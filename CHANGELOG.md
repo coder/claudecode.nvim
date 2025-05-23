@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- add LICENSE and remove unused GitHub workflow files
 
 - Initial project structure and core modules
 - **Complete WebSocket server implementation using pure Neovim built-ins**
