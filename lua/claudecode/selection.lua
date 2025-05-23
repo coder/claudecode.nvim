@@ -602,13 +602,7 @@ function M.send_at_mention_for_visual_selection()
   -- It refers to the server instance from lua/claudecode/server/init.lua
   local success = M.server.broadcast("at_mentioned", params)
 
-  if success then
-    vim.api.nvim_echo(
-      { { "At-mention sent to Claude for " .. vim.fn.fnamemodify(params.filePath, ":t"), "Normal" } },
-      false,
-      {}
-    )
-  else
+  if not success then
     vim.api.nvim_err_writeln("Failed to send at-mention.")
   end
 end

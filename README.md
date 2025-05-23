@@ -6,6 +6,8 @@
 
 A Neovim plugin that integrates with Claude Code CLI to provide a seamless AI coding experience in Neovim.
 
+https://github.com/coder/claudecode.nvim/assets/docs/demo.mp4
+
 ## Features
 
 - 🔄 **Pure Neovim WebSocket Server** (implemented with Neovim built-ins)
