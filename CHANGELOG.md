@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- add keymap group and force terminal env var for better UX
+
+
 ### Added
 
 - Initial project structure and core modules
