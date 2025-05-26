@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- implement modular MCP tool system with JSON-RPC error handling and comprehensive test coverage
 
 - Initial project structure and core modules
 - **Complete WebSocket server implementation using pure Neovim built-ins**
