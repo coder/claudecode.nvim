@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+- streamline CLAUDE.md and improve test mocking for CI
+
+
 ### Added
 
 - Initial project structure and core modules
