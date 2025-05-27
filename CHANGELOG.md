@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- implement MCP-compliant blocking openDiff tool with coroutine-based operations
 
 - Initial project structure and core modules
 - **Complete WebSocket server implementation using pure Neovim built-ins**
