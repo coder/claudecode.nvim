@@ -4,209 +4,84 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Claude Code Neovim Integration is a Neovim plugin that enables bidirectional communication between Neovim and the Claude Code CLI, allowing Claude to access file content, make edits, and respond to user selections within Neovim.
+A Neovim plugin that integrates with Claude Code CLI to provide seamless AI coding experience. The plugin creates a WebSocket server using pure Neovim built-ins to communicate with Claude Code CLI via JSON-RPC 2.0, implementing the Model Context Protocol (MCP).
 
-## Development Commands
+## Common Development Commands
 
-```bash
-# Format code with StyLua
-make format
+### Testing
 
-make check  # Runs luacheck
-make test   # Runs all tests with busted
-# Run specific test file
-nvim --headless -u tests/minimal_init.lua -c "lua require('tests.unit.config_spec')"
-```
+- `make test` - Run all tests using busted
+- `./run_tests.sh` - Direct test runner script
+- `busted tests/unit/specific_spec.lua` - Run specific test file
+- `busted --coverage -v` - Run tests with coverage
 
-## Architecture
+### Code Quality
 
-The plugin follows a modular architecture with these main components:
+- `make check` - Check Lua syntax and run luacheck
+- `make format` - Format code with stylua (or nix fmt if available)
+- `luacheck lua/ tests/ --no-unused-args --no-max-line-length` - Direct linting
 
-1. **WebSocket Server** (`lua/claudecode/server/init.lua`)
+### Build Commands
 
-   - Handles communication with Claude Code CLI using JSON-RPC 2.0 protocol
-   - Pure Lua implementation with RFC 6455 WebSocket compliance
-   - Zero external dependencies
+- `make all` - Run check and format (default target)
+- `make clean` - Remove generated test files
+- `make help` - Show available commands
 
-2. **Lock File System** (`lua/claudecode/lockfile.lua`)
+### Development with Nix
 
-   - Creates and manages lock files at `~/.claude/ide/[port].lock`
-   - Enables Claude CLI to discover the Neovim integration
+- `nix develop` - Enter development shell with all dependencies
+- `nix fmt` - Format all files using nix formatter
 
-3. **MCP Tool System** (`lua/claudecode/tools/init.lua`)
+## Architecture Overview
 
-   - Dynamic tool registration with schema validation
-   - Implements openFile, openDiff, getCurrentSelection, getOpenEditors
-   - Follows Model Context Protocol 2025-03-26 specification
-   - Centralized tool definitions and automatic MCP exposure
+### Core Components
 
-4. **Diff Integration** (`lua/claudecode/diff.lua`)
+1. **WebSocket Server** (`lua/claudecode/server/`) - Pure Neovim implementation using vim.loop, RFC 6455 compliant
+2. **MCP Tool System** (`lua/claudecode/tools/`) - Implements tools that Claude can execute (openFile, getCurrentSelection, etc.)
+3. **Lock File System** (`lua/claudecode/lockfile.lua`) - Creates discovery files for Claude CLI at `~/.claude/ide/`
+4. **Selection Tracking** (`lua/claudecode/selection.lua`) - Monitors text selections and sends updates to Claude
+5. **Diff Integration** (`lua/claudecode/diff.lua`) - Native Neovim diff support for Claude's file comparisons
+6. **Terminal Integration** (`lua/claudecode/terminal.lua`) - Manages Claude CLI terminal sessions
 
-   - **MCP-compliant blocking diff operations** for Claude Code integration
-   - Native Neovim diff support with configurable options
-   - **Scratch buffer system** replacing temporary files for enhanced security
-   - **Coroutine-based blocking** that waits for user interaction (save/close)
-   - **Event monitoring system** with autocmds for save/close/reject detection
-   - **Comprehensive resource cleanup** with automatic state management
-   - **State management** for concurrent diff operations with unique identifiers
-   - Current-tab mode (default) to reduce tab clutter
-   - Helpful keymaps: `<leader>dq` (exit), `<leader>da` (accept all)
-   - Returns MCP-compliant responses: `FILE_SAVED` + content or `DIFF_REJECTED` + tab_name
+### WebSocket Server Implementation
 
-5. **Selection Tracking** (`lua/claudecode/selection.lua`)
+- **TCP Server**: `server/tcp.lua` handles port binding and connections
+- **Handshake**: `server/handshake.lua` processes HTTP upgrade requests
+- **Frame Processing**: `server/frame.lua` implements RFC 6455 WebSocket frames
+- **Client Management**: `server/client.lua` manages individual connections
+- **Utils**: `server/utils.lua` provides base64, SHA-1, XOR operations in pure Lua
 
-   - Monitors text selections and cursor position in Neovim
-   - Sends updates to Claude via WebSocket
+### MCP Tools Architecture
 
-6. **Terminal Integration** (`lua/claudecode/terminal.lua`)
+Tools are registered with JSON schemas and handlers. MCP-exposed tools include:
 
-   - Supports both Snacks.nvim and native Neovim terminals
-   - Vertical split terminal with configurable positioning
-   - Commands: `:ClaudeCode`, `:ClaudeCodeOpen`, `:ClaudeCodeClose`
+- `openFile` - Opens files with optional line/text selection
+- `getCurrentSelection` - Gets current text selection
+- `getOpenEditors` - Lists currently open files
+- `openDiff` - Opens native Neovim diff views
 
-7. **Configuration** (`lua/claudecode/config.lua`)
+### Key File Locations
 
-   - Handles user configuration validation and merging with defaults
-   - Includes diff provider and terminal configuration
+- `lua/claudecode/init.lua` - Main entry point and setup
+- `lua/claudecode/config.lua` - Configuration management
+- `plugin/claudecode.lua` - Plugin loader with version checks
+- `tests/` - Comprehensive test suite with unit, component, and integration tests
 
-8. **Main Plugin Entry** (`lua/claudecode/init.lua`)
-   - Exposes setup and control functions
-   - Manages plugin lifecycle
+## Testing Architecture
 
-## MCP Compliance Enhancements
+Tests are organized in three layers:
 
-The plugin now features a **fully MCP-compliant openDiff tool** that implements the Model Context Protocol specification for blocking operations:
+- **Unit tests** (`tests/unit/`) - Test individual functions in isolation
+- **Component tests** (`tests/component/`) - Test subsystems with controlled environment
+- **Integration tests** (`tests/integration/`) - End-to-end functionality with mock Claude client
 
-### Key MCP Features
+Test files follow the pattern `*_spec.lua` or `*_test.lua` and use the busted framework.
 
-- **Blocking Operation**: openDiff now waits indefinitely for user interaction instead of returning immediately
-- **MCP Content Array Format**: Returns responses as `{content: [{type: "text", text: "..."}]}`
-- **User Action Detection**: Monitors save events, buffer/tab close events, and explicit accept/reject actions
-- **Concurrent Operation Support**: Multiple diffs can run simultaneously with unique tab identifiers
-- **Resource Management**: Comprehensive cleanup of buffers, autocmds, and state on completion
+## Development Notes
 
-### Response Formats
-
-- **FILE_SAVED**: When user saves/accepts changes, returns the final file content
-- **DIFF_REJECTED**: When user closes/rejects the diff, returns the tab name
-
-## Development Status
-
-The plugin is in beta stage with:
-
-- Core structure and configuration system implemented
-- Complete WebSocket server with RFC 6455 compliance
-- Enhanced selection tracking with multi-mode support
-- Lock file management implemented
-- Complete MCP tool framework with dynamic registration
-- Core MCP tools: openFile, **openDiff (MCP-compliant)**, getCurrentSelection, getOpenEditors
-- **Enhanced diff integration** with blocking operations and MCP compliance
-- **Scratch buffer-based diff system** with automatic resource management
-- Terminal integration (Snacks.nvim and native support)
-- Comprehensive test suite (55+ tests passing)
-
-## Testing Approach
-
-The project uses the Busted testing framework:
-
-- Unit tests for individual modules
-- Mock implementations for external dependencies
-- Test files organized into unit and component tests
-- Prioritize test-driven development (TDD)
-- Tests MUST fail for unimplemented features, never skip tests with TODOs
-- Each placeholder or future implementation must have corresponding failing tests
-- Run tests frequently to validate code changes
-
-## Development Priorities
-
-Current priorities for development are:
-
-1. Implementing diffview.nvim integration for the diff provider system
-2. Adding Neovim-specific tools (LSP integration, diagnostics, Telescope)
-3. Performance optimization for large codebases
-4. Integration testing with real Claude Code CLI
-
-## Development Principles
-
-- Implement in idiomatic Lua
-- Prioritize correctness over quick implementations
-- Write minimal, focused code without unnecessary complexity
-- Avoid cutting corners or implementing quick hacks
-- Follow Neovim plugin best practices
-- Create modular code with clear separation of concerns
-- Follow error-first return patterns (success, error_message)
-- Implement proper error handling with descriptive messages
-
-## Dependencies & Requirements
-
-- Neovim >= 0.8.0
-- **Zero external dependencies** - Pure Lua implementation
-- Development tools:
-  - LuaCheck for linting
-  - StyLua for formatting
-  - Busted for testing
-
-## Documentation Requirements
-
-- Document LazyVim integration in README.md
-- Include clear local development instructions
-- Provide comprehensive installation guides
-- Document proper repository structure for coder/claudecode.nvim
-
-## User Commands
-
-The plugin provides these user-facing commands:
-
-- `:ClaudeCode` - Toggle the Claude Code interactive terminal
-- `:ClaudeCodeOpen` - Open/focus the Claude Code terminal
-- `:ClaudeCodeClose` - Close the Claude Code terminal
-- `:ClaudeCodeSend` - Send current selection to Claude as at-mentioned context
-- `:ClaudeCodeStatus` - Show connection status (via Lua API)
-
-## Debugging
-
-Set the log level to debug for more detailed information:
-
-```lua
-require("claudecode").setup({
-  log_level = "debug",
-})
-```
-
-## Configuration Options
-
-```lua
-{
-  -- Port range for WebSocket server (default: 10000-65535)
-  port_range = { min = 10000, max = 65535 },
-
-  -- Auto-start WebSocket server on Neovim startup
-  auto_start = true,
-
-  -- Custom terminal command to use when launching Claude
-  terminal_cmd = nil, -- e.g., "claude --project-foo"
-
-  -- Log level (trace, debug, info, warn, error)
-  log_level = "info",
-
-  -- Enable sending selection updates to Claude
-  track_selection = true,
-
-  -- Diff provider configuration for openDiff MCP tool
-  diff_provider = "auto", -- "auto", "native", or "diffview"
-  diff_opts = {
-    auto_close_on_accept = true,    -- Auto-close diff when accepting changes
-    show_diff_stats = true,         -- Show diff statistics
-    vertical_split = true,          -- Use vertical split for diff view
-    open_in_current_tab = true,     -- Open diff in current tab (reduces clutter)
-  },
-
-  -- Terminal configuration
-  terminal = {
-    split_side = "right",           -- "left" or "right"
-    split_width_percentage = 0.30,  -- 0.0 to 1.0
-    provider = "snacks",            -- "snacks" or "native"
-    show_native_term_exit_tip = true, -- Show tip for Ctrl-\\ Ctrl-N
-  },
-}
-```
+- Plugin requires Neovim >= 0.8.0
+- Uses only Neovim built-ins for WebSocket implementation (vim.loop, vim.json, vim.schedule)
+- Lock files are created at `~/.claude/ide/[port].lock` for Claude CLI discovery
+- WebSocket server only accepts local connections for security
+- Selection tracking is debounced to reduce overhead
+- Terminal integration supports both snacks.nvim and native Neovim terminal

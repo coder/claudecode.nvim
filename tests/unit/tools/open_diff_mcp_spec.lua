@@ -3,22 +3,45 @@ require("tests.busted_setup")
 local open_diff_tool = require("claudecode.tools.open_diff")
 
 describe("openDiff tool MCP compliance", function()
-  local test_old_file = "/tmp/test_old_file.txt"
-  local test_new_file = "/tmp/test_new_file.txt"
+  local test_old_file = ""
+  local test_new_file = ""
   local test_content_old = "line 1\nline 2\noriginal content"
   local test_content_new = "line 1\nline 2\nnew content\nextra line"
   local test_tab_name = "test_diff_tab"
 
   before_each(function()
-    -- Create test files
-    local file = io.open(test_old_file, "w")
-    file:write(test_content_old)
-    file:close()
+    -- Use predictable test file paths for better CI compatibility
+    test_old_file = "/test/old_file.txt"
+    test_new_file = "/test/new_file.txt"
+
+    -- Mock io.open to return test content without actual file system access
+    local original_io_open = io.open
+    io.open = function(filename, mode)
+      if filename == test_old_file and mode == "r" then
+        return {
+          read = function(self, format)
+            if format == "*all" then
+              return test_content_old
+            end
+            return nil
+          end,
+          close = function() end,
+        }
+      end
+      -- Fall back to original for other files
+      return original_io_open(filename, mode)
+    end
+
+    -- Store original for cleanup
+    _G._original_io_open = original_io_open
   end)
 
   after_each(function()
-    -- Clean up test files
-    os.remove(test_old_file)
+    -- Restore original io.open
+    if _G._original_io_open then
+      io.open = _G._original_io_open
+      _G._original_io_open = nil
+    end
     -- Clean up any active diffs
     require("claudecode.diff")._cleanup_all_active_diffs("test_cleanup")
   end)
