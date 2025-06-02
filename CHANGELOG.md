@@ -31,6 +31,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **At-Mention Feature**: Implemented the `:ClaudeCodeSend` command to send visual selections as `at_mentioned` notifications to Claude, providing focused code context. This includes updates to selection tracking and server broadcasting logic.
 
 ### Changed
+- simplify diff system to use only native Neovim diff, removing diffview provider complexity
 
 ## [0.1.0-alpha] - TBD
 
