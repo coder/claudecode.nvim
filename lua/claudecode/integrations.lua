@@ -11,7 +11,7 @@ local logger = require("claudecode.logger")
 --- @return string|nil error Error message if operation failed
 function M.get_selected_files_from_tree()
   local current_ft = vim.bo.filetype
-  
+
   if current_ft == "NvimTree" then
     return M._get_nvim_tree_selection()
   elseif current_ft == "neo-tree" then
@@ -31,9 +31,9 @@ function M._get_nvim_tree_selection()
     logger.warn("integrations", "nvim-tree API not available")
     return {}, "nvim-tree not available"
   end
-  
+
   local files = {}
-  
+
   -- Check for multi-selection first (marked files)
   local marks = nvim_tree_api.marks.list()
   if marks and #marks > 0 then
@@ -48,7 +48,7 @@ function M._get_nvim_tree_selection()
       return files, nil
     end
   end
-  
+
   -- Fall back to node under cursor
   local node = nvim_tree_api.tree.get_node_under_cursor()
   if node then
@@ -59,7 +59,7 @@ function M._get_nvim_tree_selection()
       return {}, "Cannot add directory to Claude context. Please select a file."
     end
   end
-  
+
   return {}, "No file found under cursor"
 end
 
@@ -73,15 +73,15 @@ function M._get_neotree_selection()
     logger.warn("integrations", "neo-tree manager not available")
     return {}, "neo-tree not available"
   end
-  
+
   local state = manager.get_state("filesystem")
   if not state then
     logger.warn("integrations", "neo-tree filesystem state not available")
     return {}, "neo-tree filesystem state not available"
   end
-  
+
   local files = {}
-  
+
   -- Check for multi-selection first
   if state.tree and state.tree.get_selection then
     local selection = state.tree:get_selection()
@@ -98,7 +98,7 @@ function M._get_neotree_selection()
       end
     end
   end
-  
+
   -- Fall back to current node under cursor
   if state.tree then
     local node = state.tree:get_node()
@@ -111,7 +111,7 @@ function M._get_neotree_selection()
       end
     end
   end
-  
+
   return {}, "No file found under cursor"
 end
 

@@ -62,7 +62,7 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 ## Usage
 
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
-2. **Send context**: 
+2. **Send context**:
    - Select text in visual mode and use `<leader>as` to send it to Claude
    - In `nvim-tree` or `neo-tree`, press `<leader>as` on a file to add it to Claude's context
 3. **Let Claude work**: Claude can now:
@@ -80,12 +80,14 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 ### Tree Integration
 
 The `<leader>as` keybinding has context-aware behavior:
+
 - **In normal buffers (visual mode)**: Sends selected text to Claude
 - **In nvim-tree/neo-tree buffers**: Adds the file under cursor (or selected files) to Claude's context
 
 This allows you to quickly add entire files to Claude's context for review, refactoring, or discussion.
 
 #### Features:
+
 - **Single file**: Place cursor on any file and press `<leader>as`
 - **Multiple files**: Select multiple files (using tree plugin's selection features) and press `<leader>as`
 - **Smart detection**: Automatically detects whether you're in nvim-tree or neo-tree

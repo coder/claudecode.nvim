@@ -301,28 +301,28 @@ function M._create_commands()
 
     local integrations = require("claudecode.integrations")
     local files, error = integrations.get_selected_files_from_tree()
-    
+
     if error then
       logger.warn("command", "ClaudeCodeTreeAdd: " .. error)
       vim.notify(error, vim.log.levels.WARN, { title = "ClaudeCode" })
       return
     end
-    
+
     if not files or #files == 0 then
       logger.warn("command", "ClaudeCodeTreeAdd: No files selected")
       vim.notify("No files selected", vim.log.levels.WARN, { title = "ClaudeCode" })
       return
     end
-    
+
     -- Send each file as an at_mention (full file, no line numbers)
     local success_count = 0
     for _, file_path in ipairs(files) do
       local params = {
         filePath = file_path,
-        lineStart = nil,  -- No line numbers for full file
-        lineEnd = nil     -- No line numbers for full file
+        lineStart = nil, -- No line numbers for full file
+        lineEnd = nil, -- No line numbers for full file
       }
-      
+
       local broadcast_success = M.state.server.broadcast("at_mentioned", params)
       if broadcast_success then
         success_count = success_count + 1
@@ -331,10 +331,9 @@ function M._create_commands()
         logger.error("command", "ClaudeCodeTreeAdd: Failed to add file " .. file_path)
       end
     end
-    
+
     if success_count > 0 then
-      local message = success_count == 1 
-        and "Added 1 file to Claude context" 
+      local message = success_count == 1 and "Added 1 file to Claude context"
         or string.format("Added %d files to Claude context", success_count)
       vim.notify(message, vim.log.levels.INFO, { title = "ClaudeCode" })
     else
