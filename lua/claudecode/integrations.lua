@@ -82,9 +82,52 @@ function M._get_neotree_selection()
 
   local files = {}
 
-  -- Check for multi-selection first
-  if state.tree and state.tree.get_selection then
-    local selection = state.tree:get_selection()
+  -- Debug: Check what methods are available
+  if state.tree then
+    logger.debug("integrations", "neo-tree state.tree available, checking for selection methods")
+
+    -- Try different approaches for multi-selection
+    local selection = nil
+
+    -- Method 1: get_selection
+    if state.tree.get_selection then
+      selection = state.tree:get_selection()
+      logger.debug(
+        "integrations",
+        "get_selection method available, selection count: " .. (selection and #selection or "nil")
+      )
+    else
+      logger.debug("integrations", "get_selection method not available")
+    end
+
+    -- Method 2: Check for selected nodes directly
+    if not selection or #selection == 0 then
+      if state.tree.get_nodes then
+        local nodes = state.tree:get_nodes()
+        if nodes then
+          for _, node in ipairs(nodes) do
+            if node.is_selected or (node.extra and node.extra.is_selected) then
+              selection = selection or {}
+              table.insert(selection, node)
+              logger.debug(
+                "integrations",
+                "Found selected node via is_selected: " .. (node.path or node.name or "unknown")
+              )
+            end
+          end
+        end
+      end
+    end
+
+    -- Method 3: Try to get selected items via neo-tree's selection state
+    if not selection or #selection == 0 then
+      if state.selected_nodes then
+        selection = state.selected_nodes
+        logger.debug("integrations", "Using state.selected_nodes, count: " .. #selection)
+      end
+    end
+
+    -- Process the selection if found
     if selection and #selection > 0 then
       logger.debug("integrations", "Found " .. #selection .. " selected items in neo-tree")
       for _, node in ipairs(selection) do
@@ -96,6 +139,8 @@ function M._get_neotree_selection()
       if #files > 0 then
         return files, nil
       end
+    else
+      logger.debug("integrations", "No multi-selection found, falling back to cursor node")
     end
   end
 

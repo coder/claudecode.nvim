@@ -356,7 +356,6 @@ function M._create_commands()
   vim.api.nvim_create_user_command("ClaudeCodeTreeAdd", function()
     if not M.state.server then
       logger.error("command", "ClaudeCodeTreeAdd: Claude Code integration is not running.")
-      vim.notify("Claude Code integration is not running", vim.log.levels.ERROR)
       return
     end
 
