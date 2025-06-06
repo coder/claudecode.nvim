@@ -107,22 +107,58 @@ function M._get_neotree_selection()
     if state.tree and state.tree.get_nodes then
       local nodes = state.tree:get_nodes()
       if nodes then
+        logger.debug("integrations", "Found " .. #nodes .. " top-level nodes")
         local line_to_node = {}
 
         -- Build a mapping of line numbers to nodes
         local function map_nodes(node_list, depth)
           depth = depth or 0
-          for _, node in ipairs(node_list) do
+          for i, node in ipairs(node_list) do
+            logger.debug(
+              "integrations",
+              "Node "
+                .. i
+                .. " at depth "
+                .. depth
+                .. ": type="
+                .. (node.type or "nil")
+                .. ", path="
+                .. (node.path or "nil")
+                .. ", position="
+                .. (node.position and node.position.row or "nil")
+            )
+
             if node.position and node.position.row then
               line_to_node[node.position.row] = node
+              logger.debug(
+                "integrations",
+                "Mapped line " .. node.position.row .. " to node: " .. (node.path or node.name or "unknown")
+              )
             end
-            if node.children then
+
+            if node.children and #node.children > 0 then
+              logger.debug("integrations", "Node has " .. #node.children .. " children")
               map_nodes(node.children, depth + 1)
             end
           end
         end
 
         map_nodes(nodes)
+
+        logger.debug("integrations", "Built line_to_node mapping with " .. vim.tbl_count(line_to_node) .. " entries")
+
+        -- Debug: Show what's in the line mapping for our selection range
+        for line = start_line, end_line do
+          local node = line_to_node[line]
+          if node then
+            logger.debug(
+              "integrations",
+              "Line " .. line .. " maps to: type=" .. (node.type or "nil") .. ", path=" .. (node.path or "nil")
+            )
+          else
+            logger.debug("integrations", "Line " .. line .. " has no mapping")
+          end
+        end
 
         -- Get files from selected lines
         for line = start_line, end_line do
@@ -135,8 +171,14 @@ function M._get_neotree_selection()
 
         if #files > 0 then
           return files, nil
+        else
+          logger.debug("integrations", "No files found from visual selection lines " .. start_line .. "-" .. end_line)
         end
+      else
+        logger.debug("integrations", "get_nodes() returned nil")
       end
+    else
+      logger.debug("integrations", "state.tree.get_nodes not available")
     end
   end
 
