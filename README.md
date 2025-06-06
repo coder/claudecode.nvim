@@ -49,6 +49,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   "coder/claudecode.nvim",
   config = true,
   keys = {
+    { "<leader>a", nil, mode = { "n", "v", "NvimTree", "neo-tree" }, desc = "AI/Claude Code" },
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
     { "<leader>av", "<cmd>ClaudeCodeSendSelection<cr>", mode = "v", desc = "Send Visual Selection" },
     -- Add file from nvim-tree or neo-tree
@@ -62,9 +63,9 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 ## Usage
 
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
-2. **Send context**: 
-    - Select text in visual mode and use `<leader>av` to send it to Claude
-    - In `nvim-tree` or `neo-tree`, press `<leader>as` on a file to add it to the context
+2. **Send context**:
+   - Select text in visual mode and use `<leader>av` to send it to Claude
+   - In `nvim-tree` or `neo-tree`, press `<leader>as` on a file to add it to the context
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor
