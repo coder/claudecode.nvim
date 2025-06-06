@@ -51,6 +51,8 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   keys = {
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
     { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
+    -- Add file from nvim-tree or neo-tree
+    { "<leader>as", "<cmd>ClaudeCodeTreeAdd<cr>", desc = "Add file to Claude context", ft = { "NvimTree", "neo-tree" } },
   },
 }
 ```
@@ -60,12 +62,34 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 ## Usage
 
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
-2. **Send context**: Select text and run `:'<,'>ClaudeCodeSend` to send it to Claude
+2. **Send context**: 
+   - Select text in visual mode and use `<leader>as` to send it to Claude
+   - In `nvim-tree` or `neo-tree`, press `<leader>as` on a file to add it to Claude's context
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor
    - Show diffs with proposed changes
    - Access diagnostics and workspace info
+
+## Commands
+
+- `:ClaudeCode` - Toggle the Claude Code terminal window
+- `:ClaudeCodeSend` - Send current visual selection to Claude
+- `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context
+
+### Tree Integration
+
+The `<leader>as` keybinding has context-aware behavior:
+- **In normal buffers (visual mode)**: Sends selected text to Claude
+- **In nvim-tree/neo-tree buffers**: Adds the file under cursor (or selected files) to Claude's context
+
+This allows you to quickly add entire files to Claude's context for review, refactoring, or discussion.
+
+#### Features:
+- **Single file**: Place cursor on any file and press `<leader>as`
+- **Multiple files**: Select multiple files (using tree plugin's selection features) and press `<leader>as`
+- **Smart detection**: Automatically detects whether you're in nvim-tree or neo-tree
+- **Error handling**: Clear feedback if no files are selected or if tree plugins aren't available
 
 ## How It Works
 
