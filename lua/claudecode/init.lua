@@ -248,47 +248,6 @@ function M._create_commands()
   vim.api.nvim_create_user_command("ClaudeCodeSend", function(opts)
     if not M.state.server then
       logger.error("command", "ClaudeCodeSend: Claude Code integration is not running.")
-      return
-    end
-
-    local terminal = require("claudecode.terminal")
-    local bufnr = terminal.get_active_terminal_bufnr()
-    if not bufnr then
-      logger.error("command", "ClaudeCodeSend: Could not find terminal buffer.")
-      return
-    end
-
-    if opts.fargs and #opts.fargs > 0 then
-      local file_path = table.concat(opts.fargs, " ")
-      local formatted_path = "@file " .. file_path
-      local last_line = vim.api.nvim_buf_line_count(bufnr)
-      vim.api.nvim_buf_set_lines(bufnr, last_line, -1, false, { formatted_path })
-    else
-      local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-      local content = table.concat(lines, "\n")
-      M.state.server.send(content)
-      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "" })
-    end
-  end, {
-    desc = "Send the content of the input buffer to Claude Code. Optionally add a file path.",
-    nargs = "*",
-  })
-
-  vim.api.nvim_create_user_command("ClaudeCodeTreeAddFile", function()
-    local integrations = require("claudecode.integrations")
-    local file_path = integrations.get_path_from_tree()
-    if file_path then
-      vim.cmd("ClaudeCodeSend " .. file_path)
-    else
-      logger.warn("command", "ClaudeCodeTreeAddFile: Could not determine file path from the tree.")
-    end
-  end, {
-    desc = "Add the selected file from a tree explorer to the Claude Code input buffer.",
-  })
-
-  vim.api.nvim_create_user_command("ClaudeCodeSendSelection", function(opts)
-    if not M.state.server then
-      logger.error("command", "ClaudeCodeSend: Claude Code integration is not running.")
       vim.notify("Claude Code integration is not running", vim.log.levels.ERROR)
       return
     end
@@ -332,6 +291,7 @@ function M._create_commands()
     desc = "Send current visual selection as an at_mention to Claude Code",
     range = true, -- Important: This makes the command expect a range (visual selection)
   })
+
 
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
   if terminal_ok then
