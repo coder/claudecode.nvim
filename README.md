@@ -49,7 +49,7 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   "coder/claudecode.nvim",
   config = true,
   keys = {
-    { "<leader>a", nil, mode = { "n", "v", "NvimTree", "neo-tree" }, desc = "AI/Claude Code" },
+    { "<leader>a", nil, desc = "AI/Claude Code" },
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
     { "<leader>av", "<cmd>ClaudeCodeSendSelection<cr>", mode = "v", desc = "Send Visual Selection" },
     -- Add file from nvim-tree or neo-tree
