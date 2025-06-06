@@ -254,7 +254,19 @@ function M._create_commands()
 
     -- Check if we're in a tree buffer - if so, delegate to tree integration
     local current_ft = vim.bo.filetype
-    if current_ft == "NvimTree" or current_ft == "neo-tree" then
+    local current_bufname = vim.api.nvim_buf_get_name(0)
+    logger.debug(
+      "command",
+      "ClaudeCodeSend: Buffer detection - filetype: '" .. current_ft .. "', bufname: '" .. current_bufname .. "'"
+    )
+
+    -- Check both filetype and buffer name for tree detection
+    local is_tree_buffer = current_ft == "NvimTree"
+      or current_ft == "neo-tree"
+      or string.match(current_bufname, "neo%-tree")
+      or string.match(current_bufname, "NvimTree")
+
+    if is_tree_buffer then
       logger.debug("command", "ClaudeCodeSend: Detected tree buffer, delegating to tree integration")
 
       local integrations = require("claudecode.integrations")
