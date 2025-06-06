@@ -12,7 +12,7 @@ function M.get_path_from_tree()
   elseif vim.bo.filetype == "neo-tree" then
     local success, manager = pcall(require, "neo-tree.sources.manager")
     if success and manager then
-      local state = manager.get_state()
+      local state = manager.get_state("filesystem")
       if state and state.tree then
         local node = state.tree:get_node()
         if node and node.path then
