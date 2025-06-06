@@ -889,8 +889,7 @@ function M._create_commands()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
-      terminal.simple_toggle({}, cmd_args)
+      terminal.toggle({}, nil) -- `opts.fargs` can be used for future enhancements.
     end, {
       nargs = "*",
       desc = "Toggle the Claude Code terminal window (simple show/hide) with optional arguments",
@@ -901,16 +900,16 @@ function M._create_commands()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
-      terminal.focus_toggle({}, cmd_args)
+      local model_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.focus_toggle({}, model_args)
     end, {
       nargs = "*",
       desc = "Smart focus/toggle Claude Code terminal (switches to terminal if not focused, hides if focused)",
     })
 
     vim.api.nvim_create_user_command("ClaudeCodeOpen", function(opts)
-      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
-      terminal.open({}, cmd_args)
+      local model_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.open({}, model_args)
     end, {
       nargs = "*",
       desc = "Open the Claude Code terminal window with optional arguments",
@@ -942,6 +941,40 @@ function M._create_commands()
   end, {
     desc = "Deny/reject the current diff changes",
   })
+
+  vim.api.nvim_create_user_command("ClaudeSelectModel", function()
+    M.open_with_model()
+  end, {
+    desc = "Select and open Claude terminal with chosen model",
+  })
+end
+
+M.open_with_model = function()
+  local models = {
+    { name = "Claude Opus 4 (Latest)", value = "claude-opus-4-20250514" },
+    { name = "Claude Sonnet 4 (Latest)", value = "claude-sonnet-4-20250514" },
+    { name = "Claude 3.7 Sonnet (Latest)", value = "claude-3-7-sonnet-latest" },
+    { name = "Claude 3.5 Haiku (Latest)", value = "claude-3-5-haiku-latest" },
+  }
+
+  vim.ui.select(models, {
+    prompt = "Select Claude model:",
+    format_item = function(item)
+      return item.name
+    end,
+  }, function(choice)
+    if not choice then
+      return -- User cancelled
+    end
+
+    local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+    if not terminal_ok then
+      vim.notify("Terminal module not available", vim.log.levels.ERROR)
+      return
+    end
+
+    terminal.toggle({}, "--model " .. choice.value)
+  end)
 end
 
 --- Get version information
