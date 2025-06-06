@@ -81,55 +81,82 @@ function M._get_neotree_selection()
   end
 
   local files = {}
+  local selection = nil
 
-  -- Debug: Check what methods are available
-  if state.tree then
-    logger.debug("integrations", "neo-tree state.tree available, checking for selection methods")
+  -- Debug: Log available state structure
+  logger.debug("integrations", "neo-tree state available, checking for selection")
 
-    -- Try different approaches for multi-selection
-    local selection = nil
+  -- Method 1: Check for visual selection in neo-tree (when using V to select multiple lines)
+  -- This is likely what happens when you select multiple files with visual mode
 
-    -- Method 1: get_selection
-    if state.tree.get_selection then
-      selection = state.tree:get_selection()
-      logger.debug(
-        "integrations",
-        "get_selection method available, selection count: " .. (selection and #selection or "nil")
-      )
-    else
-      logger.debug("integrations", "get_selection method not available")
+  -- Get visual selection range if in visual mode
+  local mode = vim.fn.mode()
+  if mode == "V" or mode == "v" or mode == "\22" then -- Visual modes
+    logger.debug("integrations", "Visual mode detected: " .. mode)
+
+    -- Get the visual selection range
+    local start_line = vim.fn.line("v")
+    local end_line = vim.fn.line(".")
+    if start_line > end_line then
+      start_line, end_line = end_line, start_line
     end
 
-    -- Method 2: Check for selected nodes directly
-    if not selection or #selection == 0 then
-      if state.tree.get_nodes then
-        local nodes = state.tree:get_nodes()
-        if nodes then
-          for _, node in ipairs(nodes) do
-            if node.is_selected or (node.extra and node.extra.is_selected) then
-              selection = selection or {}
-              table.insert(selection, node)
-              logger.debug(
-                "integrations",
-                "Found selected node via is_selected: " .. (node.path or node.name or "unknown")
-              )
+    logger.debug("integrations", "Visual selection from line " .. start_line .. " to " .. end_line)
+
+    -- Get the rendered tree to map line numbers to file paths
+    if state.tree and state.tree.get_nodes then
+      local nodes = state.tree:get_nodes()
+      if nodes then
+        local line_to_node = {}
+
+        -- Build a mapping of line numbers to nodes
+        local function map_nodes(node_list, depth)
+          depth = depth or 0
+          for _, node in ipairs(node_list) do
+            if node.position and node.position.row then
+              line_to_node[node.position.row] = node
+            end
+            if node.children then
+              map_nodes(node.children, depth + 1)
             end
           end
         end
+
+        map_nodes(nodes)
+
+        -- Get files from selected lines
+        for line = start_line, end_line do
+          local node = line_to_node[line]
+          if node and node.type == "file" and node.path then
+            table.insert(files, node.path)
+            logger.debug("integrations", "Added file from line " .. line .. ": " .. node.path)
+          end
+        end
+
+        if #files > 0 then
+          return files, nil
+        end
+      end
+    end
+  end
+
+  -- Method 2: Try neo-tree's built-in selection methods
+  if state.tree then
+    if state.tree.get_selection then
+      selection = state.tree:get_selection()
+      if selection and #selection > 0 then
+        logger.debug("integrations", "Found selection via get_selection: " .. #selection)
       end
     end
 
-    -- Method 3: Try to get selected items via neo-tree's selection state
-    if not selection or #selection == 0 then
-      if state.selected_nodes then
-        selection = state.selected_nodes
-        logger.debug("integrations", "Using state.selected_nodes, count: " .. #selection)
-      end
+    -- Method 3: Check state-level selection
+    if (not selection or #selection == 0) and state.selected_nodes then
+      selection = state.selected_nodes
+      logger.debug("integrations", "Found selection via state.selected_nodes: " .. #selection)
     end
 
-    -- Process the selection if found
+    -- Process selection if found
     if selection and #selection > 0 then
-      logger.debug("integrations", "Found " .. #selection .. " selected items in neo-tree")
       for _, node in ipairs(selection) do
         if node.type == "file" and node.path then
           table.insert(files, node.path)
@@ -139,8 +166,6 @@ function M._get_neotree_selection()
       if #files > 0 then
         return files, nil
       end
-    else
-      logger.debug("integrations", "No multi-selection found, falling back to cursor node")
     end
   end
 
