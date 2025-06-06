@@ -50,7 +50,9 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   config = true,
   keys = {
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
-    { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
+    { "<leader>as", "<cmd>ClaudeCodeSendSelection<cr>", mode = "v", desc = "Send to Claude" },
+    -- Add file from nvim-tree or neo-tree
+    { "<leader>ca", "<cmd>ClaudeCodeTreeAddFile<cr>", desc = "ClaudeCode: Add file from tree", ft = { "NvimTree", "neo-tree" } },
   },
 }
 ```
@@ -60,7 +62,9 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 ## Usage
 
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
-2. **Send context**: Select text and run `:'<,'>ClaudeCodeSend` to send it to Claude
+2. **Send context**:
+   - Select text and run `:'<,'>ClaudeCodeSendSelection` to send it to Claude
+   - Use the keymap you configured to add a file from `nvim-tree` or `neo-tree`
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor
