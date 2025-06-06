@@ -335,7 +335,7 @@ function M._create_commands()
     if success_count > 0 then
       local message = success_count == 1 and "Added 1 file to Claude context"
         or string.format("Added %d files to Claude context", success_count)
-      vim.notify(message, vim.log.levels.INFO, { title = "ClaudeCode" })
+      vim.notify(message, vim.log.levels.DEBUG, { title = "ClaudeCode" })
     else
       vim.notify("Failed to add any files", vim.log.levels.ERROR, { title = "ClaudeCode" })
     end
