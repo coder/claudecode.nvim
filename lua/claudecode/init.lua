@@ -262,13 +262,11 @@ function M._create_commands()
 
       if error then
         logger.warn("command", "ClaudeCodeSend->TreeAdd: " .. error)
-        vim.notify(error, vim.log.levels.WARN, { title = "ClaudeCode" })
         return
       end
 
       if not files or #files == 0 then
         logger.warn("command", "ClaudeCodeSend->TreeAdd: No files selected")
-        vim.notify("No files selected", vim.log.levels.WARN, { title = "ClaudeCode" })
         return
       end
 
@@ -295,7 +293,7 @@ function M._create_commands()
           or string.format("Added %d files to Claude context", success_count)
         logger.debug("command", message) -- Use debug level to avoid popup
       else
-        vim.notify("Failed to add any files", vim.log.levels.ERROR, { title = "ClaudeCode" })
+        logger.error("command", "ClaudeCodeSend->TreeAdd: Failed to add any files")
       end
 
       -- Exit visual mode if we were in it
@@ -315,7 +313,6 @@ function M._create_commands()
 
     if not M.state.server then
       logger.error("command", "ClaudeCodeSend: Claude Code integration is not running.")
-      vim.notify("Claude Code integration is not running", vim.log.levels.ERROR, { title = "ClaudeCode Error" })
       return
     end
 
@@ -356,13 +353,11 @@ function M._create_commands()
 
     if error then
       logger.warn("command", "ClaudeCodeTreeAdd: " .. error)
-      vim.notify(error, vim.log.levels.WARN, { title = "ClaudeCode" })
       return
     end
 
     if not files or #files == 0 then
       logger.warn("command", "ClaudeCodeTreeAdd: No files selected")
-      vim.notify("No files selected", vim.log.levels.WARN, { title = "ClaudeCode" })
       return
     end
 
@@ -387,9 +382,9 @@ function M._create_commands()
     if success_count > 0 then
       local message = success_count == 1 and "Added 1 file to Claude context"
         or string.format("Added %d files to Claude context", success_count)
-      vim.notify(message, vim.log.levels.DEBUG, { title = "ClaudeCode" })
+      logger.debug("command", message)
     else
-      vim.notify("Failed to add any files", vim.log.levels.ERROR, { title = "ClaudeCode" })
+      logger.error("command", "ClaudeCodeTreeAdd: Failed to add any files")
     end
   end, {
     desc = "Add selected file(s) from tree explorer to Claude Code context",
