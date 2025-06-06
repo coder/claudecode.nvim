@@ -64,7 +64,7 @@ function M._get_nvim_tree_selection()
 end
 
 --- Get selected files from neo-tree
---- Uses neo-tree's own visual selection method when in visual mode
+--- Supports both multi-selection and single file under cursor
 --- @return table files List of file paths
 --- @return string|nil error Error message if operation failed
 function M._get_neotree_selection()
@@ -81,65 +81,109 @@ function M._get_neotree_selection()
   end
 
   local files = {}
+  local selection = nil
 
-  -- Method 1: Use neo-tree's own visual selection method (like their copy/paste feature)
-  -- This matches how neo-tree internally handles visual selection
+  -- Debug: Log available state structure
+  logger.debug("integrations", "neo-tree state available, checking for selection")
+
+  -- Method 1: Check for visual selection in neo-tree (when using V to select multiple lines)
+  -- This is likely what happens when you select multiple files with visual mode
+
+  -- Get visual selection range if in visual mode
   local mode = vim.fn.mode()
   if mode == "V" or mode == "v" or mode == "\22" then -- Visual modes
     logger.debug("integrations", "Visual mode detected: " .. mode)
 
-    -- Check if we're in the neo-tree window
-    if state.winid and state.winid == vim.api.nvim_get_current_win() then
-      logger.debug("integrations", "In neo-tree window, getting visual selection using neo-tree method")
+    -- Get the visual selection range
+    local start_line = vim.fn.line("v")
+    local end_line = vim.fn.line(".")
+    if start_line > end_line then
+      start_line, end_line = end_line, start_line
+    end
 
-      -- Use neo-tree's method to get selected nodes from visual range
-      local start_pos = vim.fn.getpos("'<")[2]
-      local end_pos = vim.fn.getpos("'>")[2]
+    logger.debug("integrations", "Visual selection from line " .. start_line .. " to " .. end_line)
 
-      if end_pos < start_pos then
-        start_pos, end_pos = end_pos, start_pos
-      end
+    -- Get the rendered tree to map line numbers to file paths
+    if state.tree and state.tree.get_nodes then
+      local nodes = state.tree:get_nodes()
+      if nodes then
+        logger.debug("integrations", "Found " .. #nodes .. " top-level nodes")
+        local line_to_node = {}
 
-      logger.debug("integrations", "Visual selection from line " .. start_pos .. " to " .. end_pos)
+        -- Build a mapping of line numbers to nodes
+        local function map_nodes(node_list, depth)
+          depth = depth or 0
+          for i, node in ipairs(node_list) do
+            logger.debug(
+              "integrations",
+              "Node "
+                .. i
+                .. " at depth "
+                .. depth
+                .. ": type="
+                .. (node.type or "nil")
+                .. ", path="
+                .. (node.path or "nil")
+                .. ", position="
+                .. (node.position and node.position.row or "nil")
+            )
 
-      local selected_nodes = {}
-      for line = start_pos, end_pos do
-        local node = state.tree:get_node(line)
-        if node then
-          table.insert(selected_nodes, node)
-          logger.debug(
-            "integrations",
-            "Found node at line " .. line .. ": type=" .. (node.type or "nil") .. ", path=" .. (node.path or "nil")
-          )
+            if node.position and node.position.row then
+              line_to_node[node.position.row] = node
+              logger.debug(
+                "integrations",
+                "Mapped line " .. node.position.row .. " to node: " .. (node.path or node.name or "unknown")
+              )
+            end
+
+            if node.children and #node.children > 0 then
+              logger.debug("integrations", "Node has " .. #node.children .. " children")
+              map_nodes(node.children, depth + 1)
+            end
+          end
+        end
+
+        map_nodes(nodes)
+
+        logger.debug("integrations", "Built line_to_node mapping with " .. vim.tbl_count(line_to_node) .. " entries")
+
+        -- Debug: Show what's in the line mapping for our selection range
+        for line = start_line, end_line do
+          local node = line_to_node[line]
+          if node then
+            logger.debug(
+              "integrations",
+              "Line " .. line .. " maps to: type=" .. (node.type or "nil") .. ", path=" .. (node.path or "nil")
+            )
+          else
+            logger.debug("integrations", "Line " .. line .. " has no mapping")
+          end
+        end
+
+        -- Get files from selected lines
+        for line = start_line, end_line do
+          local node = line_to_node[line]
+          if node and node.type == "file" and node.path then
+            table.insert(files, node.path)
+            logger.debug("integrations", "Added file from line " .. line .. ": " .. node.path)
+          end
+        end
+
+        if #files > 0 then
+          return files, nil
         else
-          logger.debug("integrations", "No node found at line " .. line)
+          logger.debug("integrations", "No files found from visual selection lines " .. start_line .. "-" .. end_line)
         end
-      end
-
-      logger.debug("integrations", "Found " .. #selected_nodes .. " selected nodes from visual range")
-
-      -- Extract file paths from selected nodes
-      for _, node in ipairs(selected_nodes) do
-        if node.type == "file" and node.path then
-          table.insert(files, node.path)
-          logger.debug("integrations", "Added file from visual selection: " .. node.path)
-        end
-      end
-
-      if #files > 0 then
-        return files, nil
       else
-        logger.debug("integrations", "No files found in visual selection (" .. #selected_nodes .. " nodes total)")
+        logger.debug("integrations", "get_nodes() returned nil")
       end
     else
-      logger.debug("integrations", "Not in neo-tree window, visual selection method not applicable")
+      logger.debug("integrations", "state.tree.get_nodes not available")
     end
   end
 
   -- Method 2: Try neo-tree's built-in selection methods
   if state.tree then
-    local selection = nil
-
     if state.tree.get_selection then
       selection = state.tree:get_selection()
       if selection and #selection > 0 then
