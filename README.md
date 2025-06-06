@@ -51,8 +51,8 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   keys = {
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
     { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
-    -- Add file from nvim-tree or neo-tree
-    { "<leader>as", "<cmd>ClaudeCodeTreeAdd<cr>", desc = "Add file to Claude context", ft = { "NvimTree", "neo-tree" } },
+    -- Tree integration works automatically with the same keybinding
+    { "<leader>as", "<cmd>ClaudeCodeSend<cr>", desc = "Add file to Claude context", ft = { "NvimTree", "neo-tree" } },
   },
 }
 ```
@@ -74,8 +74,8 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 ## Commands
 
 - `:ClaudeCode` - Toggle the Claude Code terminal window
-- `:ClaudeCodeSend` - Send current visual selection to Claude
-- `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context
+- `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
+- `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context (also available via ClaudeCodeSend)
 
 ### Tree Integration
 

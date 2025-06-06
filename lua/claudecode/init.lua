@@ -251,6 +251,58 @@ function M._create_commands()
       vim.notify("Claude Code integration is not running", vim.log.levels.ERROR)
       return
     end
+
+    -- Check if we're in a tree buffer - if so, delegate to tree integration
+    local current_ft = vim.bo.filetype
+    if current_ft == "NvimTree" or current_ft == "neo-tree" then
+      logger.debug("command", "ClaudeCodeSend: Detected tree buffer, delegating to tree integration")
+
+      local integrations = require("claudecode.integrations")
+      local files, error = integrations.get_selected_files_from_tree()
+
+      if error then
+        logger.warn("command", "ClaudeCodeSend->TreeAdd: " .. error)
+        vim.notify(error, vim.log.levels.WARN, { title = "ClaudeCode" })
+        return
+      end
+
+      if not files or #files == 0 then
+        logger.warn("command", "ClaudeCodeSend->TreeAdd: No files selected")
+        vim.notify("No files selected", vim.log.levels.WARN, { title = "ClaudeCode" })
+        return
+      end
+
+      -- Send each file as an at_mention (full file, no line numbers)
+      local success_count = 0
+      for _, file_path in ipairs(files) do
+        local params = {
+          filePath = file_path,
+          lineStart = nil, -- No line numbers for full file
+          lineEnd = nil, -- No line numbers for full file
+        }
+
+        local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+        if broadcast_success then
+          success_count = success_count + 1
+          logger.debug("command", "ClaudeCodeSend->TreeAdd: Added file " .. file_path)
+        else
+          logger.error("command", "ClaudeCodeSend->TreeAdd: Failed to add file " .. file_path)
+        end
+      end
+
+      if success_count > 0 then
+        local message = success_count == 1 and "Added 1 file to Claude context"
+          or string.format("Added %d files to Claude context", success_count)
+        logger.debug("command", message) -- Use debug level to avoid popup
+      else
+        vim.notify("Failed to add any files", vim.log.levels.ERROR, { title = "ClaudeCode" })
+      end
+
+      -- Exit visual mode if we were in it
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+      return
+    end
+
     logger.debug(
       "command",
       "ClaudeCodeSend (new logic) invoked. Mode: "
