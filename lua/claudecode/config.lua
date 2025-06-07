@@ -6,6 +6,7 @@ M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
   terminal_cmd = nil,
+  env = {}, -- Custom environment variables for Claude terminal
   log_level = "info",
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
@@ -74,6 +75,13 @@ function M.validate(config)
   assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
   assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
 
+  -- Validate env
+  assert(type(config.env) == "table", "env must be a table")
+  for key, value in pairs(config.env) do
+    assert(type(key) == "string", "env keys must be strings")
+    assert(type(value) == "string", "env values must be strings")
+  end
+
   return true
 end
 
@@ -85,6 +93,14 @@ function M.apply(user_config)
 
   if user_config then
     config = vim.tbl_deep_extend("force", config, user_config)
+  end
+
+  -- Check environment variable for terminal_cmd if not set in user config
+  if config.terminal_cmd == nil then
+    local env_cmd = vim.fn.getenv("CLAUDE_TERMINAL_CMD")
+    if env_cmd ~= vim.NIL then
+      config.terminal_cmd = env_cmd
+    end
   end
 
   M.validate(config)
