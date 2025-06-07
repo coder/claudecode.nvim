@@ -46,7 +46,7 @@ local default_config = {
   terminal_cmd = nil,
   log_level = "info",
   track_selection = true,
-  visual_demotion_delay_ms = 200,
+  visual_demotion_delay_ms = 50,
   diff_opts = {
     auto_close_on_accept = true,
     show_diff_stats = true,
@@ -245,25 +245,89 @@ function M._create_commands()
     desc = "Show Claude Code integration status",
   })
 
-  vim.api.nvim_create_user_command("ClaudeCodeSend", function(opts)
+  -- Helper function to format file paths for at mentions
+  local function format_path_for_at_mention(file_path)
+    local is_directory = vim.fn.isdirectory(file_path) == 1
+    local formatted_path = file_path
+
+    -- For directories, convert to relative path and add trailing slash
+    if is_directory then
+      -- Get current working directory
+      local cwd = vim.fn.getcwd()
+      -- Convert absolute path to relative if it's under the current working directory
+      if string.find(file_path, cwd, 1, true) == 1 then
+        local relative_path = string.sub(file_path, #cwd + 2) -- +2 to skip the trailing slash
+        if relative_path ~= "" then
+          formatted_path = relative_path
+        end
+      end
+      -- Always add trailing slash for directories
+      if not string.match(formatted_path, "/$") then
+        formatted_path = formatted_path .. "/"
+      end
+    end
+
+    return formatted_path, is_directory
+  end
+
+  -- Create the normal send handler
+  local function handle_send_normal(opts)
     if not M.state.server then
       logger.error("command", "ClaudeCodeSend: Claude Code integration is not running.")
       vim.notify("Claude Code integration is not running", vim.log.levels.ERROR)
       return
     end
-    logger.debug(
-      "command",
-      "ClaudeCodeSend (new logic) invoked. Mode: "
-        .. vim.fn.mode(true)
-        .. ", Neovim's reported range: "
-        .. tostring(opts and opts.range)
-    )
-    -- We now ignore opts.range and rely on the selection module's state,
-    -- as opts.range was found to be 0 even when in visual mode for <cmd> mappings.
 
-    if not M.state.server then
-      logger.error("command", "ClaudeCodeSend: Claude Code integration is not running.")
-      vim.notify("Claude Code integration is not running", vim.log.levels.ERROR, { title = "ClaudeCode Error" })
+    -- Check if we're in a tree buffer - if so, delegate to tree integration
+    local current_ft = vim.bo.filetype
+    local current_bufname = vim.api.nvim_buf_get_name(0)
+
+    -- Check both filetype and buffer name for tree detection
+    local is_tree_buffer = current_ft == "NvimTree"
+      or current_ft == "neo-tree"
+      or string.match(current_bufname, "neo%-tree")
+      or string.match(current_bufname, "NvimTree")
+
+    if is_tree_buffer then
+      local integrations = require("claudecode.integrations")
+      local files, error = integrations.get_selected_files_from_tree()
+
+      if error then
+        logger.warn("command", "ClaudeCodeSend->TreeAdd: " .. error)
+        return
+      end
+
+      if not files or #files == 0 then
+        logger.warn("command", "ClaudeCodeSend->TreeAdd: No files selected")
+        return
+      end
+
+      -- Send each file as an at_mention (full file, no line numbers)
+      local success_count = 0
+      for _, file_path in ipairs(files) do
+        local params = {
+          filePath = file_path,
+          lineStart = nil, -- No line numbers for full file
+          lineEnd = nil, -- No line numbers for full file
+        }
+
+        local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+        if broadcast_success then
+          success_count = success_count + 1
+          logger.debug("command", "ClaudeCodeSend->TreeAdd: Added file " .. file_path)
+        else
+          logger.error("command", "ClaudeCodeSend->TreeAdd: Failed to add file " .. file_path)
+        end
+      end
+
+      if success_count > 0 then
+        local message = success_count == 1 and "Added 1 file to Claude context"
+          or string.format("Added %d files to Claude context", success_count)
+        logger.debug("command", message) -- Use debug level to avoid popup
+      else
+        logger.error("command", "ClaudeCodeSend->TreeAdd: Failed to add any files")
+      end
+
       return
     end
 
@@ -271,13 +335,9 @@ function M._create_commands()
     if selection_module_ok then
       local sent_successfully = selection_module.send_at_mention_for_visual_selection()
       if sent_successfully then
-        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
-        logger.debug("command", "ClaudeCodeSend: Exited visual mode after successful send.")
-
-        -- Focus the Claude Code terminal after sending selection
         local terminal_ok, terminal = pcall(require, "claudecode.terminal")
         if terminal_ok then
-          terminal.open({}) -- Open/focus the terminal
+          terminal.open({})
           logger.debug("command", "ClaudeCodeSend: Focused Claude Code terminal after selection send.")
         else
           logger.warn("command", "ClaudeCodeSend: Failed to load terminal module for focusing.")
@@ -287,9 +347,227 @@ function M._create_commands()
       logger.error("command", "ClaudeCodeSend: Failed to load selection module.")
       vim.notify("Failed to send selection: selection module not loaded.", vim.log.levels.ERROR)
     end
-  end, {
-    desc = "Send current visual selection as an at_mention to Claude Code",
+  end
+
+  -- Create the visual send handler (processes visual selection after mode exit)
+  local function handle_send_visual(visual_data, opts)
+    if not M.state.server then
+      logger.error("command", "ClaudeCodeSend_visual: Claude Code integration is not running.")
+      return
+    end
+
+    -- Try tree visual selection first using captured data
+    if visual_data then
+      local visual_commands = require("claudecode.visual_commands")
+      local files, error = visual_commands.get_files_from_visual_selection(visual_data)
+
+      if not error and files and #files > 0 then
+        local file_success_count = 0
+
+        -- Send files with a small delay between each to ensure Claude processes them all
+        local function send_files_sequentially(index)
+          if index > #files then
+            -- All files sent, show summary and focus terminal
+            if file_success_count > 0 then
+              local message = file_success_count == 1 and "Added 1 file to Claude context from visual selection"
+                or string.format("Added %d files to Claude context from visual selection", file_success_count)
+              logger.debug("command", message)
+
+              local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+              if terminal_ok then
+                terminal.open({})
+              end
+            end
+            return
+          end
+
+          local file_path = files[index]
+          local formatted_path, is_directory = format_path_for_at_mention(file_path)
+
+          local params = {
+            filePath = formatted_path,
+            lineStart = nil, -- No line numbers for full file
+            lineEnd = nil, -- No line numbers for full file
+          }
+
+          local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+          if broadcast_success then
+            file_success_count = file_success_count + 1
+            logger.debug(
+              "command",
+              "ClaudeCodeSend_visual: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+            )
+          end
+
+          -- Schedule next file send with a small delay (10ms)
+          vim.defer_fn(function()
+            send_files_sequentially(index + 1)
+          end, 10)
+        end
+
+        -- Start sending files
+        send_files_sequentially(1)
+        return
+      end
+      -- No error handling needed - fall back to text visual selection
+    end
+
+    -- Fall back to text visual selection
+    local selection_module_ok, selection_module = pcall(require, "claudecode.selection")
+    if selection_module_ok then
+      local sent_successfully = selection_module.send_at_mention_for_visual_selection()
+      if sent_successfully then
+        local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+        if terminal_ok then
+          terminal.open({})
+        end
+      end
+    end
+  end
+
+  -- Create the unified command that handles both normal and visual modes
+  local visual_commands = require("claudecode.visual_commands")
+  local unified_send_handler = visual_commands.create_visual_command_wrapper(handle_send_normal, handle_send_visual)
+
+  vim.api.nvim_create_user_command("ClaudeCodeSend", unified_send_handler, {
+    desc = "Send current visual selection as an at_mention to Claude Code (supports tree visual selection)",
     range = true, -- Important: This makes the command expect a range (visual selection)
+  })
+
+  -- Create the normal tree add handler
+  local function handle_tree_add_normal()
+    if not M.state.server then
+      logger.error("command", "ClaudeCodeTreeAdd: Claude Code integration is not running.")
+      return
+    end
+
+    local integrations = require("claudecode.integrations")
+    local files, error = integrations.get_selected_files_from_tree()
+
+    if error then
+      logger.warn("command", "ClaudeCodeTreeAdd: " .. error)
+      return
+    end
+
+    if not files or #files == 0 then
+      logger.warn("command", "ClaudeCodeTreeAdd: No files selected")
+      return
+    end
+
+    -- Send each file/directory as an at_mention (full file, no line numbers)
+    local success_count = 0
+    for _, file_path in ipairs(files) do
+      local formatted_path, is_directory = format_path_for_at_mention(file_path)
+
+      local params = {
+        filePath = formatted_path,
+        lineStart = nil, -- No line numbers for full file
+        lineEnd = nil, -- No line numbers for full file
+      }
+
+      local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+      if broadcast_success then
+        success_count = success_count + 1
+        logger.debug(
+          "command",
+          "ClaudeCodeTreeAdd: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+        )
+      else
+        logger.error(
+          "command",
+          "ClaudeCodeTreeAdd: Failed to add " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+        )
+      end
+    end
+
+    if success_count > 0 then
+      local message = success_count == 1 and "Added 1 file to Claude context"
+        or string.format("Added %d files to Claude context", success_count)
+      logger.debug("command", message)
+    else
+      logger.error("command", "ClaudeCodeTreeAdd: Failed to add any files")
+    end
+  end
+
+  -- Create the visual tree add handler (processes visual selection after mode exit)
+  local function handle_tree_add_visual(visual_data)
+    if not M.state.server then
+      logger.error("command", "ClaudeCodeTreeAdd_visual: Claude Code integration is not running.")
+      return
+    end
+
+    local visual_cmd_module = require("claudecode.visual_commands")
+    local files, error = visual_cmd_module.get_files_from_visual_selection(visual_data)
+
+    if error then
+      logger.warn("command", "ClaudeCodeTreeAdd_visual: " .. error)
+      return
+    end
+
+    if not files or #files == 0 then
+      logger.warn("command", "ClaudeCodeTreeAdd_visual: No files selected in visual range")
+      return
+    end
+
+    -- Send each file as an at_mention (full file, no line numbers)
+    local success_count = 0
+
+    -- Send files with a small delay between each to ensure Claude processes them all
+    local function send_files_sequentially(index)
+      if index > #files then
+        -- All files sent, show summary
+        if success_count > 0 then
+          local message = success_count == 1 and "Added 1 file to Claude context from visual selection"
+            or string.format("Added %d files to Claude context from visual selection", success_count)
+          logger.debug("command", message)
+        else
+          logger.error("command", "ClaudeCodeTreeAdd_visual: Failed to add any files from visual selection")
+        end
+        return
+      end
+
+      local file_path = files[index]
+      local formatted_path, is_directory = format_path_for_at_mention(file_path)
+
+      local params = {
+        filePath = formatted_path,
+        lineStart = nil, -- No line numbers for full file
+        lineEnd = nil, -- No line numbers for full file
+      }
+
+      local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+      if broadcast_success then
+        success_count = success_count + 1
+        logger.debug(
+          "command",
+          "ClaudeCodeTreeAdd_visual: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+        )
+      else
+        logger.error(
+          "command",
+          "ClaudeCodeTreeAdd_visual: Failed to add "
+            .. (is_directory and "directory" or "file")
+            .. " "
+            .. formatted_path
+        )
+      end
+
+      -- Schedule next file send with a small delay (10ms)
+      vim.defer_fn(function()
+        send_files_sequentially(index + 1)
+      end, 10)
+    end
+
+    -- Start sending files
+    send_files_sequentially(1)
+  end
+
+  -- Create the unified command that handles both normal and visual modes
+  local unified_tree_add_handler =
+    visual_commands.create_visual_command_wrapper(handle_tree_add_normal, handle_tree_add_visual)
+
+  vim.api.nvim_create_user_command("ClaudeCodeTreeAdd", unified_tree_add_handler, {
+    desc = "Add selected file(s) from tree explorer to Claude Code context (supports visual selection)",
   })
 
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
@@ -335,6 +613,40 @@ function M.get_version()
     patch = M.version.patch,
     prerelease = M.version.prerelease,
   }
+end
+
+--- Format file path for at mention (exposed for testing)
+---@param file_path string The file path to format
+---@return string formatted_path The formatted path
+---@return boolean is_directory Whether the path is a directory
+function M._format_path_for_at_mention(file_path)
+  local is_directory = vim.fn.isdirectory(file_path) == 1
+  local formatted_path = file_path
+
+  if is_directory then
+    local cwd = vim.fn.getcwd()
+    if string.find(file_path, cwd, 1, true) == 1 then
+      local relative_path = string.sub(file_path, #cwd + 2)
+      if relative_path ~= "" then
+        formatted_path = relative_path
+      else
+        formatted_path = "./"
+      end
+    end
+    if not string.match(formatted_path, "/$") then
+      formatted_path = formatted_path .. "/"
+    end
+  else
+    local cwd = vim.fn.getcwd()
+    if string.find(file_path, cwd, 1, true) == 1 then
+      local relative_path = string.sub(file_path, #cwd + 2)
+      if relative_path ~= "" then
+        formatted_path = relative_path
+      end
+    end
+  end
+
+  return formatted_path, is_directory
 end
 
 return M

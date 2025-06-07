@@ -6,21 +6,13 @@ all: check format
 # Check for syntax errors
 check:
 	@echo "Checking Lua files for syntax errors..."
-	@find lua -name "*.lua" -type f -exec lua -e "assert(loadfile('{}'))" \;
+	nix develop .#ci -c find lua -name "*.lua" -type f -exec lua -e "assert(loadfile('{}'))" \;
 	@echo "Running luacheck..."
-	@luacheck lua/ tests/ --no-unused-args --no-max-line-length
+	nix develop .#ci -c luacheck lua/ tests/ --no-unused-args --no-max-line-length
 
 # Format all files
 format:
-	@echo "Formatting files..."
-	@if command -v nix >/dev/null 2>&1; then \
-		nix fmt; \
-	elif command -v stylua >/dev/null 2>&1; then \
-		stylua lua/; \
-	else \
-		echo "Neither nix nor stylua found. Please install one of them."; \
-		exit 1; \
-	fi
+	nix fmt
 
 # Run tests
 test:

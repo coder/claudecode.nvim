@@ -1,8 +1,5 @@
 ---
 -- Manages selection tracking and communication with the Claude server.
--- This module handles enabling/disabling selection tracking, debouncing updates,
--- determining the current selection (visual or cursor position), and sending
--- updates to the Claude server.
 -- @module claudecode.selection
 local M = {}
 
@@ -13,16 +10,14 @@ M.state = {
   latest_selection = nil,
   tracking_enabled = false,
   debounce_timer = nil,
-  debounce_ms = 300,
+  debounce_ms = 100,
 
-  -- New state for delayed visual demotion
-  last_active_visual_selection = nil, -- Stores { bufnr, selection_data, timestamp }
+  last_active_visual_selection = nil,
   demotion_timer = nil,
-  visual_demotion_delay_ms = 50, -- Default, will be overridden by config in M.enable
+  visual_demotion_delay_ms = 50,
 }
 
 --- Enables selection tracking.
--- Sets up autocommands to monitor cursor movements, mode changes, and text changes.
 -- @param server table The server object to use for communication.
 -- @param visual_demotion_delay_ms number The delay for visual selection demotion.
 function M.enable(server, visual_demotion_delay_ms)
@@ -209,6 +204,7 @@ function M.update_selection()
         M.state.demotion_timer:stop()
         M.state.demotion_timer:close()
       end
+
       M.state.demotion_timer = vim.loop.new_timer()
       M.state.demotion_timer:start(
         M.state.visual_demotion_delay_ms,
@@ -271,6 +267,7 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
   end
 
   local current_mode_info = vim.api.nvim_get_mode()
+
   -- Condition 2: Back in Visual Mode in the Original Buffer
   if
     current_buf == original_bufnr_when_scheduled
@@ -296,7 +293,9 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
         M.send_selection_update(M.state.latest_selection)
       end
     end
+    -- No change detected in selection
   end
+  -- User switched to different buffer
 
   -- Always clear last_active_visual_selection for the original buffer as its pending demotion is resolved.
   if
