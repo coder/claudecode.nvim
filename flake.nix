@@ -40,6 +40,7 @@
           luajitPackages.luacov
           neovim
           treefmt.config.build.wrapper
+          findutils
         ];
 
         # Development packages (additional tools for development)
@@ -49,7 +50,7 @@
           gnumake
           websocat
           jq
-          claude-code
+          # claude-code
         ];
       in
       {
