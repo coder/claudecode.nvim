@@ -238,7 +238,7 @@ local function open_fallback_terminal(cmd_string, env_table, effective_term_conf
 
   managed_fallback_terminal_winid = new_winid
   managed_fallback_terminal_bufnr = vim.api.nvim_get_current_buf()
-  vim.bo[managed_fallback_terminal_bufnr].bufhidden = "hide" -- Wipe buffer when hidden (e.g., window closed)
+  vim.bo[managed_fallback_terminal_bufnr].bufhidden = "hide" -- Hide buffer when hidden (e.g., window closed)
   -- buftype=terminal is set by termopen
 
   vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
