@@ -150,7 +150,7 @@ end
 -- @param effective_term_config table Configuration for split_side and split_width_percentage.
 -- @return boolean True if successful, false otherwise.
 local function open_fallback_terminal(cmd_string, env_table, effective_term_config)
-  if is_fallback_terminal_valid() then -- Should not happen if called correctly, but as a safeguard
+  if is_fallback_terminal_window_valid() then -- Should not happen if called correctly, but as a safeguard
     vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
     vim.cmd("startinsert")
     return true
@@ -240,7 +240,7 @@ end
 --- Closes the managed fallback terminal if it's open and valid.
 -- @local
 local function close_fallback_terminal()
-  if is_fallback_terminal_valid() then
+  if is_fallback_terminal_window_valid() then
     -- Closing the window should trigger on_exit of the job if the process is still running,
     -- which then calls cleanup_fallback_terminal_state.
     -- If the job already exited, on_exit would have cleaned up.
@@ -253,7 +253,7 @@ end
 --- Focuses the managed fallback terminal if it's open and valid.
 -- @local
 local function focus_fallback_terminal()
-  if is_fallback_terminal_valid() then
+  if is_fallback_terminal_window_valid() then
     vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
     vim.cmd("startinsert")
   end
@@ -410,7 +410,9 @@ function M.close()
       -- managed_snacks_terminal will be set to nil by the on_close callback
     end
   elseif provider == "native" then
-    close_fallback_terminal()
+    if is_fallback_terminal_window_valid() then
+      close_fallback_terminal()
+    end
   end
 end
 
@@ -505,7 +507,7 @@ function M.get_active_terminal_bufnr()
     end
   end
 
-  if is_fallback_terminal_valid() then
+  if is_fallback_terminal_buffer_valid() then
     return managed_fallback_terminal_bufnr
   end
 
