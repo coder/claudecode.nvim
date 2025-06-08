@@ -202,7 +202,7 @@ describe("openDiff tool MCP compliance", function()
   end)
 
   describe("error handling", function()
-    it("should handle file access errors", function()
+    it("should handle new files successfully", function()
       local params = {
         old_file_path = "/tmp/non_existent_file.txt",
         new_file_path = test_new_file,
@@ -210,15 +210,22 @@ describe("openDiff tool MCP compliance", function()
         tab_name = test_tab_name,
       }
 
+      -- Set up mock resolution to avoid hanging
+      _G.claude_deferred_responses = {
+        [tostring(coroutine.running())] = function(result)
+          -- Mock resolution
+        end,
+      }
+
       local co = coroutine.create(function()
         open_diff_tool.handler(params)
       end)
 
-      local success, err = coroutine.resume(co)
-      assert.is_false(success)
-      assert.is_table(err)
-      assert.equal(-32000, err.code)
-      assert_contains(err.data, "Cannot open file")
+      local success = coroutine.resume(co)
+      assert.is_true(success, "Should handle new file scenario successfully")
+
+      -- The coroutine should yield (waiting for user action)
+      assert.equal("suspended", coroutine.status(co))
     end)
 
     it("should handle diff module loading errors", function()

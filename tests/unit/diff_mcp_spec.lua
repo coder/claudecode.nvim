@@ -90,17 +90,30 @@ describe("MCP-compliant diff operations", function()
       assert.equal("text", result.content[2].type)
     end)
 
-    it("should error on non-existent old file", function()
+    it("should handle non-existent old file as new file", function()
       local non_existent_file = "/tmp/non_existent_file.txt"
+
+      -- Set up mock resolution
+      _G.claude_deferred_responses = {
+        [tostring(coroutine.running())] = function()
+          -- Mock resolution
+        end,
+      }
+
       local co = coroutine.create(function()
         diff.open_diff_blocking(non_existent_file, test_new_file, test_content_new, test_tab_name)
       end)
 
-      local success, err = coroutine.resume(co)
-      assert.is_false(success, "Should fail with non-existent file")
-      assert.is_table(err)
-      assert.equal(-32000, err.code)
-      assert_contains(err.message, "File access error")
+      local success = coroutine.resume(co)
+      assert.is_true(success, "Should handle new file scenario successfully")
+
+      -- The coroutine should yield (waiting for user action)
+      assert.equal("suspended", coroutine.status(co))
+
+      -- Verify diff state was created for new file
+      local active_diffs = diff._get_active_diffs()
+      assert.is_table(active_diffs[test_tab_name])
+      assert.is_true(active_diffs[test_tab_name].is_new_file)
     end)
 
     it("should replace existing diff with same tab_name", function()

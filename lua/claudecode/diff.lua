@@ -408,6 +408,26 @@ function M._apply_accepted_changes(diff_data, final_content)
 
   require("claudecode.logger").debug("diff", "Writing accepted changes to file:", old_file_path)
 
+  -- Ensure parent directories exist for new files
+  if diff_data.is_new_file then
+    local parent_dir = vim.fn.fnamemodify(old_file_path, ":h")
+    if parent_dir and parent_dir ~= "" and parent_dir ~= "." then
+      require("claudecode.logger").debug("diff", "Creating parent directories for new file:", parent_dir)
+      local mkdir_success, mkdir_err = pcall(vim.fn.mkdir, parent_dir, "p")
+      if not mkdir_success then
+        require("claudecode.logger").error(
+          "diff",
+          "Failed to create parent directories:",
+          parent_dir,
+          "error:",
+          mkdir_err
+        )
+        return
+      end
+      require("claudecode.logger").debug("diff", "Successfully created parent directories:", parent_dir)
+    end
+  end
+
   -- Write the content to the actual file
   local lines = vim.split(final_content, "\n")
   local success, err = pcall(vim.fn.writefile, lines, old_file_path)
@@ -581,8 +601,9 @@ end
 -- @param old_file_path string Path to the original file
 -- @param new_buffer number New file buffer ID
 -- @param tab_name string The diff identifier
+-- @param is_new_file boolean Whether this is a new file (doesn't exist yet)
 -- @return table Info about the created diff layout
-function M._create_diff_view_from_window(target_window, old_file_path, new_buffer, tab_name)
+function M._create_diff_view_from_window(target_window, old_file_path, new_buffer, tab_name, is_new_file)
   require("claudecode.logger").debug("diff", "Creating diff view from window", target_window)
 
   -- If no target window provided, create a new window in suitable location
@@ -608,16 +629,36 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
     vim.api.nvim_set_current_win(target_window)
   end
 
-  -- Make sure the window shows the file we want to diff
-  -- This handles the case where the buffer exists but isn't in the current window
-  vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+  -- Handle the left side of the diff (original file or empty for new files)
+  local original_buffer
+  if is_new_file then
+    -- Create an empty buffer for new file comparison
+    require("claudecode.logger").debug("diff", "Creating empty buffer for new file diff")
+    local empty_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
+    vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
+    vim.api.nvim_buf_set_lines(empty_buffer, 0, -1, false, {}) -- Empty content
+    vim.api.nvim_buf_set_option(empty_buffer, "buftype", "nofile")
+    vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
+    vim.api.nvim_buf_set_option(empty_buffer, "readonly", true)
 
-  -- Store the original buffer for later
-  local original_buffer = vim.api.nvim_win_get_buf(target_window)
+    -- Set the empty buffer in the target window
+    vim.api.nvim_win_set_buf(target_window, empty_buffer)
+    original_buffer = empty_buffer
+  else
+    -- Make sure the window shows the existing file we want to diff
+    vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+    original_buffer = vim.api.nvim_win_get_buf(target_window)
+  end
 
-  -- Enable diff mode on the original file
+  -- Enable diff mode on the original/empty file
   vim.cmd("diffthis")
-  require("claudecode.logger").debug("diff", "Enabled diff mode on original file in window", target_window)
+  require("claudecode.logger").debug(
+    "diff",
+    "Enabled diff mode on",
+    is_new_file and "empty buffer" or "original file",
+    "in window",
+    target_window
+  )
 
   -- Create vertical split for new buffer (proposed changes)
   vim.cmd("vsplit")
@@ -646,6 +687,14 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
   vim.keymap.set("n", "<leader>da", function()
     -- Accept all changes
     local new_content = vim.api.nvim_buf_get_lines(new_buffer, 0, -1, false)
+
+    -- Ensure parent directories exist for new files
+    if is_new_file then
+      local parent_dir = vim.fn.fnamemodify(old_file_path, ":h")
+      if parent_dir and parent_dir ~= "" and parent_dir ~= "." then
+        vim.fn.mkdir(parent_dir, "p")
+      end
+    end
 
     -- Write to file
     vim.fn.writefile(new_content, old_file_path)
@@ -747,41 +796,49 @@ function M._setup_blocking_diff(params, resolution_callback)
     params.old_file_path
   )
 
-  -- Step 1: Check if the file exists
+  -- Step 1: Check if the file exists (allow new files)
   local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
-  if not old_file_exists then
-    error({
-      code = -32000,
-      message = "File access error",
-      data = "Cannot open file: " .. params.old_file_path .. " (file does not exist)",
-    })
-  end
+  local is_new_file = not old_file_exists
 
-  -- Step 2: Find if the file is already open in a buffer
+  require("claudecode.logger").debug(
+    "diff",
+    "File existence check - old_file_exists:",
+    old_file_exists,
+    "is_new_file:",
+    is_new_file,
+    "path:",
+    params.old_file_path
+  )
+
+  -- Step 2: Find if the file is already open in a buffer (only for existing files)
   local existing_buffer = nil
   local target_window = nil
 
-  -- Look for existing buffer with this file
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-      local buf_name = vim.api.nvim_buf_get_name(buf)
-      if buf_name == params.old_file_path then
-        existing_buffer = buf
-        require("claudecode.logger").debug("diff", "Found existing buffer", buf, "for file", params.old_file_path)
-        break
+  if old_file_exists then
+    -- Look for existing buffer with this file
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+        local buf_name = vim.api.nvim_buf_get_name(buf)
+        if buf_name == params.old_file_path then
+          existing_buffer = buf
+          require("claudecode.logger").debug("diff", "Found existing buffer", buf, "for file", params.old_file_path)
+          break
+        end
       end
     end
-  end
 
-  -- Find window containing this buffer (if any)
-  if existing_buffer then
-    for _, win in ipairs(vim.api.nvim_list_wins()) do
-      if vim.api.nvim_win_get_buf(win) == existing_buffer then
-        target_window = win
-        require("claudecode.logger").debug("diff", "Found window", win, "containing buffer", existing_buffer)
-        break
+    -- Find window containing this buffer (if any)
+    if existing_buffer then
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == existing_buffer then
+          target_window = win
+          require("claudecode.logger").debug("diff", "Found window", win, "containing buffer", existing_buffer)
+          break
+        end
       end
     end
+  else
+    require("claudecode.logger").debug("diff", "Skipping buffer search for new file:", params.old_file_path)
   end
 
   -- If no existing buffer/window, find a suitable main editor window
@@ -811,7 +868,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     })
   end
 
-  local new_unique_name = tab_name .. " (proposed)"
+  local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
   vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
   vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, vim.split(params.new_file_contents, "\n"))
 
@@ -820,8 +877,15 @@ function M._setup_blocking_diff(params, resolution_callback)
   vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
 
   -- Step 4: Set up diff view using the target window
-  require("claudecode.logger").debug("diff", "Creating diff view from window", target_window)
-  local diff_info = M._create_diff_view_from_window(target_window, params.old_file_path, new_buffer, tab_name)
+  require("claudecode.logger").debug(
+    "diff",
+    "Creating diff view from window",
+    target_window,
+    "is_new_file:",
+    is_new_file
+  )
+  local diff_info =
+    M._create_diff_view_from_window(target_window, params.old_file_path, new_buffer, tab_name, is_new_file)
 
   -- Step 5: Register autocmds for user interaction monitoring
   require("claudecode.logger").debug("diff", "Registering autocmds")
@@ -842,6 +906,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     status = "pending",
     resolution_callback = resolution_callback,
     result_content = nil,
+    is_new_file = is_new_file,
   })
   require("claudecode.logger").debug("diff", "Setup completed successfully for", tab_name)
 end
