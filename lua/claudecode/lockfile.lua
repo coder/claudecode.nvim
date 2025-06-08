@@ -18,7 +18,6 @@ function M.create(port)
     return false, "Invalid port number"
   end
 
-  -- Ensure lock directory exists
   local ok, err = pcall(function()
     return vim.fn.mkdir(M.lock_dir, "p")
   end)
@@ -27,10 +26,8 @@ function M.create(port)
     return false, "Failed to create lock directory: " .. (err or "unknown error")
   end
 
-  -- Generate lock file path
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
-  -- Get workspace folders
   local workspace_folders = M.get_workspace_folders()
 
   -- Prepare lock file content
@@ -41,7 +38,6 @@ function M.create(port)
     transport = "ws",
   }
 
-  -- Convert to JSON with error handling
   local json
   local ok_json, json_err = pcall(function()
     json = vim.json.encode(lock_content)
@@ -52,7 +48,6 @@ function M.create(port)
     return false, "Failed to encode lock file content: " .. (json_err or "unknown error")
   end
 
-  -- Write to file
   local file = io.open(lock_path, "w")
   if not file then
     return false, "Failed to create lock file: " .. lock_path
@@ -64,7 +59,6 @@ function M.create(port)
   end)
 
   if not write_ok then
-    -- Try to close file if still open
     pcall(function()
       file:close()
     end)
@@ -85,12 +79,10 @@ function M.remove(port)
 
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
-  -- Check if file exists
   if vim.fn.filereadable(lock_path) == 0 then
     return false, "Lock file does not exist: " .. lock_path
   end
 
-  -- Remove the file with error handling
   local ok, err = pcall(function()
     return os.remove(lock_path)
   end)
@@ -111,7 +103,6 @@ function M.update(port)
     return false, "Invalid port number"
   end
 
-  -- First remove existing lock file if it exists
   local exists = vim.fn.filereadable(M.lock_dir .. "/" .. port .. ".lock") == 1
   if exists then
     local remove_ok, remove_err = M.remove(port)
@@ -120,7 +111,6 @@ function M.update(port)
     end
   end
 
-  -- Then create a new one
   return M.create(port)
 end
 

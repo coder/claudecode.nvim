@@ -26,7 +26,6 @@ M.OPCODE = {
 ---@return WebSocketFrame|nil frame The parsed frame, or nil if incomplete/invalid
 ---@return number bytes_consumed Number of bytes consumed from input
 function M.parse_frame(data)
-  -- Input validation
   if type(data) ~= "string" then
     return nil, 0
   end
@@ -46,14 +45,12 @@ function M.parse_frame(data)
 
   pos = pos + 2
 
-  -- Parse first byte
   local fin = math.floor(byte1 / 128) == 1
   local rsv1 = math.floor((byte1 % 128) / 64) == 1
   local rsv2 = math.floor((byte1 % 64) / 32) == 1
   local rsv3 = math.floor((byte1 % 32) / 16) == 1
   local opcode = byte1 % 16
 
-  -- Parse second byte
   local masked = math.floor(byte2 / 128) == 1
   local payload_len = byte2 % 128
 

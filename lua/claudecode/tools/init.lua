@@ -172,23 +172,4 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
   return { result = handler_return_val1 }
 end
 
--- Removed M.open_file function, its logic is now in lua/claudecode/tools/impl/open_file.lua
-
--- Removed M.get_diagnostics function, its logic is now in lua/claudecode/tools/impl/get_diagnostics.lua
-
--- Removed M.get_open_editors function, its logic is now in lua/claudecode/tools/impl/get_open_editors.lua
-
--- Removed M.get_workspace_folders function, its logic is now in lua/claudecode/tools/impl/get_workspace_folders.lua
-
--- Removed M.get_current_selection function, its logic is now in lua/claudecode/tools/impl/get_current_selection.lua
--- Removed M.get_latest_selection function as it was redundant with get_current_selection's new implementation
-
--- Removed M.check_document_dirty function, its logic is now in lua/claudecode/tools/impl/check_document_dirty.lua
-
--- Removed M.save_document function, its logic is now in lua/claudecode/tools/impl/save_document.lua
-
--- Removed M.open_diff function, its logic is now in lua/claudecode/tools/impl/open_diff.lua
-
--- Removed M.close_buffer_by_name function, its logic is now in lua/claudecode/tools/impl/close_buffer_by_name.lua
-
 return M

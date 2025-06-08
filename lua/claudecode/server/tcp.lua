@@ -22,7 +22,6 @@ function M.find_available_port(min_port, max_port)
     return nil -- Or handle error appropriately
   end
 
-  -- Create a list of ports in the range
   local ports = {}
   for i = min_port, max_port do
     table.insert(ports, i)
@@ -51,13 +50,11 @@ end
 ---@return TCPServer|nil server The server object, or nil on error
 ---@return string|nil error Error message if failed
 function M.create_server(config, callbacks)
-  -- Find available port
   local port = M.find_available_port(config.port_range.min, config.port_range.max)
   if not port then
     return nil, "No available ports in range " .. config.port_range.min .. "-" .. config.port_range.max
   end
 
-  -- Create TCP server
   local tcp_server = vim.loop.new_tcp()
   if not tcp_server then
     return nil, "Failed to create TCP server"
@@ -74,7 +71,6 @@ function M.create_server(config, callbacks)
     on_error = callbacks.on_error or function() end,
   }
 
-  -- Bind to port
   local bind_success, bind_err = tcp_server:bind("127.0.0.1", port)
   if not bind_success then
     tcp_server:close()

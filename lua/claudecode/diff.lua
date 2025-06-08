@@ -641,7 +641,6 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
     vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
     vim.api.nvim_buf_set_option(empty_buffer, "readonly", true)
 
-    -- Set the empty buffer in the target window
     vim.api.nvim_win_set_buf(target_window, empty_buffer)
     original_buffer = empty_buffer
   else
@@ -872,7 +871,6 @@ function M._setup_blocking_diff(params, resolution_callback)
   vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
   vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, vim.split(params.new_file_contents, "\n"))
 
-  -- Set buffer options for the new content buffer
   vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
   vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
 

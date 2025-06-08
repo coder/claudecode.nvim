@@ -17,9 +17,7 @@ M.defaults = {
   },
 }
 
---- Validates the provided configuration table.
--- Ensures that all configuration options are of the correct type and within valid ranges.
--- @param config table The configuration table to validate.
+--- @param config table The configuration table to validate.
 -- @return boolean true if the configuration is valid.
 -- @error string if any configuration option is invalid.
 function M.validate(config)
@@ -64,10 +62,7 @@ function M.validate(config)
   return true
 end
 
---- Applies user configuration on top of default settings and validates the result.
--- Merges the user-provided configuration with the default configuration,
--- then validates the merged configuration.
--- @param user_config table|nil The user-provided configuration table.
+--- @param user_config table|nil The user-provided configuration table.
 -- @return table The final, validated configuration table.
 function M.apply(user_config)
   local config = vim.deepcopy(M.defaults)

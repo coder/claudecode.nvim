@@ -105,7 +105,6 @@ function M._get_neotree_selection()
           end_pos = cursor_pos
         end
       end
-      -- No valid visual marks found
 
       if end_pos < start_pos then
         start_pos, end_pos = end_pos, start_pos
@@ -120,12 +119,8 @@ function M._get_neotree_selection()
           if node.type and node.type ~= "message" then
             table.insert(selected_nodes, node)
           end
-          -- Message nodes not included in selection
         end
-        -- No node found at this line
       end
-
-      -- Extract file paths from selected nodes with enhanced validation
 
       for i, node in ipairs(selected_nodes) do
         -- Enhanced validation: check for file type and valid path
@@ -141,13 +136,8 @@ function M._get_neotree_selection()
       if #files > 0 then
         return files, nil
       end
-      -- No files found in visual selection
     end
-    -- Not in correct neo-tree window
   end
-  -- Not in visual mode
-
-  -- Method 2: Try neo-tree's built-in selection methods
 
   if state.tree then
     local selection = nil
@@ -170,13 +160,8 @@ function M._get_neotree_selection()
       if #files > 0 then
         return files, nil
       end
-      -- No files found in selection
     end
-    -- No selection available
   end
-  -- No tree available
-
-  -- Fall back to current node under cursor
 
   if state.tree then
     local node = state.tree:get_node()
@@ -187,11 +172,8 @@ function M._get_neotree_selection()
       elseif node.type == "directory" and node.path then
         return { node.path }, nil
       end
-      -- Invalid node type or path
     end
-    -- No cursor node found
   end
-  -- No tree state available
 
   return {}, "No file found under cursor"
 end

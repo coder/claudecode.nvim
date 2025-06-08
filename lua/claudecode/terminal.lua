@@ -33,9 +33,7 @@ local managed_fallback_terminal_winid = nil
 local managed_fallback_terminal_jobid = nil
 local native_term_tip_shown = false
 
--- Determines the command to run in the terminal.
 -- Uses the `terminal_cmd` from the module's configuration, or defaults to "claude".
--- @local
 -- @return string The command to execute.
 local function get_claude_command()
   local cmd_from_config = term_module_config.terminal_cmd
@@ -91,7 +89,6 @@ function M.setup(user_term_config, p_terminal_cmd)
 end
 
 --- Determines the effective terminal provider based on configuration and availability.
--- @local
 -- @return string "snacks" or "native"
 local function get_effective_terminal_provider()
   if term_module_config.provider == "snacks" then
@@ -117,8 +114,6 @@ local function get_effective_terminal_provider()
   end
 end
 
---- Cleans up state variables for the fallback terminal.
--- @local
 local function cleanup_fallback_terminal_state()
   managed_fallback_terminal_bufnr = nil
   managed_fallback_terminal_winid = nil
@@ -127,7 +122,6 @@ end
 
 --- Checks if the managed fallback terminal is currently valid (window and buffer exist).
 -- Cleans up state if invalid.
--- @local
 -- @return boolean True if valid, false otherwise.
 local function is_fallback_terminal_valid()
   -- First check if we have a valid buffer
@@ -158,7 +152,6 @@ local function is_fallback_terminal_valid()
 end
 
 --- Opens a new terminal using native Neovim functions.
--- @local
 -- @param cmd_string string The command string to run.
 -- @param env_table table Environment variables for the command.
 -- @param effective_term_config table Configuration for split_side and split_width_percentage.
@@ -252,7 +245,6 @@ local function open_fallback_terminal(cmd_string, env_table, effective_term_conf
 end
 
 --- Closes the managed fallback terminal if it's open and valid.
--- @local
 local function close_fallback_terminal()
   if is_fallback_terminal_valid() then
     -- Closing the window should trigger on_exit of the job if the process is still running,
@@ -265,7 +257,6 @@ local function close_fallback_terminal()
 end
 
 --- Focuses the managed fallback terminal if it's open and valid.
--- @local
 local function focus_fallback_terminal()
   if is_fallback_terminal_valid() then
     vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
@@ -275,7 +266,6 @@ end
 
 --- Builds the effective terminal configuration by merging module defaults with runtime overrides.
 -- Used by the native fallback.
--- @local
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
 -- @return table The effective terminal configuration.
 local function build_effective_term_config(opts_override)
@@ -304,7 +294,6 @@ end
 --- Builds the options table for Snacks.terminal.
 -- This function merges the module's current terminal configuration
 -- with any runtime overrides provided specifically for an open/toggle action.
--- @local
 -- @param effective_term_config_for_snacks table Pre-calculated effective config for split_side, width.
 -- @param env_table table Environment variables for the command.
 -- @return table The options table for Snacks.
@@ -329,7 +318,6 @@ local function build_snacks_opts(effective_term_config_for_snacks, env_table)
 end
 
 --- Gets the base claude command string and necessary environment variables.
--- @local
 -- @return string|nil cmd_string The command string, or nil on failure.
 -- @return table|nil env_table The environment variables table, or nil on failure.
 local function get_claude_command_and_env()
@@ -355,7 +343,6 @@ local function get_claude_command_and_env()
 end
 
 --- Find any existing Claude Code terminal buffer by checking terminal job command
--- @local
 -- @return number|nil Buffer number if found, nil otherwise
 local function find_existing_claude_terminal()
   local buffers = vim.api.nvim_list_bufs()
