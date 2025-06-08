@@ -275,16 +275,69 @@ function M.get_files_from_visual_selection(visual_data)
       end
     end
   elseif tree_type == "nvim-tree" then
-    -- For nvim-tree, we'll fall back to using the integrations module
-    -- since nvim-tree doesn't have the same line-to-node mapping as neo-tree
-    local integrations = require("claudecode.integrations")
-    local tree_files, tree_err = integrations._get_nvim_tree_selection()
+    -- For nvim-tree, we need to manually map visual lines to tree nodes
+    -- since nvim-tree doesn't have direct line-to-node mapping like neo-tree
+    require("claudecode.logger").debug(
+      "visual_commands",
+      "Processing nvim-tree visual selection from line",
+      start_pos,
+      "to",
+      end_pos
+    )
 
-    if tree_err then
-      return {}, tree_err
+    local nvim_tree_api = tree_state
+    local current_buf = vim.api.nvim_get_current_buf()
+
+    -- Get all lines in the visual selection
+    local lines = vim.api.nvim_buf_get_lines(current_buf, start_pos - 1, end_pos, false)
+
+    require("claudecode.logger").debug("visual_commands", "Found", #lines, "lines in visual selection")
+
+    -- For each line in the visual selection, try to get the corresponding node
+    for i, line_content in ipairs(lines) do
+      local line_num = start_pos + i - 1
+
+      -- Set cursor to this line to get the node
+      pcall(vim.api.nvim_win_set_cursor, 0, { line_num, 0 })
+
+      -- Get node under cursor for this line
+      local node_success, node = pcall(nvim_tree_api.tree.get_node_under_cursor)
+      if node_success and node then
+        require("claudecode.logger").debug(
+          "visual_commands",
+          "Line",
+          line_num,
+          "node type:",
+          node.type,
+          "path:",
+          node.absolute_path
+        )
+
+        if node.type == "file" and node.absolute_path and node.absolute_path ~= "" then
+          -- Check if it's not a root-level file (basic protection)
+          if not string.match(node.absolute_path, "^/[^/]*$") then
+            table.insert(files, node.absolute_path)
+          end
+        elseif node.type == "directory" and node.absolute_path and node.absolute_path ~= "" then
+          table.insert(files, node.absolute_path)
+        end
+      else
+        require("claudecode.logger").debug("visual_commands", "No valid node found for line", line_num)
+      end
     end
 
-    files = tree_files
+    require("claudecode.logger").debug("visual_commands", "Extracted", #files, "files from nvim-tree visual selection")
+
+    -- Remove duplicates while preserving order
+    local seen = {}
+    local unique_files = {}
+    for _, file_path in ipairs(files) do
+      if not seen[file_path] then
+        seen[file_path] = true
+        table.insert(unique_files, file_path)
+      end
+    end
+    files = unique_files
   end
 
   return files, nil
