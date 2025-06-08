@@ -572,4 +572,3 @@ function M.get_active_terminal_bufnr()
 end
 
 return M
-
