@@ -59,12 +59,9 @@ jobs:
 
       - name: Generate coverage report
         run: |
-          # Check if stats file exists (created by busted --coverage)
           if [ -f "luacov.stats.out" ]; then
-            # Generate the regular luacov report
             nix develop .#ci -c luacov
 
-            # Create simple lcov.info from luacov.report.out
             echo "Creating lcov.info from luacov.report.out"
             {
               echo "TN:"
@@ -81,12 +78,10 @@ jobs:
               done
             } > lcov.info
 
-            # Create markdown coverage summary for GitHub Actions
             {
               echo "## 📊 Test Coverage Report"
               echo ""
 
-              # Extract overall coverage percentage
               if [ -f "luacov.report.out" ]; then
                 overall_coverage=$(grep -E "Total.*%" luacov.report.out | grep -oE "[0-9]+\.[0-9]+%" | head -1)
                 if [ -n "$overall_coverage" ]; then
@@ -94,11 +89,9 @@ jobs:
                   echo ""
                 fi
 
-                # Create table header
                 echo "| File | Coverage |"
                 echo "|------|----------|"
 
-                # Extract file-by-file coverage
                 grep -E "^[^ ].*:" luacov.report.out | while read -r line; do
                   file=$(echo "$line" | cut -d':' -f1)
                   percent=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+%" | head -1)
