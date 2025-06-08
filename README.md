@@ -81,7 +81,7 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 - `:ClaudeCode` - Toggle the Claude Code terminal window
 - `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
 - `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context (also available via ClaudeCodeSend)
-- `:ClaudeCodeAdd <file-path>` - Add a specific file or directory to Claude context by path
+- `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add a specific file or directory to Claude context by path with optional line range
 
 ### Tree Integration
 
@@ -101,35 +101,44 @@ This allows you to quickly add entire files to Claude's context for review, refa
 
 ### Direct File Addition
 
-The `:ClaudeCodeAdd` command allows you to add files or directories directly by path:
+The `:ClaudeCodeAdd` command allows you to add files or directories directly by path, with optional line range specification:
 
 ```vim
 :ClaudeCodeAdd src/main.lua
 :ClaudeCodeAdd ~/projects/myproject/
 :ClaudeCodeAdd ./README.md
+:ClaudeCodeAdd src/main.lua 50 100    " Lines 50-100 only
+:ClaudeCodeAdd config.lua 25          " From line 25 to end of file
 ```
 
 #### Features
 
 - **Path completion**: Tab completion for file and directory paths
 - **Path expansion**: Supports `~` for home directory and relative paths
-- **Validation**: Checks that files and directories exist before adding
+- **Line range support**: Optionally specify start and end lines for files (ignored for directories)
+- **Validation**: Checks that files and directories exist before adding, validates line numbers
 - **Flexible**: Works with both individual files and entire directories
 
 #### Examples
 
 ```vim
-" Add a specific file
+" Add entire files
 :ClaudeCodeAdd src/components/Header.tsx
-
-" Add an entire directory
-:ClaudeCodeAdd tests/
-
-" Add file in home directory
 :ClaudeCodeAdd ~/.config/nvim/init.lua
 
-" Add relative path
-:ClaudeCodeAdd ../other-project/package.json
+" Add entire directories (line numbers ignored)
+:ClaudeCodeAdd tests/
+:ClaudeCodeAdd ../other-project/
+
+" Add specific line ranges
+:ClaudeCodeAdd src/main.lua 50 100        " Lines 50 through 100
+:ClaudeCodeAdd config.lua 25              " From line 25 to end of file
+:ClaudeCodeAdd utils.py 1 50              " First 50 lines
+:ClaudeCodeAdd README.md 10 20            " Just lines 10-20
+
+" Path expansion works with line ranges
+:ClaudeCodeAdd ~/project/src/app.js 100 200
+:ClaudeCodeAdd ./relative/path.lua 30
 ```
 
 ## How It Works

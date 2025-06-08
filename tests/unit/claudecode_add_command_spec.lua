@@ -32,14 +32,14 @@ describe("ClaudeCodeAdd command", function()
     end)
 
     vim.fn.filereadable = spy.new(function(path)
-      if path == "/existing/file.lua" or path == "/home/user/test.lua" then
+      if path == "/existing/file.lua" or path == "/home/user/test.lua" or path == "/current/dir/relative.lua" then
         return 1
       end
       return 0
     end)
 
     vim.fn.isdirectory = spy.new(function(path)
-      if path == "/existing/dir" or path == "/current/dir/relative.lua" then
+      if path == "/existing/dir" then
         return 1
       end
       return 0
@@ -119,11 +119,11 @@ describe("ClaudeCodeAdd command", function()
         if call.vals[1] == "ClaudeCodeAdd" then
           add_command_found = true
 
-          -- Check command configuration
           local config = call.vals[3]
-          assert.is_equal(1, config.nargs)
+          assert.is_equal("+", config.nargs)
           assert.is_equal("file", config.complete)
           assert.is_string(config.desc)
+          assert.is_true(string.find(config.desc, "line range") ~= nil, "Description should mention line range support")
           break
         end
       end
@@ -138,7 +138,6 @@ describe("ClaudeCodeAdd command", function()
     before_each(function()
       claudecode.setup({ auto_start = false })
 
-      -- Extract the command handler
       for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
         if call.vals[1] == "ClaudeCodeAdd" then
           command_handler = call.vals[2]
@@ -156,21 +155,18 @@ describe("ClaudeCodeAdd command", function()
         command_handler({ args = "/existing/file.lua" })
 
         assert.spy(mock_logger.error).was_called()
-        assert.spy(vim.notify).was_called()
       end)
 
       it("should error when no file path is provided", function()
         command_handler({ args = "" })
 
         assert.spy(mock_logger.error).was_called()
-        assert.spy(vim.notify).was_called()
       end)
 
       it("should error when file does not exist", function()
         command_handler({ args = "/nonexistent/file.lua" })
 
         assert.spy(mock_logger.error).was_called()
-        assert.spy(vim.notify).was_called()
       end)
     end)
 
@@ -227,7 +223,6 @@ describe("ClaudeCodeAdd command", function()
         command_handler({ args = "/existing/file.lua" })
 
         assert.spy(mock_logger.error).was_called()
-        assert.spy(vim.notify).was_called()
       end)
     end)
 
@@ -240,7 +235,6 @@ describe("ClaudeCodeAdd command", function()
 
         command_handler({ args = "/current/dir/src/test.lua" })
 
-        -- Just verify that broadcast was called with the expected structure
         assert.spy(mock_server.broadcast).was_called_with("at_mentioned", match.is_table())
         assert.spy(mock_logger.debug).was_called()
       end)
@@ -253,6 +247,172 @@ describe("ClaudeCodeAdd command", function()
           lineStart = nil,
           lineEnd = nil,
         })
+      end)
+    end)
+
+    describe("line number conversion", function()
+      it("should convert 1-indexed user input to 0-indexed for Claude", function()
+        command_handler({ args = "/existing/file.lua 1 3" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "/existing/file.lua",
+          lineStart = 0,
+          lineEnd = 2,
+        })
+      end)
+    end)
+
+    describe("line range functionality", function()
+      describe("argument parsing", function()
+        it("should parse single file path correctly", function()
+          command_handler({ args = "/existing/file.lua" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/file.lua",
+            lineStart = nil,
+            lineEnd = nil,
+          })
+        end)
+
+        it("should parse file path with start line", function()
+          command_handler({ args = "/existing/file.lua 50" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/file.lua",
+            lineStart = 49,
+            lineEnd = nil,
+          })
+        end)
+
+        it("should parse file path with start and end lines", function()
+          command_handler({ args = "/existing/file.lua 50 100" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/file.lua",
+            lineStart = 49,
+            lineEnd = 99,
+          })
+        end)
+      end)
+
+      describe("line number validation", function()
+        it("should error on invalid start line number", function()
+          command_handler({ args = "/existing/file.lua abc" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+
+        it("should error on invalid end line number", function()
+          command_handler({ args = "/existing/file.lua 50 xyz" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+
+        it("should error on negative start line", function()
+          command_handler({ args = "/existing/file.lua -5" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+
+        it("should error on negative end line", function()
+          command_handler({ args = "/existing/file.lua 10 -20" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+
+        it("should error on zero line numbers", function()
+          command_handler({ args = "/existing/file.lua 0 10" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+
+        it("should error when start line > end line", function()
+          command_handler({ args = "/existing/file.lua 100 50" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+
+        it("should error on too many arguments", function()
+          command_handler({ args = "/existing/file.lua 10 20 30" })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+      end)
+
+      describe("directory handling with line numbers", function()
+        it("should ignore line numbers for directories and warn", function()
+          command_handler({ args = "/existing/dir 50 100" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/dir/",
+            lineStart = nil,
+            lineEnd = nil,
+          })
+          assert.spy(mock_logger.debug).was_called()
+        end)
+      end)
+
+      describe("valid line range scenarios", function()
+        it("should handle start line equal to end line", function()
+          command_handler({ args = "/existing/file.lua 50 50" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/file.lua",
+            lineStart = 49,
+            lineEnd = 49, -- 50 - 1 (converted to 0-indexed)
+          })
+        end)
+
+        it("should handle large line numbers", function()
+          command_handler({ args = "/existing/file.lua 1000 2000" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/file.lua",
+            lineStart = 999,
+            lineEnd = 1999,
+          })
+        end)
+
+        it("should handle single line specification", function()
+          command_handler({ args = "/existing/file.lua 42" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/file.lua",
+            lineStart = 41,
+            lineEnd = nil,
+          })
+        end)
+      end)
+
+      describe("path expansion with line ranges", function()
+        it("should expand tilde paths with line numbers", function()
+          command_handler({ args = "~/test.lua 10 20" })
+
+          assert.spy(vim.fn.expand).was_called_with("~/test.lua")
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/home/user/test.lua",
+            lineStart = 9,
+            lineEnd = 19,
+          })
+        end)
+
+        it("should expand relative paths with line numbers", function()
+          command_handler({ args = "./relative.lua 5" })
+
+          assert.spy(vim.fn.expand).was_called_with("./relative.lua")
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/current/dir/relative.lua",
+            lineStart = 4,
+            lineEnd = nil,
+          })
+        end)
       end)
     end)
   end)
@@ -279,7 +439,6 @@ describe("ClaudeCodeAdd command", function()
 
       command_handler({ args = "/existing/file.lua" })
 
-      -- The command should call the format function and broadcast
       assert.spy(mock_server.broadcast).was_called()
 
       -- Restore original function

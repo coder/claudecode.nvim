@@ -273,25 +273,38 @@ function M._create_commands()
   ---@param file_path string The file path to broadcast
   ---@return boolean success Whether the broadcast was successful
   ---@return string|nil error Error message if broadcast failed
-  local function broadcast_at_mention(file_path)
+  local function broadcast_at_mention(file_path, start_line, end_line)
     if not M.state.server then
       return false, "Claude Code integration is not running"
     end
 
     local formatted_path, is_directory = format_path_for_at_mention(file_path)
 
+    if is_directory and (start_line or end_line) then
+      logger.debug("command", "Line numbers ignored for directory: " .. formatted_path)
+      start_line = nil
+      end_line = nil
+    end
+
     local params = {
       filePath = formatted_path,
-      lineStart = nil,
-      lineEnd = nil,
+      lineStart = start_line,
+      lineEnd = end_line,
     }
 
     local broadcast_success = M.state.server.broadcast("at_mentioned", params)
     if broadcast_success then
-      logger.debug(
-        "command",
-        "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
-      )
+      local message = "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+      if not is_directory and (start_line or end_line) then
+        local range_info = ""
+        if start_line and end_line then
+          range_info = " (lines " .. start_line .. "-" .. end_line .. ")"
+        elseif start_line then
+          range_info = " (from line " .. start_line .. ")"
+        end
+        message = message .. range_info
+      end
+      logger.debug("command", message)
       return true, nil
     else
       local error_msg = "Failed to broadcast " .. (is_directory and "directory" or "file") .. " " .. formatted_path
@@ -545,35 +558,83 @@ function M._create_commands()
   vim.api.nvim_create_user_command("ClaudeCodeAdd", function(opts)
     if not M.state.server then
       logger.error("command", "ClaudeCodeAdd: Claude Code integration is not running.")
-      vim.notify("Claude Code integration is not running", vim.log.levels.ERROR)
       return
     end
 
-    local file_path = opts.args
-    if not file_path or file_path == "" then
+    if not opts.args or opts.args == "" then
       logger.error("command", "ClaudeCodeAdd: No file path provided")
-      vim.notify("ClaudeCodeAdd: Please provide a file path", vim.log.levels.ERROR)
+      return
+    end
+
+    local args = vim.split(opts.args, "%s+")
+    local file_path = args[1]
+    local start_line = args[2] and tonumber(args[2]) or nil
+    local end_line = args[3] and tonumber(args[3]) or nil
+
+    if #args > 3 then
+      logger.error(
+        "command",
+        "ClaudeCodeAdd: Too many arguments. Usage: ClaudeCodeAdd <file-path> [start-line] [end-line]"
+      )
+      return
+    end
+
+    if args[2] and not start_line then
+      logger.error("command", "ClaudeCodeAdd: Invalid start line number: " .. args[2])
+      return
+    end
+
+    if args[3] and not end_line then
+      logger.error("command", "ClaudeCodeAdd: Invalid end line number: " .. args[3])
+      return
+    end
+
+    if start_line and start_line < 1 then
+      logger.error("command", "ClaudeCodeAdd: Start line must be positive: " .. start_line)
+      return
+    end
+
+    if end_line and end_line < 1 then
+      logger.error("command", "ClaudeCodeAdd: End line must be positive: " .. end_line)
+      return
+    end
+
+    if start_line and end_line and start_line > end_line then
+      logger.error(
+        "command",
+        "ClaudeCodeAdd: Start line (" .. start_line .. ") must be <= end line (" .. end_line .. ")"
+      )
       return
     end
 
     file_path = vim.fn.expand(file_path)
     if vim.fn.filereadable(file_path) == 0 and vim.fn.isdirectory(file_path) == 0 then
       logger.error("command", "ClaudeCodeAdd: File or directory does not exist: " .. file_path)
-      vim.notify("ClaudeCodeAdd: File or directory does not exist: " .. file_path, vim.log.levels.ERROR)
       return
     end
 
-    local success, error_msg = broadcast_at_mention(file_path)
+    -- Convert 1-indexed user input to 0-indexed for Claude
+    local claude_start_line = start_line and (start_line - 1) or nil
+    local claude_end_line = end_line and (end_line - 1) or nil
+
+    local success, error_msg = broadcast_at_mention(file_path, claude_start_line, claude_end_line)
     if not success then
       logger.error("command", "ClaudeCodeAdd: " .. (error_msg or "Failed to add file"))
-      vim.notify("ClaudeCodeAdd: " .. (error_msg or "Failed to add file"), vim.log.levels.ERROR)
     else
-      logger.debug("command", "ClaudeCodeAdd: Successfully added " .. file_path)
+      local message = "ClaudeCodeAdd: Successfully added " .. file_path
+      if start_line or end_line then
+        if start_line and end_line then
+          message = message .. " (lines " .. start_line .. "-" .. end_line .. ")"
+        elseif start_line then
+          message = message .. " (from line " .. start_line .. ")"
+        end
+      end
+      logger.debug("command", message)
     end
   end, {
-    nargs = 1,
+    nargs = "+",
     complete = "file",
-    desc = "Add specified file or directory to Claude Code context",
+    desc = "Add specified file or directory to Claude Code context with optional line range",
   })
 
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
