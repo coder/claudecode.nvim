@@ -1,7 +1,7 @@
 .PHONY: check format test clean
 
 # Default target
-all: check format
+all: format check test
 
 # Check for syntax errors
 check:

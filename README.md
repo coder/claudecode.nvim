@@ -81,6 +81,7 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 - `:ClaudeCode` - Toggle the Claude Code terminal window
 - `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
 - `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context (also available via ClaudeCodeSend)
+- `:ClaudeCodeAdd <file-path>` - Add a specific file or directory to Claude context by path
 
 ### Tree Integration
 
@@ -97,6 +98,39 @@ This allows you to quickly add entire files to Claude's context for review, refa
 - **Multiple files**: Select multiple files (using tree plugin's selection features) and press `<leader>as`
 - **Smart detection**: Automatically detects whether you're in nvim-tree or neo-tree
 - **Error handling**: Clear feedback if no files are selected or if tree plugins aren't available
+
+### Direct File Addition
+
+The `:ClaudeCodeAdd` command allows you to add files or directories directly by path:
+
+```vim
+:ClaudeCodeAdd src/main.lua
+:ClaudeCodeAdd ~/projects/myproject/
+:ClaudeCodeAdd ./README.md
+```
+
+#### Features
+
+- **Path completion**: Tab completion for file and directory paths
+- **Path expansion**: Supports `~` for home directory and relative paths
+- **Validation**: Checks that files and directories exist before adding
+- **Flexible**: Works with both individual files and entire directories
+
+#### Examples
+
+```vim
+" Add a specific file
+:ClaudeCodeAdd src/components/Header.tsx
+
+" Add an entire directory
+:ClaudeCodeAdd tests/
+
+" Add file in home directory
+:ClaudeCodeAdd ~/.config/nvim/init.lua
+
+" Add relative path
+:ClaudeCodeAdd ../other-project/package.json
+```
 
 ## How It Works
 
