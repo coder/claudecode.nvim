@@ -515,7 +515,7 @@ function M.get_active_terminal_bufnr()
 end
 
 
-return M
+
 
 --- Finds the existing Claude terminal buffer, even if it's not in a window.
 -- @local
