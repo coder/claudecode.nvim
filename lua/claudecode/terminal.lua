@@ -516,9 +516,10 @@ function M.toggle(opts_override)
       local current_neovim_win_id = vim.api.nvim_get_current_win()
 
       if claude_term_neovim_win_id == current_neovim_win_id then
-        close_fallback_terminal()
+        vim.api.nvim_win_hide(claude_term_neovim_win_id)
       else
-        focus_fallback_terminal() -- This already calls startinsert
+        vim.api.nvim_set_current_win(claude_term_neovim_win_id)
+        vim.cmd("startinsert")
       end
     else
       -- Check if there's an existing Claude terminal we lost track of
@@ -532,7 +533,7 @@ function M.toggle(opts_override)
         -- Check if we're currently in this terminal
         local current_neovim_win_id = vim.api.nvim_get_current_win()
         if existing_win == current_neovim_win_id then
-          close_fallback_terminal()
+          vim.api.nvim_win_hide(existing_win)
         else
           focus_fallback_terminal()
         end
@@ -572,15 +573,3 @@ end
 
 return M
 
---- Toggles the Claude terminal window.
--- If the terminal is already open, it brings it to focus.
--- If it's not open, it creates a new terminal.
-function M.toggle_fallback_terminal()
-  if is_fallback_terminal_valid() then
-    vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
-  else
-    local cmd_string = get_claude_command()
-    local env_table = { CLAUDE_TERMINAL_MODE = "true" } 
-    open_fallback_terminal(cmd_string, env_table, term_module_config)
-  end
-end
