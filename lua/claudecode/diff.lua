@@ -399,11 +399,14 @@ end
 --- Apply accepted changes to the original file and reload open buffers
 -- @param diff_data table The diff state data
 -- @param final_content string The final content to write
+-- @return boolean success Whether the operation succeeded
+-- @return string|nil error Error message if operation failed
 function M._apply_accepted_changes(diff_data, final_content)
   local old_file_path = diff_data.old_file_path
   if not old_file_path then
-    require("claudecode.logger").error("diff", "No old_file_path found in diff_data")
-    return
+    local error_msg = "No old_file_path found in diff_data"
+    require("claudecode.logger").error("diff", error_msg)
+    return false, error_msg
   end
 
   require("claudecode.logger").debug("diff", "Writing accepted changes to file:", old_file_path)
@@ -415,14 +418,9 @@ function M._apply_accepted_changes(diff_data, final_content)
       require("claudecode.logger").debug("diff", "Creating parent directories for new file:", parent_dir)
       local mkdir_success, mkdir_err = pcall(vim.fn.mkdir, parent_dir, "p")
       if not mkdir_success then
-        require("claudecode.logger").error(
-          "diff",
-          "Failed to create parent directories:",
-          parent_dir,
-          "error:",
-          mkdir_err
-        )
-        return
+        local error_msg = "Failed to create parent directories: " .. parent_dir .. " - " .. tostring(mkdir_err)
+        require("claudecode.logger").error("diff", error_msg)
+        return false, error_msg
       end
       require("claudecode.logger").debug("diff", "Successfully created parent directories:", parent_dir)
     end
@@ -433,8 +431,9 @@ function M._apply_accepted_changes(diff_data, final_content)
   local success, err = pcall(vim.fn.writefile, lines, old_file_path)
 
   if not success then
-    require("claudecode.logger").error("diff", "Failed to write file:", old_file_path, "error:", err)
-    return
+    local error_msg = "Failed to write file: " .. old_file_path .. " - " .. tostring(err)
+    require("claudecode.logger").error("diff", error_msg)
+    return false, error_msg
   end
 
   require("claudecode.logger").debug("diff", "Successfully wrote changes to", old_file_path)
@@ -454,6 +453,8 @@ function M._apply_accepted_changes(diff_data, final_content)
       end
     end
   end
+
+  return true, nil
 end
 
 --- Resolve diff as accepted with final content

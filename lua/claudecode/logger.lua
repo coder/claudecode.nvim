@@ -112,6 +112,17 @@ function M.info(component, ...)
   end
 end
 
+--- Check if a specific log level is enabled
+-- @param level_name string The level name ("error", "warn", "info", "debug", "trace")
+-- @return boolean Whether the level is enabled
+function M.is_level_enabled(level_name)
+  local level_value = level_values[level_name]
+  if not level_value then
+    return false
+  end
+  return level_value <= current_log_level_value
+end
+
 --- @param component string|nil Optional component/module name.
 -- @param ... any Varargs representing parts of the message.
 function M.debug(component, ...)

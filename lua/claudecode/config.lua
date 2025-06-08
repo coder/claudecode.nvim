@@ -18,8 +18,6 @@ M.defaults = {
 }
 
 --- @param config table The configuration table to validate.
--- @return boolean true if the configuration is valid.
--- @error string if any configuration option is invalid.
 function M.validate(config)
   assert(
     type(config.port_range) == "table"
@@ -63,7 +61,6 @@ function M.validate(config)
 end
 
 --- @param user_config table|nil The user-provided configuration table.
--- @return table The final, validated configuration table.
 function M.apply(user_config)
   local config = vim.deepcopy(M.defaults)
 

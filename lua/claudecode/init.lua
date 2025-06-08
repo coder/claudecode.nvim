@@ -46,7 +46,7 @@ local default_config = {
   terminal_cmd = nil,
   log_level = "info",
   track_selection = true,
-  visual_demotion_delay_ms = 50,
+  visual_demotion_delay_ms = 50, -- Reduced from 200ms for better responsiveness in tree navigation
   diff_opts = {
     auto_close_on_accept = true,
     show_diff_stats = true,
@@ -294,17 +294,25 @@ function M._create_commands()
 
     local broadcast_success = M.state.server.broadcast("at_mentioned", params)
     if broadcast_success then
-      local message = "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
-      if not is_directory and (start_line or end_line) then
-        local range_info = ""
-        if start_line and end_line then
-          range_info = " (lines " .. start_line .. "-" .. end_line .. ")"
-        elseif start_line then
-          range_info = " (from line " .. start_line .. ")"
+      if logger.is_level_enabled and logger.is_level_enabled("debug") then
+        local message = "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+        if not is_directory and (start_line or end_line) then
+          local range_info = ""
+          if start_line and end_line then
+            range_info = " (lines " .. start_line .. "-" .. end_line .. ")"
+          elseif start_line then
+            range_info = " (from line " .. start_line .. ")"
+          end
+          message = message .. range_info
         end
-        message = message .. range_info
+        logger.debug("command", message)
+      elseif not logger.is_level_enabled then
+        -- Fallback for tests or environments where logger isn't fully initialized
+        logger.debug(
+          "command",
+          "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+        )
       end
-      logger.debug("command", message)
       return true, nil
     else
       local error_msg = "Failed to broadcast " .. (is_directory and "directory" or "file") .. " " .. formatted_path
