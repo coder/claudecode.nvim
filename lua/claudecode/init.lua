@@ -299,7 +299,7 @@ function M._create_commands()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then -- \22 is CTRL-V (blockwise visual mode)
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      terminal.toggle({}) -- `opts.fargs` can be used for future enhancements.
+      terminal.toggle_fallback_terminal() -- `opts.fargs` can be used for future enhancements.
     end, {
       nargs = "?",
       desc = "Toggle the Claude Code terminal window",

@@ -238,7 +238,7 @@ local function open_fallback_terminal(cmd_string, env_table, effective_term_conf
 
   managed_fallback_terminal_winid = new_winid
   managed_fallback_terminal_bufnr = vim.api.nvim_get_current_buf()
-  vim.bo[managed_fallback_terminal_bufnr].bufhidden = "wipe" -- Wipe buffer when hidden (e.g., window closed)
+  vim.bo[managed_fallback_terminal_bufnr].bufhidden = "hide" -- Wipe buffer when hidden (e.g., window closed)
   -- buftype=terminal is set by termopen
 
   vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
@@ -571,3 +571,16 @@ function M.get_active_terminal_bufnr()
 end
 
 return M
+
+--- Toggles the Claude terminal window.
+-- If the terminal is already open, it brings it to focus.
+-- If it's not open, it creates a new terminal.
+function M.toggle_fallback_terminal()
+  if is_fallback_terminal_valid() then
+    vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
+  else
+    local cmd_string = get_claude_command()
+    local env_table = { CLAUDE_TERMINAL_MODE = "true" } 
+    open_fallback_terminal(cmd_string, env_table, term_module_config)
+  end
+end
