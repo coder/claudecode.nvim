@@ -517,3 +517,51 @@ end
 
 return M
 
+--- Finds the existing Claude terminal buffer, even if it's not in a window.
+-- @local
+-- @return number|nil The buffer number if found, otherwise nil.
+local function find_existing_terminal_buffer_by_name()
+  local buffers = vim.api.nvim_list_bufs()
+  for _, buf in ipairs(buffers) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == 'terminal' then
+      local buf_name = vim.api.nvim_buf_get_name(buf)
+      if buf_name:match("claude") then
+        return buf
+      end
+    end
+  end
+  return nil
+end
+
+--- Opens a window for an existing buffer.
+-- @local
+-- @param bufnr number The buffer number to open.
+-- @param effective_term_config table Configuration for split_side and split_width_percentage.
+local function open_window_for_buffer(bufnr, effective_term_config)
+  local original_win = vim.api.nvim_get_current_win()
+
+  local width = math.floor(vim.o.columns * effective_term_config.split_width_percentage)
+  local full_height = vim.o.lines
+  local placement_modifier
+
+  if effective_term_config.split_side == "left" then
+    placement_modifier = "topleft "
+  else
+    placement_modifier = "botright "
+  end
+
+  vim.cmd(placement_modifier .. width .. "vsplit")
+
+  local new_winid = vim.api.nvim_get_current_win()
+
+  vim.api.nvim_win_set_height(new_winid, full_height)
+
+  vim.api.nvim_win_set_buf(new_winid, bufnr)
+
+  managed_fallback_terminal_winid = new_winid
+  managed_fallback_terminal_bufnr = bufnr
+
+  vim.api.nvim_set_current_win(managed_fallback_terminal_winid)
+  vim.cmd("startinsert")
+end
+
