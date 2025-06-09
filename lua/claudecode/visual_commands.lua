@@ -166,6 +166,13 @@ function M.get_tree_state()
     end
 
     return nvim_tree_api, "nvim-tree"
+  elseif current_ft == "oil" then
+    local oil_success, oil = pcall(require, "oil")
+    if not oil_success then
+      return nil, nil
+    end
+
+    return oil, "oil"
   else
     return nil, nil
   end
@@ -338,6 +345,35 @@ function M.get_files_from_visual_selection(visual_data)
       end
     end
     files = unique_files
+  elseif tree_type == "oil" then
+    local oil = tree_state
+    local bufnr = vim.api.nvim_get_current_buf()
+
+    -- Get current directory once
+    local dir_ok, current_dir = pcall(oil.get_current_dir, bufnr)
+    if dir_ok and current_dir then
+      local integrations = require("claudecode.integrations")
+      -- Access the process_oil_entry function through a module method
+      for line = start_pos, end_pos do
+        local entry_ok, entry = pcall(oil.get_entry_on_line, bufnr, line)
+        if entry_ok and entry and entry.name then
+          -- Skip parent directory entries
+          if entry.name ~= ".." and entry.name ~= "." then
+            local full_path = current_dir .. entry.name
+            -- Handle various entry types
+            if entry.type == "file" or entry.type == "link" then
+              table.insert(files, full_path)
+            elseif entry.type == "directory" then
+              -- Ensure directory paths end with /
+              table.insert(files, full_path:match("/$") and full_path or full_path .. "/")
+            else
+              -- For unknown types, return the path anyway
+              table.insert(files, full_path)
+            end
+          end
+        end
+      end
+    end
   end
 
   return files, nil

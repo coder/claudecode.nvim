@@ -1,6 +1,6 @@
 ---
 -- Tree integration module for ClaudeCode.nvim
--- Handles detection and selection of files from nvim-tree and neo-tree
+-- Handles detection and selection of files from nvim-tree, neo-tree, and oil.nvim
 -- @module claudecode.integrations
 local M = {}
 
@@ -14,6 +14,8 @@ function M.get_selected_files_from_tree()
     return M._get_nvim_tree_selection()
   elseif current_ft == "neo-tree" then
     return M._get_neotree_selection()
+  elseif current_ft == "oil" then
+    return M._get_oil_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
@@ -171,6 +173,89 @@ function M._get_neotree_selection()
         return { node.path }, nil
       elseif node.type == "directory" and node.path then
         return { node.path }, nil
+      end
+    end
+  end
+
+  return {}, "No file found under cursor"
+end
+
+
+
+--- Get selected files from oil.nvim
+--- Supports both visual selection and single file under cursor
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_oil_selection()
+  local success, oil = pcall(require, "oil")
+  if not success then
+    return {}, "oil.nvim not available"
+  end
+
+  local bufnr = vim.api.nvim_get_current_buf() --[[@as number]]
+  local files = {}
+
+  -- Check if we're in visual mode
+  local mode = vim.fn.mode()
+  if mode == "V" or mode == "v" or mode == "\22" then
+    -- Visual mode: use the common visual range function
+    local visual_commands = require("claudecode.visual_commands")
+    local start_line, end_line = visual_commands.get_visual_range()
+
+    -- Get current directory once
+    local dir_ok, current_dir = pcall(oil.get_current_dir, bufnr)
+    if not dir_ok or not current_dir then
+      return {}, "Failed to get current directory"
+    end
+
+    -- Process each line in the visual selection
+    for line = start_line, end_line do
+      local entry_ok, entry = pcall(oil.get_entry_on_line, bufnr, line)
+      if entry_ok and entry and entry.name then
+        -- Skip parent directory entries
+        if entry.name ~= ".." and entry.name ~= "." then
+          local full_path = current_dir .. entry.name
+          -- Handle various entry types
+          if entry.type == "file" or entry.type == "link" then
+            table.insert(files, full_path)
+          elseif entry.type == "directory" then
+            -- Ensure directory paths end with /
+            table.insert(files, full_path:match("/$") and full_path or full_path .. "/")
+          else
+            -- For unknown types, return the path anyway
+            table.insert(files, full_path)
+          end
+        end
+      end
+    end
+
+    if #files > 0 then
+      return files, nil
+    end
+  else
+    -- Normal mode: get file under cursor with error handling
+    local ok, entry = pcall(oil.get_cursor_entry)
+    if not ok or not entry then
+      return {}, "Failed to get cursor entry"
+    end
+
+    local dir_ok, current_dir = pcall(oil.get_current_dir, bufnr)
+    if not dir_ok or not current_dir then
+      return {}, "Failed to get current directory"
+    end
+
+    -- Process the entry
+    if entry.name and entry.name ~= ".." and entry.name ~= "." then
+      local full_path = current_dir .. entry.name
+      -- Handle various entry types
+      if entry.type == "file" or entry.type == "link" then
+        return { full_path }, nil
+      elseif entry.type == "directory" then
+        -- Ensure directory paths end with /
+        return { full_path:match("/$") and full_path or full_path .. "/" }, nil
+      else
+        -- For unknown types, return the path anyway
+        return { full_path }, nil
       end
     end
   end

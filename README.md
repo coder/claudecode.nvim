@@ -88,15 +88,15 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 The `<leader>as` keybinding has context-aware behavior:
 
 - **In normal buffers (visual mode)**: Sends selected text to Claude
-- **In nvim-tree/neo-tree buffers**: Adds the file under cursor (or selected files) to Claude's context
+- **In nvim-tree/neo-tree/oil.nvim buffers**: Adds the file under cursor (or selected files) to Claude's context
 
 This allows you to quickly add entire files to Claude's context for review, refactoring, or discussion.
 
 #### Features
 
 - **Single file**: Place cursor on any file and press `<leader>as`
-- **Multiple files**: Select multiple files (using tree plugin's selection features) and press `<leader>as`
-- **Smart detection**: Automatically detects whether you're in nvim-tree or neo-tree
+- **Multiple files**: Select multiple files (using tree plugin's selection features or visual selection in oil.nvim) and press `<leader>as`
+- **Smart detection**: Automatically detects whether you're in nvim-tree, neo-tree, or oil.nvim
 - **Error handling**: Clear feedback if no files are selected or if tree plugins aren't available
 
 ### Direct File Addition
