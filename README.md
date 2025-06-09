@@ -51,6 +51,8 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
   keys = {
     { "<leader>a", nil, desc = "AI/Claude Code" },
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
+    { "<leader>ar", "<cmd>ClaudeCode --resume<cr>", desc = "Resume Claude" },
+    { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
     { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
     {
       "<leader>as",
@@ -78,7 +80,9 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 
 ## Commands
 
-- `:ClaudeCode` - Toggle the Claude Code terminal window
+- `:ClaudeCode [arguments]` - Toggle the Claude Code terminal window (arguments are passed to claude command)
+- `:ClaudeCode --resume` - Resume a previous Claude conversation
+- `:ClaudeCode --continue` - Continue Claude conversation
 - `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
 - `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context (also available via ClaudeCodeSend)
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add a specific file or directory to Claude context by path with optional line range
