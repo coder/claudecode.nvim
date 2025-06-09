@@ -408,6 +408,7 @@ function M._create_commands()
 
     local is_tree_buffer = current_ft == "NvimTree"
       or current_ft == "neo-tree"
+      or current_ft == "oil"
       or string.match(current_bufname, "neo%-tree")
       or string.match(current_bufname, "NvimTree")
 

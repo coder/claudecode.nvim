@@ -75,6 +75,7 @@ local function find_main_editor_window()
         or filetype == "neo-tree-popup"
         or filetype == "ClaudeCode"
         or filetype == "NvimTree"
+        or filetype == "oil"
         or filetype == "aerial"
         or filetype == "tagbar"
       )
