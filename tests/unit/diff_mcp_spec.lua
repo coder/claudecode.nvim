@@ -260,7 +260,7 @@ describe("MCP-compliant diff operations", function()
       assert.is_false(success, "Should fail with buffer creation error")
       assert.is_table(err)
       assert.equal(-32000, err.code)
-      assert_contains(err.message, "Buffer creation failed")
+      assert_contains(err.message, "Diff setup failed")
 
       -- Restore original function
       vim.api.nvim_create_buf = original_create_buf

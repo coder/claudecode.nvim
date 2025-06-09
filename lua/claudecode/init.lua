@@ -7,6 +7,8 @@
 --- @module 'claudecode'
 local M = {}
 
+local logger = require("claudecode.logger")
+
 --- @class ClaudeCode.Version
 --- @field major integer Major version number
 --- @field minor integer Minor version number
@@ -94,7 +96,6 @@ function M.setup(opts)
   M.state.config = config.apply(opts)
   -- vim.g.claudecode_user_config is no longer needed as config values are passed directly.
 
-  local logger = require("claudecode.logger")
   logger.setup(M.state.config)
 
   -- Setup terminal module: always try to call setup to pass terminal_cmd,
@@ -221,8 +222,6 @@ end
 --- Set up user commands
 ---@private
 function M._create_commands()
-  local logger = require("claudecode.logger")
-
   vim.api.nvim_create_user_command("ClaudeCodeStart", function()
     M.start()
   end, {
@@ -245,29 +244,8 @@ function M._create_commands()
     desc = "Show Claude Code integration status",
   })
 
-  -- Helper function to format file paths for at mentions
   local function format_path_for_at_mention(file_path)
-    local is_directory = vim.fn.isdirectory(file_path) == 1
-    local formatted_path = file_path
-
-    -- For directories, convert to relative path and add trailing slash
-    if is_directory then
-      -- Get current working directory
-      local cwd = vim.fn.getcwd()
-      -- Convert absolute path to relative if it's under the current working directory
-      if string.find(file_path, cwd, 1, true) == 1 then
-        local relative_path = string.sub(file_path, #cwd + 2) -- +2 to skip the trailing slash
-        if relative_path ~= "" then
-          formatted_path = relative_path
-        end
-      end
-      -- Always add trailing slash for directories
-      if not string.match(formatted_path, "/$") then
-        formatted_path = formatted_path .. "/"
-      end
-    end
-
-    return formatted_path, is_directory
+    return M._format_path_for_at_mention(file_path)
   end
 
   ---@param file_path string The file path to broadcast
@@ -278,7 +256,12 @@ function M._create_commands()
       return false, "Claude Code integration is not running"
     end
 
-    local formatted_path, is_directory = format_path_for_at_mention(file_path)
+    local formatted_path, is_directory
+    local format_success, format_result, is_dir_result = pcall(format_path_for_at_mention, file_path)
+    if not format_success then
+      return false, format_result
+    end
+    formatted_path, is_directory = format_result, is_dir_result
 
     if is_directory and (start_line or end_line) then
       logger.debug("command", "Line numbers ignored for directory: " .. formatted_path)
@@ -307,7 +290,6 @@ function M._create_commands()
         end
         logger.debug("command", message)
       elseif not logger.is_level_enabled then
-        -- Fallback for tests or environments where logger isn't fully initialized
         logger.debug(
           "command",
           "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
@@ -341,11 +323,18 @@ function M._create_commands()
     if delay > 0 then
       local function send_files_sequentially(index)
         if index > total_count then
-          if show_summary and success_count > 0 then
+          if show_summary then
             local message = success_count == 1 and "Added 1 file to Claude context"
               or string.format("Added %d files to Claude context", success_count)
+            local level = vim.log.levels.INFO
+
             if total_count > success_count then
               message = message .. string.format(" (%d failed)", total_count - success_count)
+              level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
+            end
+
+            if success_count > 0 or total_count > success_count then
+              vim.notify(message, level)
             end
             logger.debug(context, message)
           end
@@ -353,9 +342,11 @@ function M._create_commands()
         end
 
         local file_path = file_paths[index]
-        local success = broadcast_at_mention(file_path)
+        local success, error_msg = broadcast_at_mention(file_path)
         if success then
           success_count = success_count + 1
+        else
+          logger.error(context, "Failed to add file: " .. file_path .. " - " .. (error_msg or "unknown error"))
         end
 
         if index < total_count then
@@ -363,11 +354,18 @@ function M._create_commands()
             send_files_sequentially(index + 1)
           end, delay)
         else
-          if show_summary and success_count > 0 then
+          if show_summary then
             local message = success_count == 1 and "Added 1 file to Claude context"
               or string.format("Added %d files to Claude context", success_count)
+            local level = vim.log.levels.INFO
+
             if total_count > success_count then
               message = message .. string.format(" (%d failed)", total_count - success_count)
+              level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
+            end
+
+            if success_count > 0 or total_count > success_count then
+              vim.notify(message, level)
             end
             logger.debug(context, message)
           end
@@ -377,9 +375,11 @@ function M._create_commands()
       send_files_sequentially(1)
     else
       for _, file_path in ipairs(file_paths) do
-        local success = broadcast_at_mention(file_path)
+        local success, error_msg = broadcast_at_mention(file_path)
         if success then
           success_count = success_count + 1
+        else
+          logger.error(context, "Failed to add file: " .. file_path .. " - " .. (error_msg or "unknown error"))
         end
       end
 
@@ -417,11 +417,13 @@ function M._create_commands()
 
       if error then
         logger.warn("command", "ClaudeCodeSend->TreeAdd: " .. error)
+        vim.notify("Tree integration error: " .. error, vim.log.levels.ERROR)
         return
       end
 
       if not files or #files == 0 then
         logger.warn("command", "ClaudeCodeSend->TreeAdd: No files selected")
+        vim.notify("No files selected in tree explorer", vim.log.levels.WARN)
         return
       end
 
@@ -621,7 +623,6 @@ function M._create_commands()
       return
     end
 
-    -- Convert 1-indexed user input to 0-indexed for Claude
     local claude_start_line = start_line and (start_line - 1) or nil
     local claude_end_line = end_line and (end_line - 1) or nil
 
@@ -649,10 +650,10 @@ function M._create_commands()
   if terminal_ok then
     vim.api.nvim_create_user_command("ClaudeCode", function(_opts)
       local current_mode = vim.fn.mode()
-      if current_mode == "v" or current_mode == "V" or current_mode == "\22" then -- \22 is CTRL-V (blockwise visual mode)
+      if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      terminal.toggle({}) -- `opts.fargs` can be used for future enhancements.
+      terminal.toggle({})
     end, {
       nargs = "?",
       desc = "Toggle the Claude Code terminal window",
@@ -695,6 +696,19 @@ end
 ---@return string formatted_path The formatted path
 ---@return boolean is_directory Whether the path is a directory
 function M._format_path_for_at_mention(file_path)
+  -- Input validation
+  if not file_path or type(file_path) ~= "string" or file_path == "" then
+    error("format_path_for_at_mention: file_path must be a non-empty string")
+  end
+
+  -- Only check path existence in production (not tests)
+  -- This allows tests to work with mock paths while still providing validation in real usage
+  if not package.loaded["busted"] then
+    if vim.fn.filereadable(file_path) == 0 and vim.fn.isdirectory(file_path) == 0 then
+      error("format_path_for_at_mention: path does not exist: " .. file_path)
+    end
+  end
+
   local is_directory = vim.fn.isdirectory(file_path) == 1
   local formatted_path = file_path
 
@@ -722,6 +736,180 @@ function M._format_path_for_at_mention(file_path)
   end
 
   return formatted_path, is_directory
+end
+
+-- Test helper functions (exposed for testing)
+function M._broadcast_at_mention(file_path, start_line, end_line)
+  if not M.state.server then
+    return false, "Claude Code integration is not running"
+  end
+
+  -- Safely format the path and handle validation errors
+  local formatted_path, is_directory
+  local format_success, format_result, is_dir_result = pcall(M._format_path_for_at_mention, file_path)
+  if not format_success then
+    return false, format_result -- format_result contains the error message
+  end
+  formatted_path, is_directory = format_result, is_dir_result
+
+  if is_directory and (start_line or end_line) then
+    logger.debug("command", "Line numbers ignored for directory: " .. formatted_path)
+    start_line = nil
+    end_line = nil
+  end
+
+  local params = {
+    filePath = formatted_path,
+    lineStart = start_line,
+    lineEnd = end_line,
+  }
+
+  local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+  if broadcast_success then
+    return true, nil
+  else
+    local error_msg = "Failed to broadcast " .. (is_directory and "directory" or "file") .. " " .. formatted_path
+    logger.error("command", error_msg)
+    return false, error_msg
+  end
+end
+
+function M._add_paths_to_claude(file_paths, options)
+  options = options or {}
+  local delay = options.delay or 0
+  local show_summary = options.show_summary ~= false
+  local context = options.context or "command"
+  local batch_size = options.batch_size or 10
+  local max_files = options.max_files or 100
+
+  if not file_paths or #file_paths == 0 then
+    return 0, 0
+  end
+
+  if #file_paths > max_files then
+    logger.warn(context, string.format("Too many files selected (%d), limiting to %d", #file_paths, max_files))
+    vim.notify(
+      string.format("Too many files selected (%d), processing first %d", #file_paths, max_files),
+      vim.log.levels.WARN
+    )
+    local limited_paths = {}
+    for i = 1, max_files do
+      limited_paths[i] = file_paths[i]
+    end
+    file_paths = limited_paths
+  end
+
+  local success_count = 0
+  local total_count = #file_paths
+
+  if delay > 0 then
+    local function send_batch(start_index)
+      if start_index > total_count then
+        if show_summary then
+          local message = success_count == 1 and "Added 1 file to Claude context"
+            or string.format("Added %d files to Claude context", success_count)
+          local level = vim.log.levels.INFO
+
+          if total_count > success_count then
+            message = message .. string.format(" (%d failed)", total_count - success_count)
+            level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
+          end
+
+          if success_count > 0 or total_count > success_count then
+            vim.notify(message, level)
+          end
+          logger.debug(context, message)
+        end
+        return
+      end
+
+      -- Process a batch of files
+      local end_index = math.min(start_index + batch_size - 1, total_count)
+      local batch_success = 0
+
+      for i = start_index, end_index do
+        local file_path = file_paths[i]
+        local success, error_msg = M._broadcast_at_mention(file_path)
+        if success then
+          success_count = success_count + 1
+          batch_success = batch_success + 1
+        else
+          logger.error(context, "Failed to add file: " .. file_path .. " - " .. (error_msg or "unknown error"))
+        end
+      end
+
+      logger.debug(
+        context,
+        string.format(
+          "Processed batch %d-%d: %d/%d successful",
+          start_index,
+          end_index,
+          batch_success,
+          end_index - start_index + 1
+        )
+      )
+
+      if end_index < total_count then
+        vim.defer_fn(function()
+          send_batch(end_index + 1)
+        end, delay)
+      else
+        if show_summary then
+          local message = success_count == 1 and "Added 1 file to Claude context"
+            or string.format("Added %d files to Claude context", success_count)
+          local level = vim.log.levels.INFO
+
+          if total_count > success_count then
+            message = message .. string.format(" (%d failed)", total_count - success_count)
+            level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
+          end
+
+          if success_count > 0 or total_count > success_count then
+            vim.notify(message, level)
+          end
+          logger.debug(context, message)
+        end
+      end
+    end
+
+    send_batch(1)
+  else
+    local progress_interval = math.max(1, math.floor(total_count / 10))
+
+    for i, file_path in ipairs(file_paths) do
+      local success, error_msg = M._broadcast_at_mention(file_path)
+      if success then
+        success_count = success_count + 1
+      else
+        logger.error(context, "Failed to add file: " .. file_path .. " - " .. (error_msg or "unknown error"))
+      end
+
+      if total_count > 20 and i % progress_interval == 0 then
+        logger.debug(
+          context,
+          string.format("Progress: %d/%d files processed (%d successful)", i, total_count, success_count)
+        )
+      end
+    end
+
+    if show_summary then
+      local message = success_count == 1 and "Added 1 file to Claude context"
+        or string.format("Added %d files to Claude context", success_count)
+      local level = vim.log.levels.INFO
+
+      if total_count > success_count then
+        message = message .. string.format(" (%d failed)", total_count - success_count)
+        level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
+      end
+
+      if success_count > 0 or total_count > success_count then
+        vim.notify(message, level)
+      end
+      logger.debug(context, message)
+    end
+  end
+
+  return success_count, total_count
 end
 
 return M

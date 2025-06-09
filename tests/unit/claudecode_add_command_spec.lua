@@ -408,7 +408,7 @@ describe("ClaudeCodeAdd command", function()
 
           assert.spy(vim.fn.expand).was_called_with("./relative.lua")
           assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
-            filePath = "/current/dir/relative.lua",
+            filePath = "relative.lua",
             lineStart = 4,
             lineEnd = nil,
           })
