@@ -284,4 +284,175 @@ describe("claudecode.init", function()
       assert(#mock_lockfile.remove.calls == 0, "Lockfile remove was called unexpectedly")
     end)
   end)
+
+  describe("ClaudeCode command with arguments", function()
+    local mock_terminal
+
+    before_each(function()
+      mock_terminal = {
+        toggle = spy.new(function() end),
+        open = spy.new(function() end),
+        close = spy.new(function() end),
+        setup = spy.new(function() end),
+      }
+
+      local original_require = _G.require
+      _G.require = function(mod)
+        if mod == "claudecode.terminal" then
+          return mock_terminal
+        elseif mod == "claudecode.server.init" then
+          return mock_server
+        elseif mod == "claudecode.lockfile" then
+          return mock_lockfile
+        elseif mod == "claudecode.selection" then
+          return mock_selection
+        else
+          return original_require(mod)
+        end
+      end
+    end)
+
+    it("should register ClaudeCode command with nargs='*'", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      local command_found = false
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          command_found = true
+          local config = call.vals[3]
+          assert.is_equal("*", config.nargs)
+          assert.is_true(
+            string.find(config.desc, "optional arguments") ~= nil,
+            "Description should mention optional arguments"
+          )
+          break
+        end
+      end
+      assert.is_true(command_found, "ClaudeCode command was not registered")
+    end)
+
+    it("should register ClaudeCodeOpen command with nargs='*'", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      local command_found = false
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCodeOpen" then
+          command_found = true
+          local config = call.vals[3]
+          assert.is_equal("*", config.nargs)
+          assert.is_true(
+            string.find(config.desc, "optional arguments") ~= nil,
+            "Description should mention optional arguments"
+          )
+          break
+        end
+      end
+      assert.is_true(command_found, "ClaudeCodeOpen command was not registered")
+    end)
+
+    it("should parse and pass arguments to terminal.toggle for ClaudeCode command", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      -- Find and call the ClaudeCode command handler
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      assert.is_function(command_handler, "Command handler should be a function")
+
+      command_handler({ args = "--resume --verbose" })
+
+      assert(#mock_terminal.toggle.calls > 0, "terminal.toggle was not called")
+      local call_args = mock_terminal.toggle.calls[1].vals
+      assert.is_table(call_args[1], "First argument should be a table")
+      assert.is_equal("--resume --verbose", call_args[2], "Second argument should be the command args")
+    end)
+
+    it("should parse and pass arguments to terminal.open for ClaudeCodeOpen command", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      -- Find and call the ClaudeCodeOpen command handler
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCodeOpen" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      assert.is_function(command_handler, "Command handler should be a function")
+
+      command_handler({ args = "--flag1 --flag2" })
+
+      assert(#mock_terminal.open.calls > 0, "terminal.open was not called")
+      local call_args = mock_terminal.open.calls[1].vals
+      assert.is_table(call_args[1], "First argument should be a table")
+      assert.is_equal("--flag1 --flag2", call_args[2], "Second argument should be the command args")
+    end)
+
+    it("should handle empty arguments gracefully", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      command_handler({ args = "" })
+
+      assert(#mock_terminal.toggle.calls > 0, "terminal.toggle was not called")
+      local call_args = mock_terminal.toggle.calls[1].vals
+      assert.is_nil(call_args[2], "Second argument should be nil for empty args")
+    end)
+
+    it("should handle nil arguments gracefully", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      command_handler({ args = nil })
+
+      assert(#mock_terminal.toggle.calls > 0, "terminal.toggle was not called")
+      local call_args = mock_terminal.toggle.calls[1].vals
+      assert.is_nil(call_args[2], "Second argument should be nil when args is nil")
+    end)
+
+    it("should maintain backward compatibility when no arguments provided", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      command_handler({})
+
+      assert(#mock_terminal.toggle.calls > 0, "terminal.toggle was not called")
+      local call_args = mock_terminal.toggle.calls[1].vals
+      assert.is_nil(call_args[2], "Second argument should be nil when no args provided")
+    end)
+  end)
 end)

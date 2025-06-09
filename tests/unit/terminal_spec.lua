@@ -567,4 +567,85 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       mock_snacks_terminal.open:was_not_called()
     end)
   end)
+
+  describe("command arguments support", function()
+    it("should append cmd_args to base command when provided to open", function()
+      terminal_wrapper.open({}, "--resume")
+
+      mock_snacks_terminal.open:was_called(1)
+      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      assert.are.equal("claude --resume", cmd_arg)
+    end)
+
+    it("should append cmd_args to base command when provided to toggle", function()
+      terminal_wrapper.toggle({}, "--resume --verbose")
+
+      mock_snacks_terminal.toggle:was_called(1)
+      local cmd_arg = mock_snacks_terminal.toggle:get_call(1).refs[1]
+      assert.are.equal("claude --resume --verbose", cmd_arg)
+    end)
+
+    it("should work with custom terminal_cmd and arguments", function()
+      terminal_wrapper.setup({}, "my_claude_binary")
+      terminal_wrapper.open({}, "--flag")
+
+      mock_snacks_terminal.open:was_called(1)
+      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      assert.are.equal("my_claude_binary --flag", cmd_arg)
+    end)
+
+    it("should fallback gracefully when cmd_args is nil", function()
+      terminal_wrapper.open({}, nil)
+
+      mock_snacks_terminal.open:was_called(1)
+      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      assert.are.equal("claude", cmd_arg)
+    end)
+
+    it("should fallback gracefully when cmd_args is empty string", function()
+      terminal_wrapper.toggle({}, "")
+
+      mock_snacks_terminal.toggle:was_called(1)
+      local cmd_arg = mock_snacks_terminal.toggle:get_call(1).refs[1]
+      assert.are.equal("claude", cmd_arg)
+    end)
+
+    it("should work with both opts_override and cmd_args", function()
+      terminal_wrapper.open({ split_side = "left" }, "--resume")
+
+      mock_snacks_terminal.open:was_called(1)
+      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
+
+      assert.are.equal("claude --resume", cmd_arg)
+      assert.are.equal("left", opts_arg.win.position)
+    end)
+
+    it("should handle special characters in arguments", function()
+      terminal_wrapper.open({}, "--message='hello world'")
+
+      mock_snacks_terminal.open:was_called(1)
+      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      assert.are.equal("claude --message='hello world'", cmd_arg)
+    end)
+
+    it("should maintain backward compatibility when no cmd_args provided", function()
+      terminal_wrapper.open()
+
+      mock_snacks_terminal.open:was_called(1)
+      local open_cmd = mock_snacks_terminal.open:get_call(1).refs[1]
+      assert.are.equal("claude", open_cmd)
+
+      -- Close the existing terminal and reset spies to test toggle in isolation
+      terminal_wrapper.close()
+      mock_snacks_terminal.open:reset()
+      mock_snacks_terminal.toggle:reset()
+
+      terminal_wrapper.toggle()
+
+      mock_snacks_terminal.toggle:was_called(1)
+      local toggle_cmd = mock_snacks_terminal.toggle:get_call(1).refs[1]
+      assert.are.equal("claude", toggle_cmd)
+    end)
+  end)
 end)

@@ -648,22 +648,24 @@ function M._create_commands()
 
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
   if terminal_ok then
-    vim.api.nvim_create_user_command("ClaudeCode", function(_opts)
+    vim.api.nvim_create_user_command("ClaudeCode", function(opts)
       local current_mode = vim.fn.mode()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      terminal.toggle({})
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.toggle({}, cmd_args)
     end, {
-      nargs = "?",
-      desc = "Toggle the Claude Code terminal window",
+      nargs = "*",
+      desc = "Toggle the Claude Code terminal window with optional arguments",
     })
 
-    vim.api.nvim_create_user_command("ClaudeCodeOpen", function(_opts)
-      terminal.open({})
+    vim.api.nvim_create_user_command("ClaudeCodeOpen", function(opts)
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.open({}, cmd_args)
     end, {
-      nargs = "?",
-      desc = "Open the Claude Code terminal window",
+      nargs = "*",
+      desc = "Open the Claude Code terminal window with optional arguments",
     })
 
     vim.api.nvim_create_user_command("ClaudeCodeClose", function()

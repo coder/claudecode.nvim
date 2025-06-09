@@ -34,13 +34,21 @@ local managed_fallback_terminal_jobid = nil
 local native_term_tip_shown = false
 
 -- Uses the `terminal_cmd` from the module's configuration, or defaults to "claude".
+-- @param cmd_args string|nil Optional arguments to append to the command
 -- @return string The command to execute.
-local function get_claude_command()
+local function get_claude_command(cmd_args)
   local cmd_from_config = term_module_config.terminal_cmd
+  local base_cmd
   if not cmd_from_config or cmd_from_config == "" then
-    return "claude" -- Default if not configured
+    base_cmd = "claude" -- Default if not configured
+  else
+    base_cmd = cmd_from_config
   end
-  return cmd_from_config
+
+  if cmd_args and cmd_args ~= "" then
+    return base_cmd .. " " .. cmd_args
+  end
+  return base_cmd
 end
 
 --- Configures the terminal module.
@@ -318,10 +326,11 @@ local function build_snacks_opts(effective_term_config_for_snacks, env_table)
 end
 
 --- Gets the base claude command string and necessary environment variables.
+-- @param cmd_args string|nil Optional arguments to append to the command
 -- @return string|nil cmd_string The command string, or nil on failure.
 -- @return table|nil env_table The environment variables table, or nil on failure.
-local function get_claude_command_and_env()
-  local cmd_string = get_claude_command()
+local function get_claude_command_and_env(cmd_args)
+  local cmd_string = get_claude_command(cmd_args)
   if not cmd_string or cmd_string == "" then
     vim.notify("Claude terminal base command cannot be determined.", vim.log.levels.ERROR)
     return nil, nil
@@ -374,10 +383,11 @@ end
 
 --- Opens or focuses the Claude terminal.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
-function M.open(opts_override)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.open(opts_override, cmd_args)
   local provider = get_effective_terminal_provider()
   local effective_config = build_effective_term_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env()
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   if not cmd_string then
     -- Error already notified by the helper function
@@ -447,10 +457,11 @@ end
 
 --- Toggles the Claude terminal open or closed.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
-function M.toggle(opts_override)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.toggle(opts_override, cmd_args)
   local provider = get_effective_terminal_provider()
   local effective_config = build_effective_term_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env()
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   if not cmd_string then
     return -- Error already notified
