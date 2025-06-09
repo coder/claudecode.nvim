@@ -84,19 +84,9 @@ function M.apply(user_config)
     config = vim.tbl_deep_extend("force", config, user_config)
   end
 
-  -- Check environment variable for terminal_cmd if not set in user config
-  if config.terminal_cmd == nil then
-    local env_cmd = vim.fn.getenv("CLAUDE_TERMINAL_CMD")
-    if env_cmd ~= vim.NIL then
-      config.terminal_cmd = env_cmd
-    end
-  end
-
   M.validate(config)
 
   return config
 end
 
 return M
-
-
