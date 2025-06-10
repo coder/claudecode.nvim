@@ -79,9 +79,13 @@
 ---@field termopen fun(cmd: string|string[], opts?: table):number For vim.fn.termopen()
 -- Add other vim.fn functions as needed
 
+---@class vim_v_table
+---@field event table Event data containing status and other event information
+
 ---@class vim_global_api
 ---@field notify fun(msg: string | string[], level?: number, opts?: vim_notify_opts):nil
 ---@field log vim_log
+---@field v vim_v_table For vim.v.event access
 ---@field _last_echo table[]? table of tables, e.g. { {"message", "HighlightGroup"} }
 ---@field _last_error string?
 ---@field o vim_options_table For vim.o.option_name

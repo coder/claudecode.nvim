@@ -40,6 +40,7 @@ return {
     -- terminal_cmd = "claude --debug",
     -- terminal = {
     --   provider = "native",
+    --   auto_close = false, -- Keep terminals open to see output
     -- },
   },
 }

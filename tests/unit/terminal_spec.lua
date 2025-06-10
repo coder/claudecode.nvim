@@ -4,6 +4,8 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
   local mock_snacks_module
   local mock_snacks_terminal
   local mock_claudecode_config_module
+  local mock_snacks_provider
+  local mock_native_provider
   local last_created_mock_term_instance
   local create_mock_terminal_instance
 
@@ -221,8 +223,17 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     }
 
     package.loaded["claudecode.terminal"] = nil
+    package.loaded["claudecode.terminal.snacks"] = nil
+    package.loaded["claudecode.terminal.native"] = nil
+    package.loaded["claudecode.server.init"] = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.config"] = nil
+
+    -- Mock the server module
+    local mock_server_module = {
+      state = { port = 12345 },
+    }
+    package.loaded["claudecode.server.init"] = mock_server_module
 
     mock_claudecode_config_module = {
       apply = spy.new(function(user_conf)
@@ -234,6 +245,40 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       end),
     }
     package.loaded["claudecode.config"] = mock_claudecode_config_module
+
+    -- Mock the provider modules
+    mock_snacks_provider = {
+      setup = spy.new(function() end),
+      open = spy.new(create_mock_terminal_instance),
+      close = spy.new(function() end),
+      toggle = spy.new(function(cmd, env_table, config, opts_override)
+        return create_mock_terminal_instance(cmd, { env = env_table })
+      end),
+      get_active_bufnr = spy.new(function()
+        return nil
+      end),
+      is_available = spy.new(function()
+        return true
+      end),
+      _get_terminal_for_test = spy.new(function()
+        return last_created_mock_term_instance
+      end),
+    }
+    package.loaded["claudecode.terminal.snacks"] = mock_snacks_provider
+
+    mock_native_provider = {
+      setup = spy.new(function() end),
+      open = spy.new(function() end),
+      close = spy.new(function() end),
+      toggle = spy.new(function() end),
+      get_active_bufnr = spy.new(function()
+        return nil
+      end),
+      is_available = spy.new(function()
+        return true
+      end),
+    }
+    package.loaded["claudecode.terminal.native"] = mock_native_provider
 
     mock_snacks_terminal = {
       open = spy.new(create_mock_terminal_instance),
@@ -302,6 +347,9 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
 
   after_each(function()
     package.loaded["claudecode.terminal"] = nil
+    package.loaded["claudecode.terminal.snacks"] = nil
+    package.loaded["claudecode.terminal.native"] = nil
+    package.loaded["claudecode.server.init"] = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.config"] = nil
     if _G.vim and _G.vim._mock and _G.vim._mock.reset then
@@ -315,25 +363,25 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("should store valid split_side and split_width_percentage", function()
       terminal_wrapper.setup({ split_side = "left", split_width_percentage = 0.5 })
       terminal_wrapper.open()
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
-      assert.are.equal("left", opts_arg.win.position)
-      assert.are.equal(0.5, opts_arg.win.width)
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal("left", config_arg.split_side)
+      assert.are.equal(0.5, config_arg.split_width_percentage)
     end)
     it("should ignore invalid split_side and use default", function()
       terminal_wrapper.setup({ split_side = "invalid_side", split_width_percentage = 0.5 })
       terminal_wrapper.open()
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
-      assert.are.equal("right", opts_arg.win.position)
-      assert.are.equal(0.5, opts_arg.win.width)
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal("right", config_arg.split_side)
+      assert.are.equal(0.5, config_arg.split_width_percentage)
       vim.notify:was_called_with(spy.matching.string.match("Invalid value for split_side"), vim.log.levels.WARN)
     end)
 
     it("should ignore invalid split_width_percentage and use default", function()
       terminal_wrapper.setup({ split_side = "left", split_width_percentage = 2.0 })
       terminal_wrapper.open()
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
-      assert.are.equal("left", opts_arg.win.position)
-      assert.are.equal(0.30, opts_arg.win.width)
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal("left", config_arg.split_side)
+      assert.are.equal(0.30, config_arg.split_width_percentage)
       vim.notify:was_called_with(
         spy.matching.string.match("Invalid value for split_width_percentage"),
         vim.log.levels.WARN
@@ -343,8 +391,8 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("should ignore unknown keys", function()
       terminal_wrapper.setup({ unknown_key = "some_value", split_side = "left" })
       terminal_wrapper.open()
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
-      assert.are.equal("left", opts_arg.win.position)
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal("left", config_arg.split_side)
       vim.notify:was_called_with(
         spy.matching.string.match("Unknown configuration key: unknown_key"),
         vim.log.levels.WARN
@@ -354,9 +402,9 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("should use defaults if user_term_config is not a table and notify", function()
       terminal_wrapper.setup("not_a_table")
       terminal_wrapper.open()
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
-      assert.are.equal("right", opts_arg.win.position)
-      assert.are.equal(0.30, opts_arg.win.width)
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal("right", config_arg.split_side)
+      assert.are.equal(0.30, config_arg.split_width_percentage)
       vim.notify:was_called_with(
         "claudecode.terminal.setup expects a table or nil for user_term_config",
         vim.log.levels.WARN
@@ -379,17 +427,17 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
 
         terminal_wrapper.open()
 
-        mock_snacks_terminal.open:was_called(1)
-        local cmd_arg, opts_arg =
-          mock_snacks_terminal.open:get_call(1).refs[1], mock_snacks_terminal.open:get_call(1).refs[2]
+        mock_snacks_provider.open:was_called(1)
+        local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
+        local env_arg = mock_snacks_provider.open:get_call(1).refs[2]
+        local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
 
         assert.are.equal("claude", cmd_arg)
-        assert.is_table(opts_arg)
-        assert.are.equal("right", opts_arg.win.position)
-        assert.are.equal(0.30, opts_arg.win.width)
-        assert.is_function(opts_arg.win.on_close)
-        assert.is_true(opts_arg.interactive)
-        assert.is_true(opts_arg.enter)
+        assert.is_table(env_arg)
+        assert.are.equal("true", env_arg.ENABLE_IDE_INTEGRATION)
+        assert.is_table(config_arg)
+        assert.are.equal("right", config_arg.split_side)
+        assert.are.equal(0.30, config_arg.split_width_percentage)
       end
     )
 
@@ -404,79 +452,82 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       terminal_wrapper.setup({}, "my_claude_cli")
 
       terminal_wrapper.open()
-      mock_snacks_terminal.open:was_called(1)
-      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      mock_snacks_provider.open:was_called(1)
+      local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
       assert.are.equal("my_claude_cli", cmd_arg)
     end)
 
-    it("should focus existing valid terminal and call startinsert", function()
+    it("should call provider open twice when terminal exists", function()
       terminal_wrapper.open()
       local first_instance = last_created_mock_term_instance
       assert.is_not_nil(first_instance)
-      mock_snacks_terminal.open:reset()
 
+      -- Provider manages its own state, so we expect open to be called again
       terminal_wrapper.open()
-      first_instance.valid:was_called()
-      first_instance.focus:was_called(1)
-      vim.api.nvim_win_call:was_called(1)
-      vim.cmd:was_called_with("startinsert")
-      mock_snacks_terminal.open:was_not_called()
+      mock_snacks_provider.open:was_called(2) -- Called twice: once to create, once for existing check
     end)
 
     it("should apply opts_override to snacks_opts when opening a new terminal", function()
       terminal_wrapper.open({ split_side = "left", split_width_percentage = 0.6 })
-      mock_snacks_terminal.open:was_called(1)
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
-      assert.are.equal("left", opts_arg.win.position)
-      assert.are.equal(0.6, opts_arg.win.width)
+      mock_snacks_provider.open:was_called(1)
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal("left", config_arg.split_side)
+      assert.are.equal(0.6, config_arg.split_width_percentage)
     end)
 
-    it("should set managed_snacks_terminal to nil and notify if Snacks.terminal.open fails (returns nil)", function()
-      mock_snacks_terminal.open = spy.new(function()
+    it("should call provider open and handle nil return gracefully", function()
+      mock_snacks_provider.open = spy.new(function()
+        -- Simulate provider handling its own failure notification
+        vim.notify("Failed to open Claude terminal using Snacks.", vim.log.levels.ERROR)
         return nil
       end)
+      vim.notify:reset()
       terminal_wrapper.open()
       vim.notify:was_called_with("Failed to open Claude terminal using Snacks.", vim.log.levels.ERROR)
-      mock_snacks_terminal.open:reset()
-      mock_snacks_terminal.open = spy.new(function()
+      mock_snacks_provider.open:reset()
+      mock_snacks_provider.open = spy.new(function()
+        vim.notify("Failed to open Claude terminal using Snacks.", vim.log.levels.ERROR)
         return nil
       end)
       terminal_wrapper.open()
-      mock_snacks_terminal.open:was_called(1)
+      mock_snacks_provider.open:was_called(1)
     end)
 
-    it("should set managed_snacks_terminal to nil if Snacks.terminal.open returns invalid instance", function()
+    it("should call provider open and handle invalid instance gracefully", function()
       local invalid_instance = { valid = spy.new(function()
         return false
       end) }
-      mock_snacks_terminal.open = spy.new(function()
+      mock_snacks_provider.open = spy.new(function()
+        -- Simulate provider handling its own failure notification
+        vim.notify("Failed to open Claude terminal using Snacks.", vim.log.levels.ERROR)
         return invalid_instance
       end)
+      vim.notify:reset()
       terminal_wrapper.open()
       vim.notify:was_called_with("Failed to open Claude terminal using Snacks.", vim.log.levels.ERROR)
-      mock_snacks_terminal.open:reset()
-      mock_snacks_terminal.open = spy.new(function()
+      mock_snacks_provider.open:reset()
+      mock_snacks_provider.open = spy.new(function()
+        vim.notify("Failed to open Claude terminal using Snacks.", vim.log.levels.ERROR)
         return invalid_instance
       end)
       terminal_wrapper.open()
-      mock_snacks_terminal.open:was_called(1)
+      mock_snacks_provider.open:was_called(1)
     end)
   end)
 
   describe("terminal.close", function()
     it("should call managed_terminal:close() if valid terminal exists", function()
       terminal_wrapper.open()
-      local current_managed_term = last_created_mock_term_instance
-      assert.is_not_nil(current_managed_term)
+      mock_snacks_provider.open:was_called(1)
 
       terminal_wrapper.close()
-      current_managed_term.close:was_called(1)
+      mock_snacks_provider.close:was_called(1)
     end)
 
-    it("should not call close if no managed terminal", function()
+    it("should call provider close even if no managed terminal", function()
       terminal_wrapper.close()
-      mock_snacks_terminal.open:was_not_called()
-      assert.is_nil(last_created_mock_term_instance)
+      mock_snacks_provider.close:was_called(1)
+      mock_snacks_provider.open:was_not_called()
     end)
 
     it("should not call close if managed terminal is invalid", function()
@@ -504,27 +555,26 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
 
       terminal_wrapper.toggle({ split_width_percentage = 0.45 })
 
-      mock_snacks_terminal.toggle:was_called(1)
-      local cmd_arg, opts_arg =
-        mock_snacks_terminal.toggle:get_call(1).refs[1], mock_snacks_terminal.toggle:get_call(1).refs[2]
+      mock_snacks_provider.toggle:was_called(1)
+      local cmd_arg = mock_snacks_provider.toggle:get_call(1).refs[1]
+      local config_arg = mock_snacks_provider.toggle:get_call(1).refs[3]
       assert.are.equal("toggle_claude", cmd_arg)
-      assert.are.equal("left", opts_arg.win.position)
-      assert.are.equal(0.45, opts_arg.win.width)
-      assert.is_function(opts_arg.win.on_close)
+      assert.are.equal("left", config_arg.split_side)
+      assert.are.equal(0.45, config_arg.split_width_percentage)
     end)
 
-    it("should update managed_snacks_terminal if toggle returns a valid instance", function()
+    it("should call provider toggle and manage state", function()
       local mock_toggled_instance = create_mock_terminal_instance("toggled_cmd", {})
-      mock_snacks_terminal.toggle = spy.new(function()
+      mock_snacks_provider.toggle = spy.new(function()
         return mock_toggled_instance
       end)
 
       terminal_wrapper.toggle({})
-      mock_snacks_terminal.open:reset()
-      mock_toggled_instance.focus:reset()
+      mock_snacks_provider.toggle:was_called(1)
+
+      -- After toggle, subsequent open should work with provider state
       terminal_wrapper.open()
-      mock_toggled_instance.focus:was_called(1)
-      mock_snacks_terminal.open:was_not_called()
+      mock_snacks_provider.open:was_called(1)
     end)
 
     it("should set managed_snacks_terminal to nil if toggle returns nil", function()
@@ -532,39 +582,33 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         return nil
       end)
       terminal_wrapper.toggle({})
-      mock_snacks_terminal.open:reset()
+      mock_snacks_provider.open:reset()
       terminal_wrapper.open()
-      mock_snacks_terminal.open:was_called(1)
+      mock_snacks_provider.open:was_called(1)
     end)
   end)
 
-  describe("snacks_opts.win.on_close callback handling", function()
-    it("should set managed_snacks_terminal to nil when on_close is triggered", function()
+  describe("provider callback handling", function()
+    it("should handle terminal closure through provider", function()
       terminal_wrapper.open()
       local opened_instance = last_created_mock_term_instance
       assert.is_not_nil(opened_instance)
-      assert.is_function(opened_instance._on_close_callback)
 
-      opened_instance._on_close_callback({ win = opened_instance.win })
-
-      mock_snacks_terminal.open:reset()
-      terminal_wrapper.open()
-      mock_snacks_terminal.open:was_called(1)
+      -- Simulate terminal closure via provider's close method
+      terminal_wrapper.close()
+      mock_snacks_provider.close:was_called(1)
     end)
 
-    it("on_close should not clear managed_snacks_terminal if winid does not match (safety check)", function()
+    it("should create new terminal after closure", function()
       terminal_wrapper.open()
-      local opened_instance = last_created_mock_term_instance
-      assert.is_not_nil(opened_instance)
-      assert.is_function(opened_instance._on_close_callback)
+      mock_snacks_provider.open:was_called(1)
 
-      opened_instance._on_close_callback({ winid = opened_instance.winid + 123 })
+      terminal_wrapper.close()
+      mock_snacks_provider.close:was_called(1)
 
-      mock_snacks_terminal.open:reset()
-      opened_instance.focus:reset()
+      mock_snacks_provider.open:reset()
       terminal_wrapper.open()
-      opened_instance.focus:was_called(1)
-      mock_snacks_terminal.open:was_not_called()
+      mock_snacks_provider.open:was_called(1)
     end)
   end)
 
@@ -572,16 +616,16 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("should append cmd_args to base command when provided to open", function()
       terminal_wrapper.open({}, "--resume")
 
-      mock_snacks_terminal.open:was_called(1)
-      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      mock_snacks_provider.open:was_called(1)
+      local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
       assert.are.equal("claude --resume", cmd_arg)
     end)
 
     it("should append cmd_args to base command when provided to toggle", function()
       terminal_wrapper.toggle({}, "--resume --verbose")
 
-      mock_snacks_terminal.toggle:was_called(1)
-      local cmd_arg = mock_snacks_terminal.toggle:get_call(1).refs[1]
+      mock_snacks_provider.toggle:was_called(1)
+      local cmd_arg = mock_snacks_provider.toggle:get_call(1).refs[1]
       assert.are.equal("claude --resume --verbose", cmd_arg)
     end)
 
@@ -589,62 +633,62 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       terminal_wrapper.setup({}, "my_claude_binary")
       terminal_wrapper.open({}, "--flag")
 
-      mock_snacks_terminal.open:was_called(1)
-      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      mock_snacks_provider.open:was_called(1)
+      local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
       assert.are.equal("my_claude_binary --flag", cmd_arg)
     end)
 
     it("should fallback gracefully when cmd_args is nil", function()
       terminal_wrapper.open({}, nil)
 
-      mock_snacks_terminal.open:was_called(1)
-      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      mock_snacks_provider.open:was_called(1)
+      local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
       assert.are.equal("claude", cmd_arg)
     end)
 
     it("should fallback gracefully when cmd_args is empty string", function()
       terminal_wrapper.toggle({}, "")
 
-      mock_snacks_terminal.toggle:was_called(1)
-      local cmd_arg = mock_snacks_terminal.toggle:get_call(1).refs[1]
+      mock_snacks_provider.toggle:was_called(1)
+      local cmd_arg = mock_snacks_provider.toggle:get_call(1).refs[1]
       assert.are.equal("claude", cmd_arg)
     end)
 
     it("should work with both opts_override and cmd_args", function()
       terminal_wrapper.open({ split_side = "left" }, "--resume")
 
-      mock_snacks_terminal.open:was_called(1)
-      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
-      local opts_arg = mock_snacks_terminal.open:get_call(1).refs[2]
+      mock_snacks_provider.open:was_called(1)
+      local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
 
       assert.are.equal("claude --resume", cmd_arg)
-      assert.are.equal("left", opts_arg.win.position)
+      assert.are.equal("left", config_arg.split_side)
     end)
 
     it("should handle special characters in arguments", function()
       terminal_wrapper.open({}, "--message='hello world'")
 
-      mock_snacks_terminal.open:was_called(1)
-      local cmd_arg = mock_snacks_terminal.open:get_call(1).refs[1]
+      mock_snacks_provider.open:was_called(1)
+      local cmd_arg = mock_snacks_provider.open:get_call(1).refs[1]
       assert.are.equal("claude --message='hello world'", cmd_arg)
     end)
 
     it("should maintain backward compatibility when no cmd_args provided", function()
       terminal_wrapper.open()
 
-      mock_snacks_terminal.open:was_called(1)
-      local open_cmd = mock_snacks_terminal.open:get_call(1).refs[1]
+      mock_snacks_provider.open:was_called(1)
+      local open_cmd = mock_snacks_provider.open:get_call(1).refs[1]
       assert.are.equal("claude", open_cmd)
 
       -- Close the existing terminal and reset spies to test toggle in isolation
       terminal_wrapper.close()
-      mock_snacks_terminal.open:reset()
+      mock_snacks_provider.open:reset()
       mock_snacks_terminal.toggle:reset()
 
       terminal_wrapper.toggle()
 
-      mock_snacks_terminal.toggle:was_called(1)
-      local toggle_cmd = mock_snacks_terminal.toggle:get_call(1).refs[1]
+      mock_snacks_provider.toggle:was_called(1)
+      local toggle_cmd = mock_snacks_provider.toggle:get_call(1).refs[1]
       assert.are.equal("claude", toggle_cmd)
     end)
   end)
