@@ -102,10 +102,11 @@ function M.setup(opts)
   -- even if terminal_opts (for split_side etc.) are not provided.
   local terminal_setup_ok, terminal_module = pcall(require, "claudecode.terminal")
   if terminal_setup_ok then
-    -- terminal_opts might be nil if user only configured top-level terminal_cmd
-    -- and not specific terminal appearance options.
-    -- The terminal.setup function handles nil for its first argument.
-    terminal_module.setup(terminal_opts, M.state.config.terminal_cmd)
+    -- Guard in case tests or user replace the module with a minimal stub without `setup`.
+    if type(terminal_module.setup) == "function" then
+      -- terminal_opts might be nil, which the setup function should handle gracefully.
+      terminal_module.setup(terminal_opts, M.state.config.terminal_cmd)
+    end
   else
     logger.error("init", "Failed to load claudecode.terminal module for setup.")
   end
@@ -403,8 +404,8 @@ function M._create_commands()
       return
     end
 
-    local current_ft = vim.bo.filetype
-    local current_bufname = vim.api.nvim_buf_get_name(0)
+    local current_ft = (vim.bo and vim.bo.filetype) or ""
+    local current_bufname = (vim.api and vim.api.nvim_buf_get_name and vim.api.nvim_buf_get_name(0)) or ""
 
     local is_tree_buffer = current_ft == "NvimTree"
       or current_ft == "neo-tree"
@@ -434,14 +435,23 @@ function M._create_commands()
 
     local selection_module_ok, selection_module = pcall(require, "claudecode.selection")
     if selection_module_ok then
-      local sent_successfully = selection_module.send_at_mention_for_visual_selection()
+      -- Pass range information if available (for :'<,'> commands)
+      local line1, line2 = nil, nil
+      if opts and opts.range and opts.range > 0 then
+        line1, line2 = opts.line1, opts.line2
+      end
+      local sent_successfully = selection_module.send_at_mention_for_visual_selection(line1, line2)
       if sent_successfully then
+        -- Exit any potential visual mode (for consistency) and focus Claude terminal
+        pcall(function()
+          if vim.api and vim.api.nvim_feedkeys then
+            local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+            vim.api.nvim_feedkeys(esc, "i", true)
+          end
+        end)
         local terminal_ok, terminal = pcall(require, "claudecode.terminal")
         if terminal_ok then
           terminal.open({})
-          logger.debug("command", "ClaudeCodeSend: Focused Claude Code terminal after selection send.")
-        else
-          logger.warn("command", "ClaudeCodeSend: Failed to load terminal module for focusing.")
         end
       end
     else

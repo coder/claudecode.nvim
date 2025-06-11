@@ -44,7 +44,11 @@ function M.validate_visual_mode()
 
   -- Use pcall to handle test environments
   local mode_success = pcall(function()
-    current_mode = vim.api.nvim_get_mode().mode
+    if vim.api and vim.api.nvim_get_mode then
+      current_mode = vim.api.nvim_get_mode().mode
+    else
+      current_mode = vim.fn.mode(true)
+    end
   end)
 
   if not mode_success then
@@ -78,7 +82,12 @@ function M.get_visual_range()
   -- Use pcall to handle test environments
   local range_success = pcall(function()
     -- Check if we're currently in visual mode
-    local current_mode = vim.api.nvim_get_mode().mode
+    local current_mode
+    if vim.api and vim.api.nvim_get_mode then
+      current_mode = vim.api.nvim_get_mode().mode
+    else
+      current_mode = vim.fn.mode(true)
+    end
     local is_visual = current_mode == "v" or current_mode == "V" or current_mode == "\022"
 
     if is_visual then
@@ -177,7 +186,12 @@ end
 --- @return function The wrapped command function
 function M.create_visual_command_wrapper(normal_handler, visual_handler)
   return function(...)
-    local current_mode = vim.api.nvim_get_mode().mode
+    local current_mode
+    if vim.api and vim.api.nvim_get_mode then
+      current_mode = vim.api.nvim_get_mode().mode
+    else
+      current_mode = vim.fn.mode(true)
+    end
 
     if current_mode == "v" or current_mode == "V" or current_mode == "\022" then
       -- Use the neo-tree pattern: exit visual mode, then schedule execution

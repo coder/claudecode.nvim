@@ -454,3 +454,177 @@ describe("Selection module", function()
     assert(selection.has_selection_changed(new_selection_diff_pos) == true)
   end)
 end)
+
+-- Tests for range selection functionality (fix for issue #25)
+describe("Range Selection Tests", function()
+  local selection
+
+  before_each(function()
+    -- Reset vim state
+    _G.vim._buffers = {
+      [1] = {
+        name = "/test/file.lua",
+        lines = {
+          "line 1",
+          "line 2",
+          "line 3",
+          "line 4",
+          "line 5",
+          "line 6",
+          "line 7",
+          "line 8",
+          "line 9",
+          "line 10",
+        },
+      },
+    }
+    _G.vim._windows = {
+      [1] = {
+        cursor = { 1, 0 },
+      },
+    }
+    _G.vim._current_mode = "n"
+
+    -- Add nvim_buf_line_count function
+    _G.vim.api.nvim_buf_line_count = function(bufnr)
+      return _G.vim._buffers[bufnr] and #_G.vim._buffers[bufnr].lines or 0
+    end
+
+    -- Reload the selection module
+    package.loaded["claudecode.selection"] = nil
+    selection = require("claudecode.selection")
+  end)
+
+  describe("get_range_selection", function()
+    it("should return valid selection for valid range", function()
+      local result = selection.get_range_selection(2, 4)
+
+      assert(result ~= nil)
+      assert(result.text == "line 2\nline 3\nline 4")
+      assert(result.filePath == "/test/file.lua")
+      assert(result.fileUrl == "file:///test/file.lua")
+      assert(result.selection.start.line == 1) -- 0-indexed
+      assert(result.selection.start.character == 0)
+      assert(result.selection["end"].line == 3) -- 0-indexed
+      assert(result.selection["end"].character == 6) -- length of "line 4"
+      assert(result.selection.isEmpty == false)
+    end)
+
+    it("should return valid selection for single line range", function()
+      local result = selection.get_range_selection(3, 3)
+
+      assert(result ~= nil)
+      assert(result.text == "line 3")
+      assert(result.selection.start.line == 2) -- 0-indexed
+      assert(result.selection["end"].line == 2) -- 0-indexed
+      assert(result.selection.isEmpty == false)
+    end)
+
+    it("should handle range that exceeds buffer bounds", function()
+      local result = selection.get_range_selection(8, 15) -- buffer only has 10 lines
+
+      assert(result ~= nil)
+      assert(result.text == "line 8\nline 9\nline 10")
+      assert(result.selection.start.line == 7) -- 0-indexed
+      assert(result.selection["end"].line == 9) -- 0-indexed, clamped to buffer size
+    end)
+
+    it("should return nil for invalid range (line1 > line2)", function()
+      local result = selection.get_range_selection(5, 3)
+      assert(result == nil)
+    end)
+
+    it("should return nil for invalid range (line1 < 1)", function()
+      local result = selection.get_range_selection(0, 3)
+      assert(result == nil)
+    end)
+
+    it("should return nil for invalid range (line2 < 1)", function()
+      local result = selection.get_range_selection(2, 0)
+      assert(result == nil)
+    end)
+
+    it("should return nil for nil parameters", function()
+      local result1 = selection.get_range_selection(nil, 3)
+      local result2 = selection.get_range_selection(2, nil)
+      local result3 = selection.get_range_selection(nil, nil)
+
+      assert(result1 == nil)
+      assert(result2 == nil)
+      assert(result3 == nil)
+    end)
+
+    it("should handle empty buffer", function()
+      _G.vim._buffers[1].lines = {}
+      local result = selection.get_range_selection(1, 1)
+      assert(result == nil)
+    end)
+  end)
+
+  describe("send_at_mention_for_visual_selection with range", function()
+    local mock_server
+
+    before_each(function()
+      mock_server = {
+        broadcast = function(event, params)
+          mock_server.last_broadcast = {
+            event = event,
+            params = params,
+          }
+          return true
+        end,
+      }
+
+      selection.state.tracking_enabled = true
+      selection.server = mock_server
+    end)
+
+    it("should send range selection successfully", function()
+      local result = selection.send_at_mention_for_visual_selection(2, 4)
+
+      assert(result == true)
+      assert(mock_server.last_broadcast ~= nil)
+      assert(mock_server.last_broadcast.event == "at_mentioned")
+      assert(mock_server.last_broadcast.params.filePath == "/test/file.lua")
+      assert(mock_server.last_broadcast.params.lineStart == 1) -- 0-indexed
+      assert(mock_server.last_broadcast.params.lineEnd == 3) -- 0-indexed
+    end)
+
+    it("should fail for invalid range", function()
+      local result = selection.send_at_mention_for_visual_selection(5, 3)
+      assert(result == false)
+    end)
+
+    it("should fall back to existing logic when no range provided", function()
+      -- Set up a tracked selection
+      selection.state.latest_selection = {
+        text = "tracked text",
+        filePath = "/test/file.lua",
+        fileUrl = "file:///test/file.lua",
+        selection = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 0, character = 12 },
+          isEmpty = false,
+        },
+      }
+
+      local result = selection.send_at_mention_for_visual_selection()
+
+      assert(result == true)
+      assert(mock_server.last_broadcast.params.lineStart == 0)
+      assert(mock_server.last_broadcast.params.lineEnd == 0)
+    end)
+
+    it("should fail when server is not available", function()
+      selection.server = nil
+      local result = selection.send_at_mention_for_visual_selection(2, 4)
+      assert(result == false)
+    end)
+
+    it("should fail when tracking is disabled", function()
+      selection.state.tracking_enabled = false
+      local result = selection.send_at_mention_for_visual_selection(2, 4)
+      assert(result == false)
+    end)
+  end)
+end)

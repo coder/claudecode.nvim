@@ -573,24 +573,90 @@ function M.send_current_selection()
   vim.api.nvim_echo({ { "Selection sent to Claude", "Normal" } }, false, {})
 end
 
+--- Gets selection from range marks (e.g., when using :'<,'> commands)
+-- @param line1 number The start line (1-indexed)
+-- @param line2 number The end line (1-indexed)
+-- @return table|nil A table containing selection text, file path, URL, and
+--                   start/end positions, or nil if invalid range
+function M.get_range_selection(line1, line2)
+  if not line1 or not line2 or line1 < 1 or line2 < 1 or line1 > line2 then
+    return nil
+  end
+
+  local current_buf = vim.api.nvim_get_current_buf()
+  local file_path = vim.api.nvim_buf_get_name(current_buf)
+
+  -- Get the total number of lines in the buffer
+  local total_lines = vim.api.nvim_buf_line_count(current_buf)
+
+  -- Ensure line2 doesn't exceed buffer bounds
+  if line2 > total_lines then
+    line2 = total_lines
+  end
+
+  local lines_content = vim.api.nvim_buf_get_lines(
+    current_buf,
+    line1 - 1, -- Convert to 0-indexed
+    line2, -- nvim_buf_get_lines end is exclusive
+    false
+  )
+
+  if #lines_content == 0 then
+    return nil
+  end
+
+  local final_text = table.concat(lines_content, "\n")
+
+  -- For range selections, we treat them as linewise
+  local lsp_start_line = line1 - 1 -- Convert to 0-indexed
+  local lsp_end_line = line2 - 1
+  local lsp_start_char = 0
+  local lsp_end_char = #lines_content[#lines_content]
+
+  return {
+    text = final_text or "",
+    filePath = file_path,
+    fileUrl = "file://" .. file_path,
+    selection = {
+      start = { line = lsp_start_line, character = lsp_start_char },
+      ["end"] = { line = lsp_end_line, character = lsp_end_char },
+      isEmpty = (not final_text or #final_text == 0),
+    },
+  }
+end
+
 --- Sends an at_mentioned notification for the current visual selection.
-function M.send_at_mention_for_visual_selection()
+-- @param line1 number|nil Optional start line for range-based selection
+-- @param line2 number|nil Optional end line for range-based selection
+function M.send_at_mention_for_visual_selection(line1, line2)
   if not M.state.tracking_enabled or not M.server then
     logger.error("selection", "Claude Code is not running or server not available for send_at_mention.")
     return false
   end
 
-  local sel_to_send = M.state.latest_selection
+  local sel_to_send
 
-  if not sel_to_send or sel_to_send.selection.isEmpty then
-    -- Fallback: try to get current visual selection directly.
-    -- This helps if latest_selection was demoted or command was too fast.
-    local current_visual = M.get_visual_selection()
-    if current_visual and not current_visual.selection.isEmpty then
-      sel_to_send = current_visual
-    else
-      logger.warn("selection", "No visual selection to send as at-mention.")
+  -- If range parameters are provided, use them (for :'<,'> commands)
+  if line1 and line2 then
+    sel_to_send = M.get_range_selection(line1, line2)
+    if not sel_to_send or sel_to_send.selection.isEmpty then
+      logger.warn("selection", "Invalid range selection to send as at-mention.")
       return false
+    end
+  else
+    -- Use existing logic for visual mode or tracked selection
+    sel_to_send = M.state.latest_selection
+
+    if not sel_to_send or sel_to_send.selection.isEmpty then
+      -- Fallback: try to get current visual selection directly.
+      -- This helps if latest_selection was demoted or command was too fast.
+      local current_visual = M.get_visual_selection()
+      if current_visual and not current_visual.selection.isEmpty then
+        sel_to_send = current_visual
+      else
+        logger.warn("selection", "No visual selection to send as at-mention.")
+        return false
+      end
     end
   end
 
