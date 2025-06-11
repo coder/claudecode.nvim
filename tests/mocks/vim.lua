@@ -750,47 +750,50 @@ local vim = {
     warn = function(...) end,
     error = function(...) end,
   },
+}
 
-  --- Internal helper functions for tests to manipulate the mock's state.
-  --- These are not part of the Neovim API but are useful for setting up
-  --- specific scenarios for testing plugins.
-  _mock = {
-    add_buffer = function(bufnr, name, content, opts)
-      _G.vim._buffers[bufnr] = {
-        name = name,
-        lines = type(content) == "string" and _G.vim._mock.split_lines(content) or content,
-        options = opts or {},
-        listed = true,
-      }
-    end,
+-- Helper function to split lines
+local function split_lines(str)
+  local lines = {}
+  for line in str:gmatch("([^\n]*)\n?") do
+    table.insert(lines, line)
+  end
+  return lines
+end
 
-    split_lines = function(str)
-      local lines = {}
-      for line in str:gmatch("([^\n]*)\n?") do
-        table.insert(lines, line)
-      end
-      return lines
-    end,
+--- Internal helper functions for tests to manipulate the mock's state.
+--- These are not part of the Neovim API but are useful for setting up
+--- specific scenarios for testing plugins.
+vim._mock = {
+  add_buffer = function(bufnr, name, content, opts)
+    vim._buffers[bufnr] = {
+      name = name,
+      lines = type(content) == "string" and split_lines(content) or content,
+      options = opts or {},
+      listed = true,
+    }
+  end,
 
-    add_window = function(winid, bufnr, cursor)
-      _G.vim._windows[winid] = {
-        buffer = bufnr,
-        cursor = cursor or { 1, 0 },
-      }
-    end,
+  split_lines = split_lines,
 
-    reset = function()
-      _G.vim._buffers = {}
-      _G.vim._windows = {}
-      _G.vim._commands = {}
-      _G.vim._autocmds = {}
-      _G.vim._vars = {}
-      _G.vim._options = {}
-      _G.vim._last_command = nil
-      _G.vim._last_echo = nil
-      _G.vim._last_error = nil
-    end,
-  },
+  add_window = function(winid, bufnr, cursor)
+    vim._windows[winid] = {
+      buffer = bufnr,
+      cursor = cursor or { 1, 0 },
+    }
+  end,
+
+  reset = function()
+    vim._buffers = {}
+    vim._windows = {}
+    vim._commands = {}
+    vim._autocmds = {}
+    vim._vars = {}
+    vim._options = {}
+    vim._last_command = nil
+    vim._last_echo = nil
+    vim._last_error = nil
+  end,
 }
 
 if _G.vim == nil then

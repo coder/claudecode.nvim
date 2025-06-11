@@ -89,6 +89,11 @@ function M.stop()
 
   tcp_server.stop_server(M.state.server)
 
+  -- CRITICAL: Clear global deferred responses to prevent memory leaks and hanging
+  if _G.claude_deferred_responses then
+    _G.claude_deferred_responses = {}
+  end
+
   M.state.server = nil
   M.state.port = nil
   M.state.clients = {}

@@ -18,7 +18,8 @@ end
 
 -- Add package paths for development
 vim.opt.runtimepath:append(vim.fn.expand("$HOME/.local/share/nvim/site/pack/vendor/start/plenary.nvim"))
-vim.opt.runtimepath:append(vim.fn.expand("$HOME/.local/share/nvim/site/pack/vendor/start/claudecode.nvim"))
+-- Add current working directory to runtime path for development
+vim.opt.runtimepath:prepend(vim.fn.getcwd())
 
 -- Set up test environment
 vim.g.mapleader = " "
@@ -43,10 +44,55 @@ for _, plugin in pairs(disabled_built_ins) do
   vim.g["loaded_" .. plugin] = 1
 end
 
--- Set up plugin
-if not vim.g.loaded_claudecode then
+-- Check for claudecode-specific tests by examining command line or environment
+local should_load = false
+
+-- Method 1: Check command line arguments for specific test files
+for _, arg in ipairs(vim.v.argv) do
+  if arg:match("command_args_spec") or arg:match("mcp_tools_spec") then
+    should_load = true
+    break
+  end
+end
+
+-- Method 2: Check if CLAUDECODE_INTEGRATION_TEST env var is set
+if not should_load and os.getenv("CLAUDECODE_INTEGRATION_TEST") == "true" then
+  should_load = true
+end
+
+if not vim.g.loaded_claudecode and should_load then
   require("claudecode").setup({
     auto_start = false,
     log_level = "trace", -- More verbose for tests
+  })
+end
+
+-- Global cleanup function for plenary test harness
+_G.claudecode_test_cleanup = function()
+  -- Clear global deferred responses
+  if _G.claude_deferred_responses then
+    _G.claude_deferred_responses = {}
+  end
+
+  -- Stop claudecode if running
+  local ok, claudecode = pcall(require, "claudecode")
+  if ok and claudecode.state and claudecode.state.server then
+    local selection_ok, selection = pcall(require, "claudecode.selection")
+    if selection_ok and selection.disable then
+      selection.disable()
+    end
+
+    if claudecode.stop then
+      claudecode.stop()
+    end
+  end
+end
+
+-- Auto-cleanup when using plenary test harness
+if vim.env.PLENARY_TEST_HARNESS then
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    callback = function()
+      _G.claudecode_test_cleanup()
+    end,
   })
 end

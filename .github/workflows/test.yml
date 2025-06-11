@@ -159,4 +159,4 @@ jobs:
           ln -s "$(pwd)" ~/.local/share/nvim/site/pack/vendor/start/claudecode.nvim
 
       - name: Run integration tests
-        run: nix develop .#ci -c nvim --headless -u tests/minimal_init.lua -c "lua require('plenary.test_harness').test_directory('tests/integration', {minimal_init = 'tests/minimal_init.lua'})"
+        run: nix develop .#ci -c ./scripts/run_integration_tests_individually.sh

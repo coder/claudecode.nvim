@@ -11,15 +11,32 @@ describe("ClaudeCode command arguments integration", function()
 
   before_each(function()
     executed_commands = {}
+    local terminal_jobs = {}
 
-    -- Mock vim.fn.termopen to capture actual commands
-    vim.fn.termopen = spy.new(function(cmd, opts)
+    -- Mock vim.fn.termopen to capture actual commands and properly simulate terminal lifecycle
+    vim.fn.termopen = function(cmd, opts)
+      local job_id = 123 + #terminal_jobs
       table.insert(executed_commands, {
         cmd = cmd,
         opts = opts,
       })
-      return 123 -- mock job id
-    end)
+
+      -- Store the job for cleanup
+      table.insert(terminal_jobs, {
+        id = job_id,
+        on_exit = opts and opts.on_exit,
+      })
+
+      -- In headless test mode, immediately schedule the terminal exit
+      -- This simulates the terminal closing right away to prevent hanging
+      if opts and opts.on_exit then
+        vim.schedule(function()
+          opts.on_exit(job_id, 0, "exit")
+        end)
+      end
+
+      return job_id
+    end
 
     vim.fn.mode = function()
       return "n"
@@ -30,27 +47,56 @@ describe("ClaudeCode command arguments integration", function()
       lines = 30,
     }
 
-    vim.api.nvim_feedkeys = spy.new(function() end)
-    vim.api.nvim_replace_termcodes = spy.new(function(str)
+    vim.api.nvim_feedkeys = function() end
+    vim.api.nvim_replace_termcodes = function(str)
       return str
-    end)
-    vim.api.nvim_create_user_command = spy.new(function() end)
-    vim.api.nvim_create_autocmd = spy.new(function() end)
-    vim.api.nvim_create_augroup = spy.new(function()
+    end
+    local create_user_command_calls = {}
+    vim.api.nvim_create_user_command = setmetatable({
+      calls = create_user_command_calls,
+    }, {
+      __call = function(self, ...)
+        table.insert(create_user_command_calls, { vals = { ... } })
+      end,
+    })
+    vim.api.nvim_create_autocmd = function() end
+    vim.api.nvim_create_augroup = function()
       return 1
-    end)
-    vim.api.nvim_get_current_win = spy.new(function()
+    end
+    vim.api.nvim_get_current_win = function()
       return 1
-    end)
-    vim.api.nvim_win_set_height = spy.new(function() end)
-    vim.api.nvim_win_call = spy.new(function(winid, func)
+    end
+    vim.api.nvim_set_current_win = function() end
+    vim.api.nvim_win_set_height = function() end
+    vim.api.nvim_win_call = function(winid, func)
       func()
-    end)
-    vim.api.nvim_get_current_buf = spy.new(function()
+    end
+    vim.api.nvim_get_current_buf = function()
       return 1
-    end)
-    vim.api.nvim_win_close = spy.new(function() end)
-    vim.cmd = spy.new(function() end)
+    end
+    vim.api.nvim_win_close = function() end
+    vim.api.nvim_buf_is_valid = function()
+      return false
+    end
+    vim.api.nvim_win_is_valid = function()
+      return true
+    end
+    vim.api.nvim_list_wins = function()
+      return { 1 }
+    end
+    vim.api.nvim_win_get_buf = function()
+      return 1
+    end
+    vim.api.nvim_list_bufs = function()
+      return { 1 }
+    end
+    vim.api.nvim_buf_get_option = function()
+      return "terminal"
+    end
+    vim.api.nvim_buf_get_name = function()
+      return "terminal://claude"
+    end
+    vim.cmd = function() end
     vim.bo = setmetatable({}, {
       __index = function()
         return {}
@@ -60,6 +106,9 @@ describe("ClaudeCode command arguments integration", function()
     vim.schedule = function(func)
       func()
     end
+
+    -- Mock vim.notify to prevent terminal notifications in headless mode
+    vim.notify = function() end
 
     mock_server = {
       start = function()
@@ -137,6 +186,24 @@ describe("ClaudeCode command arguments integration", function()
   end)
 
   after_each(function()
+    -- CRITICAL: Add explicit cleanup to prevent hanging
+    if claudecode and claudecode.state and claudecode.state.server then
+      -- Clean up global deferred responses that prevent garbage collection
+      if _G.claude_deferred_responses then
+        _G.claude_deferred_responses = {}
+      end
+
+      -- Stop the server and selection tracking explicitly
+      local selection_ok, selection = pcall(require, "claudecode.selection")
+      if selection_ok and selection.disable then
+        selection.disable()
+      end
+
+      if claudecode.stop then
+        claudecode.stop()
+      end
+    end
+
     _G.require = original_require
     package.loaded["claudecode"] = nil
     package.loaded["claudecode.terminal"] = nil
