@@ -7,6 +7,7 @@ describe("ClaudeCodeSend Command Range Functionality", function()
   local mock_server
   local mock_terminal
   local command_callback
+  local original_require
 
   before_each(function()
     -- Reset package cache
@@ -115,7 +116,7 @@ describe("ClaudeCodeSend Command Range Functionality", function()
     }
 
     -- Setup require mocks BEFORE requiring claudecode
-    local original_require = _G.require
+    original_require = _G.require
     _G.require = function(module_name)
       if module_name == "claudecode.selection" then
         return mock_selection_module
@@ -147,7 +148,7 @@ describe("ClaudeCodeSend Command Range Functionality", function()
 
   after_each(function()
     -- Restore original require
-    _G.require = require
+    _G.require = original_require
   end)
 
   describe("ClaudeCodeSend command", function()

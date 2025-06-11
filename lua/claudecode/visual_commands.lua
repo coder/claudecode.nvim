@@ -4,6 +4,23 @@
 -- @module claudecode.visual_commands
 local M = {}
 
+--- Get current vim mode with fallback for test environments
+--- @param full_mode boolean|nil Whether to get full mode info (passed to vim.fn.mode)
+--- @return string current_mode The current vim mode
+local function get_current_mode(full_mode)
+  local current_mode = "n" -- Default fallback
+
+  pcall(function()
+    if vim.api and vim.api.nvim_get_mode then
+      current_mode = vim.api.nvim_get_mode().mode
+    else
+      current_mode = vim.fn.mode(full_mode)
+    end
+  end)
+
+  return current_mode
+end
+
 -- ESC key constant matching neo-tree's implementation
 local ESC_KEY
 local success = pcall(function()
@@ -40,20 +57,7 @@ end
 --- @return boolean true if in visual mode, false otherwise
 --- @return string|nil error message if not in visual mode
 function M.validate_visual_mode()
-  local current_mode = "n" -- Default fallback
-
-  -- Use pcall to handle test environments
-  local mode_success = pcall(function()
-    if vim.api and vim.api.nvim_get_mode then
-      current_mode = vim.api.nvim_get_mode().mode
-    else
-      current_mode = vim.fn.mode(true)
-    end
-  end)
-
-  if not mode_success then
-    return false, "Cannot determine current mode (test environment)"
-  end
+  local current_mode = get_current_mode(true)
 
   local is_visual = current_mode == "v" or current_mode == "V" or current_mode == "\022"
 
@@ -82,12 +86,7 @@ function M.get_visual_range()
   -- Use pcall to handle test environments
   local range_success = pcall(function()
     -- Check if we're currently in visual mode
-    local current_mode
-    if vim.api and vim.api.nvim_get_mode then
-      current_mode = vim.api.nvim_get_mode().mode
-    else
-      current_mode = vim.fn.mode(true)
-    end
+    local current_mode = get_current_mode(true)
     local is_visual = current_mode == "v" or current_mode == "V" or current_mode == "\022"
 
     if is_visual then
@@ -186,12 +185,7 @@ end
 --- @return function The wrapped command function
 function M.create_visual_command_wrapper(normal_handler, visual_handler)
   return function(...)
-    local current_mode
-    if vim.api and vim.api.nvim_get_mode then
-      current_mode = vim.api.nvim_get_mode().mode
-    else
-      current_mode = vim.fn.mode(true)
-    end
+    local current_mode = get_current_mode(true)
 
     if current_mode == "v" or current_mode == "V" or current_mode == "\022" then
       -- Use the neo-tree pattern: exit visual mode, then schedule execution
