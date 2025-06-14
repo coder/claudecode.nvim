@@ -70,7 +70,8 @@ describe("Diff Module", function()
       expect(result.success).to_be_true()
       expect(result.temp_file).to_be_string()
       expect(result.temp_file:find("claudecode_diff", 1, true)).not_to_be_nil()
-      expect(result.temp_file:find("new.lua.new", 1, true)).not_to_be_nil()
+      local expected_suffix = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
+      expect(result.temp_file:find(expected_suffix, 1, true)).not_to_be_nil()
 
       rawset(io, "open", old_io_open)
     end)
