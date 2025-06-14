@@ -151,6 +151,10 @@ Both methods signal Claude Code to apply the changes to your file, after which t
 
 When you reject changes, the diff view closes and the original file remains unchanged.
 
+### Accepting/Rejecting from Claude Code Terminal
+
+You can also navigate to the Claude Code terminal window and accept or reject diffs directly from within Claude's interface. This provides an alternative way to manage diffs without using the Neovim-specific keymaps.
+
 ### How It Works
 
 The plugin uses a signal-based approach where accepting or rejecting a diff sends a message to Claude Code rather than directly modifying files. This ensures consistency and allows Claude Code to handle the actual file operations while the plugin manages the user interface and buffer reloading.

@@ -92,6 +92,7 @@ describe("Diff Module", function()
       expect(result.success).to_be_false()
       expect(result.error).to_be_string()
       expect(result.error:find("Failed to create temporary file", 1, true)).not_to_be_nil()
+      expect(result.temp_file).to_be_nil() -- Ensure no temp_file is created on failure
 
       rawset(io, "open", old_io_open)
     end)
@@ -263,6 +264,7 @@ describe("Diff Module", function()
           success = true,
           provider = "native",
           tab_name = tab_name,
+          temp_file = "/mock/temp/file.new",
         }
       end
 

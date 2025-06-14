@@ -231,7 +231,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
   local tmp_file, err = create_temp_file(new_file_contents, new_filename)
   if not tmp_file then
-    return { provider = "native", tab_name = tab_name, success = false, error = err }
+    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
   end
 
   local target_win = find_main_editor_window()
