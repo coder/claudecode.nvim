@@ -130,6 +130,31 @@ The `:ClaudeCodeAdd` command allows you to add files or directories directly by 
 - **Validation**: Checks that files and directories exist before adding, validates line numbers
 - **Flexible**: Works with both individual files and entire directories
 
+## Working with Diffs
+
+When Claude proposes changes to your files, the plugin opens a native Neovim diff view showing the original file alongside the proposed changes. You have several options to accept or reject these changes:
+
+### Accepting Changes
+
+- **`:w` (save)** - Accept the changes and apply them to your file
+- **`<leader>da`** - Accept the changes using the dedicated keymap
+
+You can edit the proposed changes in the right-hand diff buffer before accepting them. This allows you to modify Claude's suggestions or make additional tweaks before applying the final version to your file.
+
+Both methods signal Claude Code to apply the changes to your file, after which the plugin automatically reloads the affected buffers to show the updated content.
+
+### Rejecting Changes
+
+- **`:q` or `:close`** - Close the diff view to reject the changes
+- **`<leader>dq`** - Reject changes using the dedicated keymap
+- **`:bdelete` or `:bwipeout`** - Delete the diff buffer to reject changes
+
+When you reject changes, the diff view closes and the original file remains unchanged.
+
+### How It Works
+
+The plugin uses a signal-based approach where accepting or rejecting a diff sends a message to Claude Code rather than directly modifying files. This ensures consistency and allows Claude Code to handle the actual file operations while the plugin manages the user interface and buffer reloading.
+
 #### Examples
 
 ```vim
