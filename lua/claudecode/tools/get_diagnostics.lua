@@ -44,12 +44,9 @@ local function handler(params)
     logger.debug("Getting diagnostics for all open buffers")
     diagnostics = vim.diagnostic.get(nil)
   else
-    -- Remove file:// prefix if present
     local uri = params.uri
-    local filepath = uri
-    if uri:sub(1, 7) == "file://" then
-      filepath = uri:sub(8) -- Remove "file://" prefix
-    end
+    -- Strips the file:// scheme
+    local filepath = vim.uri_to_fname(uri)
 
     -- Get buffer number for the specific file
     local bufnr = vim.fn.bufnr(filepath)

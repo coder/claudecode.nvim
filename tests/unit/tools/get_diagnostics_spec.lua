@@ -40,6 +40,14 @@ describe("Tool: get_diagnostics", function()
       end
       return -1 -- File not open
     end)
+    _G.vim.uri_to_fname = spy.new(function(uri)
+      -- Realistic mock that matches vim.uri_to_fname behavior
+      if uri:sub(1, 7) == "file://" then
+        return uri:sub(8)
+      end
+      -- Real vim.uri_to_fname throws an error for URIs without proper scheme
+      error("URI must contain a scheme: " .. uri)
+    end)
   end)
 
   after_each(function()
@@ -49,6 +57,7 @@ describe("Tool: get_diagnostics", function()
     _G.vim.api.nvim_buf_get_name = nil
     _G.vim.json.encode = nil
     _G.vim.fn.bufnr = nil
+    _G.vim.uri_to_fname = nil
     -- Note: We don't nullify _G.vim.lsp or _G.vim.diagnostic entirely
     -- as they are checked for existence.
   end)
@@ -175,7 +184,8 @@ describe("Tool: get_diagnostics", function()
     expect(success).to_be_true()
     expect(#result.content).to_be(1)
 
-    -- Should have called vim.diagnostic.get with specific buffer
+    -- Should have used vim.uri_to_fname to convert URI to file path
+    assert.spy(_G.vim.uri_to_fname).was_called_with("file:///test/file.lua")
     assert.spy(_G.vim.diagnostic.get).was_called_with(1)
     assert.spy(_G.vim.fn.bufnr).was_called_with("/test/file.lua")
   end)
@@ -192,27 +202,9 @@ describe("Tool: get_diagnostics", function()
     expect(err.message).to_be("File not open in buffer")
     assert_contains(err.data, "File must be open in Neovim to retrieve diagnostics: /unknown/file.lua")
 
-    -- Should have checked for buffer but not called vim.diagnostic.get
+    -- Should have used vim.uri_to_fname and checked for buffer but not called vim.diagnostic.get
+    assert.spy(_G.vim.uri_to_fname).was_called_with("file:///unknown/file.lua")
     assert.spy(_G.vim.fn.bufnr).was_called_with("/unknown/file.lua")
     assert.spy(_G.vim.diagnostic.get).was_not_called()
-  end)
-
-  it("should handle URI without file:// prefix", function()
-    _G.vim.fn.bufnr = spy.new(function(filepath)
-      if filepath == "/test/file.lua" then
-        return 1
-      end
-      return -1
-    end)
-    _G.vim.diagnostic.get = spy.new(function()
-      return {}
-    end)
-
-    local success, result = pcall(get_diagnostics_handler, { uri = "/test/file.lua" })
-    expect(success).to_be_true()
-
-    -- Should have used the path directly
-    assert.spy(_G.vim.fn.bufnr).was_called_with("/test/file.lua")
-    assert.spy(_G.vim.diagnostic.get).was_called_with(1)
   end)
 end)
