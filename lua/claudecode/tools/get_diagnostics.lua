@@ -32,24 +32,17 @@ local function handler(params)
     })
   end
 
-  local log_module_ok, log = pcall(require, "claudecode.logger")
-  if not log_module_ok then
-    return {
-      code = -32603, -- Internal error
-      message = "Internal error",
-      data = "Failed to load logger module",
-    }
-  end
+  local logger = require("claudecode.logger")
 
-  log.debug("getDiagnostics handler called with params: " .. vim.inspect(params))
+  logger.debug("getDiagnostics handler called with params: " .. vim.inspect(params))
 
   -- Extract the uri parameter
   local diagnostics
 
   if not params.uri then
     -- Get diagnostics for all buffers
-    log.debug("Getting diagnostics for all open buffers")
     diagnostics = vim.diagnostic.get()
+    logger.debug("Getting diagnostics for all open buffers")
   else
     -- Remove file:// prefix if present
     local uri = params.uri
@@ -62,7 +55,7 @@ local function handler(params)
     local bufnr = vim.fn.bufnr(filepath)
     if bufnr == -1 then
       -- File is not open in any buffer, throw an error
-      log.debug("File buffer must be open to get diagnostics: " .. filepath)
+      logger.debug("File buffer must be open to get diagnostics: " .. filepath)
       error({
         code = -32001,
         message = "File not open in buffer",
@@ -70,7 +63,7 @@ local function handler(params)
       })
     else
       -- Get diagnostics for the specific buffer
-      log.debug("Getting diagnostics for bufnr: " .. bufnr)
+      logger.debug("Getting diagnostics for bufnr: " .. bufnr)
       diagnostics = vim.diagnostic.get(bufnr)
     end
   end
