@@ -30,7 +30,7 @@ describe("Tool: get_diagnostics", function()
     _G.vim.api.nvim_buf_get_name = spy.new(function(bufnr)
       return "/path/to/file_for_buf_" .. tostring(bufnr) .. ".lua"
     end)
-    _G.vim.fn.json_encode = spy.new(function(obj)
+    _G.vim.json.encode = spy.new(function(obj)
       return vim.inspect(obj) -- Use vim.inspect as a simple serialization
     end)
     _G.vim.fn.bufnr = spy.new(function(filepath)
@@ -47,7 +47,7 @@ describe("Tool: get_diagnostics", function()
     package.loaded["claudecode.logger"] = nil
     _G.vim.diagnostic.get = nil
     _G.vim.api.nvim_buf_get_name = nil
-    _G.vim.fn.json_encode = nil
+    _G.vim.json.encode = nil
     _G.vim.fn.bufnr = nil
     -- Note: We don't nullify _G.vim.lsp or _G.vim.diagnostic entirely
     -- as they are checked for existence.
@@ -59,7 +59,7 @@ describe("Tool: get_diagnostics", function()
     expect(result).to_be_table()
     expect(result.content).to_be_table()
     expect(#result.content).to_be(0)
-    assert.spy(_G.vim.diagnostic.get).was_called_with()
+    assert.spy(_G.vim.diagnostic.get).was_called_with(nil)
   end)
 
   it("should return formatted diagnostics if available", function()
@@ -81,10 +81,10 @@ describe("Tool: get_diagnostics", function()
     expect(result.content[2].type).to_be("text")
 
     -- Verify JSON encoding was called with correct structure
-    assert.spy(_G.vim.fn.json_encode).was_called(2)
+    assert.spy(_G.vim.json.encode).was_called(2)
 
     -- Check the first diagnostic was encoded with 1-indexed values
-    local first_call_args = _G.vim.fn.json_encode.calls[1].vals[1]
+    local first_call_args = _G.vim.json.encode.calls[1].vals[1]
     expect(first_call_args.filePath).to_be("/path/to/file_for_buf_1.lua")
     expect(first_call_args.line).to_be(11)     -- 10 + 1 for 1-indexing
     expect(first_call_args.character).to_be(6) -- 5 + 1 for 1-indexing
@@ -119,8 +119,8 @@ describe("Tool: get_diagnostics", function()
     expect(#result.content).to_be(1)
 
     -- Verify only the diagnostic with a file path was included
-    assert.spy(_G.vim.fn.json_encode).was_called(1)
-    local encoded_args = _G.vim.fn.json_encode.calls[1].vals[1]
+    assert.spy(_G.vim.json.encode).was_called(1)
+    local encoded_args = _G.vim.json.encode.calls[1].vals[1]
     expect(encoded_args.filePath).to_be("/path/to/file1.lua")
   end)
 

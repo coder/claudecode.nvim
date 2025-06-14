@@ -41,8 +41,8 @@ local function handler(params)
 
   if not params.uri then
     -- Get diagnostics for all buffers
-    diagnostics = vim.diagnostic.get()
     logger.debug("Getting diagnostics for all open buffers")
+    diagnostics = vim.diagnostic.get(nil)
   else
     -- Remove file:// prefix if present
     local uri = params.uri
@@ -76,7 +76,7 @@ local function handler(params)
       table.insert(formatted_diagnostics, {
         type = "text",
         -- json encode this
-        text = vim.fn.json_encode({
+        text = vim.json.encode({
           -- Use the file path and diagnostic information
           filePath = file_path,
           -- Convert line and column to 1-indexed
