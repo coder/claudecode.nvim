@@ -19,7 +19,7 @@ end
 --- Find a suitable main editor window to open diffs in.
 -- Excludes terminals, sidebars, and floating windows.
 -- @return number|nil Window ID of the main editor window, or nil if not found
-function M._find_main_editor_window()
+local function find_main_editor_window()
   local windows = vim.api.nvim_list_wins()
 
   for _, win in ipairs(windows) do
@@ -86,7 +86,7 @@ end
 -- @param content string The content to write
 -- @param filename string Base filename for the temporary file
 -- @return string|nil, string|nil The temporary file path and error message
-function M._create_temp_file(content, filename)
+local function create_temp_file(content, filename)
   local base_dir_cache = vim.fn.stdpath("cache") .. "/claudecode_diffs"
   local mkdir_ok_cache, mkdir_err_cache = pcall(vim.fn.mkdir, base_dir_cache, "p")
 
@@ -133,7 +133,7 @@ end
 
 --- Clean up temporary files and directories
 -- @param tmp_file string Path to the temporary file to clean up
-function M._cleanup_temp_file(tmp_file)
+local function cleanup_temp_file(tmp_file)
   if tmp_file and vim.fn.filereadable(tmp_file) == 1 then
     local tmp_dir = vim.fn.fnamemodify(tmp_file, ":h")
     if vim.fs and type(vim.fs.remove) == "function" then
@@ -177,56 +177,8 @@ function M._cleanup_temp_file(tmp_file)
   end
 end
 
---- Clean up diff layout by properly restoring original single-window state
--- @param tab_name string The diff identifier for logging
--- @param target_win number The original window that was split
--- @param new_win number The new window created by the split
-function M._cleanup_diff_layout(tab_name, target_win, new_win)
-  logger.debug("diff", "[CLEANUP] Starting layout cleanup for:", tab_name)
-  logger.debug("diff", "[CLEANUP] Target window:", target_win, "New window:", new_win)
-
-  local original_current_win = vim.api.nvim_get_current_win()
-  logger.debug("diff", "[CLEANUP] Original current window:", original_current_win)
-
-  if vim.api.nvim_win_is_valid(target_win) then
-    vim.api.nvim_win_call(target_win, function()
-      vim.cmd("diffoff")
-    end)
-    logger.debug("diff", "[CLEANUP] Turned off diff mode for target window")
-  end
-
-  if vim.api.nvim_win_is_valid(new_win) then
-    vim.api.nvim_win_call(new_win, function()
-      vim.cmd("diffoff")
-    end)
-    logger.debug("diff", "[CLEANUP] Turned off diff mode for new window")
-  end
-
-  if vim.api.nvim_win_is_valid(new_win) then
-    vim.api.nvim_set_current_win(new_win)
-    vim.cmd("close")
-    logger.debug("diff", "[CLEANUP] Closed new split window")
-
-    if vim.api.nvim_win_is_valid(target_win) then
-      vim.api.nvim_set_current_win(target_win)
-      logger.debug("diff", "[CLEANUP] Returned to target window")
-    elseif vim.api.nvim_win_is_valid(original_current_win) and original_current_win ~= new_win then
-      vim.api.nvim_set_current_win(original_current_win)
-      logger.debug("diff", "[CLEANUP] Returned to original current window")
-    else
-      local windows = vim.api.nvim_list_wins()
-      if #windows > 0 then
-        vim.api.nvim_set_current_win(windows[1])
-        logger.debug("diff", "[CLEANUP] Set focus to first available window")
-      end
-    end
-  end
-
-  logger.debug("diff", "[CLEANUP] Layout cleanup completed for:", tab_name)
-end
-
 -- Detect filetype from a path or existing buffer (best-effort)
-local function _detect_filetype(path, buf)
+local function detect_filetype(path, buf)
   -- 1) Try Neovim's builtin matcher if available (>=0.10)
   if vim.filetype and type(vim.filetype.match) == "function" then
     local ok, ft = pcall(vim.filetype.match, { filename = path })
@@ -275,15 +227,14 @@ end
 -- @param new_file_contents string Contents of the new file
 -- @param tab_name string Name for the diff tab/view
 -- @return table Result with provider, tab_name, and success status
-
 function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
   local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
-  local tmp_file, err = M._create_temp_file(new_file_contents, new_filename)
+  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
   if not tmp_file then
     return { provider = "native", tab_name = tab_name, success = false, error = err }
   end
 
-  local target_win = M._find_main_editor_window()
+  local target_win = find_main_editor_window()
 
   if target_win then
     vim.api.nvim_set_current_win(target_win)
@@ -306,7 +257,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
   local proposed_buf = vim.api.nvim_get_current_buf()
-  local old_filetype = _detect_filetype(old_file_path)
+  local old_filetype = detect_filetype(old_file_path)
   if old_filetype and old_filetype ~= "" then
     vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })
   end
@@ -325,7 +276,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     group = cleanup_group,
     buffer = new_buf,
     callback = function()
-      M._cleanup_temp_file(tmp_file)
+      cleanup_temp_file(tmp_file)
     end,
     once = true,
   })
@@ -338,60 +289,11 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   }
 end
 
---- Create a scratch buffer for new content
--- @param content string The content to put in the buffer
--- @param filename string The filename for the buffer
--- @return number The buffer ID
-function M._create_new_content_buffer(content, filename)
-  local buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
-  if buf == 0 then
-    error({
-      code = -32000,
-      message = "Buffer creation failed",
-      data = "Could not create buffer - may be out of memory",
-    })
-  end
-
-  vim.api.nvim_buf_set_name(buf, filename)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(content, "\n"))
-  return buf
-end
-
---- Safe file reading with error handling
--- @param file_path string Path to the file to read
--- @return string The file content
-function M._safe_file_read(file_path)
-  local file, err = io.open(file_path, "r")
-  if not file then
-    error({
-      code = -32000,
-      message = "File access error",
-      data = "Cannot open file: " .. file_path .. " (" .. (err or "unknown error") .. ")",
-    })
-  end
-
-  local content = file:read("*all")
-  file:close()
-  return content
-end
-
 --- Register diff state for tracking
 -- @param tab_name string Unique identifier for the diff
 -- @param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
   active_diffs[tab_name] = diff_data
-end
-
---- Find diff by buffer ID
--- @param buffer_id number Buffer ID to search for
--- @return string|nil The tab_name if found
-function M._find_diff_by_buffer(buffer_id)
-  for tab_name, diff_data in pairs(active_diffs) do
-    if diff_data.new_buffer == buffer_id or diff_data.old_buffer == buffer_id then
-      return tab_name
-    end
-  end
-  return nil
 end
 
 --- Resolve diff as saved (user accepted changes)
@@ -403,11 +305,24 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return
   end
 
-  -- Get final file contents
-  local final_content = table.concat(vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false), "\n")
+  logger.debug("diff", "Resolving diff as saved for", tab_name, "from buffer", buffer_id)
 
-  -- Write the accepted changes to the actual file
-  M._apply_accepted_changes(diff_data, final_content)
+  -- Get content from buffer
+  local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
+  local final_content = table.concat(content_lines, "\n")
+  -- Add trailing newline if the buffer has one
+  if #content_lines > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
+    final_content = final_content .. "\n"
+  end
+
+  -- Close diff windows (unified behavior)
+  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+    vim.api.nvim_win_close(diff_data.new_window, true)
+  end
+  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+    vim.api.nvim_set_current_win(diff_data.target_window)
+    vim.cmd("diffoff")
+  end
 
   -- Create MCP-compliant response
   local result = {
@@ -423,114 +338,71 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   -- Resume the coroutine with the result (for deferred response system)
   if diff_data.resolution_callback then
     logger.debug("diff", "Resuming coroutine for saved diff", tab_name)
-    -- The resolution_callback is actually coroutine.resume(co, result)
     diff_data.resolution_callback(result)
   else
     logger.debug("diff", "No resolution callback found for saved diff", tab_name)
   end
 
-  -- NOTE: We do NOT clean up the diff state here - that will be done by close_tab
-  logger.debug("diff", "Diff saved but not closed - waiting for close_tab command")
+  -- Reload the original file buffer after a delay to ensure Claude CLI has written the file
+  vim.defer_fn(function()
+    local current_diff_data = active_diffs[tab_name]
+    local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
+    M.reload_file_buffers_manual(diff_data.old_file_path, original_cursor_pos)
+  end, 200)
+
+  -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
+  logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
 end
 
---- Apply accepted changes to the original file and reload open buffers
--- @param diff_data table The diff state data
--- @param final_content string The final content to write
--- @return boolean success Whether the operation succeeded
--- @return string|nil error Error message if operation failed
-function M._apply_accepted_changes(diff_data, final_content)
-  local old_file_path = diff_data.old_file_path
-  if not old_file_path then
-    local error_msg = "No old_file_path found in diff_data"
-    logger.error("diff", error_msg)
-    return false, error_msg
-  end
+--- Reload file buffers after external changes (called when diff is closed)
+-- @param file_path string Path to the file that was externally modified
+-- @param original_cursor_pos table|nil Original cursor position to restore {row, col}
+local function reload_file_buffers(file_path, original_cursor_pos)
+  logger.debug("diff", "Reloading buffers for file:", file_path, original_cursor_pos and "(restoring cursor)" or "")
 
-  logger.debug("diff", "Writing accepted changes to file:", old_file_path)
-
-  -- Ensure parent directories exist for new files
-  if diff_data.is_new_file then
-    local parent_dir = vim.fn.fnamemodify(old_file_path, ":h")
-    if parent_dir and parent_dir ~= "" and parent_dir ~= "." then
-      logger.debug("diff", "Creating parent directories for new file:", parent_dir)
-      local mkdir_success, mkdir_err = pcall(vim.fn.mkdir, parent_dir, "p")
-      if not mkdir_success then
-        local error_msg = "Failed to create parent directories: " .. parent_dir .. " - " .. tostring(mkdir_err)
-        logger.error("diff", error_msg)
-        return false, error_msg
-      end
-      logger.debug("diff", "Successfully created parent directories:", parent_dir)
-    end
-  end
-
-  -- Write the content to the actual file
-  local lines = vim.split(final_content, "\n")
-  local success, err = pcall(vim.fn.writefile, lines, old_file_path)
-
-  if not success then
-    local error_msg = "Failed to write file: " .. old_file_path .. " - " .. tostring(err)
-    logger.error("diff", error_msg)
-    return false, error_msg
-  end
-
-  logger.debug("diff", "Successfully wrote changes to", old_file_path)
-
+  local reloaded_count = 0
   -- Find and reload any open buffers for this file
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     if vim.api.nvim_buf_is_valid(buf) then
       local buf_name = vim.api.nvim_buf_get_name(buf)
-      if buf_name == old_file_path then
-        logger.debug("diff", "Reloading buffer", buf, "for file:", old_file_path)
-        -- Use :edit to reload the buffer
-        -- We need to execute this in the context of the buffer
-        vim.api.nvim_buf_call(buf, function()
-          vim.cmd("edit")
-        end)
-        logger.debug("diff", "Successfully reloaded buffer", buf)
+
+      -- Simple string match - if buffer name matches the file path
+      if buf_name == file_path then
+        -- Check if buffer is modified - only reload unmodified buffers for safety
+        local modified = vim.api.nvim_buf_get_option(buf, "modified")
+        logger.debug("diff", "Found matching buffer", buf, "modified:", modified)
+
+        if not modified then
+          -- Try to find a window displaying this buffer for proper context
+          local win_id = nil
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_get_buf(win) == buf then
+              win_id = win
+              break
+            end
+          end
+
+          if win_id then
+            vim.api.nvim_win_call(win_id, function()
+              vim.cmd("edit")
+              -- Restore original cursor position if we have it
+              if original_cursor_pos then
+                pcall(vim.api.nvim_win_set_cursor, win_id, original_cursor_pos)
+              end
+            end)
+          else
+            vim.api.nvim_buf_call(buf, function()
+              vim.cmd("edit")
+            end)
+          end
+
+          reloaded_count = reloaded_count + 1
+        end
       end
     end
   end
 
-  return true, nil
-end
-
---- Resolve diff as accepted with final content
--- @param tab_name string The diff identifier
--- @param final_content string The final content after user edits
-function M._resolve_diff_as_accepted(tab_name, final_content)
-  local diff_data = active_diffs[tab_name]
-  if not diff_data or diff_data.status ~= "pending" then
-    return
-  end
-
-  -- Create MCP-compliant response
-  local result = {
-    content = {
-      { type = "text", text = "FILE_SAVED" },
-      { type = "text", text = final_content },
-    },
-  }
-
-  diff_data.status = "saved"
-  diff_data.result_content = result
-
-  -- Write the accepted changes to the actual file and reload any open buffers FIRST
-  -- This ensures the file is updated before we send the response
-  M._apply_accepted_changes(diff_data, final_content)
-
-  -- Clean up diff state and resources BEFORE resolving to prevent any interference
-  M._cleanup_diff_state(tab_name, "changes accepted")
-
-  -- Use vim.schedule to ensure the resolution callback happens after all cleanup
-  vim.schedule(function()
-    -- Resume the coroutine with the result (for deferred response system)
-    if diff_data.resolution_callback then
-      logger.debug("diff", "Resuming coroutine for accepted diff", tab_name)
-      diff_data.resolution_callback(result)
-    else
-      logger.debug("diff", "No resolution callback found for accepted diff", tab_name)
-    end
-  end)
+  logger.debug("diff", "Completed buffer reload - reloaded", reloaded_count, "buffers for file:", file_path)
 end
 
 --- Resolve diff as rejected (user closed/rejected)
@@ -560,10 +432,7 @@ function M._resolve_diff_as_rejected(tab_name)
     -- Resume the coroutine with the result (for deferred response system)
     if diff_data.resolution_callback then
       logger.debug("diff", "Resuming coroutine for rejected diff", tab_name)
-      -- The resolution_callback is actually coroutine.resume(co, result)
       diff_data.resolution_callback(result)
-    else
-      logger.debug("diff", "No resolution callback found for rejected diff", tab_name)
     end
   end)
 end
@@ -571,28 +440,19 @@ end
 --- Register autocmds for a specific diff
 -- @param tab_name string The diff identifier
 -- @param new_buffer number New file buffer ID
--- @param old_buffer number Old file buffer ID
 -- @return table List of autocmd IDs
-function M._register_diff_autocmds(tab_name, new_buffer, old_buffer)
+local function register_diff_autocmds(tab_name, new_buffer)
   local autocmd_ids = {}
 
-  -- Save event monitoring for new buffer (BufWritePost)
-  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufWritePost", {
-    group = get_autocmd_group(),
-    buffer = new_buffer,
-    callback = function()
-      logger.debug("diff", "BufWritePost triggered - accepting diff changes for", tab_name)
-      M._resolve_diff_as_saved(tab_name, new_buffer)
-    end,
-  })
-
-  -- Also handle :w command directly (BufWriteCmd) for immediate acceptance
+  -- Handle :w command to accept diff changes (replaces both BufWritePost and BufWriteCmd)
   autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufWriteCmd", {
     group = get_autocmd_group(),
     buffer = new_buffer,
     callback = function()
       logger.debug("diff", "BufWriteCmd (:w) triggered - accepting diff changes for", tab_name)
       M._resolve_diff_as_saved(tab_name, new_buffer)
+      -- Prevent actual file write since we're handling it through MCP
+      return true
     end,
   })
 
@@ -642,8 +502,6 @@ end
 -- @param is_new_file boolean Whether this is a new file (doesn't exist yet)
 -- @return table Info about the created diff layout
 function M._create_diff_view_from_window(target_window, old_file_path, new_buffer, tab_name, is_new_file)
-  logger.debug("diff", "Creating diff view from window", target_window)
-
   -- If no target window provided, create a new window in suitable location
   if not target_window then
     -- Try to create a new window in the main area
@@ -659,14 +517,12 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
     end
 
     target_window = vim.api.nvim_get_current_win()
-    logger.debug("diff", "Created new window for diff", target_window)
   else
     vim.api.nvim_set_current_win(target_window)
   end
 
   local original_buffer
   if is_new_file then
-    logger.debug("diff", "Creating empty buffer for new file diff")
     local empty_buffer = vim.api.nvim_create_buf(false, true)
     if not empty_buffer or empty_buffer == 0 then
       local error_msg = "Failed to create empty buffer for new file diff"
@@ -706,55 +562,24 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
   end
 
   vim.cmd("diffthis")
-  logger.debug(
-    "diff",
-    "Enabled diff mode on",
-    is_new_file and "empty buffer" or "original file",
-    "in window",
-    target_window
-  )
 
   vim.cmd("vsplit")
   local new_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(new_win, new_buffer)
 
   -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
-  local original_ft = _detect_filetype(old_file_path, original_buffer)
+  local original_ft = detect_filetype(old_file_path, original_buffer)
   if original_ft and original_ft ~= "" then
     vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
   end
   vim.cmd("diffthis")
-  logger.debug("diff", "Created split window", new_win, "with new buffer", new_buffer)
 
   vim.cmd("wincmd =")
   vim.api.nvim_set_current_win(new_win)
 
-  logger.debug("diff", "Diff view setup complete - original window:", target_window, "new window:", new_win)
-
   local keymap_opts = { buffer = new_buffer, silent = true }
 
   vim.keymap.set("n", "<leader>da", function()
-    local new_content = vim.api.nvim_buf_get_lines(new_buffer, 0, -1, false)
-
-    if is_new_file then
-      local parent_dir = vim.fn.fnamemodify(old_file_path, ":h")
-      if parent_dir and parent_dir ~= "" and parent_dir ~= "." then
-        vim.fn.mkdir(parent_dir, "p")
-      end
-    end
-
-    vim.fn.writefile(new_content, old_file_path)
-
-    if vim.api.nvim_win_is_valid(new_win) then
-      vim.api.nvim_win_close(new_win, true)
-    end
-
-    if vim.api.nvim_win_is_valid(target_window) then
-      vim.api.nvim_set_current_win(target_window)
-      vim.cmd("diffoff")
-      vim.cmd("edit!")
-    end
-
     M._resolve_diff_as_saved(tab_name, new_buffer)
   end, keymap_opts)
 
@@ -812,12 +637,12 @@ function M._cleanup_diff_state(tab_name, reason)
   -- Remove from active diffs
   active_diffs[tab_name] = nil
 
-  -- Log cleanup reason
-  logger.debug("Cleaned up diff state for '" .. tab_name .. "' due to: " .. reason)
+  logger.debug("diff", "Cleaned up diff state for", tab_name, "due to:", reason)
 end
 
 --- Clean up all active diffs
 -- @param reason string Reason for cleanup
+-- NOTE: This will become a public closeAllDiffTabs tool in the future
 function M._cleanup_all_active_diffs(reason)
   for tab_name, _ in pairs(active_diffs) do
     M._cleanup_diff_state(tab_name, reason)
@@ -829,23 +654,13 @@ end
 -- @param resolution_callback function Callback to call when diff resolves
 function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
-  logger.debug("diff", "Setup step 1: Finding existing buffer or window for", params.old_file_path)
+  logger.debug("diff", "Setting up diff for:", params.old_file_path)
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
     -- Step 1: Check if the file exists (allow new files)
     local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
     local is_new_file = not old_file_exists
-
-    logger.debug(
-      "diff",
-      "File existence check - old_file_exists:",
-      old_file_exists,
-      "is_new_file:",
-      is_new_file,
-      "path:",
-      params.old_file_path
-    )
 
     -- Step 2: Find if the file is already open in a buffer (only for existing files)
     local existing_buffer = nil
@@ -858,7 +673,6 @@ function M._setup_blocking_diff(params, resolution_callback)
           local buf_name = vim.api.nvim_buf_get_name(buf)
           if buf_name == params.old_file_path then
             existing_buffer = buf
-            logger.debug("diff", "Found existing buffer", buf, "for file", params.old_file_path)
             break
           end
         end
@@ -869,29 +683,18 @@ function M._setup_blocking_diff(params, resolution_callback)
         for _, win in ipairs(vim.api.nvim_list_wins()) do
           if vim.api.nvim_win_get_buf(win) == existing_buffer then
             target_window = win
-            logger.debug("diff", "Found window", win, "containing buffer", existing_buffer)
             break
           end
         end
       end
-    else
-      logger.debug("diff", "Skipping buffer search for new file:", params.old_file_path)
     end
 
     -- If no existing buffer/window, find a suitable main editor window
     if not target_window then
-      target_window = M._find_main_editor_window()
-      if target_window then
-        logger.debug("diff", "No existing buffer/window found, using main editor window", target_window)
-      else
-        -- Fallback: Create a new window
-        logger.debug("diff", "No suitable window found, will create new window")
-        -- This will be handled in _create_diff_view_from_window
-      end
+      target_window = find_main_editor_window()
     end
 
     -- Step 3: Create scratch buffer for new content
-    logger.debug("diff", "Creating new content buffer")
     local new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
     if new_buffer == 0 then
       error({
@@ -903,22 +706,31 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
     vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, vim.split(params.new_file_contents, "\n"))
+    local lines = vim.split(params.new_file_contents, "\n")
+    -- Remove trailing empty line if content ended with \n
+    if #lines > 0 and lines[#lines] == "" then
+      table.remove(lines, #lines)
+    end
+    vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
 
     vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
     vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
 
     -- Step 4: Set up diff view using the target window
-    logger.debug("diff", "Creating diff view from window", target_window, "is_new_file:", is_new_file)
     local diff_info =
       M._create_diff_view_from_window(target_window, params.old_file_path, new_buffer, tab_name, is_new_file)
 
     -- Step 5: Register autocmds for user interaction monitoring
-    logger.debug("diff", "Registering autocmds")
-    local autocmd_ids = M._register_diff_autocmds(tab_name, new_buffer, nil)
+    local autocmd_ids = register_diff_autocmds(tab_name, new_buffer)
 
     -- Step 6: Store diff state
-    logger.debug("diff", "Storing diff state")
+
+    -- Save the original cursor position before storing diff state
+    local original_cursor_pos = nil
+    if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
+      original_cursor_pos = vim.api.nvim_win_get_cursor(diff_info.target_window)
+    end
+
     M._register_diff_state(tab_name, {
       old_file_path = params.old_file_path,
       new_file_path = params.new_file_path,
@@ -927,6 +739,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       new_window = diff_info.new_window,
       target_window = diff_info.target_window,
       original_buffer = diff_info.original_buffer,
+      original_cursor_pos = original_cursor_pos,
       autocmd_ids = autocmd_ids,
       created_at = vim.fn.localtime(),
       status = "pending",
@@ -934,7 +747,6 @@ function M._setup_blocking_diff(params, resolution_callback)
       result_content = nil,
       is_new_file = is_new_file,
     })
-    logger.debug("diff", "Setup completed successfully for", tab_name)
   end) -- End of pcall
 
   -- Handle setup errors
@@ -979,8 +791,7 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     })
   end
 
-  -- Initialize diff state and monitoring
-  logger.debug("diff", "Starting diff setup for tab_name:", tab_name)
+  logger.debug("diff", "Starting diff setup for", tab_name)
 
   -- Use native diff implementation
   local success, err = pcall(M._setup_blocking_diff, {
@@ -990,24 +801,17 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     tab_name = tab_name,
   }, function(result)
     -- Resume the coroutine with the result
-    logger.debug("diff", "Resolution callback called for coroutine:", tostring(co))
     local resume_success, resume_result = coroutine.resume(co, result)
     if resume_success then
-      -- Coroutine completed successfully - send the response using the global sender
-      logger.debug("diff", "Coroutine completed successfully with result:", vim.inspect(resume_result))
-
       -- Use the global response sender to avoid module reloading issues
       local co_key = tostring(co)
       if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then
-        logger.debug("diff", "Calling global response sender for coroutine:", co_key)
         _G.claude_deferred_responses[co_key](resume_result)
-        -- Clean up
         _G.claude_deferred_responses[co_key] = nil
       else
         logger.error("diff", "No global response sender found for coroutine:", co_key)
       end
     else
-      -- Coroutine failed - send error response
       logger.error("diff", "Coroutine failed:", tostring(resume_result))
       local co_key = tostring(co)
       if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then
@@ -1018,14 +822,13 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
             data = "Coroutine failed: " .. tostring(resume_result),
           },
         })
-        -- Clean up
         _G.claude_deferred_responses[co_key] = nil
       end
     end
   end)
 
   if not success then
-    logger.error("diff", "Diff setup failed for", tab_name, "error:", vim.inspect(err))
+    logger.error("diff", "Diff setup failed for", tab_name, "error:", tostring(err))
     -- If the error is already structured, propagate it directly
     if type(err) == "table" and err.code then
       error(err)
@@ -1038,12 +841,9 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     end
   end
 
-  logger.debug("diff", "Diff setup completed successfully for", tab_name, "- about to yield and wait for user action")
-
   -- Yield and wait indefinitely for user interaction - the resolve functions will resume us
-  logger.debug("diff", "About to yield and wait for user action")
   local user_action_result = coroutine.yield()
-  logger.debug("diff", "User interaction detected, got result:", vim.inspect(user_action_result))
+  logger.debug("diff", "User action completed for", tab_name)
 
   -- Return the result directly - this will be sent by the deferred response system
   return user_action_result
@@ -1066,8 +866,15 @@ function M.close_diff_by_tab_name(tab_name)
     return false
   end
 
-  -- If the diff was already saved, just clean up
+  -- If the diff was already saved, reload file buffers and clean up
   if diff_data.status == "saved" then
+    -- Claude Code CLI has written the file, reload any open buffers
+    if diff_data.old_file_path then
+      -- Add a small delay to ensure Claude CLI has finished writing the file
+      vim.defer_fn(function()
+        M.reload_file_buffers_manual(diff_data.old_file_path, diff_data.original_cursor_pos)
+      end, 100) -- 100ms delay
+    end
     M._cleanup_diff_state(tab_name, "diff tab closed after save")
     return true
   end
@@ -1084,6 +891,11 @@ end
 -- Test helper function (only for testing)
 function M._get_active_diffs()
   return active_diffs
+end
+
+-- Manual buffer reload function for testing/debugging
+function M.reload_file_buffers_manual(file_path, original_cursor_pos)
+  return reload_file_buffers(file_path, original_cursor_pos)
 end
 
 return M

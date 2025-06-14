@@ -53,6 +53,9 @@
 ---@class vim_fs_module
 ---@field remove fun(path: string, opts?: {force?: boolean, recursive?: boolean}):boolean|nil
 
+---@class vim_filetype_module
+---@field match fun(args: {filename: string, contents?: string}):string|nil
+
 ---@class vim_fn_table
 ---@field mode fun(mode_str?: string, full?: boolean|number):string
 ---@field delete fun(name: string, flags?: string):integer For file deletion
@@ -109,6 +112,7 @@
 ---@field api vim_api_table For vim.api.*
 ---@field fn vim_fn_table For vim.fn.*
 ---@field fs vim_fs_module For vim.fs.*
+---@field filetype vim_filetype_module For vim.filetype.*
 ---@field test vim_test_utils? For test utility mocks
 ---@field split fun(str: string, pat?: string, opts?: {plain?: boolean, trimempty?: boolean}):string[] For vim.split()
 -- Add other vim object definitions here if they cause linting issues
