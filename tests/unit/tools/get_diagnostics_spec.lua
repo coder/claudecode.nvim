@@ -73,7 +73,7 @@ describe("Tool: get_diagnostics", function()
 
   it("should return formatted diagnostics if available", function()
     local mock_diagnostics = {
-      { bufnr = 1, lnum = 10, col = 5,  severity = 1, message = "Error message 1",   source = "linter1" },
+      { bufnr = 1, lnum = 10, col = 5, severity = 1, message = "Error message 1", source = "linter1" },
       { bufnr = 2, lnum = 20, col = 15, severity = 2, message = "Warning message 2", source = "linter2" },
     }
     _G.vim.diagnostic.get = spy.new(function()
@@ -95,7 +95,7 @@ describe("Tool: get_diagnostics", function()
     -- Check the first diagnostic was encoded with 1-indexed values
     local first_call_args = _G.vim.json.encode.calls[1].vals[1]
     expect(first_call_args.filePath).to_be("/path/to/file_for_buf_1.lua")
-    expect(first_call_args.line).to_be(11)     -- 10 + 1 for 1-indexing
+    expect(first_call_args.line).to_be(11) -- 10 + 1 for 1-indexing
     expect(first_call_args.character).to_be(6) -- 5 + 1 for 1-indexing
     expect(first_call_args.severity).to_be(1)
     expect(first_call_args.message).to_be("Error message 1")
@@ -107,7 +107,7 @@ describe("Tool: get_diagnostics", function()
 
   it("should filter out diagnostics with no file path", function()
     local mock_diagnostics = {
-      { bufnr = 1,  lnum = 10, col = 5,  severity = 1, message = "Error message 1",   source = "linter1" },
+      { bufnr = 1, lnum = 10, col = 5, severity = 1, message = "Error message 1", source = "linter1" },
       { bufnr = 99, lnum = 20, col = 15, severity = 2, message = "Warning message 2", source = "linter2" }, -- This one will have no path
     }
     _G.vim.diagnostic.get = spy.new(function()
@@ -140,7 +140,7 @@ describe("Tool: get_diagnostics", function()
     expect(err).to_be_table()
     expect(err.code).to_be(-32000)
     assert_contains(err.message, "Feature unavailable")
-    assert_contains(err.data, "LSP or vim.diagnostic.get not available")
+    assert_contains(err.data, "Diagnostics not available in this editor version/configuration.")
   end)
 
   it("should error if vim.diagnostic is not available", function()
@@ -199,8 +199,8 @@ describe("Tool: get_diagnostics", function()
     expect(success).to_be_false()
     expect(err).to_be_table()
     expect(err.code).to_be(-32001)
-    expect(err.message).to_be("File not open in buffer")
-    assert_contains(err.data, "File must be open in Neovim to retrieve diagnostics: /unknown/file.lua")
+    expect(err.message).to_be("File not open")
+    assert_contains(err.data, "File must be open to retrieve diagnostics: /unknown/file.lua")
 
     -- Should have used vim.uri_to_fname and checked for buffer but not called vim.diagnostic.get
     assert.spy(_G.vim.uri_to_fname).was_called_with("file:///unknown/file.lua")
