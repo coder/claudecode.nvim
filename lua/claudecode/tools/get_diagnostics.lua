@@ -1,7 +1,11 @@
 --- Tool implementation for getting diagnostics.
 
+-- NOTE: Its important we don't tip off Claude that we're dealing with Neovim LSP diagnostics because it may adjust
+-- line and col numbers by 1 on its own (since it knows nvim LSP diagnostics are 0-indexed). By calling these
+-- "editor diagnostics" and converting to 1-indexed ourselves we (hopefully) avoid incorrect line and column numbers
+-- in Claude's responses.
 local schema = {
-  description = "Get Neovim LSP diagnostics (errors, warnings) from open buffers",
+  description = "Get language diagnostics (errors, warnings) from the editor",
   inputSchema = {
     type = "object",
     properties = {
@@ -28,7 +32,7 @@ local function handler(params)
     error({
       code = -32000,
       message = "Feature unavailable",
-      data = "LSP or vim.diagnostic.get not available in this Neovim version/configuration.",
+      data = "Diagnostics not available in this editor version/configuration.",
     })
   end
 
@@ -55,8 +59,8 @@ local function handler(params)
       logger.debug("File buffer must be open to get diagnostics: " .. filepath)
       error({
         code = -32001,
-        message = "File not open in buffer",
-        data = "File must be open in Neovim to retrieve diagnostics: " .. filepath,
+        message = "File not open",
+        data = "File must be open to retrieve diagnostics: " .. filepath,
       })
     else
       -- Get diagnostics for the specific buffer
