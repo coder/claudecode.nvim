@@ -180,8 +180,6 @@ function M._get_neotree_selection()
   return {}, "No file found under cursor"
 end
 
-
-
 --- Get selected files from oil.nvim
 --- Supports both visual selection and single file under cursor
 --- @return table files List of file paths
