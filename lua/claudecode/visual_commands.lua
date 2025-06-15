@@ -352,7 +352,6 @@ function M.get_files_from_visual_selection(visual_data)
     -- Get current directory once
     local dir_ok, current_dir = pcall(oil.get_current_dir, bufnr)
     if dir_ok and current_dir then
-      local integrations = require("claudecode.integrations")
       -- Access the process_oil_entry function through a module method
       for line = start_pos, end_pos do
         local entry_ok, entry = pcall(oil.get_entry_on_line, bufnr, line)
