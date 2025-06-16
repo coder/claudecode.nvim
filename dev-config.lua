@@ -1,12 +1,11 @@
 -- Development configuration for claudecode.nvim
 -- This is Thomas's personal config for developing claudecode.nvim
 -- Symlink this to your personal Neovim config:
--- ln -s ~/GitHub/claudecode.nvim/dev-config.lua ~/.config/nvim/lua/plugins/dev-claudecode.lua
+-- ln -s ~/projects/claudecode.nvim/dev-config.lua ~/.config/nvim/lua/plugins/dev-claudecode.lua
 
 return {
   "coder/claudecode.nvim",
   dev = true, -- Use local development version
-  dir = "~/GitHub/claudecode.nvim", -- Adjust path as needed
   keys = {
     -- AI/Claude Code prefix
     { "<leader>a", nil, desc = "AI/Claude Code" },

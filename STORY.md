@@ -4,7 +4,7 @@
 
 While browsing Reddit at DevOpsCon in London, I stumbled upon a post that caught my eye: someone mentioned finding .vsix files in Anthropic's npm package for their Claude Code VS Code extension.
 
-Link to the Reddit post: https://www.reddit.com/r/ClaudeAI/comments/1klpzvl/hidden_jetbrains_vs_code_plugin_in_todays_release/
+Link to the Reddit post: <https://www.reddit.com/r/ClaudeAI/comments/1klpzvl/hidden_jetbrains_vs_code_plugin_in_todays_release/>
 
 My first thought? "No way, they wouldn't ship the source like that."
 
@@ -45,7 +45,7 @@ What I discovered was fascinating:
 
 Armed with this knowledge, I faced a new challenge: I wanted this in Neovim, but I didn't know Lua.
 
-So I did what any reasonable person would do in 2024 — I used AI to help me build it. Using Roo Code with Gemini 2.5 Pro, I scaffolded a Neovim plugin that implements the same protocol.
+So I did what any reasonable person would do in 2025 — I used AI to help me build it. Using Roo Code with Gemini 2.5 Pro, I scaffolded a Neovim plugin that implements the same protocol. (Note: Claude 4 models were not publicly available at the time of writing the extension.)
 
 The irony isn't lost on me: I used AI to reverse-engineer an AI tool, then used AI to build a plugin for AI.
 

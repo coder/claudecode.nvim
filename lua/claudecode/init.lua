@@ -443,17 +443,13 @@ function M._create_commands()
       end
       local sent_successfully = selection_module.send_at_mention_for_visual_selection(line1, line2)
       if sent_successfully then
-        -- Exit any potential visual mode (for consistency) and focus Claude terminal
+        -- Exit any potential visual mode (for consistency)
         pcall(function()
           if vim.api and vim.api.nvim_feedkeys then
             local esc = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
             vim.api.nvim_feedkeys(esc, "i", true)
           end
         end)
-        local terminal_ok, terminal = pcall(require, "claudecode.terminal")
-        if terminal_ok then
-          terminal.open({})
-        end
       end
     else
       logger.error("command", "ClaudeCodeSend: Failed to load selection module.")
@@ -481,24 +477,13 @@ function M._create_commands()
           local message = success_count == 1 and "Added 1 file to Claude context from visual selection"
             or string.format("Added %d files to Claude context from visual selection", success_count)
           logger.debug("command", message)
-
-          local terminal_ok, terminal = pcall(require, "claudecode.terminal")
-          if terminal_ok then
-            terminal.open({})
-          end
         end
         return
       end
     end
     local selection_module_ok, selection_module = pcall(require, "claudecode.selection")
     if selection_module_ok then
-      local sent_successfully = selection_module.send_at_mention_for_visual_selection()
-      if sent_successfully then
-        local terminal_ok, terminal = pcall(require, "claudecode.terminal")
-        if terminal_ok then
-          terminal.open({})
-        end
-      end
+      selection_module.send_at_mention_for_visual_selection()
     end
   end
 

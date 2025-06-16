@@ -76,9 +76,12 @@ function M.open(cmd_string, env_table, config)
     terminal:focus()
     local term_buf_id = terminal.buf
     if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
-      vim.api.nvim_win_call(terminal.win, function()
-        vim.cmd("startinsert")
-      end)
+      -- Check if window is valid before calling nvim_win_call
+      if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+        vim.api.nvim_win_call(terminal.win, function()
+          vim.cmd("startinsert")
+        end)
+      end
     end
     return
   end
