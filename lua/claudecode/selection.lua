@@ -629,8 +629,15 @@ end
 -- @param line1 number|nil Optional start line for range-based selection
 -- @param line2 number|nil Optional end line for range-based selection
 function M.send_at_mention_for_visual_selection(line1, line2)
-  if not M.state.tracking_enabled or not M.server then
-    logger.error("selection", "Claude Code is not running or server not available for send_at_mention.")
+  if not M.state.tracking_enabled then
+    logger.error("selection", "Selection tracking is not enabled.")
+    return false
+  end
+
+  -- Check if Claude Code integration is running (server may or may not have clients)
+  local claudecode_main = require("claudecode")
+  if not claudecode_main.state.server then
+    logger.error("selection", "Claude Code integration is not running.")
     return false
   end
 
@@ -663,31 +670,31 @@ function M.send_at_mention_for_visual_selection(line1, line2)
   -- Sanity check: ensure the selection is for the current buffer
   local current_buf_name = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
   if sel_to_send.filePath ~= current_buf_name then
-    vim.notify(
+    logger.warn(
+      "selection",
       "Tracked selection is for '"
         .. sel_to_send.filePath
         .. "', but current buffer is '"
         .. current_buf_name
-        .. "'. Not sending.",
-      vim.log.levels.WARN,
-      { title = "ClaudeCode Warning" }
+        .. "'. Not sending."
     )
     return false
   end
 
-  local params = {}
-  params["filePath"] = sel_to_send.filePath
-  params["lineStart"] = sel_to_send.selection.start.line -- Assuming 0-indexed from selection module
-  params["lineEnd"] = sel_to_send.selection["end"].line -- Assuming 0-indexed
+  -- Use connection-aware broadcasting from main module
+  local file_path = sel_to_send.filePath
+  local start_line = sel_to_send.selection.start.line -- Already 0-indexed from selection module
+  local end_line = sel_to_send.selection["end"].line -- Already 0-indexed
 
-  local broadcast_success = M.server.broadcast("at_mentioned", params)
+  local success, error_msg = claudecode_main.send_at_mention(file_path, start_line, end_line, "ClaudeCodeSend")
 
-  if not broadcast_success then
-    logger.error("selection", "Failed to send at-mention.")
-    return false
-  else
+  if success then
     logger.debug("selection", "Visual selection sent as at-mention.")
+
     return true
+  else
+    logger.error("selection", "Failed to send at-mention: " .. (error_msg or "unknown error"))
+    return false
   end
 end
 return M

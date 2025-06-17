@@ -92,6 +92,7 @@ describe("claudecode.init", function()
         return 1
       end),
       nvim_create_user_command = SpyObject.new(function() end),
+      nvim_echo = SpyObject.new(function() end),
     }
 
     vim.deepcopy = function(t)
@@ -296,6 +297,7 @@ describe("claudecode.init", function()
         open = spy.new(function() end),
         close = spy.new(function() end),
         setup = spy.new(function() end),
+        ensure_visible = spy.new(function() end),
       }
 
       local original_require = _G.require

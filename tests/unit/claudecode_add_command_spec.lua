@@ -49,6 +49,10 @@ describe("ClaudeCodeAdd command", function()
       return "/current/dir"
     end
 
+    vim.fn.getbufinfo = function(bufnr)
+      return { { windows = { 1 } } }
+    end
+
     vim.api.nvim_create_user_command = spy.new(function() end)
     vim.api.nvim_buf_get_name = function()
       return "test.lua"
@@ -70,9 +74,22 @@ describe("ClaudeCodeAdd command", function()
         return {
           setup = function() end,
         }
+      elseif mod == "claudecode.server.init" then
+        return {
+          get_status = function()
+            return { running = true, client_count = 1 }
+          end,
+        }
       elseif mod == "claudecode.terminal" then
         return {
           setup = function() end,
+          open = spy.new(function() end),
+          toggle_open_no_focus = spy.new(function() end),
+          ensure_visible = spy.new(function() end),
+          get_active_terminal_bufnr = function()
+            return 1
+          end,
+          simple_toggle = spy.new(function() end),
         }
       elseif mod == "claudecode.visual_commands" then
         return {

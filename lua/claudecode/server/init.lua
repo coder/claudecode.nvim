@@ -42,6 +42,14 @@ function M.start(config)
     on_connect = function(client)
       M.state.clients[client.id] = client
       logger.debug("server", "WebSocket client connected:", client.id)
+
+      -- Notify main module about new connection for queue processing
+      local main_module = require("claudecode")
+      if main_module._process_queued_mentions then
+        vim.schedule(function()
+          main_module._process_queued_mentions()
+        end)
+      end
     end,
     on_disconnect = function(client, code, reason)
       M.state.clients[client.id] = nil

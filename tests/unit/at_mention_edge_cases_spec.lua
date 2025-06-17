@@ -13,8 +13,16 @@ describe("At Mention Edge Cases", function()
     -- Mock logger
     package.loaded["claudecode.logger"] = {
       debug = function() end,
-      warn = function() end,
-      error = function() end,
+      warn = function(component, ...)
+        local args = { ... }
+        local message = table.concat(args, " ")
+        _G.vim.notify(message, _G.vim.log.levels.WARN)
+      end,
+      error = function(component, ...)
+        local args = { ... }
+        local message = table.concat(args, " ")
+        _G.vim.notify(message, _G.vim.log.levels.ERROR)
+      end,
     }
 
     -- Mock config

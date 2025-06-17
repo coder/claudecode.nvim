@@ -39,6 +39,9 @@ M.version = {
 --- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
 --- @field track_selection boolean Enable sending selection updates to Claude.
 --- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
+--- @field connection_wait_delay number Milliseconds to wait after connection before sending queued @ mentions.
+--- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
+--- @field queue_timeout number Maximum time to keep @ mentions in queue (milliseconds).
 --- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean } Options for the diff provider.
 
 --- @type ClaudeCode.Config
@@ -49,6 +52,9 @@ local default_config = {
   log_level = "info",
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Reduced from 200ms for better responsiveness in tree navigation
+  connection_wait_delay = 200, -- Milliseconds to wait after connection before sending queued @ mentions
+  connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
+  queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
   diff_opts = {
     auto_close_on_accept = true,
     show_diff_stats = true,
@@ -62,6 +68,8 @@ local default_config = {
 --- @field server table|nil The WebSocket server instance.
 --- @field port number|nil The port the server is running on.
 --- @field initialized boolean Whether the plugin has been initialized.
+--- @field queued_mentions table[] Array of queued @ mentions waiting for connection.
+--- @field connection_timer table|nil Timer for connection timeout.
 
 --- @type ClaudeCode.State
 M.state = {
@@ -69,6 +77,8 @@ M.state = {
   server = nil,
   port = nil,
   initialized = false,
+  queued_mentions = {},
+  connection_timer = nil,
 }
 
 ---@alias ClaudeCode.TerminalOpts { \
@@ -79,6 +89,200 @@ M.state = {
 ---
 ---@alias ClaudeCode.SetupOpts { \
 ---  terminal?: ClaudeCode.TerminalOpts }
+
+---@brief Check if Claude Code is connected to WebSocket server
+---@return boolean connected Whether Claude Code has active connections
+function M.is_claude_connected()
+  if not M.state.server then
+    return false
+  end
+
+  local server_module = require("claudecode.server.init")
+  local status = server_module.get_status()
+  return status.running and status.client_count > 0
+end
+
+---@brief Clear the @ mention queue and stop timers
+local function clear_mention_queue()
+  if #M.state.queued_mentions > 0 then
+    logger.debug("queue", "Clearing " .. #M.state.queued_mentions .. " queued @ mentions")
+  end
+
+  M.state.queued_mentions = {}
+
+  if M.state.connection_timer then
+    M.state.connection_timer:stop()
+    M.state.connection_timer:close()
+    M.state.connection_timer = nil
+  end
+end
+
+---@brief Add @ mention to queue for later sending
+---@param mention_data table The @ mention data to queue
+local function queue_at_mention(mention_data)
+  mention_data.timestamp = vim.loop.now()
+  table.insert(M.state.queued_mentions, mention_data)
+
+  logger.debug("queue", "Queued @ mention: " .. vim.inspect(mention_data))
+
+  -- Start connection timer if not already running
+  if not M.state.connection_timer then
+    M.state.connection_timer = vim.loop.new_timer()
+    M.state.connection_timer:start(M.state.config.connection_timeout, 0, function()
+      vim.schedule(function()
+        if #M.state.queued_mentions > 0 then
+          logger.error("queue", "Connection timeout - clearing " .. #M.state.queued_mentions .. " queued @ mentions")
+          clear_mention_queue()
+        end
+      end)
+    end)
+  end
+end
+
+---@brief Process queued @ mentions after connection established
+function M._process_queued_mentions()
+  if #M.state.queued_mentions == 0 then
+    return
+  end
+
+  logger.debug("queue", "Processing " .. #M.state.queued_mentions .. " queued @ mentions")
+
+  -- Stop connection timer
+  if M.state.connection_timer then
+    M.state.connection_timer:stop()
+    M.state.connection_timer:close()
+    M.state.connection_timer = nil
+  end
+
+  -- Wait for connection_wait_delay before sending
+  vim.defer_fn(function()
+    local mentions_to_send = vim.deepcopy(M.state.queued_mentions)
+    M.state.queued_mentions = {} -- Clear queue
+
+    if #mentions_to_send == 0 then
+      return
+    end
+
+    -- Ensure terminal is visible when processing queued mentions
+    local terminal = require("claudecode.terminal")
+    terminal.ensure_visible()
+
+    local success_count = 0
+    local total_count = #mentions_to_send
+    local delay = 10 -- Use same delay as existing batch operations
+
+    local function send_mentions_sequentially(index)
+      if index > total_count then
+        if success_count > 0 then
+          local message = success_count == 1 and "Sent 1 queued @ mention to Claude Code"
+            or string.format("Sent %d queued @ mentions to Claude Code", success_count)
+          logger.debug("queue", message)
+        end
+        return
+      end
+
+      local mention = mentions_to_send[index]
+      local now = vim.loop.now()
+
+      -- Check if mention hasn't expired
+      if (now - mention.timestamp) < M.state.config.queue_timeout then
+        local success, error_msg = M._broadcast_at_mention(mention.file_path, mention.start_line, mention.end_line)
+        if success then
+          success_count = success_count + 1
+        else
+          logger.error("queue", "Failed to send queued @ mention: " .. (error_msg or "unknown error"))
+        end
+      else
+        logger.debug("queue", "Skipped expired @ mention: " .. mention.file_path)
+      end
+
+      -- Send next mention with delay
+      if index < total_count then
+        vim.defer_fn(function()
+          send_mentions_sequentially(index + 1)
+        end, delay)
+      else
+        -- Final summary
+        if success_count > 0 then
+          local message = success_count == 1 and "Sent 1 queued @ mention to Claude Code"
+            or string.format("Sent %d queued @ mentions to Claude Code", success_count)
+          logger.debug("queue", message)
+        end
+      end
+    end
+
+    send_mentions_sequentially(1)
+  end, M.state.config.connection_wait_delay)
+end
+
+---@brief Show terminal if Claude is connected and it's not already visible
+---@return boolean success Whether terminal was shown or was already visible
+function M._ensure_terminal_visible_if_connected()
+  if not M.is_claude_connected() then
+    return false
+  end
+
+  local terminal = require("claudecode.terminal")
+  local active_bufnr = terminal.get_active_terminal_bufnr and terminal.get_active_terminal_bufnr()
+
+  if not active_bufnr then
+    return false
+  end
+
+  local bufinfo = vim.fn.getbufinfo(active_bufnr)[1]
+  local is_visible = bufinfo and #bufinfo.windows > 0
+
+  if not is_visible then
+    terminal.simple_toggle()
+  end
+
+  return true
+end
+
+---@brief Send @ mention to Claude Code, handling connection state automatically
+---@param file_path string The file path to send
+---@param start_line number|nil Start line (0-indexed for Claude)
+---@param end_line number|nil End line (0-indexed for Claude)
+---@param context string|nil Context for logging
+---@return boolean success Whether the operation was successful
+---@return string|nil error Error message if failed
+function M.send_at_mention(file_path, start_line, end_line, context)
+  context = context or "command"
+
+  if not M.state.server then
+    logger.error(context, "Claude Code integration is not running")
+    return false, "Claude Code integration is not running"
+  end
+
+  -- Check if Claude Code is connected
+  if M.is_claude_connected() then
+    -- Claude is connected, send immediately and ensure terminal is visible
+    local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
+    if success then
+      M._ensure_terminal_visible_if_connected()
+    end
+    return success, error_msg
+  else
+    -- Claude not connected, queue the mention and launch terminal
+    local mention_data = {
+      file_path = file_path,
+      start_line = start_line,
+      end_line = end_line,
+      context = context,
+    }
+
+    queue_at_mention(mention_data)
+
+    -- Launch terminal with Claude Code
+    local terminal = require("claudecode.terminal")
+    terminal.open()
+
+    logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+
+    return true, nil
+  end
+end
+
 ---
 --- Set up the plugin with user configuration
 ---@param opts ClaudeCode.SetupOpts|nil Optional configuration table to override defaults.
@@ -125,6 +329,9 @@ function M.setup(opts)
     callback = function()
       if M.state.server then
         M.stop()
+      else
+        -- Clear queue even if server isn't running
+        clear_mention_queue()
       end
     end,
     desc = "Automatically stop Claude Code integration when exiting Neovim",
@@ -144,7 +351,7 @@ function M.start(show_startup_notification)
   end
   if M.state.server then
     local msg = "Claude Code integration is already running on port " .. tostring(M.state.port)
-    vim.notify(msg, vim.log.levels.WARN)
+    logger.warn("init", msg)
     return false, "Already running"
   end
 
@@ -152,7 +359,7 @@ function M.start(show_startup_notification)
   local success, result = server.start(M.state.config)
 
   if not success then
-    vim.notify("Failed to start Claude Code integration: " .. result, vim.log.levels.ERROR)
+    logger.error("init", "Failed to start Claude Code integration: " .. result)
     return false, result
   end
 
@@ -167,7 +374,7 @@ function M.start(show_startup_notification)
     M.state.server = nil
     M.state.port = nil
 
-    vim.notify("Failed to create lock file: " .. lock_result, vim.log.levels.ERROR)
+    logger.error("init", "Failed to create lock file: " .. lock_result)
     return false, lock_result
   end
 
@@ -177,7 +384,7 @@ function M.start(show_startup_notification)
   end
 
   if show_startup_notification then
-    vim.notify("Claude Code integration started on port " .. tostring(M.state.port), vim.log.levels.INFO)
+    logger.info("init", "Claude Code integration started on port " .. tostring(M.state.port))
   end
 
   return true, M.state.port
@@ -188,7 +395,7 @@ end
 ---@return string? error Error message if operation failed
 function M.stop()
   if not M.state.server then
-    vim.notify("Claude Code integration is not running", vim.log.levels.WARN)
+    logger.warn("init", "Claude Code integration is not running")
     return false, "Not running"
   end
 
@@ -196,7 +403,7 @@ function M.stop()
   local lock_success, lock_error = lockfile.remove(M.state.port)
 
   if not lock_success then
-    vim.notify("Failed to remove lock file: " .. lock_error, vim.log.levels.WARN)
+    logger.warn("init", "Failed to remove lock file: " .. lock_error)
     -- Continue with shutdown even if lock file removal fails
   end
 
@@ -208,14 +415,17 @@ function M.stop()
   local success, error = M.state.server.stop()
 
   if not success then
-    vim.notify("Failed to stop Claude Code integration: " .. error, vim.log.levels.ERROR)
+    logger.error("init", "Failed to stop Claude Code integration: " .. error)
     return false, error
   end
 
   M.state.server = nil
   M.state.port = nil
 
-  vim.notify("Claude Code integration stopped", vim.log.levels.INFO)
+  -- Clear any queued @ mentions when server stops
+  clear_mention_queue()
+
+  logger.info("init", "Claude Code integration stopped")
 
   return true
 end
@@ -237,72 +447,13 @@ function M._create_commands()
 
   vim.api.nvim_create_user_command("ClaudeCodeStatus", function()
     if M.state.server and M.state.port then
-      vim.notify("Claude Code integration is running on port " .. tostring(M.state.port), vim.log.levels.INFO)
+      logger.info("command", "Claude Code integration is running on port " .. tostring(M.state.port))
     else
-      vim.notify("Claude Code integration is not running", vim.log.levels.INFO)
+      logger.info("command", "Claude Code integration is not running")
     end
   end, {
     desc = "Show Claude Code integration status",
   })
-
-  local function format_path_for_at_mention(file_path)
-    return M._format_path_for_at_mention(file_path)
-  end
-
-  ---@param file_path string The file path to broadcast
-  ---@return boolean success Whether the broadcast was successful
-  ---@return string|nil error Error message if broadcast failed
-  local function broadcast_at_mention(file_path, start_line, end_line)
-    if not M.state.server then
-      return false, "Claude Code integration is not running"
-    end
-
-    local formatted_path, is_directory
-    local format_success, format_result, is_dir_result = pcall(format_path_for_at_mention, file_path)
-    if not format_success then
-      return false, format_result
-    end
-    formatted_path, is_directory = format_result, is_dir_result
-
-    if is_directory and (start_line or end_line) then
-      logger.debug("command", "Line numbers ignored for directory: " .. formatted_path)
-      start_line = nil
-      end_line = nil
-    end
-
-    local params = {
-      filePath = formatted_path,
-      lineStart = start_line,
-      lineEnd = end_line,
-    }
-
-    local broadcast_success = M.state.server.broadcast("at_mentioned", params)
-    if broadcast_success then
-      if logger.is_level_enabled and logger.is_level_enabled("debug") then
-        local message = "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
-        if not is_directory and (start_line or end_line) then
-          local range_info = ""
-          if start_line and end_line then
-            range_info = " (lines " .. start_line .. "-" .. end_line .. ")"
-          elseif start_line then
-            range_info = " (from line " .. start_line .. ")"
-          end
-          message = message .. range_info
-        end
-        logger.debug("command", message)
-      elseif not logger.is_level_enabled then
-        logger.debug(
-          "command",
-          "Broadcast success: Added " .. (is_directory and "directory" or "file") .. " " .. formatted_path
-        )
-      end
-      return true, nil
-    else
-      local error_msg = "Failed to broadcast " .. (is_directory and "directory" or "file") .. " " .. formatted_path
-      logger.error("command", error_msg)
-      return false, error_msg
-    end
-  end
 
   ---@param file_paths table List of file paths to add
   ---@param options table|nil Optional settings: { delay?: number, show_summary?: boolean, context?: string }
@@ -327,23 +478,27 @@ function M._create_commands()
           if show_summary then
             local message = success_count == 1 and "Added 1 file to Claude context"
               or string.format("Added %d files to Claude context", success_count)
-            local level = vim.log.levels.INFO
-
             if total_count > success_count then
               message = message .. string.format(" (%d failed)", total_count - success_count)
-              level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
             end
 
-            if success_count > 0 or total_count > success_count then
-              vim.notify(message, level)
+            if total_count > success_count then
+              if success_count > 0 then
+                logger.warn(context, message)
+              else
+                logger.error(context, message)
+              end
+            elseif success_count > 0 then
+              logger.info(context, message)
+            else
+              logger.debug(context, message)
             end
-            logger.debug(context, message)
           end
           return
         end
 
         local file_path = file_paths[index]
-        local success, error_msg = broadcast_at_mention(file_path)
+        local success, error_msg = M.send_at_mention(file_path, nil, nil, context)
         if success then
           success_count = success_count + 1
         else
@@ -358,17 +513,21 @@ function M._create_commands()
           if show_summary then
             local message = success_count == 1 and "Added 1 file to Claude context"
               or string.format("Added %d files to Claude context", success_count)
-            local level = vim.log.levels.INFO
-
             if total_count > success_count then
               message = message .. string.format(" (%d failed)", total_count - success_count)
-              level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
             end
 
-            if success_count > 0 or total_count > success_count then
-              vim.notify(message, level)
+            if total_count > success_count then
+              if success_count > 0 then
+                logger.warn(context, message)
+              else
+                logger.error(context, message)
+              end
+            elseif success_count > 0 then
+              logger.info(context, message)
+            else
+              logger.debug(context, message)
             end
-            logger.debug(context, message)
           end
         end
       end
@@ -376,7 +535,7 @@ function M._create_commands()
       send_files_sequentially(1)
     else
       for _, file_path in ipairs(file_paths) do
-        local success, error_msg = broadcast_at_mention(file_path)
+        local success, error_msg = M.send_at_mention(file_path, nil, nil, context)
         if success then
           success_count = success_count + 1
         else
@@ -398,12 +557,6 @@ function M._create_commands()
   end
 
   local function handle_send_normal(opts)
-    if not M.state.server then
-      logger.error("command", "ClaudeCodeSend: Claude Code integration is not running.")
-      vim.notify("Claude Code integration is not running", vim.log.levels.ERROR)
-      return
-    end
-
     local current_ft = (vim.bo and vim.bo.filetype) or ""
     local current_bufname = (vim.api and vim.api.nvim_buf_get_name and vim.api.nvim_buf_get_name(0)) or ""
 
@@ -418,14 +571,12 @@ function M._create_commands()
       local files, error = integrations.get_selected_files_from_tree()
 
       if error then
-        logger.warn("command", "ClaudeCodeSend->TreeAdd: " .. error)
-        vim.notify("Tree integration error: " .. error, vim.log.levels.ERROR)
+        logger.error("command", "ClaudeCodeSend->TreeAdd: " .. error)
         return
       end
 
       if not files or #files == 0 then
         logger.warn("command", "ClaudeCodeSend->TreeAdd: No files selected")
-        vim.notify("No files selected in tree explorer", vim.log.levels.WARN)
         return
       end
 
@@ -453,16 +604,11 @@ function M._create_commands()
       end
     else
       logger.error("command", "ClaudeCodeSend: Failed to load selection module.")
-      vim.notify("Failed to send selection: selection module not loaded.", vim.log.levels.ERROR)
     end
   end
 
-  local function handle_send_visual(visual_data, opts)
-    if not M.state.server then
-      logger.error("command", "ClaudeCodeSend_visual: Claude Code integration is not running.")
-      return
-    end
-
+  local function handle_send_visual(visual_data, _opts)
+    -- Try tree file selection first
     if visual_data then
       local visual_commands = require("claudecode.visual_commands")
       local files, error = visual_commands.get_files_from_visual_selection(visual_data)
@@ -481,8 +627,18 @@ function M._create_commands()
         return
       end
     end
+
+    -- Handle regular text selection using range from visual mode
     local selection_module_ok, selection_module = pcall(require, "claudecode.selection")
-    if selection_module_ok then
+    if not selection_module_ok then
+      return
+    end
+
+    -- Use the marks left by visual mode instead of trying to get current visual selection
+    local line1, line2 = vim.fn.line("'<"), vim.fn.line("'>")
+    if line1 and line2 and line1 > 0 and line2 > 0 then
+      selection_module.send_at_mention_for_visual_selection(line1, line2)
+    else
       selection_module.send_at_mention_for_visual_selection()
     end
   end
@@ -505,7 +661,7 @@ function M._create_commands()
     local files, error = integrations.get_selected_files_from_tree()
 
     if error then
-      logger.warn("command", "ClaudeCodeTreeAdd: " .. error)
+      logger.error("command", "ClaudeCodeTreeAdd: " .. error)
       return
     end
 
@@ -514,10 +670,31 @@ function M._create_commands()
       return
     end
 
-    local success_count = add_paths_to_claude(files, { context = "ClaudeCodeTreeAdd" })
+    -- Use connection-aware broadcasting for each file
+    local success_count = 0
+    local total_count = #files
+
+    for _, file_path in ipairs(files) do
+      local success, error_msg = M.send_at_mention(file_path, nil, nil, "ClaudeCodeTreeAdd")
+      if success then
+        success_count = success_count + 1
+      else
+        logger.error(
+          "command",
+          "ClaudeCodeTreeAdd: Failed to add file: " .. file_path .. " - " .. (error_msg or "unknown error")
+        )
+      end
+    end
 
     if success_count == 0 then
       logger.error("command", "ClaudeCodeTreeAdd: Failed to add any files")
+    elseif success_count < total_count then
+      local message = string.format("Added %d/%d files to Claude context", success_count, total_count)
+      logger.debug("command", message)
+    else
+      local message = success_count == 1 and "Added 1 file to Claude context"
+        or string.format("Added %d files to Claude context", success_count)
+      logger.debug("command", message)
     end
   end
 
@@ -531,7 +708,7 @@ function M._create_commands()
     local files, error = visual_cmd_module.get_files_from_visual_selection(visual_data)
 
     if error then
-      logger.warn("command", "ClaudeCodeTreeAdd_visual: " .. error)
+      logger.error("command", "ClaudeCodeTreeAdd_visual: " .. error)
       return
     end
 
@@ -540,15 +717,30 @@ function M._create_commands()
       return
     end
 
-    local success_count = add_paths_to_claude(files, {
-      delay = 10,
-      context = "ClaudeCodeTreeAdd_visual",
-      show_summary = false,
-    })
+    -- Use connection-aware broadcasting for each file
+    local success_count = 0
+    local total_count = #files
+
+    for _, file_path in ipairs(files) do
+      local success, error_msg = M.send_at_mention(file_path, nil, nil, "ClaudeCodeTreeAdd_visual")
+      if success then
+        success_count = success_count + 1
+      else
+        logger.error(
+          "command",
+          "ClaudeCodeTreeAdd_visual: Failed to add file: " .. file_path .. " - " .. (error_msg or "unknown error")
+        )
+      end
+    end
+
     if success_count > 0 then
       local message = success_count == 1 and "Added 1 file to Claude context from visual selection"
         or string.format("Added %d files to Claude context from visual selection", success_count)
       logger.debug("command", message)
+
+      if success_count < total_count then
+        logger.warn("command", string.format("Added %d/%d files from visual selection", success_count, total_count))
+      end
     else
       logger.error("command", "ClaudeCodeTreeAdd_visual: Failed to add any files from visual selection")
     end
@@ -622,7 +814,7 @@ function M._create_commands()
     local claude_start_line = start_line and (start_line - 1) or nil
     local claude_end_line = end_line and (end_line - 1) or nil
 
-    local success, error_msg = broadcast_at_mention(file_path, claude_start_line, claude_end_line)
+    local success, error_msg = M.send_at_mention(file_path, claude_start_line, claude_end_line, "ClaudeCodeAdd")
     if not success then
       logger.error("command", "ClaudeCodeAdd: " .. (error_msg or "Failed to add file"))
     else
@@ -798,10 +990,6 @@ function M._add_paths_to_claude(file_paths, options)
 
   if #file_paths > max_files then
     logger.warn(context, string.format("Too many files selected (%d), limiting to %d", #file_paths, max_files))
-    vim.notify(
-      string.format("Too many files selected (%d), processing first %d", #file_paths, max_files),
-      vim.log.levels.WARN
-    )
     local limited_paths = {}
     for i = 1, max_files do
       limited_paths[i] = file_paths[i]
@@ -818,17 +1006,21 @@ function M._add_paths_to_claude(file_paths, options)
         if show_summary then
           local message = success_count == 1 and "Added 1 file to Claude context"
             or string.format("Added %d files to Claude context", success_count)
-          local level = vim.log.levels.INFO
-
           if total_count > success_count then
             message = message .. string.format(" (%d failed)", total_count - success_count)
-            level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
           end
 
-          if success_count > 0 or total_count > success_count then
-            vim.notify(message, level)
+          if total_count > success_count then
+            if success_count > 0 then
+              logger.warn(context, message)
+            else
+              logger.error(context, message)
+            end
+          elseif success_count > 0 then
+            logger.info(context, message)
+          else
+            logger.debug(context, message)
           end
-          logger.debug(context, message)
         end
         return
       end
@@ -867,17 +1059,21 @@ function M._add_paths_to_claude(file_paths, options)
         if show_summary then
           local message = success_count == 1 and "Added 1 file to Claude context"
             or string.format("Added %d files to Claude context", success_count)
-          local level = vim.log.levels.INFO
-
           if total_count > success_count then
             message = message .. string.format(" (%d failed)", total_count - success_count)
-            level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
           end
 
-          if success_count > 0 or total_count > success_count then
-            vim.notify(message, level)
+          if total_count > success_count then
+            if success_count > 0 then
+              logger.warn(context, message)
+            else
+              logger.error(context, message)
+            end
+          elseif success_count > 0 then
+            logger.info(context, message)
+          else
+            logger.debug(context, message)
           end
-          logger.debug(context, message)
         end
       end
     end
@@ -905,17 +1101,21 @@ function M._add_paths_to_claude(file_paths, options)
     if show_summary then
       local message = success_count == 1 and "Added 1 file to Claude context"
         or string.format("Added %d files to Claude context", success_count)
-      local level = vim.log.levels.INFO
-
       if total_count > success_count then
         message = message .. string.format(" (%d failed)", total_count - success_count)
-        level = success_count > 0 and vim.log.levels.WARN or vim.log.levels.ERROR
       end
 
-      if success_count > 0 or total_count > success_count then
-        vim.notify(message, level)
+      if total_count > success_count then
+        if success_count > 0 then
+          logger.warn(context, message)
+        else
+          logger.error(context, message)
+        end
+      elseif success_count > 0 then
+        logger.info(context, message)
+      else
+        logger.debug(context, message)
       end
-      logger.debug(context, message)
     end
   end
 

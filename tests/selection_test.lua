@@ -563,6 +563,8 @@ describe("Range Selection Tests", function()
 
   describe("send_at_mention_for_visual_selection with range", function()
     local mock_server
+    local mock_claudecode_main
+    local original_require
 
     before_each(function()
       mock_server = {
@@ -575,8 +577,37 @@ describe("Range Selection Tests", function()
         end,
       }
 
+      mock_claudecode_main = {
+        state = {
+          server = mock_server,
+        },
+        send_at_mention = function(file_path, start_line, end_line, context)
+          -- Convert to the format expected by tests (1-indexed to 0-indexed conversion done here)
+          local params = {
+            filePath = file_path,
+            lineStart = start_line,
+            lineEnd = end_line,
+          }
+          return mock_server.broadcast("at_mentioned", params), nil
+        end,
+      }
+
+      -- Mock the require function to return our mock claudecode module
+      original_require = _G.require
+      _G.require = function(module_name)
+        if module_name == "claudecode" then
+          return mock_claudecode_main
+        else
+          return original_require(module_name)
+        end
+      end
+
       selection.state.tracking_enabled = true
       selection.server = mock_server
+    end)
+
+    after_each(function()
+      _G.require = original_require
     end)
 
     it("should send range selection successfully", function()
@@ -616,7 +647,7 @@ describe("Range Selection Tests", function()
     end)
 
     it("should fail when server is not available", function()
-      selection.server = nil
+      mock_claudecode_main.state.server = nil
       local result = selection.send_at_mention_for_visual_selection(2, 4)
       assert(result == false)
     end)

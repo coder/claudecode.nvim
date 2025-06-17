@@ -71,6 +71,7 @@ describe("ClaudeCodeSend Command Range Functionality", function()
     -- Mock terminal module
     mock_terminal = {
       open = spy.new(function() end),
+      ensure_visible = spy.new(function() end),
     }
 
     -- Mock server
@@ -246,8 +247,8 @@ describe("ClaudeCodeSend Command Range Functionality", function()
 
       command_callback(opts)
 
-      assert.spy(_G.vim.notify).was_called()
-      assert.spy(mock_selection_module.send_at_mention_for_visual_selection).was_not_called()
+      -- The command should call the selection module, which will handle the error
+      assert.spy(mock_selection_module.send_at_mention_for_visual_selection).was_called()
     end)
 
     it("should handle selection module failure", function()

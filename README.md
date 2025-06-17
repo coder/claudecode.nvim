@@ -214,10 +214,26 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 See [DEVELOPMENT.md](./DEVELOPMENT.md) for build instructions and development guidelines. Tests can be run with `make test`.
 
-## Advanced Setup
+## Configuration
+
+### Quick Setup
+
+For most users, the default configuration is sufficient:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  dependencies = {
+    "folke/snacks.nvim", -- optional
+  },
+  config = true,
+}
+```
+
+### Advanced Configuration
 
 <details>
-<summary>Full configuration with all options</summary>
+<summary>Complete configuration options</summary>
 
 ```lua
 {
@@ -226,65 +242,128 @@ See [DEVELOPMENT.md](./DEVELOPMENT.md) for build instructions and development gu
     "folke/snacks.nvim", -- Optional for enhanced terminal
   },
   opts = {
-    -- Server options
-    port_range = { min = 10000, max = 65535 },
-    auto_start = true,
-    log_level = "info",
+    -- Server Configuration
+    port_range = { min = 10000, max = 65535 },  -- WebSocket server port range
+    auto_start = true,                          -- Auto-start server on Neovim startup
+    log_level = "info",                         -- "trace", "debug", "info", "warn", "error"
+    terminal_cmd = nil,                         -- Custom terminal command (default: "claude")
 
-    -- Terminal options
+    -- Selection Tracking
+    track_selection = true,                     -- Enable real-time selection tracking
+    visual_demotion_delay_ms = 50,             -- Delay before demoting visual selection (ms)
+
+    -- Connection Management
+    connection_wait_delay = 200,                -- Wait time after connection before sending queued @ mentions (ms)
+    connection_timeout = 10000,                 -- Max time to wait for Claude Code connection (ms)
+    queue_timeout = 3000,                       -- Max time to keep @ mentions in queue (ms)
+
+    -- Terminal Configuration
     terminal = {
-      split_side = "right",
-      split_width_percentage = 0.3,
-      provider = "auto", -- "auto" (default), "snacks", or "native"
-      auto_close = true, -- Auto-close terminal after command completion
+      split_side = "right",                     -- "left" or "right"
+      split_width_percentage = 0.30,            -- Width as percentage (0.0 to 1.0)
+      provider = "auto",                        -- "auto", "snacks", or "native"
+      show_native_term_exit_tip = true,         -- Show exit tip for native terminal
+      auto_close = true,                        -- Auto-close terminal after command completion
     },
 
-    -- Diff options
+    -- Diff Integration
     diff_opts = {
-      auto_close_on_accept = true,
-      vertical_split = true,
+      auto_close_on_accept = true,              -- Close diff view after accepting changes
+      show_diff_stats = true,                   -- Show diff statistics
+      vertical_split = true,                    -- Use vertical split for diffs
+      open_in_current_tab = true,               -- Open diffs in current tab vs new tab
     },
   },
   config = true,
-  keys = {
-    { "<leader>a", nil, desc = "AI/Claude Code" },
-    { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
-    { "<leader>af", "<cmd>ClaudeCodeFocus<cr>", desc = "Focus Claude" },
-    { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
-    {
-      "<leader>as",
-      "<cmd>ClaudeCodeTreeAdd<cr>",
-      desc = "Add file",
-      ft = { "NvimTree", "neo-tree" },
-    },
-    { "<leader>ao", "<cmd>ClaudeCodeOpen<cr>", desc = "Open Claude" },
-    { "<leader>ax", "<cmd>ClaudeCodeClose<cr>", desc = "Close Claude" },
-  },
 }
 ```
 
 </details>
 
-### Terminal Auto-Close Behavior
+### Configuration Options Explained
 
-The `auto_close` option controls what happens when Claude commands finish:
+#### Server Options
 
-**When `auto_close = true` (default):**
+- **`port_range`**: Port range for the WebSocket server that Claude connects to
+- **`auto_start`**: Whether to automatically start the integration when Neovim starts
+- **`terminal_cmd`**: Override the default "claude" command (useful for custom Claude installations)
+- **`log_level`**: Controls verbosity of plugin logs
 
-- Terminal automatically closes after command completion
-- Error notifications shown for failed commands (non-zero exit codes)
-- Clean workflow for quick command execution
+#### Selection Tracking
 
-**When `auto_close = false`:**
+- **`track_selection`**: Enables real-time selection updates sent to Claude
+- **`visual_demotion_delay_ms`**: Time to wait before switching from visual selection to cursor position tracking
 
-- Terminal stays open after command completion
-- Allows reviewing command output and any error messages
-- Useful for debugging or when you want to see detailed output
+#### Connection Management
+
+- **`connection_wait_delay`**: Prevents overwhelming Claude with rapid @ mentions after connection
+- **`connection_timeout`**: How long to wait for Claude to connect before giving up
+- **`queue_timeout`**: How long to keep queued @ mentions before discarding them
+
+#### Terminal Configuration
+
+- **`split_side`**: Which side to open the terminal split (`"left"` or `"right"`)
+- **`split_width_percentage`**: Terminal width as a fraction of screen width (0.1 = 10%, 0.5 = 50%)
+- **`provider`**: Terminal implementation to use:
+  - `"auto"`: Try snacks.nvim, fallback to native
+  - `"snacks"`: Force snacks.nvim (requires folke/snacks.nvim)
+  - `"native"`: Use built-in Neovim terminal
+- **`show_native_term_exit_tip`**: Show help text for exiting native terminal
+- **`auto_close`**: Automatically close terminal when commands finish
+
+#### Diff Options
+
+- **`auto_close_on_accept`**: Close diff view after accepting changes with `:w` or `<leader>da`
+- **`show_diff_stats`**: Display diff statistics (lines added/removed)
+- **`vertical_split`**: Use vertical split layout for diffs
+- **`open_in_current_tab`**: Open diffs in current tab instead of creating new tabs
+
+### Example Configurations
+
+#### Minimal Configuration
 
 ```lua
-terminal = {
-  provider = "snacks",
-  auto_close = false, -- Keep terminal open to review output
+{
+  "coder/claudecode.nvim",
+  opts = {
+    log_level = "warn",  -- Reduce log verbosity
+    auto_start = false,  -- Manual startup only
+  },
+}
+```
+
+#### Power User Configuration
+
+```lua
+{
+  "coder/claudecode.nvim",
+  opts = {
+    log_level = "debug",
+    visual_demotion_delay_ms = 100,  -- Slower selection demotion
+    connection_wait_delay = 500,     -- Longer delay for @ mention batching
+    terminal = {
+      split_side = "left",
+      split_width_percentage = 0.4,  -- Wider terminal
+      provider = "snacks",
+      auto_close = false,            -- Keep terminal open to review output
+    },
+    diff_opts = {
+      vertical_split = false,        -- Horizontal diffs
+      open_in_current_tab = false,   -- New tabs for diffs
+    },
+  },
+}
+```
+
+#### Custom Claude Installation
+
+```lua
+{
+  "coder/claudecode.nvim",
+  opts = {
+    terminal_cmd = "/opt/claude/bin/claude",  -- Custom Claude path
+    port_range = { min = 20000, max = 25000 }, -- Different port range
+  },
 }
 ```
 
