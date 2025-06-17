@@ -578,23 +578,16 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
   vim.cmd("wincmd =")
   vim.api.nvim_set_current_win(new_win)
 
+  -- Store diff context in buffer variables for user commands
+  vim.b[new_buffer].claudecode_diff_tab_name = tab_name
+  vim.b[new_buffer].claudecode_diff_new_win = new_win
+  vim.b[new_buffer].claudecode_diff_target_win = target_window
+
   local keymap_opts = { buffer = new_buffer, silent = true }
 
-  vim.keymap.set("n", "<leader>da", function()
-    M._resolve_diff_as_saved(tab_name, new_buffer)
-  end, keymap_opts)
-
-  vim.keymap.set("n", "<leader>dq", function()
-    if vim.api.nvim_win_is_valid(new_win) then
-      vim.api.nvim_win_close(new_win, true)
-    end
-    if vim.api.nvim_win_is_valid(target_window) then
-      vim.api.nvim_set_current_win(target_window)
-      vim.cmd("diffoff")
-    end
-
-    M._resolve_diff_as_rejected(tab_name)
-  end, keymap_opts)
+  -- Use the new user commands instead of inline functions
+  vim.keymap.set("n", "<leader>da", "<cmd>ClaudeCodeDiffAccept<cr>", keymap_opts)
+  vim.keymap.set("n", "<leader>dq", "<cmd>ClaudeCodeDiffDeny<cr>", keymap_opts)
 
   -- Return window information for later storage
   return {
@@ -897,6 +890,45 @@ end
 -- Manual buffer reload function for testing/debugging
 function M.reload_file_buffers_manual(file_path, original_cursor_pos)
   return reload_file_buffers(file_path, original_cursor_pos)
+end
+
+--- Accept the current diff (user command version)
+-- This function reads the diff context from buffer variables
+function M.accept_current_diff()
+  local current_buffer = vim.api.nvim_get_current_buf()
+  local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
+
+  if not tab_name then
+    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    return
+  end
+
+  M._resolve_diff_as_saved(tab_name, current_buffer)
+end
+
+--- Deny/reject the current diff (user command version)
+-- This function reads the diff context from buffer variables
+function M.deny_current_diff()
+  local current_buffer = vim.api.nvim_get_current_buf()
+  local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
+  local new_win = vim.b[current_buffer].claudecode_diff_new_win
+  local target_window = vim.b[current_buffer].claudecode_diff_target_win
+
+  if not tab_name then
+    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    return
+  end
+
+  -- Close windows and clean up (same logic as the original keymap)
+  if new_win and vim.api.nvim_win_is_valid(new_win) then
+    vim.api.nvim_win_close(new_win, true)
+  end
+  if target_window and vim.api.nvim_win_is_valid(target_window) then
+    vim.api.nvim_set_current_win(target_window)
+    vim.cmd("diffoff")
+  end
+
+  M._resolve_diff_as_rejected(tab_name)
 end
 
 return M

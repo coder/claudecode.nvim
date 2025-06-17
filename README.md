@@ -88,6 +88,8 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 - `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
 - `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context (also available via ClaudeCodeSend)
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add a specific file or directory to Claude context by path with optional line range
+- `:ClaudeCodeDiffAccept` - Accept the current diff changes (equivalent to `<leader>da`)
+- `:ClaudeCodeDiffDeny` - Deny/reject the current diff changes (equivalent to `<leader>dq`)
 
 ### Toggle Behavior
 
@@ -154,6 +156,18 @@ When you reject changes, the diff view closes and the original file remains unch
 ### Accepting/Rejecting from Claude Code Terminal
 
 You can also navigate to the Claude Code terminal window and accept or reject diffs directly from within Claude's interface. This provides an alternative way to manage diffs without using the Neovim-specific keymaps.
+
+### Customizing Diff Keymaps
+
+The default keymaps (`<leader>da` and `<leader>dq`) can be customized by remapping them to the underlying commands:
+
+```lua
+-- Example: Use different keymaps for diff handling
+vim.keymap.set('n', '<leader>ya', '<cmd>ClaudeCodeDiffAccept<cr>', { desc = 'Accept diff' })
+vim.keymap.set('n', '<leader>yn', '<cmd>ClaudeCodeDiffDeny<cr>', { desc = 'Deny diff' })
+```
+
+The commands `ClaudeCodeDiffAccept` and `ClaudeCodeDiffDeny` work only in diff buffers created by the plugin and will show a warning if used elsewhere.
 
 ### How It Works
 

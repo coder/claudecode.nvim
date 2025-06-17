@@ -880,6 +880,21 @@ function M._create_commands()
       "Terminal module not found. Terminal commands (ClaudeCode, ClaudeCodeOpen, ClaudeCodeClose) not registered."
     )
   end
+
+  -- Diff management commands
+  vim.api.nvim_create_user_command("ClaudeCodeDiffAccept", function()
+    local diff = require("claudecode.diff")
+    diff.accept_current_diff()
+  end, {
+    desc = "Accept the current diff changes",
+  })
+
+  vim.api.nvim_create_user_command("ClaudeCodeDiffDeny", function()
+    local diff = require("claudecode.diff")
+    diff.deny_current_diff()
+  end, {
+    desc = "Deny/reject the current diff changes",
+  })
 end
 
 --- Get version information
