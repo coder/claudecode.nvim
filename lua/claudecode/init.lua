@@ -259,7 +259,8 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     -- Claude is connected, send immediately and ensure terminal is visible
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
     if success then
-      M._ensure_terminal_visible_if_connected()
+      local terminal = require("claudecode.terminal")
+      terminal.ensure_visible()
     end
     return success, error_msg
   else

@@ -105,6 +105,18 @@ local function build_config(opts_override)
   }
 end
 
+--- Checks if a terminal buffer is currently visible in any window
+--- @param bufnr number|nil The buffer number to check
+--- @return boolean True if the buffer is visible in any window, false otherwise
+local function is_terminal_visible(bufnr)
+  if not bufnr then
+    return false
+  end
+
+  local bufinfo = vim.fn.getbufinfo(bufnr)
+  return bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0
+end
+
 --- Gets the claude command string and necessary environment variables
 --- @param cmd_args string|nil Optional arguments to append to the command
 --- @return string cmd_string The command string
@@ -230,15 +242,11 @@ end
 function M.toggle_open_no_focus(opts_override, cmd_args)
   local provider = get_provider()
 
-  -- Check if terminal is already visible by checking active buffer
+  -- Check if terminal is already visible
   local active_bufnr = provider.get_active_bufnr()
-  if active_bufnr then
-    -- Check if buffer is currently visible in any window
-    local bufinfo = vim.fn.getbufinfo(active_bufnr)
-    if bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
-      -- Terminal is already visible, do nothing
-      return
-    end
+  if is_terminal_visible(active_bufnr) then
+    -- Terminal is already visible, do nothing
+    return
   end
 
   -- Terminal is not visible, open it without focus
@@ -258,19 +266,13 @@ function M.ensure_visible(opts_override, cmd_args)
 
   -- Check if terminal exists and is visible
   local active_bufnr = provider.get_active_bufnr()
-  if active_bufnr then
-    local bufinfo = vim.fn.getbufinfo(active_bufnr)
-    if bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
-      -- Terminal is already visible, do nothing
-      return
-    end
-    -- Terminal exists but not visible, use open() to show it
-    -- Using open() instead of simple_toggle() to avoid toggle conflicts when called rapidly
-    provider.open(cmd_string, claude_env_table, effective_config)
-  else
-    -- No terminal exists, create one
-    provider.open(cmd_string, claude_env_table, effective_config)
+  if is_terminal_visible(active_bufnr) then
+    -- Terminal is already visible, do nothing
+    return
   end
+
+  -- Terminal is not visible or doesn't exist, create/show it
+  provider.open(cmd_string, claude_env_table, effective_config)
 end
 
 --- Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).
