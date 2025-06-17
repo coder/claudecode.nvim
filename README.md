@@ -170,11 +170,11 @@ The diff keymaps are configured in the LazyVim spec and can be customized by mod
   config = true,
   keys = {
     -- ... other keymaps ...
-    
+
     -- Customize diff keymaps to avoid conflicts (e.g., with debugger)
     { "<leader>ya", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
     { "<leader>yn", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
-    
+
     -- Or disable them entirely by omitting them from the keys table
   },
 }

@@ -582,6 +582,25 @@ local vim = {
     end,
   }),
 
+  b = setmetatable({}, {
+    __index = function(_, bufnr)
+      -- Return buffer-local variables for the given buffer
+      if vim._buffers[bufnr] then
+        if not vim._buffers[bufnr].b_vars then
+          vim._buffers[bufnr].b_vars = {}
+        end
+        return vim._buffers[bufnr].b_vars
+      end
+      return {}
+    end,
+    __newindex = function(_, bufnr, vars)
+      -- Set buffer-local variables for the given buffer
+      if vim._buffers[bufnr] then
+        vim._buffers[bufnr].b_vars = vars
+      end
+    end,
+  }),
+
   deepcopy = function(tbl)
     if type(tbl) ~= "table" then
       return tbl
