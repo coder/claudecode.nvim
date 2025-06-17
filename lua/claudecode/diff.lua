@@ -583,11 +583,10 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
   vim.b[new_buffer].claudecode_diff_new_win = new_win
   vim.b[new_buffer].claudecode_diff_target_win = target_window
 
-  local keymap_opts = { buffer = new_buffer, silent = true }
-
-  -- Use the new user commands instead of inline functions
-  vim.keymap.set("n", "<leader>da", "<cmd>ClaudeCodeDiffAccept<cr>", keymap_opts)
-  vim.keymap.set("n", "<leader>dq", "<cmd>ClaudeCodeDiffDeny<cr>", keymap_opts)
+  -- Note: Keymaps for diff accept/deny are now configured in the LazyVim spec
+  -- Users can customize them by adding to their plugin configuration:
+  -- { "<leader>da", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff", buffer = true }
+  -- { "<leader>dq", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff", buffer = true }
 
   -- Return window information for later storage
   return {
