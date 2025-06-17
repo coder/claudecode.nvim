@@ -45,10 +45,14 @@ local function is_valid()
   return true
 end
 
-local function open_terminal(cmd_string, env_table, effective_config)
+local function open_terminal(cmd_string, env_table, effective_config, focus)
+  focus = focus == nil and true or focus -- Default to true for backward compatibility
+
   if is_valid() then -- Should not happen if called correctly, but as a safeguard
-    vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if focus then
+      vim.api.nvim_set_current_win(winid)
+      vim.cmd("startinsert")
+    end
     return true
   end
 
@@ -121,8 +125,13 @@ local function open_terminal(cmd_string, env_table, effective_config)
   vim.bo[bufnr].bufhidden = "wipe" -- Wipe buffer when hidden (e.g., window closed)
   -- buftype=terminal is set by termopen
 
-  vim.api.nvim_set_current_win(winid)
-  vim.cmd("startinsert")
+  if focus then
+    vim.api.nvim_set_current_win(winid)
+    vim.cmd("startinsert")
+  else
+    -- Return to original window if not focusing
+    vim.api.nvim_set_current_win(original_win)
+  end
 
   if config.show_native_term_exit_tip and not tip_shown then
     vim.notify("Native terminal opened. Press Ctrl-\\ Ctrl-N to return to Normal mode.", vim.log.levels.INFO)
@@ -251,9 +260,14 @@ end
 --- @param cmd_string string
 --- @param env_table table
 --- @param effective_config table
-function M.open(cmd_string, env_table, effective_config)
+--- @param focus boolean|nil
+function M.open(cmd_string, env_table, effective_config, focus)
+  focus = focus == nil and true or focus -- Default to true for backward compatibility
+
   if is_valid() then
-    focus_terminal()
+    if focus then
+      focus_terminal()
+    end
   else
     -- Check if there's an existing Claude terminal we lost track of
     local existing_buf, existing_win = find_existing_claude_terminal()
@@ -263,9 +277,11 @@ function M.open(cmd_string, env_table, effective_config)
       winid = existing_win
       -- Note: We can't recover the job ID easily, but it's less critical
       logger.debug("terminal", "Recovered existing Claude terminal")
-      focus_terminal()
+      if focus then
+        focus_terminal()
+      end
     else
-      if not open_terminal(cmd_string, env_table, effective_config) then
+      if not open_terminal(cmd_string, env_table, effective_config, focus) then
         vim.notify("Failed to open Claude terminal using native fallback.", vim.log.levels.ERROR)
       end
     end

@@ -151,6 +151,27 @@ local function get_claude_command_and_env(cmd_args)
   return cmd_string, env_table
 end
 
+--- Common helper to open terminal without focus if not already visible
+--- @param opts_override table|nil Optional config overrides
+--- @param cmd_args string|nil Optional command arguments
+--- @return boolean True if terminal was opened or already visible
+local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
+  local provider = get_provider()
+  local active_bufnr = provider.get_active_bufnr()
+
+  if is_terminal_visible(active_bufnr) then
+    -- Terminal is already visible, do nothing
+    return true
+  end
+
+  -- Terminal is not visible, open it without focus
+  local effective_config = build_config(opts_override)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+
+  provider.open(cmd_string, claude_env_table, effective_config, false) -- false = don't focus
+  return true
+end
+
 --- Configures the terminal module.
 -- Merges user-provided terminal configuration with defaults and sets the terminal command.
 -- @param user_term_config table (optional) Configuration options for the terminal.
@@ -240,39 +261,14 @@ end
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
 -- @param cmd_args string|nil (optional) Arguments to append to the claude command.
 function M.toggle_open_no_focus(opts_override, cmd_args)
-  local provider = get_provider()
-
-  -- Check if terminal is already visible
-  local active_bufnr = provider.get_active_bufnr()
-  if is_terminal_visible(active_bufnr) then
-    -- Terminal is already visible, do nothing
-    return
-  end
-
-  -- Terminal is not visible, open it without focus
-  local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
-
-  provider.open(cmd_string, claude_env_table, effective_config)
+  ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
 --- Ensures terminal is visible without changing focus. Creates if necessary, shows if hidden.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
 -- @param cmd_args string|nil (optional) Arguments to append to the claude command.
 function M.ensure_visible(opts_override, cmd_args)
-  local provider = get_provider()
-  local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
-
-  -- Check if terminal exists and is visible
-  local active_bufnr = provider.get_active_bufnr()
-  if is_terminal_visible(active_bufnr) then
-    -- Terminal is already visible, do nothing
-    return
-  end
-
-  -- Terminal is not visible or doesn't exist, create/show it
-  provider.open(cmd_string, claude_env_table, effective_config)
+  ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
 --- Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).

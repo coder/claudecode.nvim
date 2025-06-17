@@ -43,12 +43,14 @@ end
 
 --- @param config table
 --- @param env_table table
+--- @param focus boolean|nil
 --- @return table
-local function build_opts(config, env_table)
+local function build_opts(config, env_table, focus)
+  focus = focus == nil and true or focus -- Default to true for backward compatibility
   return {
     env = env_table,
-    start_insert = true,
-    auto_insert = true,
+    start_insert = focus,
+    auto_insert = focus,
     auto_close = false,
     win = {
       position = config.split_side,
@@ -66,27 +68,32 @@ end
 --- @param cmd_string string
 --- @param env_table table
 --- @param config table
-function M.open(cmd_string, env_table, config)
+--- @param focus boolean|nil
+function M.open(cmd_string, env_table, config, focus)
   if not is_available() then
     vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
     return
   end
 
+  focus = focus == nil and true or focus -- Default to true for backward compatibility
+
   if terminal and terminal:buf_valid() then
-    terminal:focus()
-    local term_buf_id = terminal.buf
-    if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
-      -- Check if window is valid before calling nvim_win_call
-      if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
-        vim.api.nvim_win_call(terminal.win, function()
-          vim.cmd("startinsert")
-        end)
+    if focus then
+      terminal:focus()
+      local term_buf_id = terminal.buf
+      if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
+        -- Check if window is valid before calling nvim_win_call
+        if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+          vim.api.nvim_win_call(terminal.win, function()
+            vim.cmd("startinsert")
+          end)
+        end
       end
     end
     return
   end
 
-  local opts = build_opts(config, env_table)
+  local opts = build_opts(config, env_table, focus)
   local term_instance = Snacks.terminal.open(cmd_string, opts)
   if term_instance and term_instance:buf_valid() then
     setup_terminal_events(term_instance, config)

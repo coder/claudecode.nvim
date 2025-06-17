@@ -283,7 +283,7 @@ For most users, the default configuration is sufficient:
     -- Connection Management
     connection_wait_delay = 200,                -- Wait time after connection before sending queued @ mentions (ms)
     connection_timeout = 10000,                 -- Max time to wait for Claude Code connection (ms)
-    queue_timeout = 3000,                       -- Max time to keep @ mentions in queue (ms)
+    queue_timeout = 5000,                       -- Max time to keep @ mentions in queue (ms)
 
     -- Terminal Configuration
     terminal = {
