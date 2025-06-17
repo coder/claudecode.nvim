@@ -51,9 +51,11 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
   if is_valid() then -- Should not happen if called correctly, but as a safeguard
     if focus then
+      -- Focus existing terminal: switch to terminal window and enter insert mode
       vim.api.nvim_set_current_win(winid)
       vim.cmd("startinsert")
     end
+    -- If focus=false, preserve user context by staying in current window
     return true
   end
 
@@ -127,10 +129,11 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   -- buftype=terminal is set by termopen
 
   if focus then
+    -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
     vim.cmd("startinsert")
   else
-    -- Return to original window if not focusing
+    -- Preserve user context: return to the window they were in before terminal creation
     vim.api.nvim_set_current_win(original_win)
   end
 
@@ -279,8 +282,9 @@ function M.open(cmd_string, env_table, effective_config, focus)
       -- Note: We can't recover the job ID easily, but it's less critical
       logger.debug("terminal", "Recovered existing Claude terminal")
       if focus then
-        focus_terminal()
+        focus_terminal() -- Focus recovered terminal
       end
+      -- If focus=false, preserve user context by staying in current window
     else
       if not open_terminal(cmd_string, env_table, effective_config, focus) then
         vim.notify("Failed to open Claude terminal using native fallback.", vim.log.levels.ERROR)

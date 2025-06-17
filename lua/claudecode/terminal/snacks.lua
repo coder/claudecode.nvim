@@ -42,10 +42,11 @@ local function setup_terminal_events(term_instance, config)
   end, { buf = true })
 end
 
---- @param config table
---- @param env_table table
---- @param focus boolean|nil
---- @return table
+--- Builds Snacks terminal options with focus control
+--- @param config table Terminal configuration (split_side, split_width_percentage, etc.)
+--- @param env_table table Environment variables to set for the terminal process
+--- @param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
+--- @return table Snacks terminal options with start_insert/auto_insert controlled by focus parameter
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   return {
