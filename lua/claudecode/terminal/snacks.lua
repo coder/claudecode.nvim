@@ -80,15 +80,33 @@ function M.open(cmd_string, env_table, config, focus)
   focus = utils.normalize_focus(focus)
 
   if terminal and terminal:buf_valid() then
-    if focus then
-      terminal:focus()
-      local term_buf_id = terminal.buf
-      if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
-        -- Check if window is valid before calling nvim_win_call
-        if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
-          vim.api.nvim_win_call(terminal.win, function()
-            vim.cmd("startinsert")
-          end)
+    -- Check if terminal exists but is hidden (no window)
+    if not terminal.win or not vim.api.nvim_win_is_valid(terminal.win) then
+      -- Terminal is hidden, show it using snacks toggle
+      terminal:toggle()
+      if focus then
+        terminal:focus()
+        local term_buf_id = terminal.buf
+        if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
+          if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+            vim.api.nvim_win_call(terminal.win, function()
+              vim.cmd("startinsert")
+            end)
+          end
+        end
+      end
+    else
+      -- Terminal is already visible
+      if focus then
+        terminal:focus()
+        local term_buf_id = terminal.buf
+        if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
+          -- Check if window is valid before calling nvim_win_call
+          if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+            vim.api.nvim_win_call(terminal.win, function()
+              vim.cmd("startinsert")
+            end)
+          end
         end
       end
     end

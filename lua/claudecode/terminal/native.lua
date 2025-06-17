@@ -196,7 +196,7 @@ local function hide_terminal()
   end
 end
 
-local function show_hidden_terminal(effective_config)
+local function show_hidden_terminal(effective_config, focus)
   -- Show an existing hidden terminal buffer in a new window
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return false
@@ -204,9 +204,13 @@ local function show_hidden_terminal(effective_config)
 
   -- Check if it's already visible
   if is_terminal_visible() then
-    focus_terminal()
+    if focus then
+      focus_terminal()
+    end
     return true
   end
+
+  local original_win = vim.api.nvim_get_current_win()
 
   -- Create a new window for the existing buffer
   local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
@@ -227,8 +231,14 @@ local function show_hidden_terminal(effective_config)
   vim.api.nvim_win_set_buf(new_winid, bufnr)
   winid = new_winid
 
-  vim.api.nvim_set_current_win(winid)
-  vim.cmd("startinsert")
+  if focus then
+    -- Focus the terminal: switch to terminal window and enter insert mode
+    vim.api.nvim_set_current_win(winid)
+    vim.cmd("startinsert")
+  else
+    -- Preserve user context: return to the window they were in before showing terminal
+    vim.api.nvim_set_current_win(original_win)
+  end
 
   logger.debug("terminal", "Showed hidden terminal in new window")
   return true
@@ -269,8 +279,15 @@ function M.open(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
 
   if is_valid() then
-    if focus then
-      focus_terminal()
+    -- Check if terminal exists but is hidden (no window)
+    if not winid or not vim.api.nvim_win_is_valid(winid) then
+      -- Terminal is hidden, show it by calling show_hidden_terminal
+      show_hidden_terminal(effective_config, focus)
+    else
+      -- Terminal is already visible
+      if focus then
+        focus_terminal()
+      end
     end
   else
     -- Check if there's an existing Claude terminal we lost track of
@@ -313,7 +330,7 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
     -- Terminal is not visible
     if has_buffer then
       -- Terminal process exists but is hidden, show it
-      if show_hidden_terminal(effective_config) then
+      if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
       else
         logger.error("terminal", "Failed to show hidden terminal")
@@ -360,7 +377,7 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- Terminal process exists but is hidden, show it
-      if show_hidden_terminal(effective_config) then
+      if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
       else
         logger.error("terminal", "Failed to show hidden terminal")
