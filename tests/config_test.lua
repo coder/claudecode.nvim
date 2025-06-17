@@ -185,7 +185,7 @@ describe("Config module", function()
       visual_demotion_delay_ms = 50,
       connection_wait_delay = 200,
       connection_timeout = 10000,
-      queue_timeout = 3000,
+      queue_timeout = 5000,
       diff_opts = {
         auto_close_on_accept = true,
         show_diff_stats = true,

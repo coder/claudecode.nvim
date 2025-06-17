@@ -5,6 +5,7 @@
 local M = {}
 
 local snacks_available, Snacks = pcall(require, "snacks")
+local utils = require("claudecode.utils")
 local terminal = nil
 
 --- @return boolean
@@ -41,19 +42,12 @@ local function setup_terminal_events(term_instance, config)
   end, { buf = true })
 end
 
---- Normalizes focus parameter to default to true for backward compatibility
---- @param focus boolean|nil The focus parameter
---- @return boolean Normalized focus value
-local function normalize_focus(focus)
-  return focus == nil and true or focus
-end
-
 --- @param config table
 --- @param env_table table
 --- @param focus boolean|nil
 --- @return table
 local function build_opts(config, env_table, focus)
-  focus = normalize_focus(focus)
+  focus = utils.normalize_focus(focus)
   return {
     env = env_table,
     start_insert = focus,
@@ -82,7 +76,7 @@ function M.open(cmd_string, env_table, config, focus)
     return
   end
 
-  focus = normalize_focus(focus)
+  focus = utils.normalize_focus(focus)
 
   if terminal and terminal:buf_valid() then
     if focus then

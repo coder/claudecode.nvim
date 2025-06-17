@@ -5,13 +5,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
-
---- Normalizes focus parameter to default to true for backward compatibility
---- @param focus boolean|nil The focus parameter
---- @return boolean Normalized focus value
-local function normalize_focus(focus)
-  return focus == nil and true or focus
-end
+local utils = require("claudecode.utils")
 
 local bufnr = nil
 local winid = nil
@@ -53,7 +47,7 @@ local function is_valid()
 end
 
 local function open_terminal(cmd_string, env_table, effective_config, focus)
-  focus = normalize_focus(focus)
+  focus = utils.normalize_focus(focus)
 
   if is_valid() then -- Should not happen if called correctly, but as a safeguard
     if focus then
@@ -269,7 +263,7 @@ end
 --- @param effective_config table
 --- @param focus boolean|nil
 function M.open(cmd_string, env_table, effective_config, focus)
-  focus = normalize_focus(focus)
+  focus = utils.normalize_focus(focus)
 
   if is_valid() then
     if focus then
