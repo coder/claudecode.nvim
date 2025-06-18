@@ -62,8 +62,8 @@ Using [lazy.nvim](https://github.com/folke/lazy.nvim):
       ft = { "NvimTree", "neo-tree", "oil" },
     },
     -- Diff management
-    { "<leader>da", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
-    { "<leader>dq", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
 }
 ```
@@ -91,8 +91,8 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 - `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
 - `:ClaudeCodeTreeAdd` - Add selected file(s) from tree explorer to Claude context (also available via ClaudeCodeSend)
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add a specific file or directory to Claude context by path with optional line range
-- `:ClaudeCodeDiffAccept` - Accept the current diff changes (equivalent to `<leader>da`)
-- `:ClaudeCodeDiffDeny` - Deny/reject the current diff changes (equivalent to `<leader>dq`)
+- `:ClaudeCodeDiffAccept` - Accept the current diff changes (equivalent to `<leader>aa`)
+- `:ClaudeCodeDiffDeny` - Deny/reject the current diff changes (equivalent to `<leader>ad`)
 
 ### Toggle Behavior
 
@@ -142,7 +142,7 @@ When Claude proposes changes to your files, the plugin opens a native Neovim dif
 ### Accepting Changes
 
 - **`:w` (save)** - Accept the changes and apply them to your file
-- **`<leader>da`** - Accept the changes using the dedicated keymap (configured in LazyVim spec)
+- **`<leader>aa`** - Accept the changes using the dedicated keymap (configured in LazyVim spec)
 
 You can edit the proposed changes in the right-hand diff buffer before accepting them. This allows you to modify Claude's suggestions or make additional tweaks before applying the final version to your file.
 
@@ -151,7 +151,7 @@ Both methods signal Claude Code to apply the changes to your file, after which t
 ### Rejecting Changes
 
 - **`:q` or `:close`** - Close the diff view to reject the changes
-- **`<leader>dq`** - Reject changes using the dedicated keymap (configured in LazyVim spec)
+- **`<leader>ad`** - Reject changes using the dedicated keymap (configured in LazyVim spec)
 - **`:bdelete` or `:bwipeout`** - Delete the diff buffer to reject changes
 
 When you reject changes, the diff view closes and the original file remains unchanged.
@@ -267,6 +267,9 @@ For most users, the default configuration is sufficient:
       desc = "Add file",
       ft = { "NvimTree", "neo-tree", "oil" },
     },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
 }
 ```
@@ -295,6 +298,9 @@ For most users, the default configuration is sufficient:
       desc = "Add file",
       ft = { "NvimTree", "neo-tree", "oil" },
     },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
   opts = {
     -- Server Configuration
@@ -367,7 +373,7 @@ For most users, the default configuration is sufficient:
 
 #### Diff Options
 
-- **`auto_close_on_accept`**: Close diff view after accepting changes with `:w` or `<leader>da`
+- **`auto_close_on_accept`**: Close diff view after accepting changes with `:w` or `<leader>aa`
 - **`show_diff_stats`**: Display diff statistics (lines added/removed)
 - **`vertical_split`**: Use vertical split layout for diffs
 - **`open_in_current_tab`**: Open diffs in current tab instead of creating new tabs
@@ -392,6 +398,9 @@ For most users, the default configuration is sufficient:
       desc = "Add file",
       ft = { "NvimTree", "neo-tree", "oil" },
     },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
   opts = {
     log_level = "warn",  -- Reduce log verbosity
@@ -418,6 +427,9 @@ For most users, the default configuration is sufficient:
       desc = "Add file",
       ft = { "NvimTree", "neo-tree", "oil" },
     },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
   opts = {
     log_level = "debug",
@@ -455,6 +467,9 @@ For most users, the default configuration is sufficient:
       desc = "Add file",
       ft = { "NvimTree", "neo-tree", "oil" },
     },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
   opts = {
     terminal_cmd = "/opt/claude/bin/claude",  -- Custom Claude path

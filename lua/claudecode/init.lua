@@ -20,9 +20,9 @@ local logger = require("claudecode.logger")
 --- @type ClaudeCode.Version
 M.version = {
   major = 0,
-  minor = 1,
+  minor = 2,
   patch = 0,
-  prerelease = "alpha",
+  prerelease = nil,
   string = function(self)
     local version = string.format("%d.%d.%d", self.major, self.minor, self.patch)
     if self.prerelease then

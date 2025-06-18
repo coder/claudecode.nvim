@@ -85,6 +85,55 @@ Test files follow the pattern `*_spec.lua` or `*_test.lua` and use the busted fr
 - Selection tracking is debounced to reduce overhead
 - Terminal integration supports both snacks.nvim and native Neovim terminal
 
+## Release Process
+
+### Version Updates
+
+When updating the version number for a new release, you must update **ALL** of these files:
+
+1. **`lua/claudecode/init.lua`** - Main version table:
+
+   ```lua
+   M.version = {
+     major = 0,
+     minor = 2,  -- Update this
+     patch = 0,  -- Update this
+     prerelease = nil,  -- Remove for stable releases
+   }
+   ```
+
+2. **`scripts/claude_interactive.sh`** - Multiple client version references:
+
+   - Line ~52: `"version": "0.2.0"` (handshake)
+   - Line ~223: `"version": "0.2.0"` (initialize)
+   - Line ~309: `"version": "0.2.0"` (reconnect)
+
+3. **`scripts/lib_claude.sh`** - ClaudeCodeNvim version:
+
+   - Line ~120: `"version": "0.2.0"` (init message)
+
+4. **`CHANGELOG.md`** - Add new release section with:
+   - Release date
+   - Features with PR references
+   - Bug fixes with PR references
+   - Development improvements
+
+### Release Commands
+
+```bash
+# Get merged PRs since last version
+gh pr list --state merged --base main --json number,title,mergedAt,url --jq 'sort_by(.mergedAt) | reverse'
+
+# Get commit history
+git log --oneline v0.1.0..HEAD
+
+# Always run before committing
+make
+
+# Verify no old version references remain
+rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
+```
+
 ## CRITICAL: Pre-commit Requirements
 
 **ALWAYS run `make` before committing any changes.** This runs code quality checks and formatting that must pass for CI to succeed. Never skip this step - many PRs fail CI because contributors don't run the build commands before committing.

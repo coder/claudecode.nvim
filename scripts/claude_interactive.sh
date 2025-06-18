@@ -49,7 +49,7 @@ HANDSHAKE_PARAMS=$(ws_format_json '{
   },
   "clientInfo": {
     "name": "claude-nvim-client",
-    "version": "0.1.0"
+    "version": "0.2.0"
   }
 }')
 ws_notify "mcp.connect" "$HANDSHAKE_PARAMS" "$CONN_ID"
@@ -220,7 +220,7 @@ handle_initialize() {
     },
     "clientInfo": {
       "name": "ClaudeCodeNvim",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   }')
 
@@ -306,7 +306,7 @@ handle_reconnect() {
       },
       "clientInfo": {
         "name": "claude-nvim-client",
-        "version": "0.1.0"
+        "version": "0.2.0"
       }
     }')
     ws_notify "mcp.connect" "$HANDSHAKE_PARAMS" "$CONN_ID"
