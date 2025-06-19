@@ -485,7 +485,7 @@ If you prefer to run Claude Code in an external terminal (e.g., tmux, separate t
 With this configuration:
 
 - The MCP server starts automatically when Neovim loads
-- Run `claude --ide` in your external terminal to connect
+- Run `claude` in your external terminal to connect
 - Use `:ClaudeCodeStatus` to check connection status and get guidance
 
 #### Tmux Integration
