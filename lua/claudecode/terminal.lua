@@ -67,6 +67,14 @@ local function get_provider()
   elseif config.provider == "native" then
     -- noop, will use native provider as default below
     logger.debug("terminal", "Using native terminal provider")
+  elseif config.provider == "external" then
+    local external_provider = load_provider("external")
+    if external_provider then
+      logger.debug("terminal", "Using external terminal provider")
+      return external_provider
+    else
+      logger.error("terminal", "Failed to load external terminal provider. Falling back to 'native'.")
+    end
   else
     logger.warn("terminal", "Invalid provider configured: " .. tostring(config.provider) .. ". Defaulting to 'native'.")
   end
@@ -204,7 +212,7 @@ function M.setup(user_term_config, p_terminal_cmd)
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "snacks" or v == "native") then
+      elseif k == "provider" and (v == "snacks" or v == "native" or v == "external") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
@@ -284,6 +292,12 @@ end
 -- @return number|nil The buffer number if an active terminal is found, otherwise nil.
 function M.get_active_terminal_bufnr()
   return get_provider().get_active_bufnr()
+end
+
+--- Checks if the current terminal provider is external.
+-- @return boolean True if using external terminal provider, false otherwise.
+function M.is_external_provider()
+  return config.provider == "external"
 end
 
 --- Gets the managed terminal instance for testing purposes.

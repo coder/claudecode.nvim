@@ -368,6 +368,7 @@ For most users, the default configuration is sufficient:
   - `"auto"`: Try snacks.nvim, fallback to native
   - `"snacks"`: Force snacks.nvim (requires folke/snacks.nvim)
   - `"native"`: Use built-in Neovim terminal
+  - `"external"`: Use external terminal (e.g., tmux, separate terminal window)
 - **`show_native_term_exit_tip`**: Show help text for exiting native terminal
 - **`auto_close`**: Automatically close terminal when commands finish
 
@@ -449,6 +450,42 @@ For most users, the default configuration is sufficient:
 }
 ```
 
+#### External Terminal Configuration
+
+If you prefer to run Claude Code in an external terminal (e.g., tmux, separate terminal window), configure the plugin to use the external provider and load on startup:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  event = "VeryLazy",  -- Load on startup for auto-start behavior
+  opts = {
+    terminal = {
+      provider = "external",  -- Don't launch internal terminals
+    },
+  },
+  keys = {
+    { "<leader>a", nil, desc = "AI/Claude Code" },
+    -- Add any keymaps you want (but they're not required for loading)
+    { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
+    {
+      "<leader>as",
+      "<cmd>ClaudeCodeTreeAdd<cr>",
+      desc = "Add file",
+      ft = { "NvimTree", "neo-tree", "oil" },
+    },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
+  },
+}
+```
+
+With this configuration:
+
+- The MCP server starts automatically when Neovim loads
+- Run `claude --ide` in your external terminal to connect
+- Use `:ClaudeCodeStatus` to check connection status and get guidance
+
 #### Custom Claude Installation
 
 ```lua
@@ -483,6 +520,7 @@ For most users, the default configuration is sufficient:
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/`
 - **Need debug logs?** Set `log_level = "debug"` in setup
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
+- **Auto-start not working?** If using external terminal provider, ensure you're using `event = "VeryLazy"` instead of `keys = {...}` only, as lazy loading prevents auto-start from running
 
 ## License
 
