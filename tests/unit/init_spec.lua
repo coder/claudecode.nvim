@@ -301,6 +301,9 @@ describe("claudecode.init", function()
         is_external_provider = function()
           return false -- Default to false for existing tests
         end,
+        is_tmux_provider = function()
+          return false -- Default to false for existing tests
+        end,
       }
 
       local original_require = _G.require

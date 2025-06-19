@@ -93,6 +93,9 @@ describe("ClaudeCodeAdd command", function()
           is_external_provider = function()
             return false -- Default to false for existing tests
           end,
+          is_tmux_provider = function()
+            return false -- Default to false for existing tests
+          end,
         }
       elseif mod == "claudecode.visual_commands" then
         return {

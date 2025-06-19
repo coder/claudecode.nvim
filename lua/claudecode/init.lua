@@ -84,7 +84,7 @@ M.state = {
 ---@alias ClaudeCode.TerminalOpts { \
 ---  split_side?: "left"|"right", \
 ---  split_width_percentage?: number, \
----  provider?: "auto"|"snacks"|"native"|"external", \
+---  provider?: "auto"|"snacks"|"native"|"external"|"tmux", \
 ---  show_native_term_exit_tip?: boolean }
 ---
 ---@alias ClaudeCode.SetupOpts { \
@@ -895,6 +895,26 @@ function M._create_commands()
       terminal.close()
     end, {
       desc = "Close the Claude Code terminal window",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeTmux", function(opts)
+      local tmux_provider = require("claudecode.terminal.tmux")
+      if not tmux_provider.is_available() then
+        logger.error("command", "ClaudeCodeTmux: Not running in tmux session")
+        return
+      end
+
+      -- Use the normal terminal flow but force tmux provider by calling it directly
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+
+      local effective_config = { split_side = "right", split_width_percentage = 0.5 }
+      local cmd_string, claude_env_table = terminal.get_claude_command_and_env(cmd_args)
+
+      tmux_provider.setup({})
+      tmux_provider.open(cmd_string, claude_env_table, effective_config, true)
+    end, {
+      nargs = "*",
+      desc = "Open Claude Code in new tmux pane (requires tmux session)",
     })
   else
     logger.error(

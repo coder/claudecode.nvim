@@ -86,6 +86,7 @@ That's it! For more configuration options, see [Advanced Setup](#advanced-setup)
 
 - `:ClaudeCode [arguments]` - Toggle the Claude Code terminal window (simple show/hide behavior)
 - `:ClaudeCodeFocus [arguments]` - Smart focus/toggle Claude terminal (switches to terminal if not focused, hides if focused)
+- `:ClaudeCodeTmux [arguments]` - Open Claude Code in a tmux pane (works regardless of terminal provider setting)
 - `:ClaudeCode --resume` - Resume a previous Claude conversation
 - `:ClaudeCode --continue` - Continue Claude conversation
 - `:ClaudeCodeSend` - Send current visual selection to Claude, or add files from tree explorer
@@ -365,10 +366,11 @@ For most users, the default configuration is sufficient:
 - **`split_side`**: Which side to open the terminal split (`"left"` or `"right"`)
 - **`split_width_percentage`**: Terminal width as a fraction of screen width (0.1 = 10%, 0.5 = 50%)
 - **`provider`**: Terminal implementation to use:
-  - `"auto"`: Try snacks.nvim, fallback to native
+  - `"auto"`: Try tmux (if in tmux session), then snacks.nvim, fallback to native
   - `"snacks"`: Force snacks.nvim (requires folke/snacks.nvim)
   - `"native"`: Use built-in Neovim terminal
-  - `"external"`: Use external terminal (e.g., tmux, separate terminal window)
+  - `"tmux"`: Use tmux panes (requires tmux session)
+  - `"external"`: Use external terminal (e.g., separate terminal window)
 - **`show_native_term_exit_tip`**: Show help text for exiting native terminal
 - **`auto_close`**: Automatically close terminal when commands finish
 
@@ -485,6 +487,45 @@ With this configuration:
 - The MCP server starts automatically when Neovim loads
 - Run `claude --ide` in your external terminal to connect
 - Use `:ClaudeCodeStatus` to check connection status and get guidance
+
+#### Tmux Integration
+
+If you work with tmux sessions, claudecode.nvim can create tmux panes automatically:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  keys = {
+    { "<leader>a", nil, desc = "AI/Claude Code" },
+    { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
+    { "<leader>ct", "<cmd>ClaudeCodeTmux<cr>", desc = "Claude in tmux pane" },
+    { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
+    {
+      "<leader>as",
+      "<cmd>ClaudeCodeTreeAdd<cr>",
+      desc = "Add file",
+      ft = { "NvimTree", "neo-tree", "oil" },
+    },
+    -- Diff management
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
+  },
+  opts = {
+    terminal = {
+      provider = "tmux",      -- Use tmux panes when available
+      split_side = "right",   -- Create panes to the right
+      split_width_percentage = 0.4,  -- 40% of terminal width
+    },
+  },
+}
+```
+
+With tmux integration:
+
+- **Auto-detection**: `provider = "auto"` automatically uses tmux when in tmux sessions
+- **Manual command**: `:ClaudeCodeTmux` creates tmux panes regardless of provider setting
+- **Pane control**: Supports `split_side` ("left"/"right") and `split_width_percentage`
+- **Session persistence**: Tmux panes survive across Neovim restarts
 
 #### Custom Claude Installation
 

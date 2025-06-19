@@ -51,7 +51,13 @@ local function get_provider()
   local logger = require("claudecode.logger")
 
   if config.provider == "auto" then
-    -- Try snacks first, then fallback to native silently
+    -- Try tmux first if in tmux session, then snacks, then fallback to native silently
+    local tmux_provider = load_provider("tmux")
+    if tmux_provider and tmux_provider.is_available() then
+      logger.debug("terminal", "Auto-detected tmux session, using tmux provider")
+      return tmux_provider
+    end
+
     local snacks_provider = load_provider("snacks")
     if snacks_provider and snacks_provider.is_available() then
       return snacks_provider
@@ -67,6 +73,14 @@ local function get_provider()
   elseif config.provider == "native" then
     -- noop, will use native provider as default below
     logger.debug("terminal", "Using native terminal provider")
+  elseif config.provider == "tmux" then
+    local tmux_provider = load_provider("tmux")
+    if tmux_provider and tmux_provider.is_available() then
+      logger.debug("terminal", "Using tmux terminal provider")
+      return tmux_provider
+    else
+      logger.warn("terminal", "'tmux' provider configured, but not in tmux session. Falling back to 'native'.")
+    end
   elseif config.provider == "external" then
     local external_provider = load_provider("external")
     if external_provider then
@@ -212,7 +226,7 @@ function M.setup(user_term_config, p_terminal_cmd)
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "snacks" or v == "native" or v == "external") then
+      elseif k == "provider" and (v == "snacks" or v == "native" or v == "external" or v == "tmux") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
@@ -298,6 +312,20 @@ end
 -- @return boolean True if using external terminal provider, false otherwise.
 function M.is_external_provider()
   return config.provider == "external"
+end
+
+--- Checks if the current terminal provider is tmux.
+-- @return boolean True if using tmux terminal provider, false otherwise.
+function M.is_tmux_provider()
+  return config.provider == "tmux"
+end
+
+--- Gets the claude command and environment variables for external use.
+-- @param cmd_args string|nil Optional arguments to append to the command
+-- @return string cmd_string The command string
+-- @return table env_table The environment variables table
+function M.get_claude_command_and_env(cmd_args)
+  return get_claude_command_and_env(cmd_args)
 end
 
 --- Gets the managed terminal instance for testing purposes.
