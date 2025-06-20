@@ -3,6 +3,9 @@ if not _G.vim then
     schedule_wrap = function(fn)
       return fn
     end,
+    schedule = function(fn)
+      fn()
+    end,
     _buffers = {},
     _windows = {},
     _commands = {},
