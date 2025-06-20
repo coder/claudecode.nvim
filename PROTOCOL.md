@@ -132,46 +132,361 @@ According to the MCP spec, Claude should be able to call tools, but **current im
 
 ## Available MCP Tools
 
-The extensions register these tools that Claude can (theoretically) call:
+The VS Code extension registers 12 tools that Claude can call. Here's the complete specification:
 
-### Core Tools
+### 1. openFile
 
-1. **openFile** - Open a file and optionally select text
+**Description**: Open a file in the editor and optionally select a range of text
 
-   ```json
-   {
-     "filePath": "/path/to/file.js",
-     "startText": "function hello", // Find and select from this text
-     "endText": "}" // To this text
-   }
-   ```
+**Input**:
 
-2. **openDiff** - Show a diff and wait for user action (blocking!)
+```json
+{
+  "filePath": "/path/to/file.js",
+  "preview": false,
+  "startText": "function hello",
+  "endText": "}",
+  "selectToEndOfLine": false,
+  "makeFrontmost": true
+}
+```
 
-   ```json
-   {
-     "old_file_path": "/path/to/original.js",
-     "new_file_path": "/path/to/modified.js",
-     "new_file_contents": "// Modified content...",
-     "tab_name": "Proposed changes"
-   }
-   ```
+- `filePath` (string, required): Path to the file to open
+- `preview` (boolean, default: false): Whether to open in preview mode
+- `startText` (string, optional): Text pattern to find selection start
+- `endText` (string, optional): Text pattern to find selection end
+- `selectToEndOfLine` (boolean, default: false): Extend selection to end of line
+- `makeFrontmost` (boolean, default: true): Make the file the active editor tab
 
-   Returns `FILE_SAVED` or `DIFF_REJECTED` based on user action.
+**Output**: When `makeFrontmost=true`, returns simple message:
 
-3. **getCurrentSelection** - Get the current text selection
-4. **getOpenEditors** - List all open files
-5. **getWorkspaceFolders** - Get project folders
-6. **getDiagnostics** - Get errors/warnings from the IDE
-7. **saveDocument** - Save a file
-8. **close_tab** - Close a tab by name (note the inconsistent naming!)
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Opened file: /path/to/file.js"
+    }
+  ]
+}
+```
+
+When `makeFrontmost=false`, returns detailed JSON:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": true, \"filePath\": \"/absolute/path/to/file.js\", \"languageId\": \"javascript\", \"lineCount\": 42}"
+    }
+  ]
+}
+```
+
+### 2. openDiff
+
+**Description**: Open a git diff for the file (blocking operation)
+
+**Input**:
+
+```json
+{
+  "old_file_path": "/path/to/original.js",
+  "new_file_path": "/path/to/modified.js",
+  "new_file_contents": "// Modified content...",
+  "tab_name": "Proposed changes"
+}
+```
+
+- `old_file_path` (string): Path to original file
+- `new_file_path` (string): Path to new file
+- `new_file_contents` (string): Contents of the new file
+- `tab_name` (string): Tab name for the diff view
+
+**Output**: Returns MCP-formatted response:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "FILE_SAVED"
+    }
+  ]
+}
+```
+
+or
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "DIFF_REJECTED"
+    }
+  ]
+}
+```
+
+Based on whether the user saves or rejects the diff.
+
+### 3. getCurrentSelection
+
+**Description**: Get the current text selection in the active editor
+
+**Input**: None
+
+**Output**: Returns JSON-stringified selection data:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": true, \"text\": \"selected content\", \"filePath\": \"/path/to/file\", \"selection\": {\"start\": {\"line\": 0, \"character\": 0}, \"end\": {\"line\": 0, \"character\": 10}}}"
+    }
+  ]
+}
+```
+
+Or when no active editor:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": false, \"message\": \"No active editor found\"}"
+    }
+  ]
+}
+```
+
+### 4. getLatestSelection
+
+**Description**: Get the most recent text selection (even if not in active editor)
+
+**Input**: None
+
+**Output**: JSON-stringified selection data or `{success: false, message: "No selection available"}`
+
+### 5. getOpenEditors
+
+**Description**: Get information about currently open editors
+
+**Input**: None
+
+**Output**: Returns JSON-stringified array of open tabs:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"tabs\": [{\"uri\": \"file:///path/to/file\", \"isActive\": true, \"label\": \"filename.ext\", \"languageId\": \"javascript\", \"isDirty\": false}]}"
+    }
+  ]
+}
+```
+
+### 6. getWorkspaceFolders
+
+**Description**: Get all workspace folders currently open in the IDE
+
+**Input**: None
+
+**Output**: Returns JSON-stringified workspace information:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": true, \"folders\": [{\"name\": \"project-name\", \"uri\": \"file:///path/to/workspace\", \"path\": \"/path/to/workspace\"}], \"rootPath\": \"/path/to/workspace\"}"
+    }
+  ]
+}
+```
+
+### 7. getDiagnostics
+
+**Description**: Get language diagnostics from VS Code
+
+**Input**:
+
+```json
+{
+  "uri": "file:///path/to/file.js"
+}
+```
+
+- `uri` (string, optional): File URI to get diagnostics for. If not provided, gets diagnostics for all files.
+
+**Output**: Returns JSON-stringified array of diagnostics per file:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "[{\"uri\": \"file:///path/to/file\", \"diagnostics\": [{\"message\": \"Error message\", \"severity\": \"Error\", \"range\": {\"start\": {\"line\": 0, \"character\": 0}}, \"source\": \"typescript\"}]}]"
+    }
+  ]
+}
+```
+
+### 8. checkDocumentDirty
+
+**Description**: Check if a document has unsaved changes (is dirty)
+
+**Input**:
+
+```json
+{
+  "filePath": "/path/to/file.js"
+}
+```
+
+- `filePath` (string, required): Path to the file to check
+
+**Output**: Returns document dirty status:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": true, \"filePath\": \"/path/to/file.js\", \"isDirty\": true, \"isUntitled\": false}"
+    }
+  ]
+}
+```
+
+Or when document not open:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": false, \"message\": \"Document not open: /path/to/file.js\"}"
+    }
+  ]
+}
+```
+
+### 9. saveDocument
+
+**Description**: Save a document with unsaved changes
+
+**Input**:
+
+```json
+{
+  "filePath": "/path/to/file.js"
+}
+```
+
+- `filePath` (string, required): Path to the file to save
+
+**Output**: Returns save operation result:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": true, \"filePath\": \"/path/to/file.js\", \"saved\": true, \"message\": \"Document saved successfully\"}"
+    }
+  ]
+}
+```
+
+Or when document not open:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"success\": false, \"message\": \"Document not open: /path/to/file.js\"}"
+    }
+  ]
+}
+```
+
+### 10. close_tab
+
+**Description**: Close a tab by name
+
+**Input**:
+
+```json
+{
+  "tab_name": "filename.js"
+}
+```
+
+- `tab_name` (string, required): Name of the tab to close
+
+**Output**: Returns `{content: [{type: "text", text: "TAB_CLOSED"}]}`
+
+### 11. closeAllDiffTabs
+
+**Description**: Close all diff tabs in the editor
+
+**Input**: None
+
+**Output**: Returns `{content: [{type: "text", text: "CLOSED_${count}_DIFF_TABS"}]}`
+
+### 12. executeCode
+
+**Description**: Execute Python code in the Jupyter kernel for the current notebook file
+
+**Input**:
+
+```json
+{
+  "code": "print('Hello, World!')"
+}
+```
+
+- `code` (string, required): The code to be executed on the kernel
+
+**Output**: Returns execution results with mixed content types:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "Hello, World!"
+    },
+    {
+      "type": "image",
+      "data": "base64_encoded_image_data",
+      "mimeType": "image/png"
+    }
+  ]
+}
+```
+
+**Notes**:
+
+- All code executed will persist across calls unless the kernel is restarted
+- Avoid declaring variables or modifying kernel state unless explicitly requested
+- Only available when working with Jupyter notebooks
+- Can return multiple content types including text output and images
 
 ### Implementation Notes
 
 - Most tools follow camelCase naming except `close_tab` (uses snake_case)
-- The `openDiff` tool is unique - it's **blocking** and waits for user interaction
+- The `openDiff` tool is **blocking** and waits for user interaction
 - Tools return MCP-formatted responses with content arrays
-- There's also `executeCode` for Jupyter notebooks in the VS Code extension
+- All schemas use Zod validation in the VS Code extension
+- Selection-related tools work with the current editor state
 
 ## Building Your Own Integration
 
