@@ -41,17 +41,14 @@ ws_connect() {
   # 1. Reads JSON requests from request_file
   # 2. Writes all server responses to response_file
   (
-    # Build websocat command with optional auth header
-    local websocat_cmd="websocat -t"
-
-    if [ -n "$auth_token" ]; then
-      websocat_cmd="$websocat_cmd --header 'x-claude-code-ide-authorization: $auth_token'"
-    fi
-
-    websocat_cmd="$websocat_cmd '$url'"
-
     # Note: The -E flag makes websocat exit when the file is closed
-    tail -f "$request_file" | eval "$websocat_cmd" | tee -a "$response_file" >"$log_file" &
+    if [ -n "$auth_token" ]; then
+      # Use websocat with auth header - avoid eval by constructing command safely
+      tail -f "$request_file" | websocat -t --header "x-claude-code-ide-authorization: $auth_token" "$url" | tee -a "$response_file" >"$log_file" &
+    else
+      # Use websocat without auth header
+      tail -f "$request_file" | websocat -t "$url" | tee -a "$response_file" >"$log_file" &
+    fi
 
     # Save PID
     echo $! >"$pid_file"
