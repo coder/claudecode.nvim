@@ -48,7 +48,7 @@ function M.validate_upgrade_request(request, expected_auth_token)
 
     -- Check for empty auth header
     if auth_header == "" then
-      return false, "Empty authentication token provided"
+      return false, "Authentication token too short (min 10 characters)"
     end
 
     -- Check for suspicious auth header lengths
