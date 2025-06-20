@@ -31,11 +31,14 @@ describe("claudecode.init", function()
 
   local mock_lockfile = {
     create = function()
-      return true, "/mock/path"
+      return true, "/mock/path", "mock-auth-token-12345"
     end,
     ---@type SpyableFunction
     remove = function()
       return true
+    end,
+    generate_auth_token = function()
+      return "mock-auth-token-12345"
     end,
   }
 

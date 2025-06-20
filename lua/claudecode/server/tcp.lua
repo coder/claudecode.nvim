@@ -7,6 +7,7 @@ local M = {}
 ---@class TCPServer
 ---@field server table The vim.loop TCP server handle
 ---@field port number The port the server is listening on
+---@field auth_token string|nil The authentication token for validating connections
 ---@field clients table Table of connected clients (client_id -> WebSocketClient)
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
@@ -47,9 +48,10 @@ end
 ---@brief Create and start a TCP server
 ---@param config table Server configuration
 ---@param callbacks table Callback functions
+---@param auth_token string|nil Authentication token for validating connections
 ---@return TCPServer|nil server The server object, or nil on error
 ---@return string|nil error Error message if failed
-function M.create_server(config, callbacks)
+function M.create_server(config, callbacks, auth_token)
   local port = M.find_available_port(config.port_range.min, config.port_range.max)
   if not port then
     return nil, "No available ports in range " .. config.port_range.min .. "-" .. config.port_range.max
@@ -64,6 +66,7 @@ function M.create_server(config, callbacks)
   local server = {
     server = tcp_server,
     port = port,
+    auth_token = auth_token,
     clients = {},
     on_message = callbacks.on_message or function() end,
     on_connect = callbacks.on_connect or function() end,
@@ -138,7 +141,7 @@ function M._handle_new_connection(server)
     end, function(cl, error_msg)
       server.on_error("Client " .. cl.id .. " error: " .. error_msg)
       M._remove_client(server, cl)
-    end)
+    end, server.auth_token)
   end)
 
   -- Notify about new connection

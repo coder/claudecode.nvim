@@ -1,6 +1,7 @@
 ---@brief WebSocket client connection management
 local frame = require("claudecode.server.frame")
 local handshake = require("claudecode.server.handshake")
+local logger = require("claudecode.logger")
 
 local M = {}
 
@@ -38,16 +39,55 @@ end
 ---@param on_message function Callback for complete messages: function(client, message_text)
 ---@param on_close function Callback for client close: function(client, code, reason)
 ---@param on_error function Callback for errors: function(client, error_msg)
-function M.process_data(client, data, on_message, on_close, on_error)
+---@param auth_token string|nil Expected authentication token for validation
+function M.process_data(client, data, on_message, on_close, on_error, auth_token)
   client.buffer = client.buffer .. data
 
   if not client.handshake_complete then
     local complete, request, remaining = handshake.extract_http_request(client.buffer)
     if complete then
-      local success, response_from_handshake, _ = handshake.process_handshake(request)
+      logger.debug("client", "Processing WebSocket handshake for client:", client.id)
+
+      -- Log if auth token is required
+      if auth_token then
+        logger.debug("client", "Authentication required for client:", client.id)
+      else
+        logger.debug("client", "No authentication required for client:", client.id)
+      end
+
+      local success, response_from_handshake, _ = handshake.process_handshake(request, auth_token)
+
+      -- Log authentication results
+      if success then
+        if auth_token then
+          logger.debug("client", "Client authenticated successfully:", client.id)
+        else
+          logger.debug("client", "Client handshake completed (no auth required):", client.id)
+        end
+      else
+        -- Log specific authentication failure details
+        if auth_token and response_from_handshake:find("auth") then
+          logger.warn(
+            "client",
+            "Authentication failed for client "
+              .. client.id
+              .. ": "
+              .. (response_from_handshake:match("Bad WebSocket upgrade request: (.+)") or "unknown auth error")
+          )
+        else
+          logger.warn(
+            "client",
+            "WebSocket handshake failed for client "
+              .. client.id
+              .. ": "
+              .. (response_from_handshake:match("HTTP/1.1 %d+ (.+)") or "unknown handshake error")
+          )
+        end
+      end
 
       client.tcp_handle:write(response_from_handshake, function(err)
         if err then
+          logger.error("client", "Failed to send handshake response to client " .. client.id .. ": " .. err)
           on_error(client, "Failed to send handshake response: " .. err)
           return
         end
@@ -56,12 +96,14 @@ function M.process_data(client, data, on_message, on_close, on_error)
           client.handshake_complete = true
           client.state = "connected"
           client.buffer = remaining
+          logger.debug("client", "WebSocket connection established for client:", client.id)
 
           if #client.buffer > 0 then
-            M.process_data(client, "", on_message, on_close, on_error)
+            M.process_data(client, "", on_message, on_close, on_error, auth_token)
           end
         else
           client.state = "closing"
+          logger.debug("client", "Closing connection for client due to failed handshake:", client.id)
           vim.schedule(function()
             client.tcp_handle:close()
           end)

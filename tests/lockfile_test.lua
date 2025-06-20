@@ -24,12 +24,21 @@ if not _G.vim then
     fs = { remove = function() end }, ---@type vim_fs_module
     fn = { ---@type vim_fn_table
       expand = function(path)
-        return select(1, path:gsub("~", "/home/user"))
+        -- Use a temp directory that actually exists
+        local temp_dir = os.getenv("TMPDIR") or "/tmp"
+        return select(1, path:gsub("~", temp_dir .. "/claude_test"))
       end,
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
-      filereadable = function()
-        return 1
+      filereadable = function(path)
+        -- Check if file actually exists
+        local file = io.open(path, "r")
+        if file then
+          file:close()
+          return 1
+        else
+          return 0
+        end
       end,
       fnamemodify = function(fname, _)
         return fname
@@ -113,8 +122,48 @@ if not _G.vim then
       },
     },
     json = {
-      encode = function(_obj) -- Prefix unused param with underscore
-        return '{"mocked":"json"}'
+      encode = function(obj)
+        -- Simple JSON encoding for testing
+        if type(obj) == "table" then
+          local pairs_array = {}
+          for k, v in pairs(obj) do
+            local key_str = '"' .. tostring(k) .. '"'
+            local val_str
+            if type(v) == "string" then
+              val_str = '"' .. v .. '"'
+            elseif type(v) == "number" then
+              val_str = tostring(v)
+            elseif type(v) == "table" then
+              -- Simple array encoding
+              local items = {}
+              for _, item in ipairs(v) do
+                table.insert(items, '"' .. tostring(item) .. '"')
+              end
+              val_str = "[" .. table.concat(items, ",") .. "]"
+            else
+              val_str = '"' .. tostring(v) .. '"'
+            end
+            table.insert(pairs_array, key_str .. ":" .. val_str)
+          end
+          return "{" .. table.concat(pairs_array, ",") .. "}"
+        else
+          return '"' .. tostring(obj) .. '"'
+        end
+      end,
+      decode = function(json_str)
+        -- Very basic JSON parsing for test purposes
+        if json_str:match("^%s*{.*}%s*$") then
+          local result = {}
+          -- Extract key-value pairs - this is very basic
+          for key, value in json_str:gmatch('"([^"]+)"%s*:%s*"([^"]*)"') do
+            result[key] = value
+          end
+          for key, value in json_str:gmatch('"([^"]+)"%s*:%s*(%d+)') do
+            result[key] = tonumber(value)
+          end
+          return result
+        end
+        return {}
       end,
     },
     lsp = {}, -- Existing lsp mock part
@@ -198,12 +247,22 @@ describe("Lockfile Module", function()
       return "/mock/cwd"
     end
 
+    -- Create test directory
+    local temp_dir = os.getenv("TMPDIR") or "/tmp"
+    local test_dir = temp_dir .. "/claude_test/.claude/ide"
+    os.execute("mkdir -p '" .. test_dir .. "'")
+
     -- Load the lockfile module for all tests
     package.loaded["claudecode.lockfile"] = nil -- Clear any previous requires
     lockfile = require("claudecode.lockfile")
   end)
 
   teardown(function()
+    -- Clean up test files
+    local temp_dir = os.getenv("TMPDIR") or "/tmp"
+    local test_dir = temp_dir .. "/claude_test"
+    os.execute("rm -rf '" .. test_dir .. "'")
+
     -- Restore original vim
     if real_vim then
       _G.vim = real_vim
@@ -277,6 +336,65 @@ describe("Lockfile Module", function()
 
       -- Verify results
       assert(2 == #folders) -- cwd + 1 unique workspace folder
+    end)
+  end)
+
+  describe("authentication token functionality", function()
+    it("should generate auth tokens", function()
+      local token1 = lockfile.generate_auth_token()
+      local token2 = lockfile.generate_auth_token()
+
+      -- Tokens should be strings
+      assert("string" == type(token1))
+      assert("string" == type(token2))
+
+      -- Tokens should be different
+      assert(token1 ~= token2)
+
+      -- Tokens should match UUID format (xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx)
+      assert(token1:match("^%x+%-%x+%-4%x+%-[89ab]%x+%-%x+$"))
+      assert(token2:match("^%x+%-%x+%-4%x+%-[89ab]%x+%-%x+$"))
+    end)
+
+    it("should create lock files with auth tokens", function()
+      local port = 12345
+      local success, lock_path, auth_token = lockfile.create(port)
+
+      assert(success == true)
+      assert("string" == type(lock_path))
+      assert("string" == type(auth_token))
+
+      -- Should be able to read the auth token back
+      local read_success, read_token, read_error = lockfile.get_auth_token(port)
+      assert(read_success == true)
+      assert(auth_token == read_token)
+      assert(read_error == nil)
+    end)
+
+    it("should create lock files with pre-generated auth tokens", function()
+      local port = 12346
+      local preset_token = "test-auth-token-12345"
+      local success, lock_path, returned_token = lockfile.create(port, preset_token)
+
+      assert(success == true)
+      assert("string" == type(lock_path))
+      assert(preset_token == returned_token)
+
+      -- Should be able to read the preset token back
+      local read_success, read_token, read_error = lockfile.get_auth_token(port)
+      assert(read_success == true)
+      assert(preset_token == read_token)
+      assert(read_error == nil)
+    end)
+
+    it("should handle missing lock files when reading auth tokens", function()
+      local nonexistent_port = 99999
+      local success, token, error = lockfile.get_auth_token(nonexistent_port)
+
+      assert(success == false)
+      assert(token == nil)
+      assert("string" == type(error))
+      assert(error:find("Lock file does not exist"))
     end)
   end)
 end)

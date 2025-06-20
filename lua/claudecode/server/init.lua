@@ -11,12 +11,14 @@ local M = {}
 ---@class ServerState
 ---@field server table|nil The TCP server instance
 ---@field port number|nil The port server is running on
+---@field auth_token string|nil The authentication token for validating connections
 ---@field clients table A list of connected clients
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
 M.state = {
   server = nil,
   port = nil,
+  auth_token = nil,
   clients = {},
   handlers = {},
   ping_timer = nil,
@@ -24,11 +26,22 @@ M.state = {
 
 ---@brief Initialize the WebSocket server
 ---@param config table Configuration options
+---@param auth_token string|nil The authentication token for validating connections
 ---@return boolean success Whether server started successfully
 ---@return number|string port_or_error Port number or error message
-function M.start(config)
+function M.start(config, auth_token)
   if M.state.server then
     return false, "Server already running"
+  end
+
+  M.state.auth_token = auth_token
+
+  -- Log authentication state
+  if auth_token then
+    logger.debug("server", "Starting WebSocket server with authentication enabled")
+    logger.debug("server", "Auth token length:", #auth_token)
+  else
+    logger.debug("server", "Starting WebSocket server WITHOUT authentication (insecure)")
   end
 
   M.register_handlers()
@@ -41,7 +54,13 @@ function M.start(config)
     end,
     on_connect = function(client)
       M.state.clients[client.id] = client
-      logger.debug("server", "WebSocket client connected:", client.id)
+
+      -- Log connection with auth status
+      if M.state.auth_token then
+        logger.debug("server", "Authenticated WebSocket client connected:", client.id)
+      else
+        logger.debug("server", "WebSocket client connected (no auth):", client.id)
+      end
 
       -- Notify main module about new connection for queue processing
       local main_module = require("claudecode")
@@ -68,7 +87,7 @@ function M.start(config)
     end,
   }
 
-  local server, error_msg = tcp_server.create_server(config, callbacks)
+  local server, error_msg = tcp_server.create_server(config, callbacks, M.state.auth_token)
   if not server then
     return false, error_msg or "Unknown server creation error"
   end
@@ -104,6 +123,7 @@ function M.stop()
 
   M.state.server = nil
   M.state.port = nil
+  M.state.auth_token = nil
   M.state.clients = {}
 
   return true

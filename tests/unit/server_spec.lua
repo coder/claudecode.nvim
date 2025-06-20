@@ -170,6 +170,142 @@ describe("WebSocket Server", function()
     server.stop()
   end)
 
+  describe("authentication integration", function()
+    it("should start server with authentication token", function()
+      local config = {
+        port_range = {
+          min = 10000,
+          max = 65535,
+        },
+      }
+      local auth_token = "550e8400-e29b-41d4-a716-446655440000"
+
+      local success, port = server.start(config, auth_token)
+
+      expect(success).to_be_true()
+      expect(server.state.auth_token).to_be(auth_token)
+      expect(server.state.server).to_be_table()
+      expect(server.state.port).to_be(port)
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should clear auth token when server stops", function()
+      local config = {
+        port_range = {
+          min = 10000,
+          max = 65535,
+        },
+      }
+      local auth_token = "550e8400-e29b-41d4-a716-446655440000"
+
+      -- Start server with auth token
+      server.start(config, auth_token)
+      expect(server.state.auth_token).to_be(auth_token)
+
+      -- Stop server
+      server.stop()
+      expect(server.state.auth_token).to_be_nil()
+    end)
+
+    it("should start server without authentication token", function()
+      local config = {
+        port_range = {
+          min = 10000,
+          max = 65535,
+        },
+      }
+
+      local success, port = server.start(config, nil)
+
+      expect(success).to_be_true()
+      expect(server.state.auth_token).to_be_nil()
+      expect(server.state.server).to_be_table()
+      expect(server.state.port).to_be(port)
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should pass auth token to TCP server creation", function()
+      local config = {
+        port_range = {
+          min = 10000,
+          max = 65535,
+        },
+      }
+      local auth_token = "550e8400-e29b-41d4-a716-446655440000"
+
+      -- Mock the TCP server module to verify auth token is passed
+      local tcp_server = require("claudecode.server.tcp")
+      local original_create_server = tcp_server.create_server
+      local captured_auth_token = nil
+
+      tcp_server.create_server = function(cfg, callbacks, auth_token_arg)
+        captured_auth_token = auth_token_arg
+        return original_create_server(cfg, callbacks, auth_token_arg)
+      end
+
+      local success, _ = server.start(config, auth_token)
+
+      -- Restore original function
+      tcp_server.create_server = original_create_server
+
+      expect(success).to_be_true()
+      expect(captured_auth_token).to_be(auth_token)
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should maintain auth token in server state throughout lifecycle", function()
+      local config = {
+        port_range = {
+          min = 10000,
+          max = 65535,
+        },
+      }
+      local auth_token = "550e8400-e29b-41d4-a716-446655440000"
+
+      -- Start server
+      server.start(config, auth_token)
+      expect(server.state.auth_token).to_be(auth_token)
+
+      -- Get status should show running state
+      local status = server.get_status()
+      expect(status.running).to_be_true()
+      expect(server.state.auth_token).to_be(auth_token)
+
+      -- Send message should work with auth token in place
+      local client = { id = "test_client" }
+      local success = server.send(client, "test_method", { test = "data" })
+      expect(success).to_be_true()
+      expect(server.state.auth_token).to_be(auth_token)
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should reject starting server if auth token is explicitly false", function()
+      local config = {
+        port_range = {
+          min = 10000,
+          max = 65535,
+        },
+      }
+
+      -- Use an empty string as invalid auth token
+      local success, _ = server.start(config, "")
+
+      expect(success).to_be_true() -- Server should still start, just with empty token
+      expect(server.state.auth_token).to_be("")
+
+      -- Clean up
+      server.stop()
+    end)
+  end)
+
   -- Clean up after all tests
   teardown()
 end)

@@ -23,7 +23,8 @@ The IDE writes a discovery file to `~/.claude/ide/[port].lock`:
   "pid": 12345, // IDE process ID
   "workspaceFolders": ["/path/to/project"], // Open folders
   "ideName": "VS Code", // or "Neovim", "IntelliJ", etc.
-  "transport": "ws" // WebSocket transport
+  "transport": "ws", // WebSocket transport
+  "authToken": "550e8400-e29b-41d4-a716-446655440000" // Random UUID for authentication
 }
 ```
 
@@ -37,6 +38,16 @@ When launching Claude, the IDE sets:
 ### 4. Claude Connects
 
 Claude reads the lock files, finds the matching port from the environment, and connects to the WebSocket server.
+
+## Authentication
+
+When Claude connects to the IDE's WebSocket server, it must authenticate using the token from the lock file. The authentication happens via a custom WebSocket header:
+
+```
+x-claude-code-ide-authorization: 550e8400-e29b-41d4-a716-446655440000
+```
+
+The IDE validates this header against the `authToken` value from the lock file. If the token doesn't match, the connection is rejected.
 
 ## The Protocol
 
@@ -503,11 +514,13 @@ local server = create_websocket_server("127.0.0.1", random_port)
 
 ```lua
 -- ~/.claude/ide/[port].lock
+local auth_token = generate_uuid() -- Generate random UUID
 local lock_data = {
   pid = vim.fn.getpid(),
   workspaceFolders = { vim.fn.getcwd() },
   ideName = "YourEditor",
-  transport = "ws"
+  transport = "ws",
+  authToken = auth_token
 }
 write_json(lock_path, lock_data)
 ```
@@ -523,6 +536,12 @@ claude  # Claude will now connect!
 ### 4. Handle Messages
 
 ```lua
+-- Validate authentication on WebSocket handshake
+function validate_auth(headers)
+  local auth_header = headers["x-claude-code-ide-authorization"]
+  return auth_header == auth_token
+end
+
 -- Send selection updates
 send_message({
   jsonrpc = "2.0",
