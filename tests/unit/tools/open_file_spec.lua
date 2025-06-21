@@ -29,6 +29,12 @@ describe("Tool: open_file", function()
       table.insert(_G.vim.cmd_history, command)
     end)
 
+    -- Mock vim.json.encode
+    _G.vim.json = _G.vim.json or {}
+    _G.vim.json.encode = spy.new(function(data, opts)
+      return require("tests.busted_setup").json_encode(data)
+    end)
+
     -- Mock window-related APIs
     _G.vim.api.nvim_list_wins = spy.new(function()
       return { 1000 } -- Return a single window
@@ -50,6 +56,30 @@ describe("Tool: open_file", function()
     end)
     _G.vim.api.nvim_get_current_win = spy.new(function()
       return 1000
+    end)
+    _G.vim.api.nvim_get_current_buf = spy.new(function()
+      return 1 -- Mock current buffer ID
+    end)
+    _G.vim.api.nvim_buf_get_name = spy.new(function(buf)
+      return "test.txt" -- Mock buffer name
+    end)
+    _G.vim.api.nvim_buf_line_count = spy.new(function(buf)
+      return 10 -- Mock line count
+    end)
+    _G.vim.api.nvim_buf_set_mark = spy.new(function(buf, name, line, col, opts)
+      -- Mock mark setting
+    end)
+    _G.vim.api.nvim_buf_get_lines = spy.new(function(buf, start, end_line, strict)
+      -- Mock buffer lines for search
+      return {
+        "local function test()",
+        "  print('hello')",
+        "  return true",
+        "end",
+      }
+    end)
+    _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
+      -- Mock cursor setting
     end)
   end)
 
@@ -89,7 +119,10 @@ describe("Tool: open_file", function()
 
     expect(success).to_be_true()
     expect(result).to_be_table()
-    expect(result.message).to_be("File opened: readable_file.txt")
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+    expect(result.content[1].text).to_be("Opened file: readable_file.txt")
 
     assert.spy(_G.vim.fn.expand).was_called_with("readable_file.txt")
     assert.spy(_G.vim.fn.filereadable).was_called_with("readable_file.txt")
@@ -110,17 +143,90 @@ describe("Tool: open_file", function()
     local success, result = pcall(open_file_handler, params)
 
     expect(success).to_be_true()
-    expect(result.message).to_be("File opened: /Users/testuser/.config/nvim/init.lua")
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+    expect(result.content[1].text).to_be("Opened file: /Users/testuser/.config/nvim/init.lua")
     assert.spy(_G.vim.fn.expand).was_called_with("~/.config/nvim/init.lua")
     assert.spy(_G.vim.fn.filereadable).was_called_with("/Users/testuser/.config/nvim/init.lua")
     assert.spy(_G.vim.fn.fnameescape).was_called_with("/Users/testuser/.config/nvim/init.lua")
     expect(_G.vim.cmd_history[1]).to_be("edit /Users/testuser/.config/nvim/init.lua")
   end)
 
-  -- TODO: Add tests for selection by line numbers (params.startLine, params.endLine)
-  -- This will require mocking vim.api.nvim_win_set_cursor or similar for selection
-  -- and potentially vim.api.nvim_buf_get_lines if text content matters for selection.
+  it("should handle makeFrontmost=false to return detailed JSON", function()
+    local params = { filePath = "test.txt", makeFrontmost = false }
+    local success, result = pcall(open_file_handler, params)
 
-  -- TODO: Add tests for selection by text patterns (params.startText, params.endText)
-  -- This will require more complex mocking of buffer content and search functions.
+    expect(success).to_be_true()
+    expect(result.content).to_be_table()
+    expect(result.content[1].type).to_be("text")
+
+    -- makeFrontmost=false should return JSON-encoded detailed info
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_true()
+    expect(parsed_result.filePath).to_be("test.txt")
+  end)
+
+  it("should handle preview mode parameter", function()
+    local params = { filePath = "test.txt", preview = true }
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    expect(result.content[1].text).to_be("Opened file: test.txt")
+    -- Preview mode affects window behavior but basic functionality should work
+  end)
+
+  it("should handle line selection parameters", function()
+    -- Mock additional functions needed for line selection
+    _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
+      -- Mock cursor setting
+    end)
+    _G.vim.fn.setpos = spy.new(function(mark, pos)
+      -- Mock position setting
+    end)
+
+    local params = { filePath = "test.txt", startLine = 5, endLine = 10 }
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    expect(result.content).to_be_table()
+    expect(result.content[1].type).to_be("text")
+    expect(result.content[1].text).to_be("Opened file and selected lines 5 to 10")
+  end)
+
+  it("should handle text pattern selection when pattern found", function()
+    local params = {
+      filePath = "test.txt",
+      startText = "function",
+      endText = "end",
+      selectToEndOfLine = true,
+    }
+
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    expect(result.content).to_be_table()
+    expect(result.content[1].type).to_be("text")
+    -- Since the mock buffer contains "function" and "end", selection should work
+    expect(result.content[1].text).to_be('Opened file and selected text from "function" to "end"')
+  end)
+
+  it("should handle text pattern selection when pattern not found", function()
+    -- Mock search to return 0 (not found)
+    _G.vim.fn.search = spy.new(function(pattern)
+      return 0 -- Pattern not found
+    end)
+
+    local params = {
+      filePath = "test.txt",
+      startText = "nonexistent",
+    }
+
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    expect(result.content).to_be_table()
+    expect(result.content[1].type).to_be("text")
+    assert_contains(result.content[1].text, "not found")
+  end)
 end)

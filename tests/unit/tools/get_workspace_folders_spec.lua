@@ -9,6 +9,12 @@ describe("Tool: get_workspace_folders", function()
 
     _G.vim = _G.vim or {}
     _G.vim.fn = _G.vim.fn or {}
+    _G.vim.json = _G.vim.json or {}
+
+    -- Mock vim.json.encode
+    _G.vim.json.encode = spy.new(function(data, opts)
+      return require("tests.busted_setup").json_encode(data)
+    end)
 
     -- Default mocks
     _G.vim.fn.getcwd = spy.new(function()
@@ -30,16 +36,24 @@ describe("Tool: get_workspace_folders", function()
     package.loaded["claudecode.tools.get_workspace_folders"] = nil
     _G.vim.fn.getcwd = nil
     _G.vim.fn.fnamemodify = nil
+    _G.vim.json.encode = nil
   end)
 
   it("should return the current working directory as the only workspace folder", function()
     local success, result = pcall(get_workspace_folders_handler, {})
     expect(success).to_be_true()
     expect(result).to_be_table()
-    expect(result.workspaceFolders).to_be_table()
-    expect(#result.workspaceFolders).to_be(1)
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
 
-    local folder = result.workspaceFolders[1]
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_true()
+    expect(parsed_result.folders).to_be_table()
+    expect(#parsed_result.folders).to_be(1)
+    expect(parsed_result.rootPath).to_be("/mock/project/root")
+
+    local folder = parsed_result.folders[1]
     expect(folder.name).to_be("root")
     expect(folder.uri).to_be("file:///mock/project/root")
     expect(folder.path).to_be("/mock/project/root")
@@ -54,8 +68,11 @@ describe("Tool: get_workspace_folders", function()
     end)
     local success, result = pcall(get_workspace_folders_handler, {})
     expect(success).to_be_true()
-    expect(#result.workspaceFolders).to_be(1)
-    local folder = result.workspaceFolders[1]
+    expect(result.content).to_be_table()
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#parsed_result.folders).to_be(1)
+    local folder = parsed_result.folders[1]
     expect(folder.name).to_be("project_name")
     expect(folder.uri).to_be("file:///another/path/project_name")
     expect(folder.path).to_be("/another/path/project_name")

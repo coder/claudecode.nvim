@@ -14,8 +14,9 @@ local schema = {
 -- @param _params table The input parameters for the tool (currently unused).
 -- @return table A list of open editor information.
 local function handler(_params) -- Prefix unused params with underscore
-  local editors = {}
+  local tabs = {}
   local buffers = vim.api.nvim_list_bufs()
+  local current_buf = vim.api.nvim_get_current_buf()
 
   for _, bufnr in ipairs(buffers) do
     -- Only include loaded, listed buffers with a file path
@@ -23,19 +24,35 @@ local function handler(_params) -- Prefix unused params with underscore
       local file_path = vim.api.nvim_buf_get_name(bufnr)
 
       if file_path and file_path ~= "" then
-        table.insert(editors, {
-          filePath = file_path,
-          fileUrl = "file://" .. file_path,
+        -- Get the filename for the label
+        local label = vim.fn.fnamemodify(file_path, ":t")
+
+        -- Get language ID (filetype)
+        local language_id = vim.api.nvim_buf_get_option(bufnr, "filetype")
+        if language_id == "" then
+          language_id = "plaintext"
+        end
+
+        table.insert(tabs, {
+          uri = "file://" .. file_path,
+          isActive = bufnr == current_buf,
+          label = label,
+          languageId = language_id,
           isDirty = vim.api.nvim_buf_get_option(bufnr, "modified"),
         })
       end
     end
   end
 
-  -- The MCP spec for tools/list implies the result should be the direct data.
-  -- The 'content' and 'isError' fields were an internal convention that is
-  -- now handled by the main M.handle_invoke in tools/init.lua.
-  return { editors = editors }
+  -- Return MCP-compliant format with JSON-stringified tabs array matching VS Code format
+  return {
+    content = {
+      {
+        type = "text",
+        text = vim.json.encode({ tabs = tabs }, { indent = 2 }),
+      },
+    },
+  }
 end
 
 return {

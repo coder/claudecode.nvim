@@ -26,7 +26,7 @@ local function handler(_params) -- Prefix unused params with underscore
     -- Consider if "no selection" is an error or a valid state returning empty/specific data.
     -- For now, returning an empty object or specific structure might be better than an error.
     -- Let's assume it's valid to have no selection and return a structure indicating that.
-    return {
+    local empty_selection = {
       text = "",
       filePath = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()),
       fileUrl = "file://" .. vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()),
@@ -36,9 +36,27 @@ local function handler(_params) -- Prefix unused params with underscore
         isEmpty = true,
       },
     }
+
+    -- Return MCP-compliant format with JSON-stringified empty selection
+    return {
+      content = {
+        {
+          type = "text",
+          text = vim.json.encode(empty_selection, { indent = 2 }),
+        },
+      },
+    }
   end
 
-  return selection -- Directly return the selection data
+  -- Return MCP-compliant format with JSON-stringified selection data
+  return {
+    content = {
+      {
+        type = "text",
+        text = vim.json.encode(selection, { indent = 2 }),
+      },
+    },
+  }
 end
 
 return {

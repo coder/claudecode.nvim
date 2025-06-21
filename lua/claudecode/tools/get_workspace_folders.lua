@@ -1,5 +1,14 @@
 --- Tool implementation for getting workspace folders.
 
+local schema = {
+  description = "Get all workspace folders currently open in the IDE",
+  inputSchema = {
+    type = "object",
+    additionalProperties = false,
+    ["$schema"] = "http://json-schema.org/draft-07/schema#",
+  },
+}
+
 --- Handles the getWorkspaceFolders tool invocation.
 -- Retrieves workspace folders, currently defaulting to CWD and attempting LSP integration.
 -- @param _params table The input parameters for the tool (currently unused).
@@ -38,11 +47,23 @@ local function handler(_params) -- Prefix unused params with underscore
   --   end
   -- end
 
-  return { workspaceFolders = folders }
+  -- Return MCP-compliant format with JSON-stringified workspace data
+  return {
+    content = {
+      {
+        type = "text",
+        text = vim.json.encode({
+          success = true,
+          folders = folders,
+          rootPath = cwd,
+        }, { indent = 2 }),
+      },
+    },
+  }
 end
 
 return {
   name = "getWorkspaceFolders",
-  schema = nil, -- Internal tool
+  schema = schema,
   handler = handler,
 }

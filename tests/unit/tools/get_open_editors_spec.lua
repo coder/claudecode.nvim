@@ -10,6 +10,12 @@ describe("Tool: get_open_editors", function()
     _G.vim = _G.vim or {}
     _G.vim.api = _G.vim.api or {}
     _G.vim.fn = _G.vim.fn or {}
+    _G.vim.json = _G.vim.json or {}
+
+    -- Mock vim.json.encode
+    _G.vim.json.encode = spy.new(function(data, opts)
+      return require("tests.busted_setup").json_encode(data)
+    end)
 
     -- Default mocks
     _G.vim.api.nvim_list_bufs = spy.new(function()
@@ -27,6 +33,15 @@ describe("Tool: get_open_editors", function()
     _G.vim.api.nvim_buf_get_option = spy.new(function()
       return false
     end)
+    _G.vim.api.nvim_get_current_buf = spy.new(function()
+      return 1
+    end)
+    _G.vim.fn.fnamemodify = spy.new(function(path, modifier)
+      if modifier == ":t" then
+        return path:match("[^/]+$") or path -- Extract filename
+      end
+      return path
+    end)
   end)
 
   after_each(function()
@@ -37,14 +52,22 @@ describe("Tool: get_open_editors", function()
     _G.vim.fn.buflisted = nil
     _G.vim.api.nvim_buf_get_name = nil
     _G.vim.api.nvim_buf_get_option = nil
+    _G.vim.api.nvim_get_current_buf = nil
+    _G.vim.fn.fnamemodify = nil
+    _G.vim.json.encode = nil
   end)
 
   it("should return an empty list if no listed buffers are found", function()
     local success, result = pcall(get_open_editors_handler, {})
     expect(success).to_be_true()
     expect(result).to_be_table()
-    expect(result.editors).to_be_table()
-    expect(#result.editors).to_be(0)
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.tabs).to_be_table()
+    expect(#parsed_result.tabs).to_be(0)
   end)
 
   it("should return a list of open and listed editors", function()
@@ -149,22 +172,51 @@ describe("Tool: get_open_editors", function()
     _G.vim.api.nvim_buf_get_option = spy.new(function(bufnr, opt_name)
       if opt_name == "modified" then
         return bufnr == 2 -- file2.txt is dirty
+      elseif opt_name == "filetype" then
+        if bufnr == 1 then
+          return "lua"
+        end
+        if bufnr == 2 then
+          return "text"
+        end
       end
       return false
+    end)
+    _G.vim.api.nvim_get_current_buf = spy.new(function()
+      return 1 -- Buffer 1 is active
+    end)
+    _G.vim.fn.fnamemodify = spy.new(function(path, modifier)
+      if modifier == ":t" then
+        return path:match("[^/]+$") or path -- Extract filename
+      end
+      return path
+    end)
+    _G.vim.json.encode = spy.new(function(data, opts)
+      return require("tests.busted_setup").json_encode(data)
     end)
 
     local success, result = pcall(get_open_editors_handler, {})
     expect(success).to_be_true()
-    expect(result.editors).to_be_table()
-    expect(#result.editors).to_be(2)
+    expect(result).to_be_table()
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
 
-    expect(result.editors[1].filePath).to_be("/path/to/file1.lua")
-    expect(result.editors[1].fileUrl).to_be("file:///path/to/file1.lua")
-    expect(result.editors[1].isDirty).to_be_false()
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.tabs).to_be_table()
+    expect(#parsed_result.tabs).to_be(2)
 
-    expect(result.editors[2].filePath).to_be("/path/to/file2.txt")
-    expect(result.editors[2].fileUrl).to_be("file:///path/to/file2.txt")
-    expect(result.editors[2].isDirty).to_be_true()
+    expect(parsed_result.tabs[1].uri).to_be("file:///path/to/file1.lua")
+    expect(parsed_result.tabs[1].isActive).to_be_true()
+    expect(parsed_result.tabs[1].label).to_be("file1.lua")
+    expect(parsed_result.tabs[1].languageId).to_be("lua")
+    expect(parsed_result.tabs[1].isDirty).to_be_false()
+
+    expect(parsed_result.tabs[2].uri).to_be("file:///path/to/file2.txt")
+    expect(parsed_result.tabs[2].isActive).to_be_false()
+    expect(parsed_result.tabs[2].label).to_be("file2.txt")
+    expect(parsed_result.tabs[2].languageId).to_be("text")
+    expect(parsed_result.tabs[2].isDirty).to_be_true()
   end)
 
   it("should filter out buffers that are not loaded", function()
@@ -183,7 +235,9 @@ describe("Tool: get_open_editors", function()
 
     local success, result = pcall(get_open_editors_handler, {})
     expect(success).to_be_true()
-    expect(#result.editors).to_be(0)
+    expect(result.content).to_be_table()
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#parsed_result.tabs).to_be(0)
   end)
 
   it("should filter out buffers that are not listed", function()
@@ -202,7 +256,9 @@ describe("Tool: get_open_editors", function()
 
     local success, result = pcall(get_open_editors_handler, {})
     expect(success).to_be_true()
-    expect(#result.editors).to_be(0)
+    expect(result.content).to_be_table()
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#parsed_result.tabs).to_be(0)
   end)
 
   it("should filter out buffers with no file path", function()
@@ -221,6 +277,8 @@ describe("Tool: get_open_editors", function()
 
     local success, result = pcall(get_open_editors_handler, {})
     expect(success).to_be_true()
-    expect(#result.editors).to_be(0)
+    expect(result.content).to_be_table()
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#parsed_result.tabs).to_be(0)
   end)
 end)
