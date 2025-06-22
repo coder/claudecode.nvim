@@ -210,13 +210,20 @@ function M.focus_toggle(cmd_string, env_table, config)
     -- you're NOT in it
     else
       logger.debug("terminal", "Focus toggle: focusing terminal")
-      vim.api.nvim_set_current_win(claude_term_neovim_win_id)
-      if terminal.buf and vim.api.nvim_buf_is_valid(terminal.buf) then
-        if vim.api.nvim_buf_get_option(terminal.buf, "buftype") == "terminal" then
-          vim.api.nvim_win_call(claude_term_neovim_win_id, function()
-            vim.cmd("startinsert")
-          end)
+      -- Check if window is still valid before trying to focus it
+      if vim.api.nvim_win_is_valid(claude_term_neovim_win_id) then
+        vim.api.nvim_set_current_win(claude_term_neovim_win_id)
+        if terminal.buf and vim.api.nvim_buf_is_valid(terminal.buf) then
+          if vim.api.nvim_buf_get_option(terminal.buf, "buftype") == "terminal" then
+            vim.api.nvim_win_call(claude_term_neovim_win_id, function()
+              vim.cmd("startinsert")
+            end)
+          end
         end
+      else
+        -- Window was closed, reopen the terminal
+        logger.debug("terminal", "Focus toggle: window was closed, reopening terminal")
+        terminal:toggle()
       end
     end
   -- No terminal exists
