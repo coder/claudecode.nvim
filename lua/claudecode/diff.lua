@@ -10,13 +10,10 @@ local autocmd_group
 
 --- Restore window layout by delegating to terminal module
 -- @param target_window number|nil The remaining main editor window
-local function restore_window_layout(target_window)
+local function restore_window_layout()
   local ok, terminal = pcall(require, "claudecode.terminal")
   if ok and terminal.restore_window_layout then
-    terminal.restore_window_layout(target_window)
-  else
-    -- Fallback: just equalize windows
-    vim.cmd("wincmd =")
+    terminal.restore_window_layout()
   end
 end
 
@@ -336,7 +333,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     vim.api.nvim_set_current_win(diff_data.target_window)
     vim.cmd("diffoff")
     -- Restore proper window layout after closing diff
-    restore_window_layout(diff_data.target_window)
+    restore_window_layout()
   end
 
   -- Create MCP-compliant response
@@ -635,7 +632,7 @@ function M._cleanup_diff_state(tab_name, reason)
       vim.cmd("diffoff")
     end)
     -- Restore proper window layout after cleanup
-    restore_window_layout(diff_data.target_window)
+    restore_window_layout()
   end
 
   -- Remove from active diffs
@@ -937,7 +934,7 @@ function M.deny_current_diff()
     vim.api.nvim_set_current_win(target_window)
     vim.cmd("diffoff")
     -- Restore proper window layout after rejecting diff
-    restore_window_layout(target_window)
+    restore_window_layout()
   end
 
   M._resolve_diff_as_rejected(tab_name)

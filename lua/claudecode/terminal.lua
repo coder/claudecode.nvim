@@ -301,54 +301,25 @@ end
 --- Restore window layout after closing diff windows
 -- This ensures that Claude's terminal maintains its configured size ratio
 -- @param target_window number|nil The remaining main editor window
-function M.restore_window_layout(target_window)
-  if not target_window or not vim.api.nvim_win_is_valid(target_window) then
+function M.restore_window_layout()
+  local logger = require("claudecode.logger")
+
+  -- Get active terminal buffer number
+  local terminal_bufnr = M.get_active_terminal_bufnr()
+  if not terminal_bufnr then
     return
   end
 
-  local logger = require("claudecode.logger")
-
-  -- Find terminal window
-  local terminal_win = nil
-  local windows = vim.api.nvim_list_wins()
-
-  for _, win in ipairs(windows) do
-    if vim.api.nvim_win_is_valid(win) then
-      local buf = vim.api.nvim_win_get_buf(win)
-      local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
-      local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-
-      -- Check if this is Claude's terminal window
-      if filetype == "ClaudeCode" or buftype == "terminal" then
-        local buf_name = vim.api.nvim_buf_get_name(buf)
-        if buf_name:match("claude") or filetype == "ClaudeCode" then
-          terminal_win = win
-          break
-        end
-      end
-    end
-  end
-
-  if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-    -- Calculate proper terminal width based on configuration
-    local total_width = vim.o.columns
-    local terminal_width = math.floor(total_width * config.split_width_percentage)
-
-    -- Set terminal window width
-    vim.api.nvim_win_set_width(terminal_win, terminal_width)
-
-    -- Equalize other windows
-    vim.cmd("wincmd =")
-
-    -- Re-apply terminal width to maintain proportion
-    if vim.api.nvim_win_is_valid(terminal_win) then
+  -- Check if terminal is visible and get its window
+  if is_terminal_visible(terminal_bufnr) then
+    local bufinfo = vim.fn.getbufinfo(terminal_bufnr)
+    if bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+      local terminal_win = bufinfo[1].windows[1]
+      local total_width = vim.o.columns
+      local terminal_width = math.floor(total_width * config.split_width_percentage)
       vim.api.nvim_win_set_width(terminal_win, terminal_width)
+      logger.debug("terminal", "Restored window layout with terminal width:", terminal_width)
     end
-
-    logger.debug("terminal", "Restored window layout with terminal width:", terminal_width)
-  else
-    -- No terminal found, just equalize
-    vim.cmd("wincmd =")
   end
 end
 
