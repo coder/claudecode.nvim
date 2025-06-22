@@ -22,6 +22,7 @@ local config = {
   split_width_percentage = 0.30,
   provider = "auto",
   show_native_term_exit_tip = true,
+  preserve_on_close = false, -- When true, preserves terminal process when window is closed
   terminal_cmd = nil,
   auto_close = true,
 }
@@ -179,6 +180,7 @@ end
 -- @field user_term_config.split_width_percentage number Percentage of screen width (0.0 to 1.0, default: 0.30).
 -- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
+-- @field user_term_config.preserve_on_close boolean Preserve terminal process when window is closed (default: false).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
 function M.setup(user_term_config, p_terminal_cmd)
   if user_term_config == nil then -- Allow nil, default to empty table silently
@@ -207,6 +209,8 @@ function M.setup(user_term_config, p_terminal_cmd)
       elseif k == "provider" and (v == "snacks" or v == "native") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
+        config[k] = v
+      elseif k == "preserve_on_close" and type(v) == "boolean" then
         config[k] = v
       elseif k == "auto_close" and type(v) == "boolean" then
         config[k] = v

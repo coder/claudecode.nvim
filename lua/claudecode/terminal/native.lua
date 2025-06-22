@@ -125,7 +125,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
   winid = new_winid
   bufnr = vim.api.nvim_get_current_buf()
-  vim.bo[bufnr].bufhidden = "wipe" -- Wipe buffer when hidden (e.g., window closed)
+  -- Configure buffer behavior when window is closed
+  local bufhidden_value = config.preserve_on_close and "hide" or "wipe"
+  vim.bo[bufnr].bufhidden = bufhidden_value
   -- buftype=terminal is set by termopen
 
   if focus then
@@ -185,8 +187,10 @@ end
 local function hide_terminal()
   -- Hide the terminal window but keep the buffer and job alive
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) and winid and vim.api.nvim_win_is_valid(winid) then
-    -- Set buffer to hide instead of being wiped when window closes
-    vim.api.nvim_buf_set_option(bufnr, "bufhidden", "hide")
+    -- If preserve_on_close is false (wipe mode), temporarily set to hide to preserve process
+    if not config.preserve_on_close then
+      vim.api.nvim_buf_set_option(bufnr, "bufhidden", "hide")
+    end
 
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
