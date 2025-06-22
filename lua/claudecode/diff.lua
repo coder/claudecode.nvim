@@ -8,6 +8,79 @@ local logger = require("claudecode.logger")
 local active_diffs = {}
 local autocmd_group
 
+--- Get terminal configuration to restore proper window layout
+-- @return table Terminal config with split_width_percentage and split_side
+local function get_terminal_config()
+  local ok, terminal = pcall(require, "claudecode.terminal")
+  if ok and terminal.get_config then
+    local terminal_config = terminal.get_config()
+    return {
+      split_width_percentage = terminal_config.split_width_percentage,
+      split_side = terminal_config.split_side
+    }
+  end
+
+  -- Fallback to defaults if terminal module is not available
+  return {
+    split_width_percentage = 0.30, -- Default terminal width (30%)
+    split_side = "right"           -- Default terminal side
+  }
+end
+
+--- Restore window layout after closing diff windows
+-- This ensures that Claude's terminal maintains its configured size ratio
+-- @param target_window number|nil The remaining main editor window
+local function restore_window_layout(target_window)
+  if not target_window or not vim.api.nvim_win_is_valid(target_window) then
+    return
+  end
+
+  local term_config = get_terminal_config()
+
+  -- Find terminal window
+  local terminal_win = nil
+  local windows = vim.api.nvim_list_wins()
+
+  for _, win in ipairs(windows) do
+    if vim.api.nvim_win_is_valid(win) then
+      local buf = vim.api.nvim_win_get_buf(win)
+      local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
+      local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+
+      -- Check if this is Claude's terminal window
+      if filetype == "ClaudeCode" or buftype == "terminal" then
+        local buf_name = vim.api.nvim_buf_get_name(buf)
+        if buf_name:match("claude") or filetype == "ClaudeCode" then
+          terminal_win = win
+          break
+        end
+      end
+    end
+  end
+
+  if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+    -- Calculate proper terminal width based on configuration
+    local total_width = vim.o.columns
+    local terminal_width = math.floor(total_width * term_config.split_width_percentage)
+
+    -- Set terminal window width
+    vim.api.nvim_win_set_width(terminal_win, terminal_width)
+
+    -- Equalize other windows
+    vim.cmd("wincmd =")
+
+    -- Re-apply terminal width to maintain proportion
+    if vim.api.nvim_win_is_valid(terminal_win) then
+      vim.api.nvim_win_set_width(terminal_win, terminal_width)
+    end
+
+    logger.debug("diff", "Restored window layout with terminal width:", terminal_width)
+  else
+    -- No terminal found, just equalize
+    vim.cmd("wincmd =")
+  end
+end
+
 --- Get or create the autocmd group
 local function get_autocmd_group()
   if not autocmd_group then
@@ -316,13 +389,15 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     final_content = final_content .. "\n"
   end
 
-  -- Close diff windows (unified behavior)
+  -- Close diff windows (unified behavior) and restore layout
   if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
     vim.api.nvim_win_close(diff_data.new_window, true)
   end
   if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
     vim.api.nvim_set_current_win(diff_data.target_window)
     vim.cmd("diffoff")
+    -- Restore proper window layout after closing diff
+    restore_window_layout(diff_data.target_window)
   end
 
   -- Create MCP-compliant response
@@ -615,11 +690,13 @@ function M._cleanup_diff_state(tab_name, reason)
     pcall(vim.api.nvim_win_close, diff_data.new_window, true)
   end
 
-  -- Turn off diff mode in target window if it still exists
+  -- Turn off diff mode in target window if it still exists and restore layout
   if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
     vim.api.nvim_win_call(diff_data.target_window, function()
       vim.cmd("diffoff")
     end)
+    -- Restore proper window layout after cleanup
+    restore_window_layout(diff_data.target_window)
   end
 
   -- Remove from active diffs
@@ -913,13 +990,15 @@ function M.deny_current_diff()
     return
   end
 
-  -- Close windows and clean up (same logic as the original keymap)
+  -- Close windows and clean up with layout restoration
   if new_win and vim.api.nvim_win_is_valid(new_win) then
     vim.api.nvim_win_close(new_win, true)
   end
   if target_window and vim.api.nvim_win_is_valid(target_window) then
     vim.api.nvim_set_current_win(target_window)
     vim.cmd("diffoff")
+    -- Restore proper window layout after rejecting diff
+    restore_window_layout(target_window)
   end
 
   M._resolve_diff_as_rejected(tab_name)

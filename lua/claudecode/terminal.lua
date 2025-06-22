@@ -298,4 +298,10 @@ function M._get_managed_terminal_for_test()
   return nil
 end
 
+--- Gets the current terminal configuration
+-- @return table The current terminal configuration with split_side, split_width_percentage, etc.
+function M.get_config()
+  return vim.deepcopy(config)
+end
+
 return M
