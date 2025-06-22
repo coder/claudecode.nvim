@@ -8,75 +8,14 @@ local logger = require("claudecode.logger")
 local active_diffs = {}
 local autocmd_group
 
---- Get terminal configuration to restore proper window layout
--- @return table Terminal config with split_width_percentage and split_side
-local function get_terminal_config()
-  local ok, terminal = pcall(require, "claudecode.terminal")
-  if ok and terminal.get_config then
-    local terminal_config = terminal.get_config()
-    return {
-      split_width_percentage = terminal_config.split_width_percentage,
-      split_side = terminal_config.split_side
-    }
-  end
-
-  -- Fallback to defaults if terminal module is not available
-  return {
-    split_width_percentage = 0.30, -- Default terminal width (30%)
-    split_side = "right"           -- Default terminal side
-  }
-end
-
---- Restore window layout after closing diff windows
--- This ensures that Claude's terminal maintains its configured size ratio
+--- Restore window layout by delegating to terminal module
 -- @param target_window number|nil The remaining main editor window
 local function restore_window_layout(target_window)
-  if not target_window or not vim.api.nvim_win_is_valid(target_window) then
-    return
-  end
-
-  local term_config = get_terminal_config()
-
-  -- Find terminal window
-  local terminal_win = nil
-  local windows = vim.api.nvim_list_wins()
-
-  for _, win in ipairs(windows) do
-    if vim.api.nvim_win_is_valid(win) then
-      local buf = vim.api.nvim_win_get_buf(win)
-      local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
-      local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-
-      -- Check if this is Claude's terminal window
-      if filetype == "ClaudeCode" or buftype == "terminal" then
-        local buf_name = vim.api.nvim_buf_get_name(buf)
-        if buf_name:match("claude") or filetype == "ClaudeCode" then
-          terminal_win = win
-          break
-        end
-      end
-    end
-  end
-
-  if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-    -- Calculate proper terminal width based on configuration
-    local total_width = vim.o.columns
-    local terminal_width = math.floor(total_width * term_config.split_width_percentage)
-
-    -- Set terminal window width
-    vim.api.nvim_win_set_width(terminal_win, terminal_width)
-
-    -- Equalize other windows
-    vim.cmd("wincmd =")
-
-    -- Re-apply terminal width to maintain proportion
-    if vim.api.nvim_win_is_valid(terminal_win) then
-      vim.api.nvim_win_set_width(terminal_win, terminal_width)
-    end
-
-    logger.debug("diff", "Restored window layout with terminal width:", terminal_width)
+  local ok, terminal = pcall(require, "claudecode.terminal")
+  if ok and terminal.restore_window_layout then
+    terminal.restore_window_layout(target_window)
   else
-    -- No terminal found, just equalize
+    -- Fallback: just equalize windows
     vim.cmd("wincmd =")
   end
 end
