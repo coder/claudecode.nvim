@@ -156,6 +156,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
       provider = "auto", -- "auto", "snacks", or "native"
+      preserve_on_close = false, -- Preserve terminal process when window is closed (native provider only)
       auto_close = true,
     },
 
