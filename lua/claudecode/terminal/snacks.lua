@@ -29,7 +29,9 @@ local function setup_terminal_events(term_instance, config)
       -- Clean up
       terminal = nil
       vim.schedule(function()
-        term_instance:close({ buf = true })
+        if config.close_on_exit then
+          term_instance:close({ buf = true })
+        end
         vim.cmd.checktime()
       end)
     end, { buf = true })
