@@ -24,6 +24,7 @@ local config = {
   show_native_term_exit_tip = true,
   terminal_cmd = nil,
   auto_close = true,
+  close_on_exit = true, -- When true, closes terminal window when process exits
 }
 
 -- Lazy load providers
@@ -102,6 +103,7 @@ local function build_config(opts_override)
     split_side = effective_config.split_side,
     split_width_percentage = effective_config.split_width_percentage,
     auto_close = effective_config.auto_close,
+    close_on_exit = effective_config.close_on_exit,
   }
 end
 
@@ -209,6 +211,8 @@ function M.setup(user_term_config, p_terminal_cmd)
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
       elseif k == "auto_close" and type(v) == "boolean" then
+        config[k] = v
+      elseif k == "close_on_exit" and type(v) == "boolean" then
         config[k] = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for " .. k .. ": " .. tostring(v), vim.log.levels.WARN)
