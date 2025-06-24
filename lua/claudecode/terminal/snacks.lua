@@ -54,12 +54,12 @@ local function build_opts(config, env_table, focus)
     start_insert = focus,
     auto_insert = focus,
     auto_close = false,
-    win = {
+    win = vim.tbl_deep_extend("force", {
       position = config.split_side,
       width = config.split_width_percentage,
       height = 0,
       relative = "editor",
-    },
+    }, config.snacks_win_opts or {}),
   }
 end
 
