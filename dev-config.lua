@@ -70,6 +70,7 @@ return {
     --   provider = "auto",                        -- "auto", "snacks", or "native"
     --   show_native_term_exit_tip = true,         -- Show exit tip for native terminal
     --   auto_close = true,                        -- Auto-close terminal after command completion
+    --   snacks_win_opts = {},                     -- Opts to pass to `Snacks.terminal.open()`
     -- },
 
     -- Development overrides (uncomment as needed)

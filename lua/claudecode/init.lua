@@ -87,7 +87,8 @@ M.state = {
 ---  split_side?: "left"|"right", \
 ---  split_width_percentage?: number, \
 ---  provider?: "auto"|"snacks"|"native", \
----  show_native_term_exit_tip?: boolean }
+---  show_native_term_exit_tip?: boolean, \
+---  snacks_win_opts?: table }
 ---
 ---@alias ClaudeCode.SetupOpts { \
 ---  terminal?: ClaudeCode.TerminalOpts }
