@@ -900,16 +900,16 @@ function M._create_commands()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      local model_args = opts.args and opts.args ~= "" and opts.args or nil
-      terminal.focus_toggle({}, model_args)
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.focus_toggle({}, cmd_args)
     end, {
       nargs = "*",
       desc = "Smart focus/toggle Claude Code terminal (switches to terminal if not focused, hides if focused)",
     })
 
     vim.api.nvim_create_user_command("ClaudeCodeOpen", function(opts)
-      local model_args = opts.args and opts.args ~= "" and opts.args or nil
-      terminal.open({}, model_args)
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.open({}, cmd_args)
     end, {
       nargs = "*",
       desc = "Open the Claude Code terminal window with optional arguments",
@@ -950,12 +950,7 @@ function M._create_commands()
 end
 
 M.open_with_model = function()
-  local models = {
-    { name = "Claude Opus 4 (Latest)", value = "claude-opus-4-20250514" },
-    { name = "Claude Sonnet 4 (Latest)", value = "claude-sonnet-4-20250514" },
-    { name = "Claude 3.7 Sonnet (Latest)", value = "claude-3-7-sonnet-latest" },
-    { name = "Claude 3.5 Haiku (Latest)", value = "claude-3-5-haiku-latest" },
-  }
+  local models = M.state.config.models
 
   vim.ui.select(models, {
     prompt = "Select Claude model:",

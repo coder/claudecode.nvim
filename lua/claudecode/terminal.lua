@@ -118,10 +118,10 @@ local function is_terminal_visible(bufnr)
 end
 
 --- Gets the claude command string and necessary environment variables
---- @param model string|nil Optional model to use (e.g., "--model claude-opus-4-20250514")
+--- @param cmd_args string|nil Optional arguments to append to the command
 --- @return string cmd_string The command string
 --- @return table env_table The environment variables table
-local function get_claude_command_and_env(model)
+local function get_claude_command_and_env(cmd_args)
   -- Inline get_claude_command logic
   local cmd_from_config = config.terminal_cmd
   local base_cmd
@@ -132,8 +132,8 @@ local function get_claude_command_and_env(model)
   end
 
   local cmd_string
-  if model and model ~= "" then
-    cmd_string = base_cmd .. " " .. model
+  if cmd_args and cmd_args ~= "" then
+    cmd_string = base_cmd .. " " .. cmd_args
   else
     cmd_string = base_cmd
   end
@@ -153,9 +153,9 @@ end
 
 --- Common helper to open terminal without focus if not already visible
 --- @param opts_override table|nil Optional config overrides
---- @param model string|nil Optional model arguments
+--- @param cmd_args string|nil Optional command arguments
 --- @return boolean True if terminal was opened or already visible
-local function ensure_terminal_visible_no_focus(opts_override, model)
+local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
   local provider = get_provider()
   local active_bufnr = provider.get_active_bufnr()
 
@@ -166,7 +166,7 @@ local function ensure_terminal_visible_no_focus(opts_override, model)
 
   -- Terminal is not visible, open it without focus
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(model)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   provider.open(cmd_string, claude_env_table, effective_config, false) -- false = don't focus
   return true
@@ -177,7 +177,7 @@ end
 -- @param user_term_config table (optional) Configuration options for the terminal.
 -- @field user_term_config.split_side string 'left' or 'right' (default: 'right').
 -- @field user_term_config.split_width_percentage number Percentage of screen width (0.0 to 1.0, default: 0.30).
--- @field user_term_config.provider string 'auto', 'snacks' or 'native' (default: 'auto').
+-- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
 function M.setup(user_term_config, p_terminal_cmd)
@@ -204,7 +204,7 @@ function M.setup(user_term_config, p_terminal_cmd)
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "auto" or v == "snacks" or v == "native") then
+      elseif k == "provider" and (v == "snacks" or v == "native") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
@@ -224,10 +224,10 @@ end
 
 --- Opens or focuses the Claude terminal.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
--- @param model string|nil (optional) Model arguments to append to the claude command.
-function M.open(opts_override, model)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.open(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(model)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   get_provider().open(cmd_string, claude_env_table, effective_config)
 end
@@ -239,44 +239,44 @@ end
 
 --- Simple toggle: always show/hide the Claude terminal regardless of focus.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
--- @param model string|nil (optional) Model arguments to append to the claude command.
-function M.simple_toggle(opts_override, model)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.simple_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(model)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   get_provider().simple_toggle(cmd_string, claude_env_table, effective_config)
 end
 
 --- Smart focus toggle: switches to terminal if not focused, hides if currently focused.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
--- @param model string|nil (optional) Model arguments to append to the claude command.
-function M.focus_toggle(opts_override, model)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.focus_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(model)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   get_provider().focus_toggle(cmd_string, claude_env_table, effective_config)
 end
 
 --- Toggle open terminal without focus if not already visible, otherwise do nothing.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
--- @param model string|nil (optional) Model arguments to append to the claude command.
-function M.toggle_open_no_focus(opts_override, model)
-  ensure_terminal_visible_no_focus(opts_override, model)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.toggle_open_no_focus(opts_override, cmd_args)
+  ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
 --- Ensures terminal is visible without changing focus. Creates if necessary, shows if hidden.
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
--- @param model string|nil (optional) Model arguments to append to the claude command.
-function M.ensure_visible(opts_override, model)
-  ensure_terminal_visible_no_focus(opts_override, model)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.ensure_visible(opts_override, cmd_args)
+  ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
 --- Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).
 -- @param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
--- @param model string|nil (optional) Model arguments to append to the claude command.
-function M.toggle(opts_override, model)
+-- @param cmd_args string|nil (optional) Arguments to append to the claude command.
+function M.toggle(opts_override, cmd_args)
   -- Default to simple toggle for backward compatibility
-  M.simple_toggle(opts_override, model)
+  M.simple_toggle(opts_override, cmd_args)
 end
 
 --- Gets the buffer number of the currently active Claude Code terminal.
