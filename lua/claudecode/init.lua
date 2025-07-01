@@ -889,8 +889,7 @@ function M._create_commands()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
-      terminal.simple_toggle({}, cmd_args)
+      terminal.toggle({}, nil) -- `opts.fargs` can be used for future enhancements.
     end, {
       nargs = "*",
       desc = "Toggle the Claude Code terminal window (simple show/hide) with optional arguments",
@@ -942,6 +941,35 @@ function M._create_commands()
   end, {
     desc = "Deny/reject the current diff changes",
   })
+
+  vim.api.nvim_create_user_command("ClaudeSelectModel", function()
+    M.open_with_model()
+  end, {
+    desc = "Select and open Claude terminal with chosen model",
+  })
+end
+
+M.open_with_model = function()
+  local models = M.state.config.models
+
+  vim.ui.select(models, {
+    prompt = "Select Claude model:",
+    format_item = function(item)
+      return item.name
+    end,
+  }, function(choice)
+    if not choice then
+      return -- User cancelled
+    end
+
+    local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+    if not terminal_ok then
+      vim.notify("Terminal module not available", vim.log.levels.ERROR)
+      return
+    end
+
+    terminal.toggle({}, "--model " .. choice.value)
+  end)
 end
 
 --- Get version information
