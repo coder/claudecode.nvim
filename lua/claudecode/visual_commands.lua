@@ -392,10 +392,9 @@ function M.get_files_from_visual_selection(visual_data)
       end
     end
   elseif tree_type == "snacks-explorer" then
-    -- For snacks.explorer, we need to handle visual selection differently
-    -- since it's a picker and doesn't have a traditional tree structure
+    -- For snacks.explorer, pass the visual range to handle multi-selection
     local integrations = require("claudecode.integrations")
-    local selected_files, error = integrations._get_snacks_explorer_selection()
+    local selected_files, error = integrations._get_snacks_explorer_selection(start_pos, end_pos)
 
     if not error and selected_files and #selected_files > 0 then
       for _, file in ipairs(selected_files) do

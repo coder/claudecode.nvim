@@ -265,9 +265,11 @@ end
 
 --- Get selected files from snacks.explorer
 --- Uses the picker API to get the current selection
+--- @param visual_start number|nil Start line of visual selection (optional)
+--- @param visual_end number|nil End line of visual selection (optional)
 --- @return table files List of file paths
 --- @return string|nil error Error message if operation failed
-function M._get_snacks_explorer_selection()
+function M._get_snacks_explorer_selection(visual_start, visual_end)
   local snacks_ok, snacks = pcall(require, "snacks")
   if not snacks_ok or not snacks.picker then
     return {}, "snacks.nvim not available"
@@ -287,14 +289,61 @@ function M._get_snacks_explorer_selection()
 
   local files = {}
 
-  -- Check if there are selected items
+  -- Helper function to extract file path from various item structures
+  local function extract_file_path(item)
+    if not item then
+      return nil
+    end
+    local file_path = item.file or item.path or (item.item and item.item.file) or (item.item and item.item.path)
+
+    -- Add trailing slash for directories
+    if file_path and file_path ~= "" and vim.fn.isdirectory(file_path) == 1 then
+      if not file_path:match("/$") then
+        file_path = file_path .. "/"
+      end
+    end
+
+    return file_path
+  end
+
+  -- Helper function to check if path is safe (not root-level)
+  local function is_safe_path(file_path)
+    if not file_path or file_path == "" then
+      return false
+    end
+    -- Not root-level file & this prevents selecting files like /etc/passwd, /usr/bin/vim, etc.
+    return not string.match(file_path, "^/[^/]*$")
+  end
+
+  -- Handle visual mode selection if range is provided
+  if visual_start and visual_end and explorer.list then
+    -- Process each line in the visual selection
+    for row = visual_start, visual_end do
+      -- Convert row to picker index
+      local idx = explorer.list:row2idx(row)
+      if idx then
+        -- Get the item at this index
+        local item = explorer.list:get(idx)
+        if item then
+          local file_path = extract_file_path(item)
+          if file_path and file_path ~= "" and is_safe_path(file_path) then
+            table.insert(files, file_path)
+          end
+        end
+      end
+    end
+    if #files > 0 then
+      return files, nil
+    end
+  end
+
+  -- Check if there are selected items (using toggle selection)
   local selected = explorer:selected({ fallback = false })
   if selected and #selected > 0 then
     -- Process selected items
     for _, item in ipairs(selected) do
-      -- Try different possible fields for file path
-      local file_path = item.file or item.path or (item.item and item.item.file) or (item.item and item.item.path)
-      if file_path and file_path ~= "" then
+      local file_path = extract_file_path(item)
+      if file_path and file_path ~= "" and is_safe_path(file_path) then
         table.insert(files, file_path)
       end
     end
@@ -306,13 +355,13 @@ function M._get_snacks_explorer_selection()
   -- Fall back to current item under cursor
   local current = explorer:current({ resolve = true })
   if current then
-    -- Try different possible fields for file path
-    local file_path = current.file
-      or current.path
-      or (current.item and current.item.file)
-      or (current.item and current.item.path)
+    local file_path = extract_file_path(current)
     if file_path and file_path ~= "" then
-      return { file_path }, nil
+      if is_safe_path(file_path) then
+        return { file_path }, nil
+      else
+        return {}, "Cannot add root-level file. Please select a file in a subdirectory."
+      end
     end
   end
 

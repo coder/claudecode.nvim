@@ -186,6 +186,162 @@ describe("snacks.explorer integration", function()
 
       package.loaded["snacks"] = nil
     end)
+
+    it("should handle visual mode selection with range parameters", function()
+      -- Mock snacks module with explorer picker that has list
+      local mock_list = {
+        row2idx = function(self, row)
+          return row -- Simple 1:1 mapping for test
+        end,
+        get = function(self, idx)
+          local items = {
+            [1] = { file = "/path/to/file1.lua" },
+            [2] = { file = "/path/to/file2.lua" },
+            [3] = { file = "/path/to/file3.lua" },
+            [4] = { file = "/path/to/file4.lua" },
+            [5] = { file = "/path/to/file5.lua" },
+          }
+          return items[idx]
+        end,
+      }
+
+      local mock_explorer = {
+        list = mock_list,
+        selected = function(self, opts)
+          return {} -- No marked selection
+        end,
+        current = function(self, opts)
+          return { file = "/path/to/current.lua" }
+        end,
+      }
+
+      local mock_snacks = {
+        picker = {
+          get = function(opts)
+            if opts.source == "explorer" then
+              return { mock_explorer }
+            end
+            return {}
+          end,
+        },
+      }
+
+      package.loaded["snacks"] = mock_snacks
+
+      -- Test visual selection from lines 2 to 4
+      local files, err = integrations._get_snacks_explorer_selection(2, 4)
+      assert.is_nil(err)
+      assert.are.same({
+        "/path/to/file2.lua",
+        "/path/to/file3.lua",
+        "/path/to/file4.lua",
+      }, files)
+
+      package.loaded["snacks"] = nil
+    end)
+
+    it("should handle visual mode with missing items and empty paths", function()
+      -- Mock snacks module with some problematic items
+      local mock_list = {
+        row2idx = function(self, row)
+          -- Some rows don't have corresponding indices
+          if row == 3 then
+            return nil
+          end
+          return row
+        end,
+        get = function(self, idx)
+          local items = {
+            [1] = { file = "" }, -- Empty path
+            [2] = { file = "/valid/file.lua" },
+            [4] = { path = "/path/based/file.lua" }, -- Using path field
+            [5] = nil, -- nil item
+          }
+          return items[idx]
+        end,
+      }
+
+      local mock_explorer = {
+        list = mock_list,
+        selected = function(self, opts)
+          return {}
+        end,
+        current = function(self, opts)
+          return { file = "/current.lua" }
+        end,
+      }
+
+      local mock_snacks = {
+        picker = {
+          get = function(opts)
+            if opts.source == "explorer" then
+              return { mock_explorer }
+            end
+            return {}
+          end,
+        },
+      }
+
+      package.loaded["snacks"] = mock_snacks
+
+      -- Test visual selection from lines 1 to 5
+      local files, err = integrations._get_snacks_explorer_selection(1, 5)
+      assert.is_nil(err)
+      -- Should only get the valid files
+      assert.are.same({
+        "/valid/file.lua",
+        "/path/based/file.lua",
+      }, files)
+
+      package.loaded["snacks"] = nil
+    end)
+
+    it("should add trailing slashes to directories", function()
+      -- Mock vim.fn.isdirectory to return true for directory paths
+      local original_isdirectory = vim.fn.isdirectory
+      vim.fn.isdirectory = function(path)
+        return path:match("/directory") and 1 or 0
+      end
+
+      -- Mock snacks module with directory items
+      local mock_explorer = {
+        selected = function(self, opts)
+          return {
+            { file = "/path/to/file.lua" }, -- file
+            { file = "/path/to/directory" }, -- directory (no trailing slash)
+            { file = "/path/to/another_directory/" }, -- directory (already has slash)
+          }
+        end,
+        current = function(self, opts)
+          return { file = "/current/directory" } -- directory
+        end,
+      }
+
+      local mock_snacks = {
+        picker = {
+          get = function(opts)
+            if opts.source == "explorer" then
+              return { mock_explorer }
+            end
+            return {}
+          end,
+        },
+      }
+
+      package.loaded["snacks"] = mock_snacks
+
+      local files, err = integrations._get_snacks_explorer_selection()
+      assert.is_nil(err)
+      assert.are.same({
+        "/path/to/file.lua", -- file unchanged
+        "/path/to/directory/", -- directory with added slash
+        "/path/to/another_directory/", -- directory with existing slash unchanged
+      }, files)
+
+      -- Restore original function
+      vim.fn.isdirectory = original_isdirectory
+      package.loaded["snacks"] = nil
+    end)
   end)
 
   describe("get_selected_files_from_tree", function()
