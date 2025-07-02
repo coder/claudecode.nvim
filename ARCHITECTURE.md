@@ -184,6 +184,33 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
+### 7. File Explorer Integrations (`integrations.lua`)
+
+Unified interface for popular file explorers:
+
+```lua
+-- Supports nvim-tree, neo-tree, oil.nvim, and snacks.explorer
+function M.get_selected_files_from_tree()
+  local current_ft = vim.bo.filetype
+  
+  if current_ft == "NvimTree" then
+    return M._get_nvim_tree_selection()
+  elseif current_ft == "neo-tree" then
+    return M._get_neotree_selection()
+  elseif current_ft == "oil" then
+    return M._get_oil_selection()
+  elseif current_ft == "snacks_picker_list" then
+    return M._get_snacks_explorer_selection()
+  end
+end
+```
+
+Key features across all integrations:
+- **Visual mode support**: Select multiple files using vim visual mode
+- **Security protection**: Filters out root-level files (`/etc/passwd`, `/usr/bin/vim`)
+- **Directory handling**: Adds trailing slashes to directories for consistency
+- **Fallback behavior**: Selected items → current item → error
+
 ## Module Structure
 
 ```
@@ -197,6 +224,8 @@ lua/claudecode/
 │   ├── client.lua        # Connection management
 │   └── utils.lua         # Pure Lua SHA-1, base64
 ├── tools/init.lua        # MCP tool registry
+├── integrations.lua      # File explorer integrations
+├── visual_commands.lua   # Visual mode handling
 ├── diff.lua              # Native diff support
 ├── selection.lua         # Selection tracking
 ├── terminal.lua          # Terminal management
