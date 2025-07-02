@@ -1,6 +1,6 @@
 ---
 -- Tree integration module for ClaudeCode.nvim
--- Handles detection and selection of files from nvim-tree, neo-tree, and oil.nvim
+-- Handles detection and selection of files from nvim-tree, neo-tree, oil.nvim and snacks.explorer
 -- @module claudecode.integrations
 local M = {}
 
@@ -16,6 +16,8 @@ function M.get_selected_files_from_tree()
     return M._get_neotree_selection()
   elseif current_ft == "oil" then
     return M._get_oil_selection()
+  elseif current_ft == "snacks_picker_list" then
+    return M._get_snacks_explorer_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
@@ -255,6 +257,62 @@ function M._get_oil_selection()
         -- For unknown types, return the path anyway
         return { full_path }, nil
       end
+    end
+  end
+
+  return {}, "No file found under cursor"
+end
+
+--- Get selected files from snacks.explorer
+--- Uses the picker API to get the current selection
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_snacks_explorer_selection()
+  local snacks_ok, snacks = pcall(require, "snacks")
+  if not snacks_ok or not snacks.picker then
+    return {}, "snacks.nvim not available"
+  end
+
+  -- Get the current explorer picker
+  local explorers = snacks.picker.get({ source = "explorer" })
+  if not explorers or #explorers == 0 then
+    return {}, "No active snacks.explorer found"
+  end
+
+  -- Get the first (and likely only) explorer instance
+  local explorer = explorers[1]
+  if not explorer then
+    return {}, "No active snacks.explorer found"
+  end
+
+  local files = {}
+
+  -- Check if there are selected items
+  local selected = explorer:selected({ fallback = false })
+  if selected and #selected > 0 then
+    -- Process selected items
+    for _, item in ipairs(selected) do
+      -- Try different possible fields for file path
+      local file_path = item.file or item.path or (item.item and item.item.file) or (item.item and item.item.path)
+      if file_path and file_path ~= "" then
+        table.insert(files, file_path)
+      end
+    end
+    if #files > 0 then
+      return files, nil
+    end
+  end
+
+  -- Fall back to current item under cursor
+  local current = explorer:current({ resolve = true })
+  if current then
+    -- Try different possible fields for file path
+    local file_path = current.file
+      or current.path
+      or (current.item and current.item.file)
+      or (current.item and current.item.path)
+    if file_path and file_path ~= "" then
+      return { file_path }, nil
     end
   end
 
