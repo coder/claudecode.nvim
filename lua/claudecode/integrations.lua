@@ -312,7 +312,19 @@ function M._get_snacks_explorer_selection(visual_start, visual_end)
       return false
     end
     -- Not root-level file & this prevents selecting files like /etc/passwd, /usr/bin/vim, etc.
-    return not string.match(file_path, "^/[^/]*$")
+    -- Check for system directories and root-level files
+    if string.match(file_path, "^/[^/]*$") then
+      return false -- True root-level files like /etc, /usr, /bin
+    end
+    if
+      string.match(file_path, "^/etc/")
+      or string.match(file_path, "^/usr/")
+      or string.match(file_path, "^/bin/")
+      or string.match(file_path, "^/sbin/")
+    then
+      return false -- System directories
+    end
+    return true
   end
 
   -- Handle visual mode selection if range is provided

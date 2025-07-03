@@ -192,7 +192,7 @@ Unified interface for popular file explorers:
 -- Supports nvim-tree, neo-tree, oil.nvim, and snacks.explorer
 function M.get_selected_files_from_tree()
   local current_ft = vim.bo.filetype
-  
+
   if current_ft == "NvimTree" then
     return M._get_nvim_tree_selection()
   elseif current_ft == "neo-tree" then
@@ -206,6 +206,7 @@ end
 ```
 
 Key features across all integrations:
+
 - **Visual mode support**: Select multiple files using vim visual mode
 - **Security protection**: Filters out root-level files (`/etc/passwd`, `/usr/bin/vim`)
 - **Directory handling**: Adds trailing slashes to directories for consistency

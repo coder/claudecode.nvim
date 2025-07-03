@@ -1,13 +1,12 @@
-local helpers = require("tests.helpers.setup")
 local integrations = require("claudecode.integrations")
 
 describe("snacks.explorer integration", function()
   before_each(function()
-    helpers.setup()
+    require("tests.helpers.setup")()
   end)
 
   after_each(function()
-    helpers.cleanup()
+    -- No cleanup needed
   end)
 
   describe("_get_snacks_explorer_selection", function()
