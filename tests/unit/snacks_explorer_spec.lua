@@ -342,6 +342,77 @@ describe("snacks.explorer integration", function()
       vim.fn.isdirectory = original_isdirectory
       package.loaded["snacks"] = nil
     end)
+
+    it("should protect against root-level files", function()
+      -- Mock snacks module with root-level and safe files
+      local mock_explorer = {
+        selected = function(self, opts)
+          return {
+            { file = "/etc/passwd" }, -- root-level file (dangerous)
+            { file = "/home/user/file.lua" }, -- safe file
+            { file = "/usr/bin/vim" }, -- root-level file (dangerous)
+            { file = "/path/to/directory/" }, -- safe directory
+          }
+        end,
+        current = function(self, opts)
+          return { file = "/etc/hosts" } -- root-level file
+        end,
+      }
+
+      local mock_snacks = {
+        picker = {
+          get = function(opts)
+            if opts.source == "explorer" then
+              return { mock_explorer }
+            end
+            return {}
+          end,
+        },
+      }
+
+      package.loaded["snacks"] = mock_snacks
+
+      -- Test selected items - should filter out root-level files
+      local files, err = integrations._get_snacks_explorer_selection()
+      assert.is_nil(err)
+      assert.are.same({
+        "/home/user/file.lua",
+        "/path/to/directory/",
+      }, files)
+
+      package.loaded["snacks"] = nil
+    end)
+
+    it("should return error for root-level current file", function()
+      -- Mock snacks module with root-level current file and no selection
+      local mock_explorer = {
+        selected = function(self, opts)
+          return {} -- No selection
+        end,
+        current = function(self, opts)
+          return { file = "/etc/passwd" } -- root-level file
+        end,
+      }
+
+      local mock_snacks = {
+        picker = {
+          get = function(opts)
+            if opts.source == "explorer" then
+              return { mock_explorer }
+            end
+            return {}
+          end,
+        },
+      }
+
+      package.loaded["snacks"] = mock_snacks
+
+      local files, err = integrations._get_snacks_explorer_selection()
+      assert.are.same({}, files)
+      assert.equals("Cannot add root-level file. Please select a file in a subdirectory.", err)
+
+      package.loaded["snacks"] = nil
+    end)
   end)
 
   describe("get_selected_files_from_tree", function()
