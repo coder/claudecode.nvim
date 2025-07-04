@@ -457,6 +457,12 @@ local vim = {
     localtime = function()
       return os.time()
     end,
+
+    isdirectory = function(path)
+      -- Mock implementation - return 1 for directories, 0 for files
+      -- For testing, we'll consider paths ending with '/' as directories
+      return path:match("/$") and 1 or 0
+    end,
   },
 
   cmd = function(command)
@@ -597,6 +603,27 @@ local vim = {
       -- Set buffer-local variables for the given buffer
       if vim._buffers[bufnr] then
         vim._buffers[bufnr].b_vars = vars
+      end
+    end,
+  }),
+
+  bo = setmetatable({}, {
+    __index = function(_, key)
+      -- Return buffer option for current buffer
+      local current_buf = vim.api.nvim_get_current_buf()
+      if vim._buffers[current_buf] and vim._buffers[current_buf].options then
+        return vim._buffers[current_buf].options[key]
+      end
+      return nil
+    end,
+    __newindex = function(_, key, value)
+      -- Set buffer option for current buffer
+      local current_buf = vim.api.nvim_get_current_buf()
+      if vim._buffers[current_buf] then
+        if not vim._buffers[current_buf].options then
+          vim._buffers[current_buf].options = {}
+        end
+        vim._buffers[current_buf].options[key] = value
       end
     end,
   }),

@@ -44,7 +44,7 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
       "<leader>as",
       "<cmd>ClaudeCodeTreeAdd<cr>",
       desc = "Add file",
-      ft = { "NvimTree", "neo-tree", "oil" },
+      ft = { "NvimTree", "neo-tree", "oil", "snacks_picker_list" },
     },
     -- Diff management
     { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
@@ -80,7 +80,7 @@ That's it! The plugin will auto-configure everything else.
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
 2. **Send context**:
    - Select text in visual mode and use `<leader>as` to send it to Claude
-   - In `nvim-tree`/`neo-tree`/`oil.nvim`, press `<leader>as` on a file to add it to Claude's context
+   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`snacks.explorer`, press `<leader>as` on a file to add it to Claude's context
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor

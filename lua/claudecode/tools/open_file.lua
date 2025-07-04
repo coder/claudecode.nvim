@@ -78,6 +78,7 @@ local function find_main_editor_window()
         or filetype == "oil"
         or filetype == "aerial"
         or filetype == "tagbar"
+        or filetype == "snacks_picker_list"
       )
     then
       is_suitable = false
