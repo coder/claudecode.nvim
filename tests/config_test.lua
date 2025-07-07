@@ -180,6 +180,7 @@ describe("Config module", function()
       port_range = { min = 10000, max = 65535 },
       auto_start = true,
       terminal_cmd = "toggleterm",
+      enable_terminal = true,
       log_level = "debug",
       track_selection = false,
       visual_demotion_delay_ms = 50,
