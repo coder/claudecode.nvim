@@ -48,6 +48,7 @@ M.version = {
 local default_config = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
+  bin_path = "claude",
   terminal_cmd = nil,
   log_level = "info",
   track_selection = true,
@@ -312,7 +313,7 @@ function M.setup(opts)
     -- Guard in case tests or user replace the module with a minimal stub without `setup`.
     if type(terminal_module.setup) == "function" then
       -- terminal_opts might be nil, which the setup function should handle gracefully.
-      terminal_module.setup(terminal_opts, M.state.config.terminal_cmd)
+      terminal_module.setup(terminal_opts, M.state.config.terminal_cmd, M.state.config.bin_path)
     end
   else
     logger.error("init", "Failed to load claudecode.terminal module for setup.")

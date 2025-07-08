@@ -23,6 +23,7 @@ local config = {
   provider = "auto",
   show_native_term_exit_tip = true,
   terminal_cmd = nil,
+  bin_path = "claude",
   auto_close = true,
 }
 
@@ -126,7 +127,7 @@ local function get_claude_command_and_env(cmd_args)
   local cmd_from_config = config.terminal_cmd
   local base_cmd
   if not cmd_from_config or cmd_from_config == "" then
-    base_cmd = "claude" -- Default if not configured
+    base_cmd = config.bin_path or "claude"
   else
     base_cmd = cmd_from_config
   end
@@ -180,7 +181,7 @@ end
 -- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
-function M.setup(user_term_config, p_terminal_cmd)
+function M.setup(user_term_config, p_terminal_cmd, p_bin_path)
   if user_term_config == nil then -- Allow nil, default to empty table silently
     user_term_config = {}
   elseif type(user_term_config) ~= "table" then -- Warn if it's not nil AND not a table
@@ -196,6 +197,16 @@ function M.setup(user_term_config, p_terminal_cmd)
       vim.log.levels.WARN
     )
     config.terminal_cmd = nil -- Fallback to default behavior
+  end
+
+  if p_bin_path == nil or type(p_bin_path) == "string" then
+    config.bin_path = p_bin_path or "claude"
+  else
+    vim.notify(
+      "claudecode.terminal.setup: Invalid bin_path provided: " .. tostring(p_bin_path) .. ". Using default.",
+      vim.log.levels.WARN
+    )
+    config.bin_path = "claude"
   end
 
   for k, v in pairs(user_term_config) do

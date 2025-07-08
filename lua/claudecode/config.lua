@@ -5,6 +5,7 @@ local M = {}
 M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
+  bin_path = "claude",
   terminal_cmd = nil,
   log_level = "info",
   track_selection = true,
@@ -38,6 +39,8 @@ function M.validate(config)
   assert(type(config.auto_start) == "boolean", "auto_start must be a boolean")
 
   assert(config.terminal_cmd == nil or type(config.terminal_cmd) == "string", "terminal_cmd must be nil or a string")
+
+  assert(type(config.bin_path) == "string" and config.bin_path ~= "", "bin_path must be a non-empty string")
 
   local valid_log_levels = { "trace", "debug", "info", "warn", "error" }
   local is_valid_log_level = false
