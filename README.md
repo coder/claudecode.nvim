@@ -4,11 +4,6 @@
 ![Neovim version](https://img.shields.io/badge/Neovim-0.8%2B-green)
 ![Status](https://img.shields.io/badge/Status-beta-blue)
 
-> ⚠️ **Important**: IDE integrations are currently broken in Claude Code releases newer than v1.0.27. Please use [Claude Code v1.0.27](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/1.0.27) or older until these issues are resolved:
->
-> - [Claude Code not detecting IDE integrations #2299](https://github.com/anthropics/claude-code/issues/2299)
-> - [IDE integration broken after update #2295](https://github.com/anthropics/claude-code/issues/2295)
-
 **The first Neovim IDE integration for Claude Code** — bringing Anthropic's AI coding assistant to your favorite editor with a pure Lua implementation.
 
 > 🎯 **TL;DR:** When Anthropic released Claude Code with VS Code and JetBrains support, I reverse-engineered their extension and built this Neovim plugin. This plugin implements the same WebSocket-based MCP protocol, giving Neovim users the same AI-powered coding experience.
