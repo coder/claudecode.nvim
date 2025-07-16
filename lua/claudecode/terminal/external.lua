@@ -5,16 +5,10 @@
 --- @type TerminalProvider
 local M = {}
 
-local logger = require("claudecode.logger")
-
 --- Configures the external terminal provider (no-op).
 -- @param term_config table The terminal configuration (ignored).
 function M.setup(term_config)
-  logger.info(
-    "terminal",
-    "External terminal provider configured - Claude Code commands will not launch internal terminals"
-  )
-  logger.debug("terminal", "External provider setup complete - assuming external Claude Code instance will connect")
+  -- Intentionally left blank - external provider assumes Claude Code is running elsewhere
 end
 
 --- Opens the Claude terminal (no-op for external provider).
@@ -23,15 +17,12 @@ end
 -- @param effective_config table Terminal configuration (ignored).
 -- @param focus boolean|nil Whether to focus the terminal (ignored).
 function M.open(cmd_string, env_table, effective_config, focus)
-  logger.debug(
-    "terminal",
-    "External terminal provider: open() called - no action taken (assuming external Claude Code)"
-  )
+  -- Intentionally left blank - external provider assumes Claude Code is running elsewhere
 end
 
 --- Closes the managed Claude terminal (no-op for external provider).
 function M.close()
-  logger.debug("terminal", "External terminal provider: close() called - no action taken")
+  -- Intentionally left blank - external provider assumes Claude Code is running elsewhere
 end
 
 --- Simple toggle: show/hide the Claude terminal (no-op for external provider).
@@ -39,7 +30,7 @@ end
 -- @param env_table table Environment variables (ignored).
 -- @param effective_config table Terminal configuration (ignored).
 function M.simple_toggle(cmd_string, env_table, effective_config)
-  logger.debug("terminal", "External terminal provider: simple_toggle() called - no action taken")
+  -- Intentionally left blank - external provider assumes Claude Code is running elsewhere
 end
 
 --- Smart focus toggle: switches to terminal if not focused, hides if currently focused (no-op for external provider).
@@ -47,7 +38,7 @@ end
 -- @param env_table table Environment variables (ignored).
 -- @param effective_config table Terminal configuration (ignored).
 function M.focus_toggle(cmd_string, env_table, effective_config)
-  logger.debug("terminal", "External terminal provider: focus_toggle() called - no action taken")
+  -- Intentionally left blank - external provider assumes Claude Code is running elsewhere
 end
 
 --- Toggles the Claude terminal open or closed (no-op for external provider).
@@ -55,7 +46,7 @@ end
 -- @param env_table table Environment variables (ignored).
 -- @param effective_config table Terminal configuration (ignored).
 function M.toggle(cmd_string, env_table, effective_config)
-  logger.debug("terminal", "External terminal provider: toggle() called - no action taken")
+  -- Intentionally left blank - external provider assumes Claude Code is running elsewhere
 end
 
 --- Gets the buffer number of the currently active Claude Code terminal.
