@@ -90,6 +90,7 @@ That's it! The plugin will auto-configure everything else.
 ## Key Commands
 
 - `:ClaudeCode` - Toggle the Claude Code terminal window
+- `:ClaudeCodeTmux [arguments]` - Open Claude Code in a tmux pane (works regardless of terminal provider setting)
 - `:ClaudeCodeFocus` - Smart focus/toggle Claude terminal
 - `:ClaudeCodeSend` - Send current visual selection to Claude
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
@@ -155,7 +156,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
-      provider = "auto", -- "auto", "snacks", or "native"
+      provider = "auto", -- "auto", "snacks", "native", "external" or "tmux"
       auto_close = true,
     },
 
@@ -179,6 +180,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
+- **Auto-start not working?** If using external terminal provider, ensure you're using `event = "VeryLazy"` instead of `keys = {...}` only, as lazy loading prevents auto-start from running
 
 ## Contributing
 

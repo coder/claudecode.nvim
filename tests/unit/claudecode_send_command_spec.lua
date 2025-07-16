@@ -72,6 +72,12 @@ describe("ClaudeCodeSend Command Range Functionality", function()
     mock_terminal = {
       open = spy.new(function() end),
       ensure_visible = spy.new(function() end),
+      is_external_provider = function()
+        return false -- Default to false for existing tests
+      end,
+      is_tmux_provider = function()
+        return false -- Default to false for existing tests
+      end,
     }
 
     -- Mock server
