@@ -709,5 +709,118 @@ describe("MCP Tools Integration", function()
     end)
   end)
 
+  describe("Authentication Flow Integration", function()
+    local test_auth_token = "550e8400-e29b-41d4-a716-446655440000"
+    local config = {
+      port_range = {
+        min = 10000,
+        max = 65535,
+      },
+    }
+
+    -- Ensure clean state before each test
+    before_each(function()
+      if server.state.server then
+        server.stop()
+      end
+    end)
+
+    -- Clean up after each test
+    after_each(function()
+      if server.state.server then
+        server.stop()
+      end
+    end)
+
+    it("should start server with auth token", function()
+      -- Start server with authentication
+      local success, port = server.start(config, test_auth_token)
+      expect(success).to_be_true()
+      expect(server.state.auth_token).to_be(test_auth_token)
+      expect(type(port)).to_be("number")
+
+      -- Verify server is running with auth
+      local status = server.get_status()
+      expect(status.running).to_be_true()
+      expect(status.port).to_be(port)
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should handle authentication state across server lifecycle", function()
+      -- Start with authentication
+      local success1, _ = server.start(config, test_auth_token)
+      expect(success1).to_be_true()
+      expect(server.state.auth_token).to_be(test_auth_token)
+
+      -- Stop server
+      server.stop()
+      expect(server.state.auth_token).to_be_nil()
+
+      -- Start without authentication
+      local success2, _ = server.start(config, nil)
+      expect(success2).to_be_true()
+      expect(server.state.auth_token).to_be_nil()
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should handle different auth states", function()
+      -- Test with authentication enabled
+      local success1, _ = server.start(config, test_auth_token)
+      expect(success1).to_be_true()
+      expect(server.state.auth_token).to_be(test_auth_token)
+
+      server.stop()
+
+      -- Test with authentication disabled
+      local success2, _ = server.start(config, nil)
+      expect(success2).to_be_true()
+      expect(server.state.auth_token).to_be_nil()
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should preserve auth token during handler setup", function()
+      -- Start server with auth token
+      server.start(config, test_auth_token)
+      expect(server.state.auth_token).to_be(test_auth_token)
+
+      -- Register handlers - should not affect auth token
+      server.register_handlers()
+      expect(server.state.auth_token).to_be(test_auth_token)
+
+      -- Get status - should not affect auth token
+      local status = server.get_status()
+      expect(status.running).to_be_true()
+      expect(server.state.auth_token).to_be(test_auth_token)
+
+      -- Clean up
+      server.stop()
+    end)
+
+    it("should handle multiple auth token operations", function()
+      -- Start server
+      server.start(config, test_auth_token)
+      expect(server.state.auth_token).to_be(test_auth_token)
+
+      -- Multiple operations that should not affect auth token
+      for i = 1, 5 do
+        server.register_handlers()
+        local status = server.get_status()
+        expect(status.running).to_be_true()
+
+        -- Auth token should remain stable
+        expect(server.state.auth_token).to_be(test_auth_token)
+      end
+
+      -- Clean up
+      server.stop()
+    end)
+  end)
+
   teardown()
 end)

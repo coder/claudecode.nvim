@@ -67,6 +67,7 @@ local default_config = {
 --- @field config ClaudeCode.Config The current plugin configuration.
 --- @field server table|nil The WebSocket server instance.
 --- @field port number|nil The port the server is running on.
+--- @field auth_token string|nil The authentication token for the current session.
 --- @field initialized boolean Whether the plugin has been initialized.
 --- @field queued_mentions table[] Array of queued @ mentions waiting for connection.
 --- @field connection_timer table|nil Timer for connection timeout.
@@ -76,6 +77,7 @@ M.state = {
   config = vim.deepcopy(default_config),
   server = nil,
   port = nil,
+  auth_token = nil,
   initialized = false,
   queued_mentions = {},
   connection_timer = nil,
@@ -365,26 +367,70 @@ function M.start(show_startup_notification)
   end
 
   local server = require("claudecode.server.init")
-  local success, result = server.start(M.state.config)
+  local lockfile = require("claudecode.lockfile")
+
+  -- Generate auth token first so we can pass it to the server
+  local auth_token
+  local auth_success, auth_result = pcall(function()
+    return lockfile.generate_auth_token()
+  end)
+
+  if not auth_success then
+    local error_msg = "Failed to generate authentication token: " .. (auth_result or "unknown error")
+    logger.error("init", error_msg)
+    return false, error_msg
+  end
+
+  auth_token = auth_result
+
+  -- Validate the generated auth token
+  if not auth_token or type(auth_token) ~= "string" or #auth_token < 10 then
+    local error_msg = "Invalid authentication token generated"
+    logger.error("init", error_msg)
+    return false, error_msg
+  end
+
+  local success, result = server.start(M.state.config, auth_token)
 
   if not success then
-    logger.error("init", "Failed to start Claude Code integration: " .. result)
-    return false, result
+    local error_msg = "Failed to start Claude Code server: " .. (result or "unknown error")
+    if result and result:find("auth") then
+      error_msg = error_msg .. " (authentication related)"
+    end
+    logger.error("init", error_msg)
+    return false, error_msg
   end
 
   M.state.server = server
   M.state.port = tonumber(result)
+  M.state.auth_token = auth_token
 
-  local lockfile = require("claudecode.lockfile")
-  local lock_success, lock_result = lockfile.create(M.state.port)
+  local lock_success, lock_result, returned_auth_token = lockfile.create(M.state.port, auth_token)
 
   if not lock_success then
     server.stop()
     M.state.server = nil
     M.state.port = nil
+    M.state.auth_token = nil
 
-    logger.error("init", "Failed to create lock file: " .. lock_result)
-    return false, lock_result
+    local error_msg = "Failed to create lock file: " .. (lock_result or "unknown error")
+    if lock_result and lock_result:find("auth") then
+      error_msg = error_msg .. " (authentication token issue)"
+    end
+    logger.error("init", error_msg)
+    return false, error_msg
+  end
+
+  -- Verify that the auth token in the lock file matches what we generated
+  if returned_auth_token ~= auth_token then
+    server.stop()
+    M.state.server = nil
+    M.state.port = nil
+    M.state.auth_token = nil
+
+    local error_msg = "Authentication token mismatch between server and lock file"
+    logger.error("init", error_msg)
+    return false, error_msg
   end
 
   if M.state.config.track_selection then
@@ -430,6 +476,7 @@ function M.stop()
 
   M.state.server = nil
   M.state.port = nil
+  M.state.auth_token = nil
 
   -- Clear any queued @ mentions when server stops
   clear_mention_queue()

@@ -22,9 +22,15 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 
 ### Build Commands
 
+- `make` - **RECOMMENDED**: Run formatting, linting, and testing (complete validation)
 - `make all` - Run check and format (default target)
+- `make test` - Run all tests using busted with coverage
+- `make check` - Check Lua syntax and run luacheck
+- `make format` - Format code with stylua (or nix fmt if available)
 - `make clean` - Remove generated test files
 - `make help` - Show available commands
+
+**Best Practice**: Always use `make` at the end of editing sessions for complete validation.
 
 ### Development with Nix
 
@@ -45,10 +51,19 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 ### WebSocket Server Implementation
 
 - **TCP Server**: `server/tcp.lua` handles port binding and connections
-- **Handshake**: `server/handshake.lua` processes HTTP upgrade requests
+- **Handshake**: `server/handshake.lua` processes HTTP upgrade requests with authentication
 - **Frame Processing**: `server/frame.lua` implements RFC 6455 WebSocket frames
 - **Client Management**: `server/client.lua` manages individual connections
 - **Utils**: `server/utils.lua` provides base64, SHA-1, XOR operations in pure Lua
+
+#### Authentication System
+
+The WebSocket server implements secure authentication using:
+
+- **UUID v4 Tokens**: Generated per session with enhanced entropy
+- **Header-based Auth**: Uses `x-claude-code-ide-authorization` header
+- **Lock File Discovery**: Tokens stored in `~/.claude/ide/[port].lock` for Claude CLI
+- **MCP Compliance**: Follows official Claude Code IDE authentication protocol
 
 ### MCP Tools Architecture
 
@@ -76,14 +91,125 @@ Tests are organized in three layers:
 
 Test files follow the pattern `*_spec.lua` or `*_test.lua` and use the busted framework.
 
+### Test Organization Principles
+
+- **Isolation**: Each test should be independent and not rely on external state
+- **Mocking**: Use comprehensive mocking for vim APIs and external dependencies
+- **Coverage**: Aim for both positive and negative test cases, edge cases included
+- **Performance**: Tests should run quickly to encourage frequent execution
+- **Clarity**: Test names should clearly describe what behavior is being verified
+
+## Authentication Testing
+
+The plugin implements authentication using UUID v4 tokens that are generated for each server session and stored in lock files. This ensures secure connections between Claude CLI and the Neovim WebSocket server.
+
+### Testing Authentication Features
+
+**Lock File Authentication Tests** (`tests/lockfile_test.lua`):
+
+- Auth token generation and uniqueness validation
+- Lock file creation with authentication tokens
+- Reading auth tokens from existing lock files
+- Error handling for missing or invalid tokens
+
+**WebSocket Handshake Authentication Tests** (`tests/unit/server/handshake_spec.lua`):
+
+- Valid authentication token acceptance
+- Invalid/missing token rejection
+- Edge cases (empty tokens, malformed headers, length limits)
+- Case-insensitive header handling
+
+**Server Integration Tests** (`tests/unit/server_spec.lua`):
+
+- Server startup with authentication tokens
+- Auth token state management during server lifecycle
+- Token validation throughout server operations
+
+**End-to-End Authentication Tests** (`tests/integration/mcp_tools_spec.lua`):
+
+- Complete authentication flow from server start to tool execution
+- Authentication state persistence across operations
+- Concurrent operations with authentication enabled
+
+### Manual Authentication Testing
+
+**Test Script Authentication Support**:
+
+```bash
+# Test scripts automatically detect and use authentication tokens
+cd scripts/
+./claude_interactive.sh  # Automatically reads auth token from lock file
+```
+
+**Authentication Flow Testing**:
+
+1. Start the plugin: `:ClaudeCodeStart`
+2. Check lock file contains `authToken`: `cat ~/.claude/ide/*.lock | jq .authToken`
+3. Test WebSocket connection with auth: Use test scripts in `scripts/` directory
+4. Verify authentication in logs: Set `log_level = "debug"` in config
+
+**Testing Authentication Failures**:
+
+```bash
+# Test invalid auth token (should fail)
+websocat ws://localhost:PORT --header "x-claude-code-ide-authorization: invalid-token"
+
+# Test missing auth header (should fail)
+websocat ws://localhost:PORT
+
+# Test valid auth token (should succeed)
+websocat ws://localhost:PORT --header "x-claude-code-ide-authorization: $(cat ~/.claude/ide/*.lock | jq -r .authToken)"
+```
+
+### Authentication Logging
+
+Enable detailed authentication logging by setting:
+
+```lua
+require("claudecode").setup({
+  log_level = "debug"  -- Shows auth token generation, validation, and failures
+})
+```
+
+Log levels for authentication events:
+
+- **DEBUG**: Server startup authentication state, client connections, handshake processing, auth token details
+- **WARN**: Authentication failures during handshake
+- **ERROR**: Auth token generation failures, handshake response errors
+
+### Logging Best Practices
+
+- **Connection Events**: Use DEBUG level for routine connection establishment/teardown
+- **Authentication Flow**: Use DEBUG for successful auth, WARN for failures
+- **User-Facing Events**: Use INFO sparingly for events users need to know about
+- **System Errors**: Use ERROR for failures that require user attention
+
 ## Development Notes
+
+### Technical Requirements
 
 - Plugin requires Neovim >= 0.8.0
 - Uses only Neovim built-ins for WebSocket implementation (vim.loop, vim.json, vim.schedule)
-- Lock files are created at `~/.claude/ide/[port].lock` for Claude CLI discovery
-- WebSocket server only accepts local connections for security
+- Zero external dependencies for core functionality
+
+### Security Considerations
+
+- WebSocket server only accepts local connections (127.0.0.1) for security
+- Authentication tokens are UUID v4 with enhanced entropy
+- Lock files created at `~/.claude/ide/[port].lock` for Claude CLI discovery
+- All authentication events are logged for security auditing
+
+### Performance Optimizations
+
 - Selection tracking is debounced to reduce overhead
+- WebSocket frame processing optimized for JSON-RPC payload sizes
+- Connection pooling and cleanup to prevent resource leaks
+
+### Integration Support
+
 - Terminal integration supports both snacks.nvim and native Neovim terminal
+- Compatible with popular file explorers (nvim-tree, oil.nvim)
+- Visual selection tracking across different selection modes
 
 ## Release Process
 
@@ -134,6 +260,23 @@ make
 rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
 ```
 
-## CRITICAL: Pre-commit Requirements
+## Development Workflow
+
+### Pre-commit Requirements
 
 **ALWAYS run `make` before committing any changes.** This runs code quality checks and formatting that must pass for CI to succeed. Never skip this step - many PRs fail CI because contributors don't run the build commands before committing.
+
+### Recommended Development Flow
+
+1. **Start Development**: Use existing tests and documentation to understand the system
+2. **Make Changes**: Follow existing patterns and conventions in the codebase
+3. **Validate Work**: Run `make` to ensure formatting, linting, and tests pass
+4. **Document Changes**: Update relevant documentation (this file, PROTOCOL.md, etc.)
+5. **Commit**: Only commit after successful `make` execution
+
+### Code Quality Standards
+
+- **Test Coverage**: Maintain comprehensive test coverage (currently 314+ tests)
+- **Zero Warnings**: All code must pass luacheck with 0 warnings/errors
+- **Consistent Formatting**: Use `nix fmt` or `stylua` for consistent code style
+- **Documentation**: Update CLAUDE.md for architectural changes, PROTOCOL.md for protocol changes

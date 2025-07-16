@@ -69,9 +69,13 @@ local function log(level, component, message_parts)
   end
 
   if level == M.levels.ERROR then
-    vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
+    vim.schedule(function()
+      vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
+    end)
   elseif level == M.levels.WARN then
-    vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
+    vim.schedule(function()
+      vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
+    end)
   else
     -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
     -- to make them appear in :messages, and wrap in vim.schedule

@@ -11,10 +11,11 @@ declare -A WS_CONNECTIONS
 declare -A WS_REQUEST_FILES
 
 # Start a persistent WebSocket connection
-# ws_connect URL [CONN_ID]
+# ws_connect URL [CONN_ID] [AUTH_TOKEN]
 ws_connect() {
   local url="$1"
   local conn_id="${2:-default}"
+  local auth_token="${3:-}"
 
   # Cleanup any existing connection with this ID
   ws_disconnect "$conn_id"
@@ -41,7 +42,13 @@ ws_connect() {
   # 2. Writes all server responses to response_file
   (
     # Note: The -E flag makes websocat exit when the file is closed
-    tail -f "$request_file" | websocat -t "$url" | tee -a "$response_file" >"$log_file" &
+    if [ -n "$auth_token" ]; then
+      # Use websocat with auth header - avoid eval by constructing command safely
+      tail -f "$request_file" | websocat -t --header "x-claude-code-ide-authorization: $auth_token" "$url" | tee -a "$response_file" >"$log_file" &
+    else
+      # Use websocat without auth header
+      tail -f "$request_file" | websocat -t "$url" | tee -a "$response_file" >"$log_file" &
+    fi
 
     # Save PID
     echo $! >"$pid_file"
