@@ -1,5 +1,5 @@
 --- Module to manage a dedicated vertical split terminal for Claude Code.
--- Supports Snacks.nvim or a native Neovim terminal fallback.
+-- Supports Snacks.nvim, ergoterm.nvim, or a native Neovim terminal fallback.
 -- @module claudecode.terminal
 
 --- @class TerminalProvider
@@ -51,10 +51,14 @@ local function get_provider()
   local logger = require("claudecode.logger")
 
   if config.provider == "auto" then
-    -- Try snacks first, then fallback to native silently
+    -- Try providers in order: snacks, ergoterm, then fallback to native silently
     local snacks_provider = load_provider("snacks")
     if snacks_provider and snacks_provider.is_available() then
       return snacks_provider
+    end
+    local ergoterm_provider = load_provider("ergoterm")
+    if ergoterm_provider and ergoterm_provider.is_available() then
+      return ergoterm_provider
     end
     -- Fall through to native provider
   elseif config.provider == "snacks" then
@@ -63,6 +67,13 @@ local function get_provider()
       return snacks_provider
     else
       logger.warn("terminal", "'snacks' provider configured, but Snacks.nvim not available. Falling back to 'native'.")
+    end
+  elseif config.provider == "ergoterm" then
+    local ergoterm_provider = load_provider("ergoterm")
+    if ergoterm_provider and ergoterm_provider.is_available() then
+      return ergoterm_provider
+    else
+      logger.warn("terminal", "'ergoterm' provider configured, but ergoterm.nvim not available. Falling back to 'native'.")
     end
   elseif config.provider == "native" then
     -- noop, will use native provider as default below
@@ -177,7 +188,7 @@ end
 -- @param user_term_config table (optional) Configuration options for the terminal.
 -- @field user_term_config.split_side string 'left' or 'right' (default: 'right').
 -- @field user_term_config.split_width_percentage number Percentage of screen width (0.0 to 1.0, default: 0.30).
--- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
+-- @field user_term_config.provider string 'snacks', 'ergoterm', 'native', or 'auto' (default: 'auto').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
 function M.setup(user_term_config, p_terminal_cmd)
@@ -204,7 +215,7 @@ function M.setup(user_term_config, p_terminal_cmd)
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "snacks" or v == "native") then
+      elseif k == "provider" and (v == "snacks" or v == "native" or v == "ergoterm" or v == "auto") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
@@ -280,7 +291,7 @@ function M.toggle(opts_override, cmd_args)
 end
 
 --- Gets the buffer number of the currently active Claude Code terminal.
--- This checks both Snacks and native fallback terminals.
+-- This checks Snacks, ergoterm, and native fallback terminals.
 -- @return number|nil The buffer number if an active terminal is found, otherwise nil.
 function M.get_active_terminal_bufnr()
   return get_provider().get_active_bufnr()
