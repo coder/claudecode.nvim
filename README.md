@@ -30,7 +30,12 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
 ```lua
 {
   "coder/claudecode.nvim",
-  dependencies = { "folke/snacks.nvim" },
+  dependencies = { 
+    -- For Snacks terminal
+    "folke/snacks.nvim",
+    -- For ergoterm terminal
+    "waiting-for-dev/ergoterm.nvim",
+  },
   config = true,
   keys = {
     { "<leader>a", nil, desc = "AI/Claude Code" },
@@ -155,7 +160,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
-      provider = "auto", -- "auto", "snacks", or "native"
+      provider = "auto", -- "auto", "snacks", "ergoterm", or "native"
       auto_close = true,
     },
 
