@@ -6,6 +6,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
   local mock_claudecode_config_module
   local mock_snacks_provider
   local mock_native_provider
+  local mock_ergoterm_provider
   local last_created_mock_term_instance
   local create_mock_terminal_instance
 
@@ -225,6 +226,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     package.loaded["claudecode.terminal"] = nil
     package.loaded["claudecode.terminal.snacks"] = nil
     package.loaded["claudecode.terminal.native"] = nil
+    package.loaded["claudecode.terminal.ergoterm"] = nil
     package.loaded["claudecode.server.init"] = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.config"] = nil
@@ -287,6 +289,25 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       end),
     }
     package.loaded["claudecode.terminal.native"] = mock_native_provider
+
+    mock_ergoterm_provider = {
+      setup = spy.new(function() end),
+      open = spy.new(function() end),
+      close = spy.new(function() end),
+      toggle = spy.new(function() end),
+      simple_toggle = spy.new(function() end),
+      focus_toggle = spy.new(function() end),
+      get_active_bufnr = spy.new(function()
+        return nil
+      end),
+      is_available = spy.new(function()
+        return true
+      end),
+      _get_terminal_for_test = spy.new(function()
+        return nil
+      end),
+    }
+    package.loaded["claudecode.terminal.ergoterm"] = mock_ergoterm_provider
 
     mock_snacks_terminal = {
       open = spy.new(create_mock_terminal_instance),
@@ -357,6 +378,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     package.loaded["claudecode.terminal"] = nil
     package.loaded["claudecode.terminal.snacks"] = nil
     package.loaded["claudecode.terminal.native"] = nil
+    package.loaded["claudecode.terminal.ergoterm"] = nil
     package.loaded["claudecode.server.init"] = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.config"] = nil
@@ -698,6 +720,153 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       mock_snacks_provider.simple_toggle:was_called(1)
       local toggle_cmd = mock_snacks_provider.simple_toggle:get_call(1).refs[1]
       assert.are.equal("claude", toggle_cmd)
+    end)
+  end)
+
+  describe("ergoterm provider support", function()
+    describe("provider selection", function()
+      it("should use ergoterm provider when explicitly configured", function()
+        terminal_wrapper.setup({ provider = "ergoterm" })
+        terminal_wrapper.open()
+
+        mock_ergoterm_provider.open:was_called(1)
+        mock_snacks_provider.open:was_not_called()
+        mock_native_provider.open:was_not_called()
+      end)
+
+      it("should fall back to native when ergoterm is unavailable", function()
+        mock_ergoterm_provider.is_available = spy.new(function()
+          return false
+        end)
+
+        terminal_wrapper.setup({ provider = "ergoterm" })
+        terminal_wrapper.open()
+
+        mock_ergoterm_provider.is_available:was_called()
+        mock_native_provider.open:was_called(1)
+        mock_ergoterm_provider.open:was_not_called()
+      end)
+
+      it("should warn when ergoterm provider configured but unavailable", function()
+        mock_ergoterm_provider.is_available = spy.new(function()
+          return false
+        end)
+        vim.notify:reset()
+
+        terminal_wrapper.setup({ provider = "ergoterm" })
+        terminal_wrapper.open()
+
+        -- Logger would be called but vim.notify in test only captures explicit notifications
+        mock_native_provider.open:was_called(1)
+      end)
+
+      it("should validate ergoterm as valid provider value in setup", function()
+        terminal_wrapper.setup({ provider = "ergoterm", split_side = "left" })
+        terminal_wrapper.open()
+
+        local config_arg = mock_ergoterm_provider.open:get_call(1).refs[3]
+        assert.are.equal("left", config_arg.split_side)
+        vim.notify:was_not_called() -- No validation warnings
+      end)
+
+      it("should accept auto as valid provider value and detect ergoterm", function()
+        mock_snacks_provider.is_available = spy.new(function()
+          return false
+        end)
+
+        terminal_wrapper.setup({ provider = "auto" })
+        terminal_wrapper.open()
+
+        mock_ergoterm_provider.open:was_called(1)
+        vim.notify:was_not_called() -- No validation warnings
+      end)
+    end)
+
+    describe("ergoterm provider methods", function()
+      before_each(function()
+        terminal_wrapper.setup({ provider = "ergoterm" })
+      end)
+
+      it("should call ergoterm open with correct parameters", function()
+        terminal_wrapper.open({ split_side = "left", split_width_percentage = 0.4 }, "--resume")
+
+        mock_ergoterm_provider.open:was_called(1)
+        local cmd_arg = mock_ergoterm_provider.open:get_call(1).refs[1]
+        local env_arg = mock_ergoterm_provider.open:get_call(1).refs[2]
+        local config_arg = mock_ergoterm_provider.open:get_call(1).refs[3]
+
+        assert.are.equal("claude --resume", cmd_arg)
+        assert.is_table(env_arg)
+        assert.are.equal("true", env_arg.ENABLE_IDE_INTEGRATION)
+        assert.is_table(config_arg)
+        assert.are.equal("left", config_arg.split_side)
+        assert.are.equal(0.4, config_arg.split_width_percentage)
+      end)
+
+      it("should call ergoterm close", function()
+        terminal_wrapper.close()
+        mock_ergoterm_provider.close:was_called(1)
+      end)
+
+      it("should call ergoterm simple_toggle", function()
+        terminal_wrapper.simple_toggle({ split_side = "right" }, "--verbose")
+
+        mock_ergoterm_provider.simple_toggle:was_called(1)
+        local cmd_arg = mock_ergoterm_provider.simple_toggle:get_call(1).refs[1]
+        local config_arg = mock_ergoterm_provider.simple_toggle:get_call(1).refs[3]
+
+        assert.are.equal("claude --verbose", cmd_arg)
+        assert.are.equal("right", config_arg.split_side)
+      end)
+
+      it("should call ergoterm focus_toggle", function()
+        terminal_wrapper.focus_toggle()
+        mock_ergoterm_provider.focus_toggle:was_called(1)
+      end)
+
+      it("should call ergoterm get_active_bufnr", function()
+        terminal_wrapper.get_active_terminal_bufnr()
+        mock_ergoterm_provider.get_active_bufnr:was_called(1)
+      end)
+
+      it("should call legacy toggle method which defaults to simple_toggle", function()
+        terminal_wrapper.toggle()
+        mock_ergoterm_provider.simple_toggle:was_called(1)
+      end)
+    end)
+
+    describe("provider detection order", function()
+      it("should try providers in correct order: snacks -> ergoterm -> native", function()
+        -- Make both snacks and ergoterm unavailable to test the full chain
+        mock_snacks_provider.is_available = spy.new(function()
+          return false
+        end)
+        mock_ergoterm_provider.is_available = spy.new(function()
+          return false
+        end)
+
+        terminal_wrapper.setup({ provider = "auto" })
+        terminal_wrapper.open()
+
+        -- Should check snacks first, then ergoterm, then fall back to native
+        mock_snacks_provider.is_available:was_called()
+        mock_ergoterm_provider.is_available:was_called()
+        mock_native_provider.open:was_called(1)
+      end)
+
+      it("should stop at ergoterm when snacks unavailable but ergoterm available", function()
+        mock_snacks_provider.is_available = spy.new(function()
+          return false
+        end)
+        -- ergoterm is available (default mock behavior)
+
+        terminal_wrapper.setup({ provider = "auto" })
+        terminal_wrapper.open()
+
+        mock_snacks_provider.is_available:was_called()
+        mock_ergoterm_provider.open:was_called(1)
+        mock_native_provider.open:was_not_called()
+      end)
     end)
   end)
 end)

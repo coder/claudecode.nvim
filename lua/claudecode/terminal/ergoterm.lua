@@ -36,7 +36,7 @@ end
 --- @return table Ergoterm Terminal configuration
 local function build_terminal_opts(config, env_table, cmd_string, focus)
   focus = utils.normalize_focus(focus)
-  
+
   -- Convert split_side to ergoterm layout string format
   local layout = config.split_side == "left" and "left" or "right"
 
@@ -87,7 +87,7 @@ function M.open(cmd_string, env_table, config, focus)
   -- Create new terminal
   local opts = build_terminal_opts(config, env_table, cmd_string, focus)
   terminal = ergoterm.Terminal:new(opts)
-  
+
   if terminal then
     setup_terminal_events(terminal, config)
     -- Start and open the terminal
@@ -212,3 +212,4 @@ function M._get_terminal_for_test()
 end
 
 return M
+

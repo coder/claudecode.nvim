@@ -73,7 +73,10 @@ local function get_provider()
     if ergoterm_provider and ergoterm_provider.is_available() then
       return ergoterm_provider
     else
-      logger.warn("terminal", "'ergoterm' provider configured, but ergoterm.nvim not available. Falling back to 'native'.")
+      logger.warn(
+        "terminal",
+        "'ergoterm' provider configured, but ergoterm.nvim not available. Falling back to 'native'."
+      )
     end
   elseif config.provider == "native" then
     -- noop, will use native provider as default below
@@ -215,7 +218,7 @@ function M.setup(user_term_config, p_terminal_cmd)
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "snacks" or v == "native" or v == "ergoterm" or v == "auto") then
+      elseif k == "provider" and (v == "snacks" or v == "ergoterm" or v == "native") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
