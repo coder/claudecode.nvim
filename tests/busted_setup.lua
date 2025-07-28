@@ -113,15 +113,13 @@ _G.json_encode = function(data)
   if type(data) == "table" then
     local parts = {}
     local is_array = true
-    local array_index = 1
 
-    -- Check if it's an array or object
+    -- Check if it's an array (all numeric, positive keys) or an object
     for k, _ in pairs(data) do
-      if type(k) ~= "number" or k ~= array_index then
+      if type(k) ~= "number" or k <= 0 or math.floor(k) ~= k then
         is_array = false
         break
       end
-      array_index = array_index + 1
     end
 
     if is_array then

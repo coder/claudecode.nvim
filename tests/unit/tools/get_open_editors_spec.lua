@@ -36,6 +36,12 @@ describe("Tool: get_open_editors", function()
     _G.vim.api.nvim_get_current_buf = spy.new(function()
       return 1
     end)
+    _G.vim.api.nvim_get_current_tabpage = spy.new(function()
+      return 1
+    end)
+    _G.vim.api.nvim_buf_line_count = spy.new(function()
+      return 10
+    end)
     _G.vim.fn.fnamemodify = spy.new(function(path, modifier)
       if modifier == ":t" then
         return path:match("[^/]+$") or path -- Extract filename
@@ -53,6 +59,8 @@ describe("Tool: get_open_editors", function()
     _G.vim.api.nvim_buf_get_name = nil
     _G.vim.api.nvim_buf_get_option = nil
     _G.vim.api.nvim_get_current_buf = nil
+    _G.vim.api.nvim_get_current_tabpage = nil
+    _G.vim.api.nvim_buf_line_count = nil
     _G.vim.fn.fnamemodify = nil
     _G.vim.json.encode = nil
   end)
@@ -175,8 +183,7 @@ describe("Tool: get_open_editors", function()
       elseif opt_name == "filetype" then
         if bufnr == 1 then
           return "lua"
-        end
-        if bufnr == 2 then
+        elseif bufnr == 2 then
           return "text"
         end
       end
@@ -184,6 +191,17 @@ describe("Tool: get_open_editors", function()
     end)
     _G.vim.api.nvim_get_current_buf = spy.new(function()
       return 1 -- Buffer 1 is active
+    end)
+    _G.vim.api.nvim_get_current_tabpage = spy.new(function()
+      return 1
+    end)
+    _G.vim.api.nvim_buf_line_count = spy.new(function(bufnr)
+      if bufnr == 1 then
+        return 100
+      elseif bufnr == 2 then
+        return 50
+      end
+      return 0
     end)
     _G.vim.fn.fnamemodify = spy.new(function(path, modifier)
       if modifier == ":t" then
@@ -217,6 +235,79 @@ describe("Tool: get_open_editors", function()
     expect(parsed_result.tabs[2].label).to_be("file2.txt")
     expect(parsed_result.tabs[2].languageId).to_be("text")
     expect(parsed_result.tabs[2].isDirty).to_be_true()
+  end)
+
+  it("should include VS Code-compatible fields for each tab", function()
+    -- Mock selection module to prevent errors
+    package.loaded["claudecode.selection"] = {
+      get_latest_selection = function()
+        return nil
+      end,
+    }
+
+    -- Mock all necessary API calls
+    _G.vim.api.nvim_list_bufs = spy.new(function()
+      return { 1 }
+    end)
+    _G.vim.api.nvim_buf_is_loaded = spy.new(function()
+      return true
+    end)
+    _G.vim.fn.buflisted = spy.new(function()
+      return 1
+    end)
+    _G.vim.api.nvim_buf_get_name = spy.new(function()
+      return "/path/to/test.lua"
+    end)
+    _G.vim.api.nvim_buf_get_option = spy.new(function(bufnr, opt_name)
+      if opt_name == "modified" then
+        return false
+      elseif opt_name == "filetype" then
+        return "lua"
+      end
+      return nil
+    end)
+    _G.vim.api.nvim_get_current_buf = spy.new(function()
+      return 1
+    end)
+    _G.vim.api.nvim_get_current_tabpage = spy.new(function()
+      return 1
+    end)
+    _G.vim.api.nvim_buf_line_count = spy.new(function()
+      return 42
+    end)
+    _G.vim.fn.fnamemodify = spy.new(function(path, modifier)
+      if modifier == ":t" then
+        return "test.lua"
+      end
+      return path
+    end)
+
+    local success, result = pcall(get_open_editors_handler, {})
+    expect(success).to_be_true()
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.tabs).to_be_table()
+    expect(#parsed_result.tabs).to_be(1)
+
+    local tab = parsed_result.tabs[1]
+
+    -- Check all VS Code-compatible fields
+    expect(tab.uri).to_be("file:///path/to/test.lua")
+    expect(tab.isActive).to_be_true()
+    expect(tab.isPinned).to_be_false()
+    expect(tab.isPreview).to_be_false()
+    expect(tab.isDirty).to_be_false()
+    expect(tab.label).to_be("test.lua")
+    expect(tab.groupIndex).to_be(0) -- 0-based
+    expect(tab.viewColumn).to_be(1) -- 1-based
+    expect(tab.isGroupActive).to_be_true()
+    expect(tab.fileName).to_be("/path/to/test.lua")
+    expect(tab.languageId).to_be("lua")
+    expect(tab.lineCount).to_be(42)
+    expect(tab.isUntitled).to_be_false()
+
+    -- Clean up selection module mock
+    package.loaded["claudecode.selection"] = nil
   end)
 
   it("should filter out buffers that are not loaded", function()

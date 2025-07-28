@@ -57,6 +57,7 @@ describe("Tool: get_current_selection", function()
     expect(result.content[1].type).to_be("text")
 
     local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_true() -- New success field
     expect(parsed_result.text).to_be("")
     expect(parsed_result.filePath).to_be("/current/file.lua")
     expect(parsed_result.selection.isEmpty).to_be_true()
@@ -88,8 +89,36 @@ describe("Tool: get_current_selection", function()
     expect(result.content[1].type).to_be("text")
 
     local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
-    assert.are.same(mock_sel_data, parsed_result) -- Should return the exact data as JSON
+    -- Should return the selection data with success field added
+    local expected_result = vim.tbl_extend("force", mock_sel_data, { success = true })
+    assert.are.same(expected_result, parsed_result)
     assert.spy(mock_selection_module.get_latest_selection).was_called()
+  end)
+
+  it("should return error format when no active editor is found", function()
+    mock_selection_module.get_latest_selection = spy.new(function()
+      return nil
+    end)
+
+    -- Mock empty buffer name to simulate no active editor
+    _G.vim.api.nvim_buf_get_name = spy.new(function()
+      return ""
+    end)
+
+    local success, result = pcall(get_current_selection_handler, {})
+    expect(success).to_be_true()
+    expect(result).to_be_table()
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_false()
+    expect(parsed_result.message).to_be("No active editor found")
+    -- Should not have other fields when success is false
+    expect(parsed_result.text).to_be_nil()
+    expect(parsed_result.filePath).to_be_nil()
+    expect(parsed_result.selection).to_be_nil()
   end)
 
   it("should handle pcall failure when requiring selection module", function()

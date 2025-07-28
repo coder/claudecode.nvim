@@ -24,7 +24,11 @@ local schema = {
 -- @error table A table with code, message, and data for JSON-RPC error if failed.
 local function handler(params)
   if not params.filePath then
-    error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
+    error({
+      code = -32602,
+      message = "Invalid params",
+      data = "Missing filePath parameter",
+    })
   end
 
   local bufnr = vim.fn.bufnr(params.filePath)

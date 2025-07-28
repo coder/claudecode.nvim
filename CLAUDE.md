@@ -80,6 +80,7 @@ The WebSocket server implements secure authentication using:
 - `saveDocument` - Saves document with detailed success/failure reporting
 - `getWorkspaceFolders` - Gets workspace folder information
 - `closeAllDiffTabs` - Closes all diff-related tabs and windows
+- `getDiagnostics` - Gets language diagnostics (errors, warnings) from the editor
 
 **Internal Tools** (not exposed via MCP):
 
@@ -108,7 +109,7 @@ The WebSocket server implements secure authentication using:
 
 claudecode.nvim implements **100% feature parity** with Anthropic's official VS Code extension:
 
-- **Identical Tool Set**: All 12 VS Code tools implemented
+- **Identical Tool Set**: All 10 VS Code tools implemented
 - **Compatible Formats**: Output structures match VS Code extension exactly
 - **Behavioral Consistency**: Same parameter handling and response patterns
 - **Error Compatibility**: Matching error codes and messages
