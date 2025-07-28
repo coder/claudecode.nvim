@@ -192,6 +192,10 @@ describe("Config module", function()
         vertical_split = true,
         open_in_current_tab = true,
       },
+      models = {
+        { name = "Claude Opus 4 (Latest)", value = "claude-opus-4-20250514" },
+        { name = "Claude Sonnet 4 (Latest)", value = "claude-sonnet-4-20250514" },
+      },
     }
 
     local success, _ = pcall(function()

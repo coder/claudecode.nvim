@@ -889,7 +889,8 @@ function M._create_commands()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
         vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
       end
-      terminal.toggle({}, nil) -- `opts.fargs` can be used for future enhancements.
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+      terminal.simple_toggle({}, cmd_args)
     end, {
       nargs = "*",
       desc = "Toggle the Claude Code terminal window (simple show/hide) with optional arguments",
@@ -942,15 +943,22 @@ function M._create_commands()
     desc = "Deny/reject the current diff changes",
   })
 
-  vim.api.nvim_create_user_command("ClaudeSelectModel", function()
-    M.open_with_model()
+  vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)
+    local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+    M.open_with_model(cmd_args)
   end, {
-    desc = "Select and open Claude terminal with chosen model",
+    nargs = "*",
+    desc = "Select and open Claude terminal with chosen model and optional arguments",
   })
 end
 
-M.open_with_model = function()
+M.open_with_model = function(additional_args)
   local models = M.state.config.models
+
+  if not models or #models == 0 then
+    logger.error("command", "No models configured for selection")
+    return
+  end
 
   vim.ui.select(models, {
     prompt = "Select Claude model:",
@@ -962,13 +970,14 @@ M.open_with_model = function()
       return -- User cancelled
     end
 
-    local terminal_ok, terminal = pcall(require, "claudecode.terminal")
-    if not terminal_ok then
-      vim.notify("Terminal module not available", vim.log.levels.ERROR)
+    if not choice.value or type(choice.value) ~= "string" then
+      logger.error("command", "Invalid model value selected")
       return
     end
 
-    terminal.toggle({}, "--model " .. choice.value)
+    local model_arg = "--model " .. choice.value
+    local final_args = additional_args and (model_arg .. " " .. additional_args) or model_arg
+    vim.cmd("ClaudeCode " .. final_args)
   end)
 end
 

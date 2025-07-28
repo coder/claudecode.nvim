@@ -19,10 +19,8 @@ M.defaults = {
     open_in_current_tab = true, -- Use current tab instead of creating new tab
   },
   models = {
-    { name = "Claude Opus 4 (Latest)", value = "claude-opus-4-20250514" },
-    { name = "Claude Sonnet 4 (Latest)", value = "claude-sonnet-4-20250514" },
-    { name = "Claude 3.7 Sonnet (Latest)", value = "claude-3-7-sonnet-latest" },
-    { name = "Claude 3.5 Haiku (Latest)", value = "claude-3-5-haiku-latest" },
+    { name = "Claude Opus 4 (Latest)", value = "opus" },
+    { name = "Claude Sonnet 4 (Latest)", value = "sonnet" },
   },
 }
 
@@ -83,7 +81,7 @@ function M.validate(config)
   -- Validate models
   assert(type(config.models) == "table", "models must be a table")
   assert(#config.models > 0, "models must not be empty")
-  
+
   for i, model in ipairs(config.models) do
     assert(type(model) == "table", "models[" .. i .. "] must be a table")
     assert(type(model.name) == "string" and model.name ~= "", "models[" .. i .. "].name must be a non-empty string")
