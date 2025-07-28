@@ -143,6 +143,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
     -- Selection Tracking
     track_selection = true,
+    show_terminal_on_at_mention = true, -- Whether to show terminal when sending @ mentions
     visual_demotion_delay_ms = 50,
 
     -- Terminal Configuration
