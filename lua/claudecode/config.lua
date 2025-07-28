@@ -6,6 +6,7 @@ M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
   terminal_cmd = nil,
+  enable_terminal = true, -- Enable built-in terminal integration (set to false to use external terminal like tmux)
   log_level = "info",
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
@@ -54,6 +55,8 @@ function M.validate(config)
   assert(is_valid_log_level, "log_level must be one of: " .. table.concat(valid_log_levels, ", "))
 
   assert(type(config.track_selection) == "boolean", "track_selection must be a boolean")
+
+  assert(type(config.enable_terminal) == "boolean", "enable_terminal must be a boolean")
 
   assert(
     type(config.visual_demotion_delay_ms) == "number" and config.visual_demotion_delay_ms >= 0,
