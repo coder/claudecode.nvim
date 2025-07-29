@@ -130,9 +130,6 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ## Advanced Configuration
 
-<details>
-<summary>Complete configuration options</summary>
-
 ```lua
 {
   "coder/claudecode.nvim",
@@ -152,7 +149,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
-      provider = "auto", -- "auto", "snacks", or "native"
+      provider = "auto", -- "auto", "snacks", "native", or custom provider table
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()`
     },
@@ -170,7 +167,119 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 }
 ```
 
-</details>
+## Custom Terminal Providers
+
+You can create custom terminal providers by passing a table with the required functions instead of a string provider name:
+
+```lua
+require("claudecode").setup({
+  terminal = {
+    provider = {
+      -- Required functions
+      setup = function(config)
+        -- Initialize your terminal provider
+      end,
+
+      open = function(cmd_string, env_table, effective_config, focus)
+        -- Open terminal with command and environment
+        -- focus parameter controls whether to focus terminal (defaults to true)
+      end,
+
+      close = function()
+        -- Close the terminal
+      end,
+
+      simple_toggle = function(cmd_string, env_table, effective_config)
+        -- Simple show/hide toggle
+      end,
+
+      focus_toggle = function(cmd_string, env_table, effective_config)
+        -- Smart toggle: focus terminal if not focused, hide if focused
+      end,
+
+      get_active_bufnr = function()
+        -- Return terminal buffer number or nil
+        return 123 -- example
+      end,
+
+      is_available = function()
+        -- Return true if provider can be used
+        return true
+      end,
+
+      -- Optional functions (auto-generated if not provided)
+      toggle = function(cmd_string, env_table, effective_config)
+        -- Defaults to calling simple_toggle for backward compatibility
+      end,
+
+      _get_terminal_for_test = function()
+        -- For testing only, defaults to return nil
+        return nil
+      end,
+    },
+  },
+})
+```
+
+### Custom Provider Example
+
+Here's a complete example using a hypothetical `my_terminal` plugin:
+
+```lua
+local my_terminal_provider = {
+  setup = function(config)
+    -- Store config for later use
+    self.config = config
+  end,
+
+  open = function(cmd_string, env_table, effective_config, focus)
+    if focus == nil then focus = true end
+
+    local my_terminal = require("my_terminal")
+    my_terminal.open({
+      cmd = cmd_string,
+      env = env_table,
+      width = effective_config.split_width_percentage,
+      side = effective_config.split_side,
+      focus = focus,
+    })
+  end,
+
+  close = function()
+    require("my_terminal").close()
+  end,
+
+  simple_toggle = function(cmd_string, env_table, effective_config)
+    require("my_terminal").toggle()
+  end,
+
+  focus_toggle = function(cmd_string, env_table, effective_config)
+    local my_terminal = require("my_terminal")
+    if my_terminal.is_focused() then
+      my_terminal.hide()
+    else
+      my_terminal.focus()
+    end
+  end,
+
+  get_active_bufnr = function()
+    return require("my_terminal").get_bufnr()
+  end,
+
+  is_available = function()
+    local ok, _ = pcall(require, "my_terminal")
+    return ok
+  end,
+}
+
+require("claudecode").setup({
+  terminal = {
+    provider = my_terminal_provider,
+  },
+})
+```
+
+The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
 ## Troubleshooting
 

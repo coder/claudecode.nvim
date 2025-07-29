@@ -46,13 +46,88 @@ local function load_provider(provider_name)
   return providers[provider_name]
 end
 
+--- Validates and enhances a custom table provider with smart defaults
+--- @param provider table The custom provider table to validate
+--- @return TerminalProvider|nil provider The enhanced provider, or nil if invalid
+--- @return string|nil error Error message if validation failed
+local function validate_and_enhance_provider(provider)
+  if type(provider) ~= "table" then
+    return nil, "Custom provider must be a table"
+  end
+
+  -- Required functions that must be implemented
+  local required_functions = {
+    "setup",
+    "open",
+    "close",
+    "simple_toggle",
+    "focus_toggle",
+    "get_active_bufnr",
+    "is_available",
+  }
+
+  -- Validate all required functions exist and are callable
+  for _, func_name in ipairs(required_functions) do
+    local func = provider[func_name]
+    if not func then
+      return nil, "Custom provider missing required function: " .. func_name
+    end
+    -- Check if it's callable (function or table with __call metamethod)
+    local is_callable = type(func) == "function"
+      or (type(func) == "table" and getmetatable(func) and getmetatable(func).__call)
+    if not is_callable then
+      return nil, "Custom provider field '" .. func_name .. "' must be callable, got: " .. type(func)
+    end
+  end
+
+  -- Create enhanced provider with defaults for optional functions
+  -- Note: Don't deep copy to preserve spy functions in tests
+  local enhanced_provider = provider
+
+  -- Add default toggle function if not provided (calls simple_toggle for backward compatibility)
+  if not enhanced_provider.toggle then
+    enhanced_provider.toggle = function(cmd_string, env_table, effective_config)
+      return enhanced_provider.simple_toggle(cmd_string, env_table, effective_config)
+    end
+  end
+
+  -- Add default test function if not provided
+  if not enhanced_provider._get_terminal_for_test then
+    enhanced_provider._get_terminal_for_test = function()
+      return nil
+    end
+  end
+
+  return enhanced_provider, nil
+end
+
 --- Gets the effective terminal provider, guaranteed to return a valid provider
 --- Falls back to native provider if configured provider is unavailable
 --- @return TerminalProvider provider The terminal provider module (never nil)
 local function get_provider()
   local logger = require("claudecode.logger")
 
-  if config.provider == "auto" then
+  -- Handle custom table provider
+  if type(config.provider) == "table" then
+    local enhanced_provider, error_msg = validate_and_enhance_provider(config.provider)
+    if enhanced_provider then
+      -- Check if custom provider is available
+      local is_available_ok, is_available = pcall(enhanced_provider.is_available)
+      if is_available_ok and is_available then
+        logger.debug("terminal", "Using custom table provider")
+        return enhanced_provider
+      else
+        local availability_msg = is_available_ok and "provider reports not available" or "error checking availability"
+        logger.warn(
+          "terminal",
+          "Custom table provider configured but " .. availability_msg .. ". Falling back to 'native'."
+        )
+      end
+    else
+      logger.warn("terminal", "Invalid custom table provider: " .. error_msg .. ". Falling back to 'native'.")
+    end
+    -- Fall through to native provider
+  elseif config.provider == "auto" then
     -- Try snacks first, then fallback to native silently
     local snacks_provider = load_provider("snacks")
     if snacks_provider and snacks_provider.is_available() then
@@ -69,8 +144,13 @@ local function get_provider()
   elseif config.provider == "native" then
     -- noop, will use native provider as default below
     logger.debug("terminal", "Using native terminal provider")
-  else
+  elseif type(config.provider) == "string" then
     logger.warn("terminal", "Invalid provider configured: " .. tostring(config.provider) .. ". Defaulting to 'native'.")
+  else
+    logger.warn(
+      "terminal",
+      "Invalid provider type: " .. type(config.provider) .. ". Must be string or table. Defaulting to 'native'."
+    )
   end
 
   local native_provider = load_provider("native")
@@ -188,7 +268,7 @@ end
 -- @param user_term_config table (optional) Configuration options for the terminal.
 -- @field user_term_config.split_side string 'left' or 'right' (default: 'right').
 -- @field user_term_config.split_width_percentage number Percentage of screen width (0.0 to 1.0, default: 0.30).
--- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
+-- @field user_term_config.provider string|table 'auto', 'snacks', 'native', or custom provider table (default: 'auto').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
 -- @field user_term_config.snacks_win_opts table Opts to pass to `Snacks.terminal.open()` (default: {}).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
@@ -227,7 +307,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "snacks" or v == "native") then
+      elseif k == "provider" and (v == "snacks" or v == "native" or v == "auto" or type(v) == "table") then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
@@ -314,11 +394,11 @@ end
 --- Gets the managed terminal instance for testing purposes.
 -- NOTE: This function is intended for use in tests to inspect internal state.
 -- The underscore prefix indicates it's not part of the public API for regular use.
--- @return snacks.terminal|nil The managed Snacks terminal instance, or nil.
+-- @return table|nil The managed terminal instance, or nil.
 function M._get_managed_terminal_for_test()
-  local snacks_provider = load_provider("snacks")
-  if snacks_provider and snacks_provider._get_terminal_for_test then
-    return snacks_provider._get_terminal_for_test()
+  local provider = get_provider()
+  if provider and provider._get_terminal_for_test then
+    return provider._get_terminal_for_test()
   end
   return nil
 end
