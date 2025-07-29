@@ -43,14 +43,15 @@ function M.register_all()
   M.register(require("claudecode.tools.get_current_selection"))
   M.register(require("claudecode.tools.get_open_editors"))
   M.register(require("claudecode.tools.open_diff"))
-
-  -- Register internal tools without schemas (not exposed via MCP)
+  M.register(require("claudecode.tools.get_latest_selection"))
+  M.register(require("claudecode.tools.close_all_diff_tabs"))
   M.register(require("claudecode.tools.get_diagnostics"))
   M.register(require("claudecode.tools.get_workspace_folders"))
-  -- M.register("getLatestSelection", nil, M.get_latest_selection) -- This tool is effectively covered by getCurrentSelection
   M.register(require("claudecode.tools.check_document_dirty"))
   M.register(require("claudecode.tools.save_document"))
-  M.register(require("claudecode.tools.close_tab"))
+
+  -- Register internal tools without schemas (not exposed via MCP)
+  M.register(require("claudecode.tools.close_tab")) -- Must remain internal per user requirement
 end
 
 function M.register(tool_module)

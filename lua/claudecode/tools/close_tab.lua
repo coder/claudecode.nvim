@@ -1,20 +1,21 @@
 --- Tool implementation for closing a buffer by its name.
 
-local schema = {
-  description = "Close a tab/buffer by its tab name",
-  inputSchema = {
-    type = "object",
-    properties = {
-      tab_name = {
-        type = "string",
-        description = "Name of the tab to close",
-      },
-    },
-    required = { "tab_name" },
-    additionalProperties = false,
-    ["$schema"] = "http://json-schema.org/draft-07/schema#",
-  },
-}
+-- Note: Schema defined but not used since this tool is internal
+-- local schema = {
+--   description = "Close a tab/buffer by its tab name",
+--   inputSchema = {
+--     type = "object",
+--     properties = {
+--       tab_name = {
+--         type = "string",
+--         description = "Name of the tab to close",
+--       },
+--     },
+--     required = { "tab_name" },
+--     additionalProperties = false,
+--     ["$schema"] = "http://json-schema.org/draft-07/schema#",
+--   },
+-- }
 
 --- Handles the close_tab tool invocation.
 -- Closes a tab/buffer by its tab name.
@@ -59,14 +60,35 @@ local function handler(params)
       local closed = diff.close_diff_by_tab_name(tab_name)
       if closed then
         log.debug("Successfully closed diff for tab: " .. tab_name)
-        return { message = "Tab closed: " .. tab_name }
+        return {
+          content = {
+            {
+              type = "text",
+              text = "TAB_CLOSED",
+            },
+          },
+        }
       else
         log.debug("Diff not found for tab: " .. tab_name)
-        return { message = "Tab closed: " .. tab_name .. " (diff not found)" }
+        return {
+          content = {
+            {
+              type = "text",
+              text = "TAB_CLOSED",
+            },
+          },
+        }
       end
     else
       log.error("Failed to load diff module or close_diff_by_tab_name not available")
-      return { message = "Tab closed: " .. tab_name .. " (diff system unavailable)" }
+      return {
+        content = {
+          {
+            type = "text",
+            text = "TAB_CLOSED",
+          },
+        },
+      }
     end
   end
 
@@ -94,7 +116,14 @@ local function handler(params)
   if bufnr == -1 then
     -- If buffer not found, the tab might already be closed - treat as success
     log.debug("Buffer not found for tab (already closed?): " .. tab_name)
-    return { message = "Tab closed: " .. tab_name .. " (already closed)" }
+    return {
+      content = {
+        {
+          type = "text",
+          text = "TAB_CLOSED",
+        },
+      },
+    }
   end
 
   local success, err = pcall(vim.api.nvim_buf_delete, bufnr, { force = false })
@@ -109,11 +138,20 @@ local function handler(params)
   end
 
   log.info("Successfully closed tab: " .. tab_name)
-  return { message = "Tab closed: " .. tab_name }
+
+  -- Return MCP-compliant format matching VS Code extension
+  return {
+    content = {
+      {
+        type = "text",
+        text = "TAB_CLOSED",
+      },
+    },
+  }
 end
 
 return {
   name = "close_tab",
-  schema = schema,
+  schema = nil, -- Internal tool - must remain as requested by user
   handler = handler,
 }

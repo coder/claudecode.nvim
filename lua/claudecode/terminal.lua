@@ -24,6 +24,8 @@ local config = {
   show_native_term_exit_tip = true,
   terminal_cmd = nil,
   auto_close = true,
+  env = {}, -- Custom environment variables for Claude terminal
+  snacks_win_opts = {},
 }
 
 -- Lazy load providers
@@ -91,6 +93,9 @@ local function build_config(opts_override)
       split_width_percentage = function(val)
         return type(val) == "number" and val > 0 and val < 1
       end,
+      snacks_win_opts = function(val)
+        return type(val) == "table"
+      end,
     }
     for key, val in pairs(opts_override) do
       if effective_config[key] ~= nil and validators[key] and validators[key](val) then
@@ -102,6 +107,7 @@ local function build_config(opts_override)
     split_side = effective_config.split_side,
     split_width_percentage = effective_config.split_width_percentage,
     auto_close = effective_config.auto_close,
+    snacks_win_opts = effective_config.snacks_win_opts,
   }
 end
 
@@ -148,6 +154,11 @@ local function get_claude_command_and_env(cmd_args)
     env_table["CLAUDE_CODE_SSE_PORT"] = tostring(sse_port_value)
   end
 
+  -- Merge custom environment variables from config
+  for key, value in pairs(config.env) do
+    env_table[key] = value
+  end
+
   return cmd_string, env_table
 end
 
@@ -179,8 +190,10 @@ end
 -- @field user_term_config.split_width_percentage number Percentage of screen width (0.0 to 1.0, default: 0.30).
 -- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
+-- @field user_term_config.snacks_win_opts table Opts to pass to `Snacks.terminal.open()` (default: {}).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
-function M.setup(user_term_config, p_terminal_cmd)
+-- @param p_env table|nil Custom environment variables to pass to the terminal (from main config).
+function M.setup(user_term_config, p_terminal_cmd, p_env)
   if user_term_config == nil then -- Allow nil, default to empty table silently
     user_term_config = {}
   elseif type(user_term_config) ~= "table" then -- Warn if it's not nil AND not a table
@@ -198,6 +211,16 @@ function M.setup(user_term_config, p_terminal_cmd)
     config.terminal_cmd = nil -- Fallback to default behavior
   end
 
+  if p_env == nil or type(p_env) == "table" then
+    config.env = p_env or {}
+  else
+    vim.notify(
+      "claudecode.terminal.setup: Invalid env provided: " .. tostring(p_env) .. ". Using empty table.",
+      vim.log.levels.WARN
+    )
+    config.env = {}
+  end
+
   for k, v in pairs(user_term_config) do
     if config[k] ~= nil and k ~= "terminal_cmd" then -- terminal_cmd is handled above
       if k == "split_side" and (v == "left" or v == "right") then
@@ -209,6 +232,8 @@ function M.setup(user_term_config, p_terminal_cmd)
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
       elseif k == "auto_close" and type(v) == "boolean" then
+        config[k] = v
+      elseif k == "snacks_win_opts" and type(v) == "table" then
         config[k] = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for " .. k .. ": " .. tostring(v), vim.log.levels.WARN)

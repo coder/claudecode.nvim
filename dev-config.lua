@@ -15,6 +15,7 @@ return {
     { "<leader>af", "<cmd>ClaudeCodeFocus<cr>", desc = "Focus Claude" },
     { "<leader>ar", "<cmd>ClaudeCode --resume<cr>", desc = "Resume Claude" },
     { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
+    { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
 
     -- Context sending
     { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>", desc = "Add current buffer" },
@@ -70,6 +71,7 @@ return {
     --   provider = "auto",                        -- "auto", "snacks", or "native"
     --   show_native_term_exit_tip = true,         -- Show exit tip for native terminal
     --   auto_close = true,                        -- Auto-close terminal after command completion
+    --   snacks_win_opts = {},                     -- Opts to pass to `Snacks.terminal.open()`
     -- },
 
     -- Development overrides (uncomment as needed)

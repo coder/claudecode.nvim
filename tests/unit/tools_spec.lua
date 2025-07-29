@@ -196,10 +196,40 @@ describe("Tools Module", function()
       mock_vim.api.nvim_buf_get_option = spy.new(function(b, opt)
         if b == 1 and opt == "modified" then
           return false
+        elseif b == 1 and opt == "filetype" then
+          return "lua"
         else
           return nil
         end
       end)
+      mock_vim.api.nvim_get_current_buf = spy.new(function()
+        return 1
+      end)
+      mock_vim.api.nvim_get_current_tabpage = spy.new(function()
+        return 1
+      end)
+      mock_vim.api.nvim_buf_line_count = spy.new(function(b)
+        if b == 1 then
+          return 100
+        end
+        return 0
+      end)
+      mock_vim.fn.fnamemodify = spy.new(function(path, modifier)
+        if modifier == ":t" then
+          return path:match("[^/]+$") or path
+        end
+        return path
+      end)
+      mock_vim.json.encode = spy.new(function(data, opts)
+        return require("tests.busted_setup").json_encode(data)
+      end)
+
+      -- Mock selection module to prevent errors
+      package.loaded["claudecode.selection"] = {
+        get_latest_selection = function()
+          return nil
+        end,
+      }
 
       -- Re-register the specific tool to ensure its handler picks up the new spies
       package.loaded["claudecode.tools.get_open_editors"] = nil -- Clear cache for the sub-tool
@@ -212,9 +242,15 @@ describe("Tools Module", function()
       local result_obj = tools.handle_invoke(nil, params)
 
       expect(result_obj.result).to_be_table() -- "Expected .result to be a table"
-      expect(result_obj.result.editors).to_be_table() -- "Expected .result.editors to be a table"
-      expect(#result_obj.result.editors).to_be(1)
-      expect(result_obj.result.editors[1].filePath).to_be("/test/file.lua")
+      expect(result_obj.result.content).to_be_table() -- "Expected .result.content to be a table"
+      expect(result_obj.result.content[1]).to_be_table()
+      expect(result_obj.result.content[1].type).to_be("text")
+
+      local parsed_result = require("tests.busted_setup").json_decode(result_obj.result.content[1].text)
+      expect(parsed_result.tabs).to_be_table()
+      expect(#parsed_result.tabs).to_be(1)
+      expect(parsed_result.tabs[1].uri).to_be("file:///test/file.lua")
+      expect(parsed_result.tabs[1].label).to_be("file.lua")
       expect(result_obj.error).to_be_nil() -- "Expected .error to be nil for successful call"
 
       expect(mock_vim.api.nvim_list_bufs.calls).to_be_table() -- Check if .calls table exists
@@ -223,7 +259,29 @@ describe("Tools Module", function()
       expect(mock_vim.fn.buflisted.calls[1].vals[1]).to_be(1) -- Check first arg of first call
       expect(mock_vim.api.nvim_buf_get_name.calls[1].vals[1]).to_be(1) -- Check first arg of first call
       expect(mock_vim.api.nvim_buf_get_option.calls[1].vals[1]).to_be(1) -- Check first arg of first call
-      expect(mock_vim.api.nvim_buf_get_option.calls[1].vals[2]).to_be("modified") -- Check second arg of first call
+      -- Check that both 'filetype' and 'modified' options were requested, regardless of order
+      local get_option_calls = mock_vim.api.nvim_buf_get_option.calls
+      local options_requested = {}
+      for i = 1, #get_option_calls do
+        table.insert(options_requested, get_option_calls[i].vals[2])
+      end
+
+      local found_filetype = false
+      local found_modified = false
+      for _, v in ipairs(options_requested) do
+        if v == "filetype" then
+          found_filetype = true
+        end
+        if v == "modified" then
+          found_modified = true
+        end
+      end
+
+      expect(found_filetype).to_be_true("Expected 'filetype' option to be requested")
+      expect(found_modified).to_be_true("Expected 'modified' option to be requested")
+
+      -- Clean up selection module mock
+      package.loaded["claudecode.selection"] = nil
     end)
 
     it("should handle unknown tool invocation with JSON-RPC error", function()

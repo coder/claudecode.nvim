@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# vv - Start Neovim with fixture configuration
+
+FIXTURES_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Source common functions
+source "$FIXTURES_DIR/bin/common.sh"
+
+# Main logic
+if [[ $# -eq 0 ]]; then
+  config="$(select_config "$FIXTURES_DIR")"
+  [[ -z $config ]] && echo "No config selected" && exit 0
+else
+  config="$1"
+fi
+
+if ! validate_config "$FIXTURES_DIR" "$config"; then
+  exit 1
+fi
+
+# Set environment to use the config directory as if it were ~/.config/nvim
+config_dir="$FIXTURES_DIR/$config"
+init_file="$config_dir/init.lua"
+
+if [[ -f "$init_file" ]]; then
+  echo "Loading config from: $config_dir"
+  (cd "$FIXTURES_DIR" && NVIM_APPNAME="$config" XDG_CONFIG_HOME="$FIXTURES_DIR" nvim "${@:2}")
+else
+  echo "Error: $init_file not found"
+  exit 1
+fi

@@ -570,6 +570,22 @@ local vim = {
     },
   },
 
+  -- Add tbl_extend function for compatibility
+  tbl_extend = function(behavior, ...)
+    local tables = { ... }
+    local result = {}
+
+    for _, tbl in ipairs(tables) do
+      for k, v in pairs(tbl) do
+        if behavior == "force" or result[k] == nil then
+          result[k] = v
+        end
+      end
+    end
+
+    return result
+  end,
+
   notify = function(msg, level, opts)
     -- Store the last notification for test assertions
     vim._last_notify = {

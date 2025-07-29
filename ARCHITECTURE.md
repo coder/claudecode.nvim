@@ -235,6 +235,8 @@ lua/claudecode/
 
 ## Testing
 
+### Automated Testing
+
 Three-layer testing strategy using busted:
 
 ```lua
@@ -263,6 +265,30 @@ describe("full flow", function()
   end)
 end)
 ```
+
+### Integration Testing with Fixtures
+
+Manual testing with real Neovim configurations in the `fixtures/` directory:
+
+```bash
+# Test with different file explorers
+source fixtures/nvim-aliases.sh
+vv nvim-tree  # Test with nvim-tree integration
+vv oil        # Test with oil.nvim integration
+vv netrw      # Test with built-in netrw
+
+# Each fixture provides:
+# - Complete Neovim configuration
+# - Plugin dependencies
+# - Development keybindings
+# - Integration-specific testing scenarios
+```
+
+**Fixture Architecture**:
+
+- `fixtures/bin/` - Helper scripts (`vv`, `vve`, `list-configs`)
+- `fixtures/[integration]/` - Complete Neovim configs for testing
+- `fixtures/nvim-aliases.sh` - Shell aliases for easy testing
 
 ## Performance & Security
 

@@ -68,22 +68,19 @@ local function log(level, component, message_parts)
     end
   end
 
-  if level == M.levels.ERROR then
-    vim.schedule(function()
+  -- Wrap all vim.notify and nvim_echo calls in vim.schedule to avoid
+  -- "nvim_echo must not be called in a fast event context" errors
+  vim.schedule(function()
+    if level == M.levels.ERROR then
       vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
-    end)
-  elseif level == M.levels.WARN then
-    vim.schedule(function()
+    elseif level == M.levels.WARN then
       vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
-    end)
-  else
-    -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
-    -- to make them appear in :messages, and wrap in vim.schedule
-    -- to avoid "nvim_echo must not be called in a fast event context".
-    vim.schedule(function()
+    else
+      -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
+      -- to make them appear in :messages
       vim.api.nvim_echo({ { prefix .. " " .. message, "Normal" } }, true, {})
-    end)
-  end
+    end
+  end)
 end
 
 --- @param component string|nil Optional component/module name.

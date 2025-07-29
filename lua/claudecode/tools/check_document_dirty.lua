@@ -1,5 +1,21 @@
 --- Tool implementation for checking if a document is dirty.
 
+local schema = {
+  description = "Check if a document has unsaved changes (is dirty)",
+  inputSchema = {
+    type = "object",
+    properties = {
+      filePath = {
+        type = "string",
+        description = "Path to the file to check",
+      },
+    },
+    required = { "filePath" },
+    additionalProperties = false,
+    ["$schema"] = "http://json-schema.org/draft-07/schema#",
+  },
+}
+
 --- Handles the checkDocumentDirty tool invocation.
 -- Checks if the specified file (buffer) has unsaved changes.
 -- @param params table The input parameters for the tool.
@@ -14,22 +30,41 @@ local function handler(params)
   local bufnr = vim.fn.bufnr(params.filePath)
 
   if bufnr == -1 then
-    -- It's debatable if this is an "error" or if it should return { isDirty = false }
-    -- For now, treating as an operational error as the file isn't actively managed by a buffer.
-    error({
-      code = -32000,
-      message = "File operation error",
-      data = "File not open in editor: " .. params.filePath,
-    })
+    -- Return success: false when document not open, matching VS Code behavior
+    return {
+      content = {
+        {
+          type = "text",
+          text = vim.json.encode({
+            success = false,
+            message = "Document not open: " .. params.filePath,
+          }, { indent = 2 }),
+        },
+      },
+    }
   end
 
   local is_dirty = vim.api.nvim_buf_get_option(bufnr, "modified")
+  local is_untitled = vim.api.nvim_buf_get_name(bufnr) == ""
 
-  return { isDirty = is_dirty }
+  -- Return MCP-compliant format with JSON-stringified result
+  return {
+    content = {
+      {
+        type = "text",
+        text = vim.json.encode({
+          success = true,
+          filePath = params.filePath,
+          isDirty = is_dirty,
+          isUntitled = is_untitled,
+        }, { indent = 2 }),
+      },
+    },
+  }
 end
 
 return {
   name = "checkDocumentDirty",
-  schema = nil, -- Internal tool
+  schema = schema,
   handler = handler,
 }

@@ -37,6 +37,23 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 - `nix develop` - Enter development shell with all dependencies
 - `nix fmt` - Format all files using nix formatter
 
+### Integration Testing with Fixtures
+
+The `fixtures/` directory contains test Neovim configurations for verifying plugin integrations:
+
+- `vv <config>` - Start Neovim with a specific fixture configuration
+- `vve <config>` - Start Neovim with a fixture config in edit mode
+- `list-configs` - Show available fixture configurations
+- Source `fixtures/nvim-aliases.sh` to enable these commands
+
+**Available Fixtures**:
+
+- `netrw` - Tests with Neovim's built-in file explorer
+- `nvim-tree` - Tests with nvim-tree.lua file explorer
+- `oil` - Tests with oil.nvim file explorer
+
+**Usage**: `source fixtures/nvim-aliases.sh && vv oil` starts Neovim with oil.nvim configuration
+
 ## Architecture Overview
 
 ### Core Components
@@ -65,14 +82,28 @@ The WebSocket server implements secure authentication using:
 - **Lock File Discovery**: Tokens stored in `~/.claude/ide/[port].lock` for Claude CLI
 - **MCP Compliance**: Follows official Claude Code IDE authentication protocol
 
-### MCP Tools Architecture
+### MCP Tools Architecture (✅ FULLY COMPLIANT)
 
-Tools are registered with JSON schemas and handlers. MCP-exposed tools include:
+**Complete VS Code Extension Compatibility**: All tools now implement identical behavior and output formats as the official VS Code extension.
 
-- `openFile` - Opens files with optional line/text selection
-- `getCurrentSelection` - Gets current text selection
-- `getOpenEditors` - Lists currently open files
+**MCP-Exposed Tools** (with JSON schemas):
+
+- `openFile` - Opens files with optional line/text selection (startLine/endLine), preview mode, text pattern matching, and makeFrontmost flag
+- `getCurrentSelection` - Gets current text selection from active editor
+- `getLatestSelection` - Gets most recent text selection (even from inactive editors)
+- `getOpenEditors` - Lists currently open files with VS Code-compatible `tabs` structure
 - `openDiff` - Opens native Neovim diff views
+- `checkDocumentDirty` - Checks if document has unsaved changes
+- `saveDocument` - Saves document with detailed success/failure reporting
+- `getWorkspaceFolders` - Gets workspace folder information
+- `closeAllDiffTabs` - Closes all diff-related tabs and windows
+- `getDiagnostics` - Gets language diagnostics (errors, warnings) from the editor
+
+**Internal Tools** (not exposed via MCP):
+
+- `close_tab` - Internal-only tool for tab management (hardcoded in Claude Code)
+
+**Format Compliance**: All tools return MCP-compliant format: `{content: [{type: "text", text: "JSON-stringified-data"}]}`
 
 ### Key File Locations
 
@@ -80,6 +111,33 @@ Tools are registered with JSON schemas and handlers. MCP-exposed tools include:
 - `lua/claudecode/config.lua` - Configuration management
 - `plugin/claudecode.lua` - Plugin loader with version checks
 - `tests/` - Comprehensive test suite with unit, component, and integration tests
+
+## MCP Protocol Compliance
+
+### Protocol Implementation Status
+
+- ✅ **WebSocket Server**: RFC 6455 compliant with MCP message format
+- ✅ **Tool Registration**: JSON Schema-based tool definitions
+- ✅ **Authentication**: UUID v4 token-based secure handshake
+- ✅ **Message Format**: JSON-RPC 2.0 with MCP content structure
+- ✅ **Error Handling**: Comprehensive JSON-RPC error responses
+
+### VS Code Extension Compatibility
+
+claudecode.nvim implements **100% feature parity** with Anthropic's official VS Code extension:
+
+- **Identical Tool Set**: All 10 VS Code tools implemented
+- **Compatible Formats**: Output structures match VS Code extension exactly
+- **Behavioral Consistency**: Same parameter handling and response patterns
+- **Error Compatibility**: Matching error codes and messages
+
+### Protocol Validation
+
+Run `make test` to verify MCP compliance:
+
+- **Tool Format Validation**: All tools return proper MCP structure
+- **Schema Compliance**: JSON schemas validated against VS Code specs
+- **Integration Testing**: End-to-end MCP message flow verification
 
 ## Testing Architecture
 
@@ -90,6 +148,33 @@ Tests are organized in three layers:
 - **Integration tests** (`tests/integration/`) - End-to-end functionality with mock Claude client
 
 Test files follow the pattern `*_spec.lua` or `*_test.lua` and use the busted framework.
+
+### Test Infrastructure
+
+**JSON Handling**: Custom JSON encoder/decoder with support for:
+
+- Nested objects and arrays
+- Special Lua keywords as object keys (`["end"]`)
+- MCP message format validation
+- VS Code extension output compatibility
+
+**Test Pattern**: Run specific test files during development:
+
+```bash
+# Run specific tool tests with proper LUA_PATH
+export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
+busted tests/unit/tools/specific_tool_spec.lua --verbose
+
+# Or use make for full validation
+make test  # Recommended for complete validation
+```
+
+**Coverage Metrics**:
+
+- **320+ tests** covering all MCP tools and core functionality
+- **Unit Tests**: Individual tool behavior and error cases
+- **Integration Tests**: End-to-end MCP protocol flow
+- **Format Tests**: MCP compliance and VS Code compatibility
 
 ### Test Organization Principles
 
@@ -274,9 +359,103 @@ rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
 4. **Document Changes**: Update relevant documentation (this file, PROTOCOL.md, etc.)
 5. **Commit**: Only commit after successful `make` execution
 
+### Integration Development Guidelines
+
+**Adding New Integrations** (file explorers, terminals, etc.):
+
+1. **Implement Integration**: Add support in relevant modules (e.g., `lua/claudecode/tools/`)
+2. **Create Fixture Configuration**: **REQUIRED** - Add a complete Neovim config in `fixtures/[integration-name]/`
+3. **Test Integration**: Use fixture to verify functionality with `vv [integration-name]`
+4. **Update Documentation**: Add integration to fixtures list and relevant tool documentation
+5. **Run Full Test Suite**: Ensure `make` passes with new integration
+
+**Fixture Requirements**:
+
+- Complete Neovim configuration with plugin dependencies
+- Include `dev-claudecode.lua` with development keybindings
+- Test all relevant claudecode.nvim features with the integration
+- Document any integration-specific behaviors or limitations
+
+### MCP Tool Development Guidelines
+
+**Adding New Tools**:
+
+1. **Study Existing Patterns**: Review `lua/claudecode/tools/` for consistent structure
+2. **Implement Handler**: Return MCP format: `{content: [{type: "text", text: JSON}]}`
+3. **Add JSON Schema**: Define parameters and expose via MCP (if needed)
+4. **Create Tests**: Both unit tests and integration tests required
+5. **Update Documentation**: Add to this file's MCP tools list
+
+**Tool Testing Pattern**:
+
+```lua
+-- All tools should return MCP-compliant format
+local result = tool_handler(params)
+expect(result).to_be_table()
+expect(result.content).to_be_table()
+expect(result.content[1].type).to_be("text")
+local parsed = json_decode(result.content[1].text)
+-- Validate parsed structure matches VS Code extension
+```
+
+**Error Handling Standard**:
+
+```lua
+-- Use consistent JSON-RPC error format
+error({
+  code = -32602,  -- Invalid params
+  message = "Description of the issue",
+  data = "Additional context"
+})
+```
+
 ### Code Quality Standards
 
-- **Test Coverage**: Maintain comprehensive test coverage (currently 314+ tests)
+- **Test Coverage**: Maintain comprehensive test coverage (currently **320+ tests**, 100% success rate)
 - **Zero Warnings**: All code must pass luacheck with 0 warnings/errors
+- **MCP Compliance**: All tools must return proper MCP format with JSON-stringified content
+- **VS Code Compatibility**: New tools must match VS Code extension behavior exactly
 - **Consistent Formatting**: Use `nix fmt` or `stylua` for consistent code style
 - **Documentation**: Update CLAUDE.md for architectural changes, PROTOCOL.md for protocol changes
+
+### Development Quality Gates
+
+1. **`make check`** - Syntax and linting (0 warnings required)
+2. **`make test`** - All tests passing (320/320 success rate required)
+3. **`make format`** - Consistent code formatting
+4. **MCP Validation** - Tools return proper format structure
+5. **Integration Test** - End-to-end protocol flow verification
+
+## Development Troubleshooting
+
+### Common Issues
+
+**Test Failures with LUA_PATH**:
+
+```bash
+# Tests can't find modules - use proper LUA_PATH
+export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
+busted tests/unit/specific_test.lua
+```
+
+**JSON Format Issues**:
+
+- Ensure all tools return: `{content: [{type: "text", text: "JSON-string"}]}`
+- Use `vim.json.encode()` for proper JSON stringification
+- Test JSON parsing with custom test decoder in `tests/busted_setup.lua`
+
+**MCP Tool Registration**:
+
+- Tools with `schema = nil` are internal-only
+- Tools with schema are exposed via MCP
+- Check `lua/claudecode/tools/init.lua` for registration patterns
+
+**Authentication Testing**:
+
+```bash
+# Verify auth token generation
+cat ~/.claude/ide/*.lock | jq .authToken
+
+# Test WebSocket connection
+websocat ws://localhost:PORT --header "x-claude-code-ide-authorization: $(cat ~/.claude/ide/*.lock | jq -r .authToken)"
+```

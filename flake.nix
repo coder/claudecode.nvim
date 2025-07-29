@@ -30,6 +30,11 @@
             shellcheck.enable = true;
           };
           settings.formatter.shellcheck.options = [ "--exclude=SC1091,SC2016" ];
+          settings.formatter.prettier.excludes = [
+            # Exclude lazy.nvim lock files as they are auto-generated
+            # and will be reformatted by lazy on each package update
+            "fixtures/*/lazy-lock.json"
+          ];
         };
 
         # CI-specific packages (minimal set for testing and linting)
@@ -50,6 +55,7 @@
           gnumake
           websocat
           jq
+          fzf
           # claude-code
         ];
       in

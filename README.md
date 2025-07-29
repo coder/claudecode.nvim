@@ -4,11 +4,6 @@
 ![Neovim version](https://img.shields.io/badge/Neovim-0.8%2B-green)
 ![Status](https://img.shields.io/badge/Status-beta-blue)
 
-> ⚠️ **Important**: IDE integrations are currently broken in Claude Code releases newer than v1.0.27. Please use [Claude Code v1.0.27](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/1.0.27) or older until these issues are resolved:
->
-> - [Claude Code not detecting IDE integrations #2299](https://github.com/anthropics/claude-code/issues/2299)
-> - [IDE integration broken after update #2295](https://github.com/anthropics/claude-code/issues/2295)
-
 **The first Neovim IDE integration for Claude Code** — bringing Anthropic's AI coding assistant to your favorite editor with a pure Lua implementation.
 
 > 🎯 **TL;DR:** When Anthropic released Claude Code with VS Code and JetBrains support, I reverse-engineered their extension and built this Neovim plugin. This plugin implements the same WebSocket-based MCP protocol, giving Neovim users the same AI-powered coding experience.
@@ -38,6 +33,7 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
     { "<leader>af", "<cmd>ClaudeCodeFocus<cr>", desc = "Focus Claude" },
     { "<leader>ar", "<cmd>ClaudeCode --resume<cr>", desc = "Resume Claude" },
     { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
+    { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
     { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>", desc = "Add current buffer" },
     { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
     {
@@ -91,6 +87,7 @@ That's it! The plugin will auto-configure everything else.
 
 - `:ClaudeCode` - Toggle the Claude Code terminal window
 - `:ClaudeCodeFocus` - Smart focus/toggle Claude terminal
+- `:ClaudeCodeSelectModel` - Select Claude model and open terminal with optional arguments
 - `:ClaudeCodeSend` - Send current visual selection to Claude
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
 - `:ClaudeCodeDiffAccept` - Accept diff changes
@@ -157,6 +154,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       split_width_percentage = 0.30,
       provider = "auto", -- "auto", "snacks", or "native"
       auto_close = true,
+      snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()`
     },
 
     -- Diff Integration

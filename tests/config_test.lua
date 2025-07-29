@@ -175,30 +175,24 @@ describe("Config module", function()
     assert(type(config.defaults.track_selection) == "boolean")
   end)
 
-  it("should validate valid configuration", function()
-    local valid_config = {
-      port_range = { min = 10000, max = 65535 },
-      auto_start = true,
+  it("should apply and validate user configuration", function()
+    local user_config = {
       terminal_cmd = "toggleterm",
       log_level = "debug",
       track_selection = false,
-      visual_demotion_delay_ms = 50,
-      connection_wait_delay = 200,
-      connection_timeout = 10000,
-      queue_timeout = 5000,
-      diff_opts = {
-        auto_close_on_accept = true,
-        show_diff_stats = true,
-        vertical_split = true,
-        open_in_current_tab = true,
+      models = {
+        { name = "Claude Opus 4 (Latest)", value = "claude-opus-4-20250514" },
+        { name = "Claude Sonnet 4 (Latest)", value = "claude-sonnet-4-20250514" },
       },
     }
 
-    local success, _ = pcall(function()
-      return config.validate(valid_config)
+    local success, final_config = pcall(function()
+      return config.apply(user_config)
     end)
 
     assert(success == true)
+    assert(final_config.env ~= nil) -- Should inherit default empty table
+    assert(type(final_config.env) == "table")
   end)
 
   it("should merge user config with defaults", function()

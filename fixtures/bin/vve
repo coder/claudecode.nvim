@@ -1,0 +1,44 @@
+#!/bin/bash
+
+# vve - Edit Neovim configuration for a given fixture
+
+FIXTURES_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Source common functions
+source "$FIXTURES_DIR/bin/common.sh"
+
+# Main logic
+if [[ $# -eq 0 ]]; then
+  config="$(select_config "$FIXTURES_DIR")"
+  [[ -z $config ]] && echo "No config selected" && exit 0
+  # Open the config directory for editing
+  config_path="$FIXTURES_DIR/$config"
+else
+  config="$1"
+  # Validate that config is not empty when provided as argument
+  if [[ -z "$config" ]]; then
+    echo "Error: Config name cannot be empty"
+    echo "Usage: vve [config] [file]"
+    echo "Available configs:"
+    get_configs "$FIXTURES_DIR" | while read -r c; do
+      echo "  • $c"
+    done
+    exit 1
+  fi
+  if [[ $# -gt 1 ]]; then
+    # Specific file provided - open that file in the config directory
+    config_path="$FIXTURES_DIR/$config/$2"
+  else
+    # No specific file - open the config directory
+    config_path="$FIXTURES_DIR/$config"
+  fi
+fi
+
+if ! validate_config "$FIXTURES_DIR" "$config"; then
+  exit 1
+fi
+
+echo "Editing config: $config_path"
+
+# Use Neovim to edit the configuration files
+nvim "$config_path"

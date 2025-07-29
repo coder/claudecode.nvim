@@ -462,4 +462,153 @@ describe("claudecode.init", function()
       assert.is_nil(call_args[2], "Second argument should be nil when no args provided")
     end)
   end)
+
+  describe("ClaudeCodeSelectModel command with arguments", function()
+    local mock_terminal
+    local mock_ui_select
+    local mock_vim_cmd
+
+    before_each(function()
+      mock_terminal = {
+        toggle = spy.new(function() end),
+        simple_toggle = spy.new(function() end),
+        focus_toggle = spy.new(function() end),
+        open = spy.new(function() end),
+        close = spy.new(function() end),
+      }
+
+      -- Mock vim.ui.select to automatically select the first model
+      mock_ui_select = spy.new(function(models, opts, callback)
+        -- Simulate user selecting the first model
+        callback(models[1])
+      end)
+
+      -- Mock vim.cmd to capture command execution
+      mock_vim_cmd = spy.new(function(cmd) end)
+
+      vim.ui = vim.ui or {}
+      vim.ui.select = mock_ui_select
+      vim.cmd = mock_vim_cmd
+
+      local original_require = _G.require
+      _G.require = function(mod)
+        if mod == "claudecode.terminal" then
+          return mock_terminal
+        elseif mod == "claudecode.server.init" then
+          return mock_server
+        elseif mod == "claudecode.lockfile" then
+          return mock_lockfile
+        elseif mod == "claudecode.selection" then
+          return mock_selection
+        else
+          return original_require(mod)
+        end
+      end
+    end)
+
+    it("should register ClaudeCodeSelectModel command with correct configuration", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      local command_found = false
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCodeSelectModel" then
+          command_found = true
+          local config = call.vals[3]
+          assert.is_equal("*", config.nargs)
+          assert.is_true(
+            string.find(config.desc, "model.*arguments") ~= nil,
+            "Description should mention model and arguments"
+          )
+          break
+        end
+      end
+      assert.is_true(command_found, "ClaudeCodeSelectModel command was not registered")
+    end)
+
+    it("should call ClaudeCode command with model arg when no additional args provided", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      -- Find and call the ClaudeCodeSelectModel command handler
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCodeSelectModel" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      assert.is_function(command_handler, "Command handler should be a function")
+
+      command_handler({ args = "" })
+
+      -- Verify vim.ui.select was called
+      assert(#mock_ui_select.calls > 0, "vim.ui.select was not called")
+
+      -- Verify vim.cmd was called with the correct ClaudeCode command
+      assert(#mock_vim_cmd.calls > 0, "vim.cmd was not called")
+      local cmd_arg = mock_vim_cmd.calls[1].vals[1]
+      assert.is_equal("ClaudeCode --model opus", cmd_arg, "Should call ClaudeCode with model arg")
+    end)
+
+    it("should call ClaudeCode command with model and additional args", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      -- Find and call the ClaudeCodeSelectModel command handler
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCodeSelectModel" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      assert.is_function(command_handler, "Command handler should be a function")
+
+      command_handler({ args = "--resume --verbose" })
+
+      -- Verify vim.ui.select was called
+      assert(#mock_ui_select.calls > 0, "vim.ui.select was not called")
+
+      -- Verify vim.cmd was called with the correct ClaudeCode command including additional args
+      assert(#mock_vim_cmd.calls > 0, "vim.cmd was not called")
+      local cmd_arg = mock_vim_cmd.calls[1].vals[1]
+      assert.is_equal(
+        "ClaudeCode --model opus --resume --verbose",
+        cmd_arg,
+        "Should call ClaudeCode with model and additional args"
+      )
+    end)
+
+    it("should handle user cancellation gracefully", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+
+      -- Mock vim.ui.select to simulate user cancellation
+      vim.ui.select = spy.new(function(models, opts, callback)
+        callback(nil) -- User cancelled
+      end)
+
+      -- Find and call the ClaudeCodeSelectModel command handler
+      local command_handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCodeSelectModel" then
+          command_handler = call.vals[2]
+          break
+        end
+      end
+
+      assert.is_function(command_handler, "Command handler should be a function")
+
+      command_handler({ args = "--resume" })
+
+      -- Verify vim.ui.select was called
+      assert(#vim.ui.select.calls > 0, "vim.ui.select was not called")
+
+      -- Verify vim.cmd was NOT called due to user cancellation
+      assert.is_equal(0, #mock_vim_cmd.calls, "vim.cmd should not be called when user cancels")
+    end)
+  end)
 end)

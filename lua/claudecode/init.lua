@@ -36,6 +36,7 @@ M.version = {
 --- @field port_range {min: integer, max: integer} Port range for WebSocket server.
 --- @field auto_start boolean Auto-start WebSocket server on Neovim startup.
 --- @field terminal_cmd string|nil Custom terminal command to use when launching Claude.
+--- @field env table<string,string> Custom environment variables for Claude terminal.
 --- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
 --- @field track_selection boolean Enable sending selection updates to Claude.
 --- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
@@ -49,6 +50,7 @@ local default_config = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
   terminal_cmd = nil,
+  env = {},
   log_level = "info",
   track_selection = true,
   visual_demotion_delay_ms = 50, -- Reduced from 200ms for better responsiveness in tree navigation
@@ -87,7 +89,8 @@ M.state = {
 ---  split_side?: "left"|"right", \
 ---  split_width_percentage?: number, \
 ---  provider?: "auto"|"snacks"|"native", \
----  show_native_term_exit_tip?: boolean }
+---  show_native_term_exit_tip?: boolean, \
+---  snacks_win_opts?: table }
 ---
 ---@alias ClaudeCode.SetupOpts { \
 ---  terminal?: ClaudeCode.TerminalOpts }
@@ -305,14 +308,14 @@ function M.setup(opts)
 
   logger.setup(M.state.config)
 
-  -- Setup terminal module: always try to call setup to pass terminal_cmd,
+  -- Setup terminal module: always try to call setup to pass terminal_cmd and env,
   -- even if terminal_opts (for split_side etc.) are not provided.
   local terminal_setup_ok, terminal_module = pcall(require, "claudecode.terminal")
   if terminal_setup_ok then
     -- Guard in case tests or user replace the module with a minimal stub without `setup`.
     if type(terminal_module.setup) == "function" then
       -- terminal_opts might be nil, which the setup function should handle gracefully.
-      terminal_module.setup(terminal_opts, M.state.config.terminal_cmd)
+      terminal_module.setup(terminal_opts, M.state.config.terminal_cmd, M.state.config.env)
     end
   else
     logger.error("init", "Failed to load claudecode.terminal module for setup.")
@@ -943,6 +946,43 @@ function M._create_commands()
   end, {
     desc = "Deny/reject the current diff changes",
   })
+
+  vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)
+    local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+    M.open_with_model(cmd_args)
+  end, {
+    nargs = "*",
+    desc = "Select and open Claude terminal with chosen model and optional arguments",
+  })
+end
+
+M.open_with_model = function(additional_args)
+  local models = M.state.config.models
+
+  if not models or #models == 0 then
+    logger.error("command", "No models configured for selection")
+    return
+  end
+
+  vim.ui.select(models, {
+    prompt = "Select Claude model:",
+    format_item = function(item)
+      return item.name
+    end,
+  }, function(choice)
+    if not choice then
+      return -- User cancelled
+    end
+
+    if not choice.value or type(choice.value) ~= "string" then
+      logger.error("command", "Invalid model value selected")
+      return
+    end
+
+    local model_arg = "--model " .. choice.value
+    local final_args = additional_args and (model_arg .. " " .. additional_args) or model_arg
+    vim.cmd("ClaudeCode " .. final_args)
+  end)
 end
 
 --- Get version information
