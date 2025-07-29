@@ -19,6 +19,10 @@ M.defaults = {
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
   },
+  models = {
+    { name = "Claude Opus 4 (Latest)", value = "opus" },
+    { name = "Claude Sonnet 4 (Latest)", value = "sonnet" },
+  },
 }
 
 --- Validates the provided configuration table.
@@ -82,6 +86,15 @@ function M.validate(config)
     assert(type(value) == "string", "env values must be strings")
   end
 
+  -- Validate models
+  assert(type(config.models) == "table", "models must be a table")
+  assert(#config.models > 0, "models must not be empty")
+
+  for i, model in ipairs(config.models) do
+    assert(type(model) == "table", "models[" .. i .. "] must be a table")
+    assert(type(model.name) == "string" and model.name ~= "", "models[" .. i .. "].name must be a non-empty string")
+    assert(type(model.value) == "string" and model.value ~= "", "models[" .. i .. "].value must be a non-empty string")
+  end
   return true
 end
 

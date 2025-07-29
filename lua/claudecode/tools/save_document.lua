@@ -1,5 +1,21 @@
 --- Tool implementation for saving a document.
 
+local schema = {
+  description = "Save a document with unsaved changes",
+  inputSchema = {
+    type = "object",
+    properties = {
+      filePath = {
+        type = "string",
+        description = "Path to the file to save",
+      },
+    },
+    required = { "filePath" },
+    additionalProperties = false,
+    ["$schema"] = "http://json-schema.org/draft-07/schema#",
+  },
+}
+
 --- Handles the saveDocument tool invocation.
 -- Saves the specified file (buffer).
 -- @param params table The input parameters for the tool.
@@ -8,17 +24,28 @@
 -- @error table A table with code, message, and data for JSON-RPC error if failed.
 local function handler(params)
   if not params.filePath then
-    error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
+    error({
+      code = -32602,
+      message = "Invalid params",
+      data = "Missing filePath parameter",
+    })
   end
 
   local bufnr = vim.fn.bufnr(params.filePath)
 
   if bufnr == -1 then
-    error({
-      code = -32000,
-      message = "File operation error",
-      data = "File not open in editor: " .. params.filePath,
-    })
+    -- Return failure when document not open, matching VS Code behavior
+    return {
+      content = {
+        {
+          type = "text",
+          text = vim.json.encode({
+            success = false,
+            message = "Document not open: " .. params.filePath,
+          }, { indent = 2 }),
+        },
+      },
+    }
   end
 
   local success, err = pcall(vim.api.nvim_buf_call, bufnr, function()
@@ -26,18 +53,38 @@ local function handler(params)
   end)
 
   if not success then
-    error({
-      code = -32000,
-      message = "File operation error",
-      data = "Failed to save file " .. params.filePath .. ": " .. tostring(err),
-    })
+    return {
+      content = {
+        {
+          type = "text",
+          text = vim.json.encode({
+            success = false,
+            message = "Failed to save file: " .. tostring(err),
+            filePath = params.filePath,
+          }, { indent = 2 }),
+        },
+      },
+    }
   end
 
-  return { message = "File saved: " .. params.filePath }
+  -- Return MCP-compliant format with JSON-stringified success result
+  return {
+    content = {
+      {
+        type = "text",
+        text = vim.json.encode({
+          success = true,
+          filePath = params.filePath,
+          saved = true,
+          message = "Document saved successfully",
+        }, { indent = 2 }),
+      },
+    },
+  }
 end
 
 return {
   name = "saveDocument",
-  schema = nil, -- Internal tool
+  schema = schema,
   handler = handler,
 }

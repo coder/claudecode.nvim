@@ -3,7 +3,11 @@
 # This library provides reusable functions for interacting with Claude Code's WebSocket API
 
 # Configuration
-export CLAUDE_LOCKFILE_DIR="$HOME/.claude/ide"
+if [ -n "$CLAUDE_CONFIG_DIR" ]; then
+  export CLAUDE_LOCKFILE_DIR="$CLAUDE_CONFIG_DIR/ide"
+else
+  export CLAUDE_LOCKFILE_DIR="$HOME/.claude/ide"
+fi
 export CLAUDE_LOG_DIR="mcp_test_logs" # Default log directory
 export CLAUDE_WS_TIMEOUT=10           # Default timeout in seconds
 
@@ -13,7 +17,7 @@ export CLAUDE_WS_TIMEOUT=10           # Default timeout in seconds
 # Find the Claude lockfile and extract the port
 find_claude_lockfile() {
   # Get all .lock files
-  lock_files=$(find ~/.claude/ide -name "*.lock" 2>/dev/null || echo "")
+  lock_files=$(find "$CLAUDE_LOCKFILE_DIR" -name "*.lock" 2>/dev/null || echo "")
 
   if [ -z "$lock_files" ]; then
     echo "No Claude lockfiles found. Is the VSCode extension running?" >&2
@@ -59,6 +63,48 @@ get_claude_ws_url() {
   fi
 
   echo "ws://localhost:$port"
+}
+
+# Get the authentication token from a Claude Code lock file
+# Usage: AUTH_TOKEN=$(get_claude_auth_token "$PORT")
+get_claude_auth_token() {
+  local port="$1"
+
+  if [[ -z $port ]]; then
+    echo >&2 "Error: Port number required"
+    return 1
+  fi
+
+  local lock_file="$CLAUDE_LOCKFILE_DIR/$port.lock"
+
+  if [[ ! -f $lock_file ]]; then
+    echo >&2 "Error: Lock file not found: $lock_file"
+    return 1
+  fi
+
+  # Extract authToken from JSON using jq if available, otherwise basic parsing
+  if command -v jq >/dev/null 2>&1; then
+    local auth_token
+    auth_token=$(jq -r '.authToken // empty' "$lock_file" 2>/dev/null)
+
+    if [[ -z $auth_token ]]; then
+      echo >&2 "Error: No authToken found in lock file"
+      return 1
+    fi
+
+    echo "$auth_token"
+  else
+    # Fallback parsing without jq
+    local auth_token
+    auth_token=$(grep -o '"authToken"[[:space:]]*:[[:space:]]*"[^"]*"' "$lock_file" | sed 's/.*"authToken"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+
+    if [[ -z $auth_token ]]; then
+      echo >&2 "Error: No authToken found in lock file (install jq for better JSON parsing)"
+      return 1
+    fi
+
+    echo "$auth_token"
+  fi
 }
 
 # Create a JSON-RPC request message (with ID)
@@ -117,16 +163,17 @@ create_init_message() {
     },
     "clientInfo": {
       "name": "ClaudeCodeNvim",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   }' "$id"
 }
 
 # Send a message to the Claude Code WebSocket and get the response
-# Usage: RESPONSE=$(send_claude_message "$MESSAGE" "$WS_URL")
+# Usage: RESPONSE=$(send_claude_message "$MESSAGE" "$WS_URL" "$AUTH_TOKEN")
 send_claude_message() {
   local message="$1"
   local ws_url="${2:-}"
+  local auth_token="${3:-}"
   local timeout="${CLAUDE_WS_TIMEOUT:-5}"
 
   # Auto-detect WS URL if not provided
@@ -134,8 +181,26 @@ send_claude_message() {
     ws_url=$(get_claude_ws_url)
   fi
 
+  # Auto-detect auth token if not provided
+  if [ -z "$auth_token" ]; then
+    local port
+    port=$(find_claude_lockfile)
+    if [[ $port =~ ^[0-9]+$ ]]; then
+      auth_token=$(get_claude_auth_token "$port")
+    fi
+  fi
+
+  # Build websocat command with optional auth header
+  local websocat_cmd="websocat --protocol permessage-deflate --text"
+
+  if [ -n "$auth_token" ]; then
+    websocat_cmd="$websocat_cmd --header 'x-claude-code-ide-authorization: $auth_token'"
+  fi
+
+  websocat_cmd="$websocat_cmd '$ws_url' --no-close"
+
   # Send message and get response with timeout
-  timeout "$timeout" bash -c "echo -n '$message' | websocat --protocol permessage-deflate --text '$ws_url' --no-close" 2>/dev/null ||
+  timeout "$timeout" bash -c "echo -n '$message' | $websocat_cmd" 2>/dev/null ||
     echo '{"error":{"code":-32000,"message":"Timeout waiting for response"}}'
 }
 

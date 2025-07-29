@@ -25,6 +25,7 @@ local config = {
   terminal_cmd = nil,
   auto_close = true,
   env = {}, -- Custom environment variables for Claude terminal
+  snacks_win_opts = {},
 }
 
 -- Lazy load providers
@@ -92,6 +93,9 @@ local function build_config(opts_override)
       split_width_percentage = function(val)
         return type(val) == "number" and val > 0 and val < 1
       end,
+      snacks_win_opts = function(val)
+        return type(val) == "table"
+      end,
     }
     for key, val in pairs(opts_override) do
       if effective_config[key] ~= nil and validators[key] and validators[key](val) then
@@ -103,6 +107,7 @@ local function build_config(opts_override)
     split_side = effective_config.split_side,
     split_width_percentage = effective_config.split_width_percentage,
     auto_close = effective_config.auto_close,
+    snacks_win_opts = effective_config.snacks_win_opts,
   }
 end
 
@@ -185,6 +190,7 @@ end
 -- @field user_term_config.split_width_percentage number Percentage of screen width (0.0 to 1.0, default: 0.30).
 -- @field user_term_config.provider string 'snacks' or 'native' (default: 'snacks').
 -- @field user_term_config.show_native_term_exit_tip boolean Show tip for exiting native terminal (default: true).
+-- @field user_term_config.snacks_win_opts table Opts to pass to `Snacks.terminal.open()` (default: {}).
 -- @param p_terminal_cmd string|nil The command to run in the terminal (from main config).
 -- @param p_env table|nil Custom environment variables to pass to the terminal (from main config).
 function M.setup(user_term_config, p_terminal_cmd, p_env)
@@ -226,6 +232,8 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
       elseif k == "auto_close" and type(v) == "boolean" then
+        config[k] = v
+      elseif k == "snacks_win_opts" and type(v) == "table" then
         config[k] = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for " .. k .. ": " .. tostring(v), vim.log.levels.WARN)

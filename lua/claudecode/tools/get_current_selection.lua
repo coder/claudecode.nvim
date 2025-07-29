@@ -9,6 +9,23 @@ local schema = {
   },
 }
 
+--- Helper function to safely encode data as JSON with error handling.
+-- @param data table The data to encode as JSON.
+-- @param error_context string A description of what failed for error messages.
+-- @return string The JSON-encoded string.
+-- @error table A table with code, message, and data for JSON-RPC error if encoding fails.
+local function safe_json_encode(data, error_context)
+  local ok, encoded = pcall(vim.json.encode, data, { indent = 2 })
+  if not ok then
+    error({
+      code = -32000,
+      message = "Internal server error",
+      data = "Failed to encode " .. error_context .. ": " .. tostring(encoded),
+    })
+  end
+  return encoded
+end
+
 --- Handles the getCurrentSelection tool invocation.
 -- Gets the current text selection in the editor.
 -- @param params table The input parameters for the tool (currently unused).
@@ -23,22 +40,63 @@ local function handler(_params) -- Prefix unused params with underscore
   local selection = selection_module.get_latest_selection()
 
   if not selection then
-    -- Consider if "no selection" is an error or a valid state returning empty/specific data.
-    -- For now, returning an empty object or specific structure might be better than an error.
-    -- Let's assume it's valid to have no selection and return a structure indicating that.
-    return {
+    -- Check if there's an active editor/buffer
+    local current_buf = vim.api.nvim_get_current_buf()
+    local buf_name = vim.api.nvim_buf_get_name(current_buf)
+
+    if not buf_name or buf_name == "" then
+      -- No active editor case - match VS Code format
+      local no_editor_response = {
+        success = false,
+        message = "No active editor found",
+      }
+
+      return {
+        content = {
+          {
+            type = "text",
+            text = safe_json_encode(no_editor_response, "no editor response"),
+          },
+        },
+      }
+    end
+
+    -- Valid buffer but no selection - return cursor position with success field
+    local empty_selection = {
+      success = true,
       text = "",
-      filePath = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()),
-      fileUrl = "file://" .. vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf()),
+      filePath = buf_name,
+      fileUrl = "file://" .. buf_name,
       selection = {
         start = { line = 0, character = 0 },
         ["end"] = { line = 0, character = 0 },
         isEmpty = true,
       },
     }
+
+    -- Return MCP-compliant format with JSON-stringified empty selection
+    return {
+      content = {
+        {
+          type = "text",
+          text = safe_json_encode(empty_selection, "empty selection"),
+        },
+      },
+    }
   end
 
-  return selection -- Directly return the selection data
+  -- Add success field to existing selection data
+  local selection_with_success = vim.tbl_extend("force", selection, { success = true })
+
+  -- Return MCP-compliant format with JSON-stringified selection data
+  return {
+    content = {
+      {
+        type = "text",
+        text = safe_json_encode(selection_with_success, "selection"),
+      },
+    },
+  }
 end
 
 return {

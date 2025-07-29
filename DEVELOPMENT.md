@@ -7,6 +7,12 @@ Quick guide for contributors to the claudecode.nvim project.
 ```none
 claudecode.nvim/
 ├── .github/workflows/       # CI workflow definitions
+├── fixtures/                # Test Neovim configurations for integration testing
+│   ├── bin/                 # Helper scripts (vv, vve, list-configs)
+│   ├── netrw/               # Neovim config testing with built-in file explorer
+│   ├── nvim-tree/           # Neovim config testing with nvim-tree.lua
+│   ├── oil/                 # Neovim config testing with oil.nvim
+│   └── nvim-aliases.sh      # Shell aliases for fixture testing
 ├── lua/claudecode/          # Plugin implementation
 │   ├── server/              # WebSocket server implementation
 │   ├── tools/               # MCP tool implementations and schema management
@@ -118,7 +124,49 @@ make format
 2. Create a feature branch
 3. Implement your changes with tests
 4. Run the test suite to ensure all tests pass
-5. Submit a pull request
+5. **For integrations**: Create a fixture configuration for testing
+6. Submit a pull request
+
+### Integration Testing with Fixtures
+
+When adding support for new integrations (file explorers, terminals, etc.), you **must** provide a fixture configuration for testing:
+
+**Requirements**:
+
+- Complete Neovim configuration in `fixtures/[integration-name]/`
+- Include plugin dependencies and proper setup
+- Add `dev-claudecode.lua` with development keybindings
+- Test all relevant claudecode.nvim features with the integration
+
+**Usage**:
+
+```bash
+# Source fixture aliases
+source fixtures/nvim-aliases.sh
+
+# Test with specific integration
+vv nvim-tree  # Start Neovim with nvim-tree configuration
+vv oil        # Start Neovim with oil.nvim configuration
+vv netrw      # Start Neovim with built-in netrw configuration
+
+# List available configurations
+list-configs
+```
+
+**Example fixture structure** (`fixtures/my-integration/`):
+
+```
+my-integration/
+├── init.lua                    # Main Neovim config
+├── lua/
+│   ├── config/
+│   │   └── lazy.lua           # Plugin manager setup
+│   └── plugins/
+│       ├── dev-claudecode.lua # claudecode.nvim development config
+│       ├── init.lua           # Base plugins
+│       └── my-integration.lua # Integration-specific plugin config
+└── lazy-lock.json             # Plugin lockfile (if using lazy.nvim)
+```
 
 ## Implementation Details
 

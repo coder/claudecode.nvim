@@ -15,8 +15,10 @@ return {
     { "<leader>af", "<cmd>ClaudeCodeFocus<cr>", desc = "Focus Claude" },
     { "<leader>ar", "<cmd>ClaudeCode --resume<cr>", desc = "Resume Claude" },
     { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
+    { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
 
     -- Context sending
+    { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>", desc = "Add current buffer" },
     { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
     {
       "<leader>as",
@@ -31,6 +33,10 @@ return {
     { "<leader>ai", "<cmd>ClaudeCodeStatus<cr>", desc = "Claude Status" },
     { "<leader>aS", "<cmd>ClaudeCodeStart<cr>", desc = "Start Claude Server" },
     { "<leader>aQ", "<cmd>ClaudeCodeStop<cr>", desc = "Stop Claude Server" },
+
+    -- Diff management (buffer-local, only active in diff buffers)
+    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
   },
 
   -- Development configuration - all options shown with defaults commented out
@@ -65,6 +71,7 @@ return {
     --   provider = "auto",                        -- "auto", "snacks", or "native"
     --   show_native_term_exit_tip = true,         -- Show exit tip for native terminal
     --   auto_close = true,                        -- Auto-close terminal after command completion
+    --   snacks_win_opts = {},                     -- Opts to pass to `Snacks.terminal.open()`
     -- },
 
     -- Development overrides (uncomment as needed)

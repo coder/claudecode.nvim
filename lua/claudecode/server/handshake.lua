@@ -5,9 +5,10 @@ local M = {}
 
 ---@brief Check if an HTTP request is a valid WebSocket upgrade request
 ---@param request string The HTTP request string
+---@param expected_auth_token string|nil Expected authentication token for validation
 ---@return boolean valid True if it's a valid WebSocket upgrade request
 ---@return table|string headers_or_error Headers table if valid, error message if not
-function M.validate_upgrade_request(request)
+function M.validate_upgrade_request(request, expected_auth_token)
   local headers = utils.parse_http_headers(request)
 
   -- Check for required headers
@@ -31,6 +32,37 @@ function M.validate_upgrade_request(request)
   local key = headers["sec-websocket-key"]
   if #key ~= 24 then -- Base64 encoded 16 bytes = 24 characters
     return false, "Invalid Sec-WebSocket-Key format"
+  end
+
+  -- Validate authentication token if required
+  if expected_auth_token then
+    -- Check if expected_auth_token is valid
+    if type(expected_auth_token) ~= "string" or expected_auth_token == "" then
+      return false, "Server configuration error: invalid expected authentication token"
+    end
+
+    local auth_header = headers["x-claude-code-ide-authorization"]
+    if not auth_header then
+      return false, "Missing authentication header: x-claude-code-ide-authorization"
+    end
+
+    -- Check for empty auth header
+    if auth_header == "" then
+      return false, "Authentication token too short (min 10 characters)"
+    end
+
+    -- Check for suspicious auth header lengths
+    if #auth_header > 500 then
+      return false, "Authentication token too long (max 500 characters)"
+    end
+
+    if #auth_header < 10 then
+      return false, "Authentication token too short (min 10 characters)"
+    end
+
+    if auth_header ~= expected_auth_token then
+      return false, "Invalid authentication token"
+    end
   end
 
   return true, headers
@@ -131,10 +163,11 @@ end
 
 ---@brief Process a complete WebSocket handshake
 ---@param request string The HTTP request string
+---@param expected_auth_token string|nil Expected authentication token for validation
 ---@return boolean success True if handshake was successful
 ---@return string response The HTTP response to send
 ---@return table|nil headers The parsed headers if successful
-function M.process_handshake(request)
+function M.process_handshake(request, expected_auth_token)
   -- Check if it's a valid WebSocket endpoint request
   if not M.is_websocket_endpoint(request) then
     local response = M.create_error_response(404, "WebSocket endpoint not found")
@@ -142,7 +175,7 @@ function M.process_handshake(request)
   end
 
   -- Validate the upgrade request
-  local is_valid_upgrade, validation_payload = M.validate_upgrade_request(request) ---@type boolean, table|string
+  local is_valid_upgrade, validation_payload = M.validate_upgrade_request(request, expected_auth_token) ---@type boolean, table|string
   if not is_valid_upgrade then
     assert(type(validation_payload) == "string", "validation_payload should be a string on error")
     local error_message = validation_payload

@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# list-configs - Show available Neovim configurations
+
+FIXTURES_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Source common functions
+source "$FIXTURES_DIR/bin/common.sh"
+
+echo "Available Neovim test configurations:"
+get_configs "$FIXTURES_DIR" | while read -r config; do
+  if [[ -d "$FIXTURES_DIR/$config" ]]; then
+    echo "  ✓ $config"
+  else
+    echo "  ✗ $config (missing)"
+  fi
+done

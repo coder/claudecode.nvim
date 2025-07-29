@@ -76,7 +76,8 @@ local function log(level, component, message_parts)
     elseif level == M.levels.WARN then
       vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
     else
-      -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications
+      -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
+      -- to make them appear in :messages
       vim.api.nvim_echo({ { prefix .. " " .. message, "Normal" } }, true, {})
     end
   end)

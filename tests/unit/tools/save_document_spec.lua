@@ -32,6 +32,12 @@ describe("Tool: save_document", function()
       table.insert(_G.vim.cmd_history, command)
     end)
 
+    -- Mock vim.json.encode
+    _G.vim.json = _G.vim.json or {}
+    _G.vim.json.encode = spy.new(function(data, opts)
+      return require("tests.busted_setup").json_encode(data)
+    end)
+
     -- Now require the module, it will pick up the spied functions
     save_document_handler = require("claudecode.tools.save_document").handler
   end)
@@ -42,6 +48,7 @@ describe("Tool: save_document", function()
     _G.vim.api.nvim_buf_call = nil
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
+    _G.vim.json.encode = nil
   end)
 
   it("should error if filePath parameter is missing", function()
@@ -52,13 +59,19 @@ describe("Tool: save_document", function()
     assert_contains(err.data, "Missing filePath parameter")
   end)
 
-  it("should error if file is not open in editor", function()
+  it("should return success=false if file is not open in editor", function()
     local params = { filePath = "/path/to/non_open_file.py" }
-    local success, err = pcall(save_document_handler, params)
-    expect(success).to_be_false()
-    expect(err).to_be_table()
-    expect(err.code).to_be(-32000)
-    assert_contains(err.data, "File not open in editor: /path/to/non_open_file.py")
+    local success, result = pcall(save_document_handler, params)
+    expect(success).to_be_true() -- No longer throws error, returns success=false
+    expect(result).to_be_table()
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_false()
+    expect(parsed_result.message).to_be("Document not open: /path/to/non_open_file.py")
+
     assert.spy(_G.vim.fn.bufnr).was_called_with("/path/to/non_open_file.py")
   end)
 
@@ -71,7 +84,15 @@ describe("Tool: save_document", function()
 
     expect(success).to_be_true()
     expect(result).to_be_table()
-    expect(result.message).to_be("File saved: /path/to/saveable_file.lua")
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_true()
+    expect(parsed_result.saved).to_be_true()
+    expect(parsed_result.filePath).to_be("/path/to/saveable_file.lua")
+    expect(parsed_result.message).to_be("Document saved successfully")
 
     assert.spy(_G.vim.fn.bufnr).was_called_with("/path/to/saveable_file.lua")
     -- Get the spy object for assertion using assert.spy()
@@ -108,18 +129,22 @@ describe("Tool: save_document", function()
     assert.are.equal("write", first_cmd)
   end)
 
-  it("should propagate error if nvim_buf_call fails", function()
+  it("should return success=false if nvim_buf_call fails", function()
     _G.vim.api.nvim_buf_call = spy.new(function(bufnr, callback)
       error("Simulated nvim_buf_call failure")
     end)
     local params = { filePath = "/path/to/saveable_file.lua" }
-    local success, err = pcall(save_document_handler, params)
+    local success, result = pcall(save_document_handler, params)
 
-    expect(success).to_be_false()
-    expect(err).to_be_table()
-    expect(err.code).to_be(-32000)
-    assert_contains(err.message, "File operation error")
-    assert_contains(err.data, "Failed to save file")
-    assert_contains(err.data, "Simulated nvim_buf_call failure")
+    expect(success).to_be_true() -- No longer throws error, returns success=false
+    expect(result).to_be_table()
+    expect(result.content).to_be_table()
+    expect(result.content[1]).to_be_table()
+    expect(result.content[1].type).to_be("text")
+
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_false()
+    assert_contains(parsed_result.message, "Failed to save file")
+    expect(parsed_result.filePath).to_be("/path/to/saveable_file.lua")
   end)
 end)

@@ -28,13 +28,14 @@ if ! claude_is_running; then
   exit 1
 fi
 
-# Get WebSocket URL
+# Get WebSocket URL and authentication info
 WS_URL=$(get_claude_ws_url)
 PORT=$(find_claude_lockfile)
+AUTH_TOKEN=$(get_claude_auth_token "$PORT")
 
 # Initialize WebSocket connection
 echo -e "${BLUE}Initializing WebSocket connection to ${WS_URL}...${NC}"
-if ! ws_connect "$WS_URL" "$CONN_ID"; then
+if ! ws_connect "$WS_URL" "$CONN_ID" "$AUTH_TOKEN"; then
   echo -e "${RED}Failed to establish connection.${NC}"
   exit 1
 fi
@@ -49,7 +50,7 @@ HANDSHAKE_PARAMS=$(ws_format_json '{
   },
   "clientInfo": {
     "name": "claude-nvim-client",
-    "version": "0.1.0"
+    "version": "0.2.0"
   }
 }')
 ws_notify "mcp.connect" "$HANDSHAKE_PARAMS" "$CONN_ID"
@@ -220,7 +221,7 @@ handle_initialize() {
     },
     "clientInfo": {
       "name": "ClaudeCodeNvim",
-      "version": "0.1.0"
+      "version": "0.2.0"
     }
   }')
 
@@ -306,7 +307,7 @@ handle_reconnect() {
       },
       "clientInfo": {
         "name": "claude-nvim-client",
-        "version": "0.1.0"
+        "version": "0.2.0"
       }
     }')
     ws_notify "mcp.connect" "$HANDSHAKE_PARAMS" "$CONN_ID"

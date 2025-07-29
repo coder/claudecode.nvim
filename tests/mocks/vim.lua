@@ -564,6 +564,22 @@ local vim = {
     },
   },
 
+  -- Add tbl_extend function for compatibility
+  tbl_extend = function(behavior, ...)
+    local tables = { ... }
+    local result = {}
+
+    for _, tbl in ipairs(tables) do
+      for k, v in pairs(tbl) do
+        if behavior == "force" or result[k] == nil then
+          result[k] = v
+        end
+      end
+    end
+
+    return result
+  end,
+
   notify = function(msg, level, opts)
     -- Store the last notification for test assertions
     vim._last_notify = {
@@ -579,6 +595,25 @@ local vim = {
     end,
     __newindex = function(_, key, value)
       vim._vars[key] = value
+    end,
+  }),
+
+  b = setmetatable({}, {
+    __index = function(_, bufnr)
+      -- Return buffer-local variables for the given buffer
+      if vim._buffers[bufnr] then
+        if not vim._buffers[bufnr].b_vars then
+          vim._buffers[bufnr].b_vars = {}
+        end
+        return vim._buffers[bufnr].b_vars
+      end
+      return {}
+    end,
+    __newindex = function(_, bufnr, vars)
+      -- Set buffer-local variables for the given buffer
+      if vim._buffers[bufnr] then
+        vim._buffers[bufnr].b_vars = vars
+      end
     end,
   }),
 
