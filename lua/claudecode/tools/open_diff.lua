@@ -52,8 +52,8 @@ local function handler(params)
   end
 
   -- Ensure we're running in a coroutine context for blocking operation
-  local co = coroutine.running()
-  if not co then
+  local co, is_main = coroutine.running()
+  if not co or is_main then
     error({
       code = -32000,
       message = "Internal server error",

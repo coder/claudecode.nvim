@@ -770,8 +770,8 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
   end
 
   -- Set up blocking diff operation
-  local co = coroutine.running()
-  if not co then
+  local co, is_main = coroutine.running()
+  if not co or is_main then
     error({
       code = -32000,
       message = "Internal server error",
