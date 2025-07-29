@@ -246,6 +246,7 @@ source fixtures/nvim-aliases.sh
 vv nvim-tree  # Test with nvim-tree integration
 vv oil        # Test with oil.nvim integration
 vv netrw      # Test with built-in netrw
+vv mini-files # Test with built-in mini.files
 
 # Each fixture provides:
 # - Complete Neovim configuration
