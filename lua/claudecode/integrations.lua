@@ -16,6 +16,8 @@ function M.get_selected_files_from_tree()
     return M._get_neotree_selection()
   elseif current_ft == "oil" then
     return M._get_oil_selection()
+  elseif current_ft == "minifiles" then
+    return M._get_mini_files_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
@@ -254,6 +256,60 @@ function M._get_oil_selection()
       else
         -- For unknown types, return the path anyway
         return { full_path }, nil
+      end
+    end
+  end
+
+  return {}, "No file found under cursor"
+end
+
+--- Get selected files from mini.files
+--- Supports both visual selection and single file under cursor
+--- Reference: mini.files API MiniFiles.get_fs_entry()
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_mini_files_selection()
+  local success, mini_files = pcall(require, "mini.files")
+  if not success then
+    return {}, "mini.files not available"
+  end
+
+  local files = {}
+
+  -- Check if we're in visual mode for multi-selection
+  local mode = vim.fn.mode()
+  if mode == "V" or mode == "v" or mode == "\22" then
+    -- Visual mode: get visual range
+    local visual_commands = require("claudecode.visual_commands")
+    local start_line, end_line = visual_commands.get_visual_range()
+
+    -- Process each line in the visual selection
+    for line = start_line, end_line do
+      local entry_ok, entry = pcall(mini_files.get_fs_entry, nil, line)
+      if entry_ok and entry and entry.path then
+        -- Validate that the path exists
+        if vim.fn.filereadable(entry.path) == 1 or vim.fn.isdirectory(entry.path) == 1 then
+          table.insert(files, entry.path)
+        end
+      end
+    end
+
+    if #files > 0 then
+      return files, nil
+    end
+  else
+    -- Normal mode: get file under cursor
+    local entry_ok, entry = pcall(mini_files.get_fs_entry)
+    if not entry_ok or not entry then
+      return {}, "Failed to get entry from mini.files"
+    end
+
+    if entry.path and entry.path ~= "" then
+      -- Validate that the path exists
+      if vim.fn.filereadable(entry.path) == 1 or vim.fn.isdirectory(entry.path) == 1 then
+        return { entry.path }, nil
+      else
+        return {}, "Invalid file or directory path: " .. entry.path
       end
     end
   end
