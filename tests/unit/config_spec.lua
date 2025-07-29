@@ -25,30 +25,22 @@ describe("Configuration", function()
     expect(config.defaults).to_have_key("models")
   end)
 
-  it("should validate valid configuration", function()
-    local valid_config = {
-      port_range = { min = 10000, max = 65535 },
-      auto_start = true,
+  it("should apply and validate user configuration", function()
+    local user_config = {
       terminal_cmd = "toggleterm",
       log_level = "debug",
       track_selection = false,
-      visual_demotion_delay_ms = 50,
-      connection_wait_delay = 200,
-      connection_timeout = 10000,
-      queue_timeout = 5000,
-      diff_opts = {
-        auto_close_on_accept = true,
-        show_diff_stats = true,
-        vertical_split = true,
-        open_in_current_tab = true,
-      },
       models = {
         { name = "Test Model", value = "test-model" },
       },
     }
 
-    local success = config.validate(valid_config)
-    expect(success).to_be_true()
+    local final_config = config.apply(user_config)
+    expect(final_config).to_be_table()
+    expect(final_config.terminal_cmd).to_be("toggleterm")
+    expect(final_config.log_level).to_be("debug")
+    expect(final_config.track_selection).to_be_false()
+    expect(final_config.env).to_be_table() -- Should inherit default empty table
   end)
 
   it("should reject invalid port range", function()
