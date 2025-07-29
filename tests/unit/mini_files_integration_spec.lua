@@ -42,6 +42,11 @@ describe("mini.files integration", function()
           return 0
         end,
       },
+      api = {
+        nvim_get_current_buf = function()
+          return 1 -- Mock buffer ID
+        end,
+      },
       bo = { filetype = "minifiles" },
     }
 
@@ -57,7 +62,11 @@ describe("mini.files integration", function()
     it("should get single file under cursor", function()
       -- Mock mini.files module
       local mock_mini_files = {
-        get_fs_entry = function()
+        get_fs_entry = function(buf_id)
+          -- Verify buffer ID is passed correctly
+          if buf_id ~= 1 then
+            return nil
+          end
           return { path = "/Users/test/project/main.lua" }
         end,
       }
@@ -74,7 +83,11 @@ describe("mini.files integration", function()
     it("should get directory under cursor", function()
       -- Mock mini.files module
       local mock_mini_files = {
-        get_fs_entry = function()
+        get_fs_entry = function(buf_id)
+          -- Verify buffer ID is passed correctly
+          if buf_id ~= 1 then
+            return nil
+          end
           return { path = "/Users/test/project/src" }
         end,
       }
@@ -88,22 +101,14 @@ describe("mini.files integration", function()
       expect(files[1]).to_be("/Users/test/project/src")
     end)
 
-    it("should get multiple files in visual mode", function()
-      mock_vim.fn.mode = function()
-        return "V" -- Visual line mode
-      end
-
-      -- Mock mini.files module
+    it("should handle mini.files buffer path format", function()
+      -- Mock mini.files module that returns buffer-style paths
       local mock_mini_files = {
-        get_fs_entry = function(buf_id, line)
-          if line == 1 then
-            return { path = "/Users/test/project/file1.lua" }
-          elseif line == 2 then
-            return { path = "/Users/test/project/file2.lua" }
-          elseif line == 3 then
-            return { path = "/Users/test/project/src" }
+        get_fs_entry = function(buf_id)
+          if buf_id ~= 1 then
+            return nil
           end
-          return nil
+          return { path = "minifiles://42//Users/test/project/buffer_file.lua" }
         end,
       }
       package.loaded["mini.files"] = mock_mini_files
@@ -112,39 +117,37 @@ describe("mini.files integration", function()
 
       expect(err).to_be_nil()
       expect(files).to_be_table()
-      expect(#files).to_be(3)
-      expect(files[1]).to_be("/Users/test/project/file1.lua")
-      expect(files[2]).to_be("/Users/test/project/file2.lua")
-      expect(files[3]).to_be("/Users/test/project/src")
+      expect(#files).to_be(1)
+      expect(files[1]).to_be("/Users/test/project/buffer_file.lua")
     end)
 
-    it("should filter out invalid files in visual mode", function()
-      mock_vim.fn.mode = function()
-        return "V" -- Visual line mode
-      end
-
-      -- Mock mini.files module
-      local mock_mini_files = {
-        get_fs_entry = function(buf_id, line)
-          if line == 1 then
-            return { path = "/Users/test/project/valid.lua" }
-          elseif line == 2 then
-            return { path = "/Users/test/project/invalid.xyz" } -- Won't pass filereadable/isdirectory
-          elseif line == 3 then
-            return { path = "/Users/test/project/src" }
-          end
-          return nil
-        end,
+    it("should handle various mini.files buffer path formats", function()
+      -- Test different buffer path formats that could occur
+      local test_cases = {
+        { input = "minifiles://42/Users/test/file.lua", expected = "Users/test/file.lua" },
+        { input = "minifiles://42//Users/test/file.lua", expected = "/Users/test/file.lua" },
+        { input = "minifiles://123///Users/test/file.lua", expected = "//Users/test/file.lua" },
+        { input = "/Users/test/normal_path.lua", expected = "/Users/test/normal_path.lua" },
       }
-      package.loaded["mini.files"] = mock_mini_files
 
-      local files, err = integrations._get_mini_files_selection()
+      for i, test_case in ipairs(test_cases) do
+        local mock_mini_files = {
+          get_fs_entry = function(buf_id)
+            if buf_id ~= 1 then
+              return nil
+            end
+            return { path = test_case.input }
+          end,
+        }
+        package.loaded["mini.files"] = mock_mini_files
 
-      expect(err).to_be_nil()
-      expect(files).to_be_table()
-      expect(#files).to_be(2) -- Only valid.lua and src
-      expect(files[1]).to_be("/Users/test/project/valid.lua")
-      expect(files[2]).to_be("/Users/test/project/src")
+        local files, err = integrations._get_mini_files_selection()
+
+        expect(err).to_be_nil()
+        expect(files).to_be_table()
+        expect(#files).to_be(1)
+        expect(files[1]).to_be(test_case.expected)
+      end
     end)
 
     it("should handle empty entry under cursor", function()
@@ -225,26 +228,6 @@ describe("mini.files integration", function()
       local files, err = integrations._get_mini_files_selection()
 
       expect(err).to_be("Failed to get entry from mini.files")
-      expect(files).to_be_table()
-      expect(#files).to_be(0)
-    end)
-
-    it("should handle visual mode with no valid entries", function()
-      mock_vim.fn.mode = function()
-        return "V" -- Visual line mode
-      end
-
-      -- Mock mini.files module
-      local mock_mini_files = {
-        get_fs_entry = function(buf_id, line)
-          return nil -- No entries
-        end,
-      }
-      package.loaded["mini.files"] = mock_mini_files
-
-      local files, err = integrations._get_mini_files_selection()
-
-      expect(err).to_be("No file found under cursor")
       expect(files).to_be_table()
       expect(#files).to_be(0)
     end)

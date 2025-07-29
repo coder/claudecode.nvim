@@ -614,8 +614,10 @@ function M._create_commands()
     local is_tree_buffer = current_ft == "NvimTree"
       or current_ft == "neo-tree"
       or current_ft == "oil"
+      or current_ft == "minifiles"
       or string.match(current_bufname, "neo%-tree")
       or string.match(current_bufname, "NvimTree")
+      or string.match(current_bufname, "minifiles://")
 
     if is_tree_buffer then
       local integrations = require("claudecode.integrations")
@@ -659,7 +661,53 @@ function M._create_commands()
   end
 
   local function handle_send_visual(visual_data, _opts)
-    -- Try tree file selection first
+    -- Check if we're in a tree buffer first
+    local current_ft = (vim.bo and vim.bo.filetype) or ""
+    local current_bufname = (vim.api and vim.api.nvim_buf_get_name and vim.api.nvim_buf_get_name(0)) or ""
+
+    local is_tree_buffer = current_ft == "NvimTree"
+      or current_ft == "neo-tree"
+      or current_ft == "oil"
+      or current_ft == "minifiles"
+      or string.match(current_bufname, "neo%-tree")
+      or string.match(current_bufname, "NvimTree")
+      or string.match(current_bufname, "minifiles://")
+
+    if is_tree_buffer then
+      local integrations = require("claudecode.integrations")
+      local files, error
+
+      -- For mini.files, try to get the range from visual marks
+      if current_ft == "minifiles" or string.match(current_bufname, "minifiles://") then
+        local start_line = vim.fn.line("'<")
+        local end_line = vim.fn.line("'>")
+
+        if start_line > 0 and end_line > 0 and start_line <= end_line then
+          -- Use range-based selection for mini.files
+          files, error = integrations._get_mini_files_selection_with_range(start_line, end_line)
+        else
+          -- Fall back to regular method
+          files, error = integrations.get_selected_files_from_tree()
+        end
+      else
+        files, error = integrations.get_selected_files_from_tree()
+      end
+
+      if error then
+        logger.error("command", "ClaudeCodeSend_visual->TreeAdd: " .. error)
+        return
+      end
+
+      if not files or #files == 0 then
+        logger.warn("command", "ClaudeCodeSend_visual->TreeAdd: No files selected")
+        return
+      end
+
+      add_paths_to_claude(files, { context = "ClaudeCodeSend_visual->TreeAdd" })
+      return
+    end
+
+    -- Fall back to old visual selection logic for non-tree buffers
     if visual_data then
       local visual_commands = require("claudecode.visual_commands")
       local files, error = visual_commands.get_files_from_visual_selection(visual_data)
