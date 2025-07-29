@@ -311,8 +311,6 @@ function M._get_mini_files_selection()
     return {}, "mini.files not available"
   end
 
-  local files = {}
-
   local bufnr = vim.api.nvim_get_current_buf()
 
   -- Normal mode: get file under cursor
