@@ -39,6 +39,7 @@ M.version = {
 --- @field env table<string,string> Custom environment variables for Claude terminal.
 --- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
 --- @field track_selection boolean Enable sending selection updates to Claude.
+--- @field show_terminal_on_at_mention boolean Whether to show terminal when sending @ mentions.
 --- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
 --- @field connection_wait_delay number Milliseconds to wait after connection before sending queued @ mentions.
 --- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
@@ -316,6 +317,7 @@ end
 ---@return string|nil error Error message if failed
 function M.send_at_mention(file_path, start_line, end_line, context)
   context = context or "command"
+  local show_terminal = M.state.config.show_terminal_on_at_mention
 
   if not M.state.server then
     logger.error(context, "Claude Code integration is not running")
@@ -324,9 +326,9 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 
   -- Check if Claude Code is connected
   if M.is_claude_connected() then
-    -- Claude is connected, send immediately and ensure terminal is visible
+    -- Claude is connected, send immediately and optionally ensure terminal is visible
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
-    if success then
+    if success and show_terminal then
       local terminal = require("claudecode.terminal")
       terminal.ensure_visible()
     end
@@ -335,9 +337,21 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     -- Claude not connected, queue the mention and launch terminal
     queue_mention(file_path, start_line, end_line)
 
-    -- Launch terminal with Claude Code
-    local terminal = require("claudecode.terminal")
-    terminal.open()
+    -- Claude not connected, queue the mention and optionally launch terminal
+    local mention_data = {
+      file_path = file_path,
+      start_line = start_line,
+      end_line = end_line,
+      context = context,
+    }
+
+    queue_at_mention(mention_data)
+
+    if show_terminal then
+      -- Launch terminal with Claude Code
+      local terminal = require("claudecode.terminal")
+      terminal.open()
+    end
 
     logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
 

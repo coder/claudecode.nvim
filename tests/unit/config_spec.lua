@@ -121,6 +121,32 @@ describe("Configuration", function()
     expect(success).to_be_false()
   end)
 
+  it("should reject invalid show_terminal_on_at_mention type", function()
+    local invalid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "debug",
+      track_selection = false,
+      show_terminal_on_at_mention = "invalid", -- Should be boolean
+      visual_demotion_delay_ms = 50,
+      diff_opts = {
+        auto_close_on_accept = true,
+        show_diff_stats = true,
+        vertical_split = true,
+        open_in_current_tab = true,
+      },
+      models = {
+        { name = "Test Model", value = "test-model" },
+      },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(invalid_config)
+    end)
+
+    expect(success).to_be_false()
+  end)
+
   it("should merge user config with defaults", function()
     local user_config = {
       auto_start = true,
@@ -133,6 +159,7 @@ describe("Configuration", function()
     expect(merged_config.log_level).to_be("debug")
     expect(merged_config.port_range.min).to_be(config.defaults.port_range.min)
     expect(merged_config.track_selection).to_be(config.defaults.track_selection)
+    expect(merged_config.show_terminal_on_at_mention).to_be(config.defaults.show_terminal_on_at_mention)
     expect(merged_config.models).to_be_table()
   end)
 
