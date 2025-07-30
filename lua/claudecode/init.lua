@@ -43,7 +43,7 @@ M.version = {
 --- @field connection_wait_delay number Milliseconds to wait after connection before sending queued @ mentions.
 --- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
 --- @field queue_timeout number Maximum time to keep @ mentions in queue (milliseconds).
---- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean } Options for the diff provider.
+--- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean, keep_terminal_focus: boolean } Options for the diff provider.
 
 --- @type ClaudeCode.Config
 local default_config = {
@@ -62,6 +62,7 @@ local default_config = {
     show_diff_stats = true,
     vertical_split = true,
     open_in_current_tab = false,
+    keep_terminal_focus = false,
   },
 }
 

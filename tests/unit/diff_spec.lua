@@ -49,6 +49,31 @@ describe("Diff Module", function()
     teardown()
   end)
 
+  describe("Configuration", function()
+    it("should store configuration in setup", function()
+      local test_config = {
+        diff_opts = {
+          keep_terminal_focus = true,
+        },
+      }
+
+      diff.setup(test_config)
+
+      -- We can't directly test the stored config since it's local to the module,
+      -- but we can test that setup doesn't error and the module is properly initialized
+      expect(type(diff.setup)).to_be("function")
+      expect(type(diff.open_diff)).to_be("function")
+    end)
+
+    it("should handle empty configuration", function()
+      -- This should not error
+      diff.setup(nil)
+      diff.setup({})
+
+      expect(type(diff.setup)).to_be("function")
+    end)
+  end)
+
   describe("Temporary File Management (via Native Diff)", function()
     it("should create temporary files with correct content through native diff", function()
       local test_content = "This is test content\nLine 2\nLine 3"

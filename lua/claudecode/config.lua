@@ -18,6 +18,7 @@ M.defaults = {
     show_diff_stats = true,
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
+    keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
   },
   models = {
     { name = "Claude Opus 4 (Latest)", value = "opus" },
@@ -78,6 +79,7 @@ function M.validate(config)
   assert(type(config.diff_opts.show_diff_stats) == "boolean", "diff_opts.show_diff_stats must be a boolean")
   assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
   assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
+  assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
 
   -- Validate env
   assert(type(config.env) == "table", "env must be a table")

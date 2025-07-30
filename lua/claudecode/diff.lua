@@ -7,6 +7,7 @@ local logger = require("claudecode.logger")
 -- Global state management for active diffs
 local active_diffs = {}
 local autocmd_group
+local config
 
 --- Get or create the autocmd group
 local function get_autocmd_group()
@@ -41,13 +42,12 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
-    -- Skip known sidebar filetypes and ClaudeCode terminal
+    -- Skip known sidebar filetypes
     if
       is_suitable
       and (
         filetype == "neo-tree"
         or filetype == "neo-tree-popup"
-        or filetype == "ClaudeCode"
         or filetype == "NvimTree"
         or filetype == "oil"
         or filetype == "aerial"
@@ -66,11 +66,39 @@ local function find_main_editor_window()
   return nil
 end
 
+--- Find the Claude Code terminal window to keep focus there.
+-- Uses the terminal provider to get the active terminal buffer, then finds its window.
+-- @return number|nil Window ID of the Claude Code terminal window, or nil if not found
+local function find_claudecode_terminal_window()
+  local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+  if not terminal_ok then
+    return nil
+  end
+
+  local terminal_bufnr = terminal_module.get_active_terminal_bufnr()
+  if not terminal_bufnr then
+    return nil
+  end
+
+  -- Find the window containing this buffer
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == terminal_bufnr then
+      local win_config = vim.api.nvim_win_get_config(win)
+      -- Skip floating windows
+      if not (win_config.relative and win_config.relative ~= "") then
+        return win
+      end
+    end
+  end
+
+  return nil
+end
+
 --- Setup the diff module
--- @param user_diff_config table|nil Reserved for future use
-function M.setup(user_diff_config)
-  -- Currently no configuration needed for native diff
-  -- Parameter kept for API compatibility
+-- @param user_config table|nil The configuration passed from init.lua
+function M.setup(user_config)
+  -- Store the configuration for later use
+  config = user_config or {}
 end
 
 --- Open a diff view between two files
@@ -513,7 +541,7 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
     local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
     local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
 
-    if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" or filetype == "ClaudeCode" then
+    if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" then
       vim.cmd("vsplit")
     end
 
@@ -576,12 +604,24 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
   vim.cmd("diffthis")
 
   vim.cmd("wincmd =")
+
+  -- Always focus the diff window first for proper visual flow and window arrangement
   vim.api.nvim_set_current_win(new_win)
 
   -- Store diff context in buffer variables for user commands
   vim.b[new_buffer].claudecode_diff_tab_name = tab_name
   vim.b[new_buffer].claudecode_diff_new_win = new_win
   vim.b[new_buffer].claudecode_diff_target_win = target_window
+
+  -- After all diff setup is complete, optionally return focus to terminal
+  if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+    vim.schedule(function()
+      local terminal_win = find_claudecode_terminal_window()
+      if terminal_win then
+        vim.api.nvim_set_current_win(terminal_win)
+      end
+    end, 0)
+  end
 
   -- Return window information for later storage
   return {
