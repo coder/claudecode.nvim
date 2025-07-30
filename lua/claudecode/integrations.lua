@@ -16,6 +16,8 @@ function M.get_selected_files_from_tree()
     return M._get_neotree_selection()
   elseif current_ft == "oil" then
     return M._get_oil_selection()
+  elseif current_ft == "netrw" then
+    return M._get_netrw_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
@@ -259,6 +261,56 @@ function M._get_oil_selection()
   end
 
   return {}, "No file found under cursor"
+end
+
+--- Get selected files from netrw
+--- Supports both marked files and single file under cursor
+--- Reference: :help netrw-mf, :help markfilelist
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_netrw_selection()
+  -- 1. Check for marked files
+  local mf_ok, mf_result = pcall(function()
+    if vim.fn.exists("*netrw#Expose") == 1 then
+      return vim.fn.call("netrw#Expose", { "netrwmarkfilelist" })
+    end
+    return nil
+  end)
+
+  local marked_files = {}
+
+  if mf_ok and mf_result and type(mf_result) == "table" and #mf_result > 0 then
+    for _, file_path in ipairs(mf_result) do
+      if vim.fn.filereadable(file_path) == 1 or vim.fn.isdirectory(file_path) == 1 then
+        table.insert(marked_files, file_path)
+      end
+    end
+  end
+
+  if #marked_files > 0 then
+    return marked_files, nil
+  end
+
+  -- 2. No marked files. Check for a file or dir under cursor
+  local path_ok, path_result = pcall(function()
+    if vim.fn.exists("*netrw#Call") == 1 then
+      local word = vim.fn.call("netrw#Call", { "NetrwGetWord" })
+      if word ~= "" then
+        return vim.fn.call("netrw#Call", { "NetrwFile", word })
+      end
+    end
+    return nil
+  end)
+
+  if not path_ok or not path_result or path_result == "" then
+    return {}, "Failed to get path from netrw"
+  end
+
+  if vim.fn.filereadable(path_result) == 1 or vim.fn.isdirectory(path_result) == 1 then
+    return { path_result }, nil
+  end
+
+  return {}, "Invalid file or directory path: " .. path_result
 end
 
 return M
