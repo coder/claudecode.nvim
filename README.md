@@ -207,7 +207,8 @@ return {
 }
 ```
 
-### Alternative with Meta+, (Alt+,) Toggle
+<details>
+<summary>Alternative with Meta+, (Alt+,) Toggle</summary>
 
 ```lua
 local toggle_key = "<M-,>"  -- Alt/Meta + comma
@@ -235,7 +236,10 @@ return {
 }
 ```
 
-### Centered Floating Window with Custom Styling
+</details>
+
+<details>
+<summary>Centered Floating Window with Custom Styling</summary>
 
 ```lua
 require("claudecode").setup({
@@ -255,7 +259,10 @@ require("claudecode").setup({
 })
 ```
 
-### Multiple Key Binding Options
+</details>
+
+<details>
+<summary>Multiple Key Binding Options</summary>
 
 ```lua
 {
@@ -285,7 +292,10 @@ require("claudecode").setup({
 }
 ```
 
-### Window Position Variations
+</details>
+
+<details>
+<summary>Window Position Variations</summary>
 
 ```lua
 -- Bottom floating (like a drawer)
@@ -313,6 +323,8 @@ snacks_win_opts = {
   backdrop = 90,
 }
 ```
+
+</details>
 
 For complete configuration options, see:
 
@@ -432,6 +444,25 @@ require("claudecode").setup({
 ```
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
+
+## Community Extensions
+
+The following are third-party community extensions that complement claudecode.nvim. **These extensions are not affiliated with Coder and are maintained independently by community members.** We do not ensure that these extensions work correctly or provide support for them.
+
+### 🔍 [claude-fzf.nvim](https://github.com/pittcat/claude-fzf.nvim)
+
+Integrates fzf-lua's file selection with claudecode.nvim's context management:
+
+- Batch file selection with fzf-lua multi-select
+- Smart search integration with grep → Claude
+- Tree-sitter based context extraction
+- Support for files, buffers, git files
+
+### 📚 [claude-fzf-history.nvim](https://github.com/pittcat/claude-fzf-history.nvim)
+
+Provides convenient Claude interaction history management and access for enhanced workflow continuity.
+
+> **Disclaimer**: These community extensions are developed and maintained by independent contributors. The authors and their extensions are not affiliated with Coder. Use at your own discretion and refer to their respective repositories for installation instructions, documentation, and support.
 
 ## Troubleshooting
 
