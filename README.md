@@ -57,6 +57,112 @@ That's it! The plugin will auto-configure everything else.
 - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed
 - [folke/snacks.nvim](https://github.com/folke/snacks.nvim) for enhanced terminal support
 
+## Local Installation Configuration
+
+If you've used Claude Code's `migrate-installer` command to move to a local installation, you'll need to configure the plugin to use the local path.
+
+### What is a Local Installation?
+
+Claude Code offers a `claude migrate-installer` command that:
+
+- Moves Claude Code from a global npm installation to `~/.claude/local/`
+- Avoids permission issues with system directories
+- Creates shell aliases but these may not be available to Neovim
+
+### Detecting Your Installation Type
+
+Check your installation type:
+
+```bash
+# Check where claude command points
+which claude
+
+# Global installation shows: /usr/local/bin/claude (or similar)
+# Local installation shows: alias to ~/.claude/local/claude
+
+# Verify installation health
+claude doctor
+```
+
+### Configuring for Local Installation
+
+If you have a local installation, configure the plugin with the direct path:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  dependencies = { "folke/snacks.nvim" },
+  opts = {
+    terminal_cmd = "~/.claude/local/claude", -- Point to local installation
+  },
+  config = true,
+  keys = {
+    -- Your keymaps here
+  },
+}
+```
+
+<details>
+<summary>Native Binary Installation (Alpha)</summary>
+
+Claude Code also offers an experimental native binary installation method currently in alpha testing. This provides a single executable with no Node.js dependencies.
+
+#### Installation Methods
+
+Install the native binary using one of these methods:
+
+```bash
+# Fresh install (recommended)
+curl -fsSL claude.ai/install.sh | bash
+
+# From existing Claude Code installation
+claude install
+```
+
+#### Platform Support
+
+- **macOS**: Full support for Intel and Apple Silicon
+- **Linux**: x64 and arm64 architectures
+- **Windows**: Via WSL (Windows Subsystem for Linux)
+
+#### Benefits
+
+- **Zero Dependencies**: Single executable file with no external requirements
+- **Cross-Platform**: Consistent experience across operating systems
+- **Secure Installation**: Includes checksum verification and automatic cleanup
+
+#### Configuring for Native Binary
+
+The exact binary path depends on your shell integration. To find your installation:
+
+```bash
+# Check where claude command points
+which claude
+
+# Verify installation type and health
+claude doctor
+```
+
+Configure the plugin with the detected path:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  dependencies = { "folke/snacks.nvim" },
+  opts = {
+    terminal_cmd = "/path/to/your/claude", -- Use output from 'which claude'
+  },
+  config = true,
+  keys = {
+    -- Your keymaps here
+  },
+}
+```
+
+</details>
+
+> **Note**: If Claude Code was installed globally via npm, you can use the default configuration without specifying `terminal_cmd`.
+
 ## Quick Demo
 
 ```vim
@@ -140,6 +246,8 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     auto_start = true,
     log_level = "info", -- "trace", "debug", "info", "warn", "error"
     terminal_cmd = nil, -- Custom terminal command (default: "claude")
+                        -- For local installations: "~/.claude/local/claude"
+                        -- For native binary: use output from 'which claude'
 
     -- Selection Tracking
     track_selection = true,
@@ -469,6 +577,8 @@ Provides convenient Claude interaction history management and access for enhance
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
+- **Local installation not working?** If you used `claude migrate-installer`, set `terminal_cmd = "~/.claude/local/claude"` in your config. Check `which claude` vs `ls ~/.claude/local/claude` to verify your installation type.
+- **Native binary installation not working?** If you used the alpha native binary installer, run `claude doctor` to verify installation health and use `which claude` to find the binary path. Set `terminal_cmd = "/path/to/claude"` with the detected path in your config.
 
 ## Contributing
 
