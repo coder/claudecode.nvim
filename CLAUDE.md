@@ -252,7 +252,32 @@ Enable detailed authentication logging by setting:
 
 ```lua
 require("claudecode").setup({
-  log_level = "debug"  -- Shows auth token generation, validation, and failures
+  log_level = "debug",  -- Shows auth token generation, validation, and failures
+  diff_opts = {
+    keep_terminal_focus = true,  -- If true, moves focus back to terminal after diff opens
+  },
+})
+```
+
+### Configuration Options
+
+#### Diff Options
+
+The `diff_opts` configuration allows you to customize diff behavior:
+
+- `keep_terminal_focus` (boolean, default: `false`) - When enabled, keeps focus in the Claude Code terminal when a diff opens instead of moving focus to the diff buffer. This allows you to continue using terminal keybindings like `<CR>` for accepting/rejecting diffs without accidentally triggering other mappings.
+
+**Example use case**: If you frequently use `<CR>` or arrow keys in the Claude Code terminal to accept/reject diffs, enable this option to prevent focus from moving to the diff buffer where `<CR>` might trigger unintended actions.
+
+```lua
+require("claudecode").setup({
+  diff_opts = {
+    keep_terminal_focus = true,  -- If true, moves focus back to terminal after diff opens
+    auto_close_on_accept = true,
+    show_diff_stats = true,
+    vertical_split = true,
+    open_in_current_tab = true,
+  },
 })
 ```
 
