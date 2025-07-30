@@ -95,7 +95,7 @@ end
 --- Handles mode change events.
 -- Triggers an immediate update of the selection.
 function M.on_mode_changed()
-  M.update_selection()
+  M.debounce_update()
 end
 
 --- Handles text change events.
