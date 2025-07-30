@@ -1,6 +1,6 @@
 ---
 -- Tree integration module for ClaudeCode.nvim
--- Handles detection and selection of files from nvim-tree, neo-tree, and oil.nvim
+-- Handles detection and selection of files from nvim-tree, neo-tree, oil.nvim and snacks.explorer
 -- @module claudecode.integrations
 local M = {}
 
@@ -16,6 +16,8 @@ function M.get_selected_files_from_tree()
     return M._get_neotree_selection()
   elseif current_ft == "oil" then
     return M._get_oil_selection()
+  elseif current_ft == "snacks_picker_list" then
+    return M._get_snacks_explorer_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
@@ -254,6 +256,123 @@ function M._get_oil_selection()
       else
         -- For unknown types, return the path anyway
         return { full_path }, nil
+      end
+    end
+  end
+
+  return {}, "No file found under cursor"
+end
+
+--- Get selected files from snacks.explorer
+--- Uses the picker API to get the current selection
+--- @param visual_start number|nil Start line of visual selection (optional)
+--- @param visual_end number|nil End line of visual selection (optional)
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_snacks_explorer_selection(visual_start, visual_end)
+  local snacks_ok, snacks = pcall(require, "snacks")
+  if not snacks_ok or not snacks.picker then
+    return {}, "snacks.nvim not available"
+  end
+
+  -- Get the current explorer picker
+  local explorers = snacks.picker.get({ source = "explorer" })
+  if not explorers or #explorers == 0 then
+    return {}, "No active snacks.explorer found"
+  end
+
+  -- Get the first (and likely only) explorer instance
+  local explorer = explorers[1]
+  if not explorer then
+    return {}, "No active snacks.explorer found"
+  end
+
+  local files = {}
+
+  -- Helper function to extract file path from various item structures
+  local function extract_file_path(item)
+    if not item then
+      return nil
+    end
+    local file_path = item.file or item.path or (item.item and item.item.file) or (item.item and item.item.path)
+
+    -- Add trailing slash for directories
+    if file_path and file_path ~= "" and vim.fn.isdirectory(file_path) == 1 then
+      if not file_path:match("/$") then
+        file_path = file_path .. "/"
+      end
+    end
+
+    return file_path
+  end
+
+  -- Helper function to check if path is safe (not root-level)
+  local function is_safe_path(file_path)
+    if not file_path or file_path == "" then
+      return false
+    end
+    -- Not root-level file & this prevents selecting files like /etc/passwd, /usr/bin/vim, etc.
+    -- Check for system directories and root-level files
+    if string.match(file_path, "^/[^/]*$") then
+      return false -- True root-level files like /etc, /usr, /bin
+    end
+    if
+      string.match(file_path, "^/etc/")
+      or string.match(file_path, "^/usr/")
+      or string.match(file_path, "^/bin/")
+      or string.match(file_path, "^/sbin/")
+    then
+      return false -- System directories
+    end
+    return true
+  end
+
+  -- Handle visual mode selection if range is provided
+  if visual_start and visual_end and explorer.list then
+    -- Process each line in the visual selection
+    for row = visual_start, visual_end do
+      -- Convert row to picker index
+      local idx = explorer.list:row2idx(row)
+      if idx then
+        -- Get the item at this index
+        local item = explorer.list:get(idx)
+        if item then
+          local file_path = extract_file_path(item)
+          if file_path and file_path ~= "" and is_safe_path(file_path) then
+            table.insert(files, file_path)
+          end
+        end
+      end
+    end
+    if #files > 0 then
+      return files, nil
+    end
+  end
+
+  -- Check if there are selected items (using toggle selection)
+  local selected = explorer:selected({ fallback = false })
+  if selected and #selected > 0 then
+    -- Process selected items
+    for _, item in ipairs(selected) do
+      local file_path = extract_file_path(item)
+      if file_path and file_path ~= "" and is_safe_path(file_path) then
+        table.insert(files, file_path)
+      end
+    end
+    if #files > 0 then
+      return files, nil
+    end
+  end
+
+  -- Fall back to current item under cursor
+  local current = explorer:current({ resolve = true })
+  if current then
+    local file_path = extract_file_path(current)
+    if file_path and file_path ~= "" then
+      if is_safe_path(file_path) then
+        return { file_path }, nil
+      else
+        return {}, "Cannot add root-level file. Please select a file in a subdirectory."
       end
     end
   end
