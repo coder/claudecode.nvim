@@ -8,6 +8,15 @@ local logger = require("claudecode.logger")
 local active_diffs = {}
 local autocmd_group
 
+--- Restore window layout by delegating to terminal module
+-- @param target_window number|nil The remaining main editor window
+local function restore_window_layout()
+  local ok, terminal = pcall(require, "claudecode.terminal")
+  if ok and terminal.restore_window_layout then
+    terminal.restore_window_layout()
+  end
+end
+
 --- Get or create the autocmd group
 local function get_autocmd_group()
   if not autocmd_group then
@@ -316,13 +325,15 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     final_content = final_content .. "\n"
   end
 
-  -- Close diff windows (unified behavior)
+  -- Close diff windows (unified behavior) and restore layout
   if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
     vim.api.nvim_win_close(diff_data.new_window, true)
   end
   if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
     vim.api.nvim_set_current_win(diff_data.target_window)
     vim.cmd("diffoff")
+    -- Restore proper window layout after closing diff
+    restore_window_layout()
   end
 
   -- Create MCP-compliant response
@@ -615,11 +626,13 @@ function M._cleanup_diff_state(tab_name, reason)
     pcall(vim.api.nvim_win_close, diff_data.new_window, true)
   end
 
-  -- Turn off diff mode in target window if it still exists
+  -- Turn off diff mode in target window if it still exists and restore layout
   if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
     vim.api.nvim_win_call(diff_data.target_window, function()
       vim.cmd("diffoff")
     end)
+    -- Restore proper window layout after cleanup
+    restore_window_layout()
   end
 
   -- Remove from active diffs
@@ -913,13 +926,15 @@ function M.deny_current_diff()
     return
   end
 
-  -- Close windows and clean up (same logic as the original keymap)
+  -- Close windows and clean up with layout restoration
   if new_win and vim.api.nvim_win_is_valid(new_win) then
     vim.api.nvim_win_close(new_win, true)
   end
   if target_window and vim.api.nvim_win_is_valid(target_window) then
     vim.api.nvim_set_current_win(target_window)
     vim.cmd("diffoff")
+    -- Restore proper window layout after rejecting diff
+    restore_window_layout()
   end
 
   M._resolve_diff_as_rejected(tab_name)
