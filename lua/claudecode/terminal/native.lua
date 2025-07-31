@@ -98,6 +98,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
           cleanup_state() -- Clear our managed state first
 
+          if not effective_config.auto_close then
+            return
+          end
+
           if current_winid_for_job and vim.api.nvim_win_is_valid(current_winid_for_job) then
             if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
               -- Optional: Check if the window still holds the same terminal buffer
