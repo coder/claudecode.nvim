@@ -51,6 +51,7 @@ The `fixtures/` directory contains test Neovim configurations for verifying plug
 - `netrw` - Tests with Neovim's built-in file explorer
 - `nvim-tree` - Tests with nvim-tree.lua file explorer
 - `oil` - Tests with oil.nvim file explorer
+- `mini-files` - Tests with mini.files file explorer
 
 **Usage**: `source fixtures/nvim-aliases.sh && vv oil` starts Neovim with oil.nvim configuration
 
@@ -293,7 +294,7 @@ Log levels for authentication events:
 ### Integration Support
 
 - Terminal integration supports both snacks.nvim and native Neovim terminal
-- Compatible with popular file explorers (nvim-tree, oil.nvim)
+- Compatible with popular file explorers (nvim-tree, oil.nvim, neo-tree, mini.files)
 - Visual selection tracking across different selection modes
 
 ## Release Process
