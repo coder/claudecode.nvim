@@ -259,6 +259,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       split_width_percentage = 0.30,
       provider = "auto", -- "auto", "snacks", "native", or custom provider table
       auto_close = true,
+      enable = true, -- Enable terminal commands (set to false when using external Claude Code)
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
     },
 
@@ -572,11 +573,38 @@ Provides convenient Claude interaction history management and access for enhance
 
 > **Disclaimer**: These community extensions are developed and maintained by independent contributors. The authors and their extensions are not affiliated with Coder. Use at your own discretion and refer to their respective repositories for installation instructions, documentation, and support.
 
+## Using External Claude Code
+
+If you prefer to run Claude Code externally (e.g., in a separate terminal), you can disable the plugin's built-in terminal commands:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  opts = {
+    terminal = {
+      enable = false, -- Disable ClaudeCode, ClaudeCodeOpen, etc.
+    },
+  },
+}
+```
+
+> **💡 Tip**: **Disable lazy loading** (`lazy = false`) for the best experience with external Claude Code. This ensures the WebSocket server starts immediately when Neovim opens, allowing instant connection from external terminals.
+
+Then connect your external Claude Code instance using:
+
+```bash
+# Start claudecode.nvim first: :ClaudeCodeStart in Neovim (or auto-starts if lazy = false)
+claude --ide  # Connects to the running Neovim WebSocket server
+```
+
+This approach gives you full control over Claude Code's terminal interface while still providing all the IDE integration features.
+
 ## Troubleshooting
 
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
+- **Want to use external Claude Code?** Set `terminal = { enable = false }`, then use `claude --ide` command
 - **Local installation not working?** If you used `claude migrate-installer`, set `terminal_cmd = "~/.claude/local/claude"` in your config. Check `which claude` vs `ls ~/.claude/local/claude` to verify your installation type.
 - **Native binary installation not working?** If you used the alpha native binary installer, run `claude doctor` to verify installation health and use `which claude` to find the binary path. Set `terminal_cmd = "/path/to/claude"` with the detected path in your config.
 

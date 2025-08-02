@@ -90,6 +90,7 @@ describe("ClaudeCodeAdd command", function()
             return 1
           end,
           simple_toggle = spy.new(function() end),
+          is_enabled = function() return true end,
         }
       elseif mod == "claudecode.visual_commands" then
         return {

@@ -44,6 +44,7 @@ M.version = {
 --- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
 --- @field queue_timeout number Maximum time to keep @ mentions in queue (milliseconds).
 --- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean } Options for the diff provider.
+--- @field enable_terminal boolean Whether to enable terminal commands (ClaudeCode, ClaudeCodeOpen, etc.).
 
 --- @type ClaudeCode.Config
 local default_config = {
@@ -63,6 +64,7 @@ local default_config = {
     vertical_split = true,
     open_in_current_tab = false,
   },
+  enable_terminal = true,
 }
 
 --- @class ClaudeCode.State
@@ -324,22 +326,25 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 
   -- Check if Claude Code is connected
   if M.is_claude_connected() then
-    -- Claude is connected, send immediately and ensure terminal is visible
+    -- Claude is connected, send immediately and ensure terminal is visible (if enabled)
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
-    if success then
-      local terminal = require("claudecode.terminal")
+    local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+    if success and terminal_ok and terminal.is_enabled() then
       terminal.ensure_visible()
     end
     return success, error_msg
   else
-    -- Claude not connected, queue the mention and launch terminal
+    -- Claude not connected, queue the mention and launch terminal (if enabled)
     queue_mention(file_path, start_line, end_line)
 
-    -- Launch terminal with Claude Code
-    local terminal = require("claudecode.terminal")
-    terminal.open()
-
-    logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    local terminal_ok, terminal = pcall(require, "claudecode.terminal")
+    if terminal_ok and terminal.is_enabled() then
+      -- Launch terminal with Claude Code
+      terminal.open()
+      logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    else
+      logger.debug(context, "Queued @ mention (terminal disabled): " .. file_path)
+    end
 
     return true, nil
   end
@@ -990,7 +995,7 @@ function M._create_commands()
   })
 
   local terminal_ok, terminal = pcall(require, "claudecode.terminal")
-  if terminal_ok then
+  if terminal_ok and terminal.is_enabled() then
     vim.api.nvim_create_user_command("ClaudeCode", function(opts)
       local current_mode = vim.fn.mode()
       if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
@@ -1028,6 +1033,11 @@ function M._create_commands()
     end, {
       desc = "Close the Claude Code terminal window",
     })
+  elseif terminal_ok and not terminal.is_enabled() then
+    logger.debug(
+      "init",
+      "Terminal commands disabled via terminal.enable = false. Terminal commands (ClaudeCode, ClaudeCodeOpen, ClaudeCodeClose) not registered."
+    )
   else
     logger.error(
       "init",
