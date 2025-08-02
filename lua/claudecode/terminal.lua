@@ -24,6 +24,7 @@ local config = {
   show_native_term_exit_tip = true,
   terminal_cmd = nil,
   auto_close = true,
+  enable = true, -- Enable terminal commands (ClaudeCode, ClaudeCodeOpen, etc.)
   env = {}, -- Custom environment variables for Claude terminal
   snacks_win_opts = {},
 }
@@ -313,6 +314,8 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         config[k] = v
       elseif k == "auto_close" and type(v) == "boolean" then
         config[k] = v
+      elseif k == "enable" and type(v) == "boolean" then
+        config[k] = v
       elseif k == "snacks_win_opts" and type(v) == "table" then
         config[k] = v
       else
@@ -401,6 +404,12 @@ function M._get_managed_terminal_for_test()
     return provider._get_terminal_for_test()
   end
   return nil
+end
+
+--- Gets whether terminal commands are enabled
+-- @return boolean True if terminal commands are enabled
+function M.is_enabled()
+  return config.enable
 end
 
 return M

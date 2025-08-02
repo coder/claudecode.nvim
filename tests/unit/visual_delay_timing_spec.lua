@@ -22,6 +22,7 @@ describe("Visual Delay Timing Validation", function()
       get_active_terminal_bufnr = function()
         return nil -- No active terminal by default
       end,
+      is_enabled = function() return true end,
     }
 
     -- Extend the existing vim mock

@@ -301,6 +301,7 @@ describe("claudecode.init", function()
         close = spy.new(function() end),
         setup = spy.new(function() end),
         ensure_visible = spy.new(function() end),
+        is_enabled = function() return true end,
       }
 
       local original_require = _G.require
@@ -475,6 +476,7 @@ describe("claudecode.init", function()
         focus_toggle = spy.new(function() end),
         open = spy.new(function() end),
         close = spy.new(function() end),
+        is_enabled = function() return true end,
       }
 
       -- Mock vim.ui.select to automatically select the first model

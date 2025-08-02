@@ -72,6 +72,7 @@ describe("ClaudeCodeSend Command Range Functionality", function()
     mock_terminal = {
       open = spy.new(function() end),
       ensure_visible = spy.new(function() end),
+      is_enabled = function() return true end,
     }
 
     -- Mock server
