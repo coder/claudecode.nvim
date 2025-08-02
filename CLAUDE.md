@@ -63,7 +63,7 @@ The `fixtures/` directory contains test Neovim configurations for verifying plug
 3. **Lock File System** (`lua/claudecode/lockfile.lua`) - Creates discovery files for Claude CLI at `~/.claude/ide/`
 4. **Selection Tracking** (`lua/claudecode/selection.lua`) - Monitors text selections and sends updates to Claude
 5. **Diff Integration** (`lua/claudecode/diff.lua`) - Native Neovim diff support for Claude's file comparisons
-6. **Terminal Integration** (`lua/claudecode/terminal.lua`) - Manages Claude CLI terminal sessions
+6. **Terminal Integration** (`lua/claudecode/terminal.lua`) - Manages Claude CLI terminal sessions with support for internal Neovim terminals and external terminal applications
 
 ### WebSocket Server Implementation
 
@@ -104,6 +104,28 @@ The WebSocket server implements secure authentication using:
 - `close_tab` - Internal-only tool for tab management (hardcoded in Claude Code)
 
 **Format Compliance**: All tools return MCP-compliant format: `{content: [{type: "text", text: "JSON-stringified-data"}]}`
+
+### Terminal Integration Options
+
+**Internal Terminals** (within Neovim):
+
+- **Snacks.nvim**: `terminal/snacks.lua` - Advanced terminal with floating windows
+- **Native**: `terminal/native.lua` - Built-in Neovim terminal as fallback
+
+**External Terminals** (separate applications):
+
+- **External Provider**: `terminal/external.lua` - Launches Claude in external terminal apps
+
+**Configuration Example**:
+
+```lua
+opts = {
+  terminal = {
+    provider = "external",  -- "auto", "snacks", "native", or "external"
+    external_terminal_cmd = "alacritty -e %s"  -- Required for external provider
+  }
+}
+```
 
 ### Key File Locations
 
@@ -314,13 +336,11 @@ When updating the version number for a new release, you must update **ALL** of t
    ```
 
 2. **`scripts/claude_interactive.sh`** - Multiple client version references:
-
    - Line ~52: `"version": "0.2.0"` (handshake)
    - Line ~223: `"version": "0.2.0"` (initialize)
    - Line ~309: `"version": "0.2.0"` (reconnect)
 
 3. **`scripts/lib_claude.sh`** - ClaudeCodeNvim version:
-
    - Line ~120: `"version": "0.2.0"` (init message)
 
 4. **`CHANGELOG.md`** - Add new release section with:

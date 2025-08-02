@@ -23,6 +23,9 @@ M.defaults = {
     { name = "Claude Opus 4 (Latest)", value = "opus" },
     { name = "Claude Sonnet 4 (Latest)", value = "sonnet" },
   },
+  terminal = {
+    external_terminal_cmd = nil, -- Command template for external terminal (e.g., "alacritty -e %s")
+  },
 }
 
 --- Validates the provided configuration table.
@@ -43,6 +46,19 @@ function M.validate(config)
   assert(type(config.auto_start) == "boolean", "auto_start must be a boolean")
 
   assert(config.terminal_cmd == nil or type(config.terminal_cmd) == "string", "terminal_cmd must be nil or a string")
+
+  -- Validate terminal config
+  assert(type(config.terminal) == "table", "terminal must be a table")
+  assert(
+    config.terminal.external_terminal_cmd == nil or type(config.terminal.external_terminal_cmd) == "string",
+    "terminal.external_terminal_cmd must be nil or a string"
+  )
+  if config.terminal.external_terminal_cmd and config.terminal.external_terminal_cmd ~= "" then
+    assert(
+      config.terminal.external_terminal_cmd:find("%%s"),
+      "terminal.external_terminal_cmd must contain '%s' placeholder for the Claude command"
+    )
+  end
 
   local valid_log_levels = { "trace", "debug", "info", "warn", "error" }
   local is_valid_log_level = false

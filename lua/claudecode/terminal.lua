@@ -141,6 +141,22 @@ local function get_provider()
     else
       logger.warn("terminal", "'snacks' provider configured, but Snacks.nvim not available. Falling back to 'native'.")
     end
+  elseif config.provider == "external" then
+    local external_provider = load_provider("external")
+    if external_provider then
+      -- Check availability based on our config instead of provider's internal state
+      local has_external_cmd = config.external_terminal_cmd
+        and config.external_terminal_cmd ~= ""
+        and config.external_terminal_cmd:find("%%s")
+      if has_external_cmd then
+        return external_provider
+      else
+        logger.warn(
+          "terminal",
+          "'external' provider configured, but external_terminal_cmd not properly set. Falling back to 'native'."
+        )
+      end
+    end
   elseif config.provider == "native" then
     -- noop, will use native provider as default below
     logger.debug("terminal", "Using native terminal provider")
@@ -302,12 +318,26 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
   end
 
   for k, v in pairs(user_term_config) do
-    if config[k] ~= nil and k ~= "terminal_cmd" then -- terminal_cmd is handled above
+    if k == "terminal_cmd" then
+      -- terminal_cmd is handled above, skip
+    elseif k == "external_terminal_cmd" then
+      -- Handle external_terminal_cmd specially
+      if v == nil or type(v) == "string" then
+        config[k] = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for external_terminal_cmd: " .. tostring(v),
+          vim.log.levels.WARN
+        )
+      end
+    elseif config[k] ~= nil then -- Other known config keys
       if k == "split_side" and (v == "left" or v == "right") then
         config[k] = v
       elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
         config[k] = v
-      elseif k == "provider" and (v == "snacks" or v == "native" or v == "auto" or type(v) == "table") then
+      elseif
+        k == "provider" and (v == "snacks" or v == "native" or v == "external" or v == "auto" or type(v) == "table")
+      then
         config[k] = v
       elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
         config[k] = v
@@ -318,13 +348,20 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify("claudecode.terminal.setup: Invalid value for " .. k .. ": " .. tostring(v), vim.log.levels.WARN)
       end
-    elseif k ~= "terminal_cmd" then -- Avoid warning for terminal_cmd if passed in user_term_config
+    else
       vim.notify("claudecode.terminal.setup: Unknown configuration key: " .. k, vim.log.levels.WARN)
     end
   end
 
   -- Setup providers with config
-  get_provider().setup(config)
+  -- Convert flat config to nested structure for external provider compatibility
+  local provider_config = vim.deepcopy(config)
+  if config.external_terminal_cmd then
+    provider_config.terminal = provider_config.terminal or {}
+    provider_config.terminal.external_terminal_cmd = config.external_terminal_cmd
+  end
+
+  get_provider().setup(provider_config)
 end
 
 --- Opens or focuses the Claude terminal.
