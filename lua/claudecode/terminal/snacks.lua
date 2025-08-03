@@ -1,7 +1,6 @@
---- Snacks.nvim terminal provider for Claude Code.
--- @module claudecode.terminal.snacks
+---Snacks.nvim terminal provider for Claude Code.
+---@module 'claudecode.terminal.snacks'
 
---- @type TerminalProvider
 local M = {}
 
 local snacks_available, Snacks = pcall(require, "snacks")
@@ -10,12 +9,12 @@ local terminal = nil
 
 --- @return boolean
 local function is_available()
-  return snacks_available and Snacks and Snacks.terminal
+  return snacks_available and Snacks and Snacks.terminal ~= nil
 end
 
---- Setup event handlers for terminal instance
---- @param term_instance table The Snacks terminal instance
---- @param config table Configuration options
+---Setup event handlers for terminal instance
+---@param term_instance table The Snacks terminal instance
+---@param config table Configuration options
 local function setup_terminal_events(term_instance, config)
   local logger = require("claudecode.logger")
 
@@ -42,11 +41,11 @@ local function setup_terminal_events(term_instance, config)
   end, { buf = true })
 end
 
---- Builds Snacks terminal options with focus control
---- @param config table Terminal configuration (split_side, split_width_percentage, etc.)
---- @param env_table table Environment variables to set for the terminal process
---- @param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
---- @return table Snacks terminal options with start_insert/auto_insert controlled by focus parameter
+---Builds Snacks terminal options with focus control
+---@param config TerminalConfig Terminal configuration
+---@param env_table table Environment variables to set for the terminal process
+---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
+---@return table options Snacks terminal options with start_insert/auto_insert controlled by focus parameter
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   return {
@@ -67,10 +66,11 @@ function M.setup()
   -- No specific setup needed for Snacks provider
 end
 
---- @param cmd_string string
---- @param env_table table
---- @param config table
---- @param focus boolean|nil
+---Open a terminal using Snacks.nvim
+---@param cmd_string string
+---@param env_table table
+---@param config TerminalConfig
+---@param focus boolean?
 function M.open(cmd_string, env_table, config, focus)
   if not is_available() then
     vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
@@ -145,6 +145,7 @@ function M.open(cmd_string, env_table, config, focus)
   end
 end
 
+---Close the terminal
 function M.close()
   if not is_available() then
     return
@@ -154,10 +155,10 @@ function M.close()
   end
 end
 
---- Simple toggle: always show/hide terminal regardless of focus
---- @param cmd_string string
---- @param env_table table
---- @param config table
+---Simple toggle: always show/hide terminal regardless of focus
+---@param cmd_string string
+---@param env_table table
+---@param config table
 function M.simple_toggle(cmd_string, env_table, config)
   if not is_available() then
     vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
@@ -182,10 +183,10 @@ function M.simple_toggle(cmd_string, env_table, config)
   end
 end
 
---- Smart focus toggle: switches to terminal if not focused, hides if currently focused
---- @param cmd_string string
---- @param env_table table
---- @param config table
+---Smart focus toggle: switches to terminal if not focused, hides if currently focused
+---@param cmd_string string
+---@param env_table table
+---@param config table
 function M.focus_toggle(cmd_string, env_table, config)
   if not is_available() then
     vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
@@ -226,15 +227,16 @@ function M.focus_toggle(cmd_string, env_table, config)
   end
 end
 
---- Legacy toggle function for backward compatibility (defaults to simple_toggle)
---- @param cmd_string string
---- @param env_table table
---- @param config table
+---Legacy toggle function for backward compatibility (defaults to simple_toggle)
+---@param cmd_string string
+---@param env_table table
+---@param config table
 function M.toggle(cmd_string, env_table, config)
   M.simple_toggle(cmd_string, env_table, config)
 end
 
---- @return number|nil
+---Get the active terminal buffer number
+---@return number?
 function M.get_active_bufnr()
   if terminal and terminal:buf_valid() and terminal.buf then
     if vim.api.nvim_buf_is_valid(terminal.buf) then
@@ -244,15 +246,17 @@ function M.get_active_bufnr()
   return nil
 end
 
---- @return boolean
+---Is the terminal provider available?
+---@return boolean
 function M.is_available()
   return is_available()
 end
 
--- For testing purposes
---- @return table|nil
+---For testing purposes
+---@return table? terminal The terminal instance, or nil
 function M._get_terminal_for_test()
   return terminal
 end
 
+---@type TerminalProvider
 return M

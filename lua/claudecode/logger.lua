@@ -1,5 +1,6 @@
 ---@brief Centralized logger for Claude Code Neovim integration.
 -- Provides level-based logging.
+---@module 'claudecode.logger'
 local M = {}
 
 M.levels = {
@@ -20,7 +21,8 @@ local level_values = {
 
 local current_log_level_value = M.levels.INFO
 
---- @param plugin_config table The configuration table (e.g., from claudecode.init.state.config).
+---Setup the logger module
+---@param plugin_config ClaudeCode.Config The configuration table (e.g., from claudecode.init.state.config).
 function M.setup(plugin_config)
   local conf = plugin_config
 
@@ -83,8 +85,9 @@ local function log(level, component, message_parts)
   end)
 end
 
---- @param component string|nil Optional component/module name.
--- @param ... any Varargs representing parts of the message.
+---Error level logging
+---@param component string|nil Optional component/module name.
+---@param ... any Varargs representing parts of the message.
 function M.error(component, ...)
   if type(component) ~= "string" then
     log(M.levels.ERROR, nil, { component, ... })
@@ -93,8 +96,9 @@ function M.error(component, ...)
   end
 end
 
---- @param component string|nil Optional component/module name.
--- @param ... any Varargs representing parts of the message.
+---Warn level logging
+---@param component string|nil Optional component/module name.
+---@param ... any Varargs representing parts of the message.
 function M.warn(component, ...)
   if type(component) ~= "string" then
     log(M.levels.WARN, nil, { component, ... })
@@ -103,8 +107,9 @@ function M.warn(component, ...)
   end
 end
 
---- @param component string|nil Optional component/module name.
--- @param ... any Varargs representing parts of the message.
+---Info level logging
+---@param component string|nil Optional component/module name.
+---@param ... any Varargs representing parts of the message.
 function M.info(component, ...)
   if type(component) ~= "string" then
     log(M.levels.INFO, nil, { component, ... })
@@ -113,9 +118,9 @@ function M.info(component, ...)
   end
 end
 
---- Check if a specific log level is enabled
--- @param level_name string The level name ("error", "warn", "info", "debug", "trace")
--- @return boolean Whether the level is enabled
+---Check if a specific log level is enabled
+---@param level_name ClaudeCode.LogLevel The level name ("error", "warn", "info", "debug", "trace")
+---@return boolean enabled Whether the level is enabled
 function M.is_level_enabled(level_name)
   local level_value = level_values[level_name]
   if not level_value then
@@ -124,8 +129,9 @@ function M.is_level_enabled(level_name)
   return level_value <= current_log_level_value
 end
 
---- @param component string|nil Optional component/module name.
--- @param ... any Varargs representing parts of the message.
+---Debug level logging
+---@param component string|nil Optional component/module name.
+---@param ... any Varargs representing parts of the message.
 function M.debug(component, ...)
   if type(component) ~= "string" then
     log(M.levels.DEBUG, nil, { component, ... })
@@ -134,8 +140,9 @@ function M.debug(component, ...)
   end
 end
 
---- @param component string|nil Optional component/module name.
--- @param ... any Varargs representing parts of the message.
+---Trace level logging
+---@param component string|nil Optional component/module name.
+---@param ... any Varargs representing parts of the message.
 function M.trace(component, ...)
   if type(component) ~= "string" then
     log(M.levels.TRACE, nil, { component, ... })
@@ -143,8 +150,5 @@ function M.trace(component, ...)
     log(M.levels.TRACE, component, { ... })
   end
 end
-
-local default_config_for_initial_setup = require("claudecode.config").defaults
-M.setup(default_config_for_initial_setup)
 
 return M

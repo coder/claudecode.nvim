@@ -1,4 +1,4 @@
---- Tool implementation for checking if a document is dirty.
+---Tool implementation for checking if a document is dirty.
 
 local schema = {
   description = "Check if a document has unsaved changes (is dirty)",
@@ -16,12 +16,10 @@ local schema = {
   },
 }
 
---- Handles the checkDocumentDirty tool invocation.
--- Checks if the specified file (buffer) has unsaved changes.
--- @param params table The input parameters for the tool.
--- @field params.filePath string Path to the file to check.
--- @return table A table indicating if the document is dirty.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
+---Handles the checkDocumentDirty tool invocation.
+---Checks if the specified file (buffer) has unsaved changes.
+---@param params table The input parameters for the tool
+---@return table MCP-compliant response with dirty status
 local function handler(params)
   if not params.filePath then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })

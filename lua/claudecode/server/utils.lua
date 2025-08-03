@@ -70,7 +70,7 @@ local function add32(a, b)
   return band(sum, 0xFFFFFFFF)
 end
 
----@brief Generate a random, spec-compliant WebSocket key.
+---Generate a random, spec-compliant WebSocket key.
 ---@return string key Base64 encoded 16-byte random nonce.
 function M.generate_websocket_key()
   local random_bytes = {}
@@ -80,7 +80,7 @@ function M.generate_websocket_key()
   return M.base64_encode(table.concat(random_bytes))
 end
 
----@brief Base64 encode a string
+---Base64 encode a string
 ---@param data string The data to encode
 ---@return string encoded The base64 encoded string
 function M.base64_encode(data)
@@ -109,7 +109,7 @@ function M.base64_encode(data)
   return encoded:sub(1, #encoded - #padding) .. padding
 end
 
----@brief Base64 decode a string
+---Base64 decode a string
 ---@param data string The base64 encoded string
 ---@return string|nil decoded The decoded string, or nil on error (e.g. invalid char)
 function M.base64_decode(data)
@@ -148,7 +148,7 @@ function M.base64_decode(data)
   return table.concat(result)
 end
 
----@brief Pure Lua SHA-1 implementation
+---Pure Lua SHA-1 implementation
 ---@param data string The data to hash
 ---@return string|nil hash The SHA-1 hash in binary format, or nil on error
 function M.sha1(data)
@@ -244,7 +244,7 @@ function M.sha1(data)
   return result
 end
 
----@brief Generate WebSocket accept key from client key
+---Generate WebSocket accept key from client key
 ---@param client_key string The client's WebSocket-Key header value
 ---@return string|nil accept_key The WebSocket accept key, or nil on error
 function M.generate_accept_key(client_key)
@@ -261,7 +261,7 @@ function M.generate_accept_key(client_key)
   return M.base64_encode(hash)
 end
 
----@brief Parse HTTP headers from request string
+---Parse HTTP headers from request string
 ---@param request string The HTTP request string
 ---@return table headers Table of header name -> value pairs
 function M.parse_http_headers(request)
@@ -283,7 +283,7 @@ function M.parse_http_headers(request)
   return headers
 end
 
----@brief Check if a string contains valid UTF-8
+---Check if a string contains valid UTF-8
 ---@param str string The string to check
 ---@return boolean valid True if the string is valid UTF-8
 function M.is_valid_utf8(str)
@@ -320,14 +320,14 @@ function M.is_valid_utf8(str)
   return true
 end
 
----@brief Convert a 16-bit number to big-endian bytes
+---Convert a 16-bit number to big-endian bytes
 ---@param num number The number to convert
 ---@return string bytes The big-endian byte representation
 function M.uint16_to_bytes(num)
   return string.char(math.floor(num / 256), num % 256)
 end
 
----@brief Convert a 64-bit number to big-endian bytes
+---Convert a 64-bit number to big-endian bytes
 ---@param num number The number to convert
 ---@return string bytes The big-endian byte representation
 function M.uint64_to_bytes(num)
@@ -339,7 +339,7 @@ function M.uint64_to_bytes(num)
   return string.char(unpack(bytes))
 end
 
----@brief Convert big-endian bytes to a 16-bit number
+---Convert big-endian bytes to a 16-bit number
 ---@param bytes string The byte string (2 bytes)
 ---@return number num The converted number
 function M.bytes_to_uint16(bytes)
@@ -349,7 +349,7 @@ function M.bytes_to_uint16(bytes)
   return bytes:byte(1) * 256 + bytes:byte(2)
 end
 
----@brief Convert big-endian bytes to a 64-bit number
+---Convert big-endian bytes to a 64-bit number
 ---@param bytes string The byte string (8 bytes)
 ---@return number num The converted number
 function M.bytes_to_uint64(bytes)
@@ -364,7 +364,7 @@ function M.bytes_to_uint64(bytes)
   return num
 end
 
----@brief XOR lookup table for faster operations
+---XOR lookup table for faster operations
 local xor_table = {}
 for i = 0, 255 do
   xor_table[i] = {}
@@ -390,7 +390,7 @@ for i = 0, 255 do
   end
 end
 
----@brief Apply XOR mask to payload data
+---Apply XOR mask to payload data
 ---@param data string The data to mask/unmask
 ---@param mask string The 4-byte mask
 ---@return string masked The masked/unmasked data
@@ -407,7 +407,7 @@ function M.apply_mask(data, mask)
   return table.concat(result)
 end
 
----@brief Shuffle an array in place using Fisher-Yates algorithm
+---Shuffle an array in place using Fisher-Yates algorithm
 ---@param tbl table The array to shuffle
 function M.shuffle_array(tbl)
   math.randomseed(os.time())

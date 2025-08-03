@@ -1,7 +1,41 @@
+---@brief [[
 --- Manages configuration for the Claude Code Neovim integration.
--- Provides default settings, validation, and application of user-defined configurations.
+--- Provides default settings, validation, and application of user-defined configurations.
+---@brief ]]
+---@module 'claudecode.config'
+
 local M = {}
 
+-- Types (authoritative for configuration shape):
+---@class ClaudeCode.DiffOptions
+---@field auto_close_on_accept boolean
+---@field show_diff_stats boolean
+---@field vertical_split boolean
+---@field open_in_current_tab boolean
+---@field keep_terminal_focus boolean
+
+---@class ClaudeCode.ModelOption
+---@field name string
+---@field value string
+
+---@alias ClaudeCode.LogLevel "trace"|"debug"|"info"|"warn"|"error"
+
+---@class ClaudeCode.Config
+---@field port_range {min: integer, max: integer}
+---@field auto_start boolean
+---@field terminal_cmd string|nil
+---@field env table<string, string>
+---@field log_level ClaudeCode.LogLevel
+---@field track_selection boolean
+---@field visual_demotion_delay_ms number
+---@field connection_wait_delay number
+---@field connection_timeout number
+---@field queue_timeout number
+---@field diff_opts ClaudeCode.DiffOptions
+---@field models ClaudeCode.ModelOption[]
+---@field disable_broadcast_debouncing? boolean
+---@field enable_broadcast_debouncing_in_tests? boolean
+---@field terminal TerminalConfig|nil
 M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
@@ -24,12 +58,13 @@ M.defaults = {
     { name = "Claude Opus 4 (Latest)", value = "opus" },
     { name = "Claude Sonnet 4 (Latest)", value = "sonnet" },
   },
+  terminal = nil, -- Will be lazy-loaded to avoid circular dependency
 }
 
---- Validates the provided configuration table.
--- @param config table The configuration table to validate.
--- @return boolean true if the configuration is valid.
--- @error string if any configuration option is invalid.
+---Validates the provided configuration table.
+---Throws an error if any validation fails.
+---@param config table The configuration table to validate.
+---@return boolean true if the configuration is valid.
 function M.validate(config)
   assert(
     type(config.port_range) == "table"
@@ -97,17 +132,34 @@ function M.validate(config)
     assert(type(model.name) == "string" and model.name ~= "", "models[" .. i .. "].name must be a non-empty string")
     assert(type(model.value) == "string" and model.value ~= "", "models[" .. i .. "].value must be a non-empty string")
   end
+
   return true
 end
 
---- Applies user configuration on top of default settings and validates the result.
--- @param user_config table|nil The user-provided configuration table.
--- @return table The final, validated configuration table.
+---Applies user configuration on top of default settings and validates the result.
+---@param user_config table|nil The user-provided configuration table.
+---@return ClaudeCode.Config config The final, validated configuration table.
 function M.apply(user_config)
   local config = vim.deepcopy(M.defaults)
 
+  -- Lazy-load terminal defaults to avoid circular dependency
+  if config.terminal == nil then
+    local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+    if terminal_ok and terminal_module.defaults then
+      config.terminal = terminal_module.defaults
+    end
+  end
+
   if user_config then
-    config = vim.tbl_deep_extend("force", config, user_config)
+    -- Use vim.tbl_deep_extend if available, otherwise simple merge
+    if vim.tbl_deep_extend then
+      config = vim.tbl_deep_extend("force", config, user_config)
+    else
+      -- Simple fallback for testing environment
+      for k, v in pairs(user_config) do
+        config[k] = v
+      end
+    end
   end
 
   M.validate(config)

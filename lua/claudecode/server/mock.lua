@@ -17,17 +17,17 @@ M.state = {
   messages = {}, -- Store messages for testing
 }
 
---- Find an available port in the given range
+---Find an available port in the given range
 ---@param min number The minimum port number
----@param _max number The maximum port number
+---@param max number The maximum port number
 ---@return number port The selected port
-function M.find_available_port(min, _max)
+function M.find_available_port(min, max)
   -- For mock implementation, just return the minimum port
   -- In a real implementation, this would scan for available ports in the range
   return min
 end
 
---- Start the WebSocket server
+---Start the WebSocket server
 ---@param config table Configuration options
 ---@return boolean success Whether the server started successfully
 ---@return number|string port_or_error The port number or error message
@@ -62,7 +62,7 @@ function M.start(config)
   return true, port
 end
 
---- Stop the WebSocket server
+---Stop the WebSocket server
 ---@return boolean success Whether the server stopped successfully
 ---@return string|nil error Error message if failed
 function M.stop()
@@ -84,7 +84,7 @@ end
 function M.register_handlers()
   -- Default handlers
   M.state.handlers = {
-    ["mcp.connect"] = function(_client, _params)
+    ["mcp.connect"] = function(client, params)
       -- Handle connection handshake
       -- Parameters not used in this mock implementation
       return { result = { message = "Connection established" } }
@@ -97,7 +97,7 @@ function M.register_handlers()
   }
 end
 
---- Add a client to the server
+---Add a client to the server
 ---@param client_id string A unique client identifier
 ---@return table client The client object
 function M.add_client(client_id)
@@ -115,7 +115,7 @@ function M.add_client(client_id)
   return client
 end
 
---- Remove a client from the server
+---Remove a client from the server
 ---@param client_id string The client identifier
 ---@return boolean success Whether removal was successful
 function M.remove_client(client_id)
@@ -127,7 +127,7 @@ function M.remove_client(client_id)
   return true
 end
 
---- Send a message to a client
+---Send a message to a client
 ---@param client table|string The client object or ID
 ---@param method string The method name
 ---@param params table The parameters to send
@@ -162,7 +162,7 @@ function M.send(client, method, params)
   return true
 end
 
---- Send a response to a client
+---Send a response to a client
 ---@param client table|string The client object or ID
 ---@param id string The message ID
 ---@param result table|nil The result data
@@ -203,7 +203,7 @@ function M.send_response(client, id, result, error)
   return true
 end
 
---- Broadcast a message to all connected clients
+---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table The parameters to send
 ---@return boolean success Whether broadcasting was successful
@@ -218,7 +218,7 @@ function M.broadcast(method, params)
   return success
 end
 
---- Simulate receiving a message from a client
+---Simulate receiving a message from a client
 ---@param client_id string The client ID
 ---@param message table The message to process
 ---@return table|nil response The response if any
@@ -251,7 +251,7 @@ function M.simulate_message(client_id, message)
   return nil
 end
 
---- Clear test messages
+---Clear test messages
 function M.clear_messages()
   M.state.messages = {}
 

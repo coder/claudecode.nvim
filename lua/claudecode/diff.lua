@@ -5,11 +5,12 @@ local M = {}
 local logger = require("claudecode.logger")
 
 -- Global state management for active diffs
+
 local active_diffs = {}
 local autocmd_group
 local config
 
---- Get or create the autocmd group
+---Get or create the autocmd group
 local function get_autocmd_group()
   if not autocmd_group then
     autocmd_group = vim.api.nvim_create_augroup("ClaudeCodeMCPDiff", { clear = true })
@@ -17,9 +18,9 @@ local function get_autocmd_group()
   return autocmd_group
 end
 
---- Find a suitable main editor window to open diffs in.
--- Excludes terminals, sidebars, and floating windows.
--- @return number|nil Window ID of the main editor window, or nil if not found
+---Find a suitable main editor window to open diffs in.
+---Excludes terminals, sidebars, and floating windows.
+---@return number? win_id Window ID of the main editor window, or nil if not found
 local function find_main_editor_window()
   local windows = vim.api.nvim_list_wins()
 
@@ -66,9 +67,9 @@ local function find_main_editor_window()
   return nil
 end
 
---- Find the Claude Code terminal window to keep focus there.
--- Uses the terminal provider to get the active terminal buffer, then finds its window.
--- @return number|nil Window ID of the Claude Code terminal window, or nil if not found
+---Find the Claude Code terminal window to keep focus there.
+---Uses the terminal provider to get the active terminal buffer, then finds its window.
+---@return number? win_id Window ID of the Claude Code terminal window, or nil if not found
 local function find_claudecode_terminal_window()
   local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
   if not terminal_ok then
@@ -94,27 +95,42 @@ local function find_claudecode_terminal_window()
   return nil
 end
 
---- Setup the diff module
--- @param user_config table|nil The configuration passed from init.lua
+---Check if a buffer has unsaved changes (is dirty).
+---@param file_path string The file path to check
+---@return boolean true if the buffer is dirty, false otherwise
+---@return string? error message if file is not open
+local function is_buffer_dirty(file_path)
+  local bufnr = vim.fn.bufnr(file_path)
+
+  if bufnr == -1 then
+    return false, "File not currently open in buffer"
+  end
+
+  local is_dirty = vim.api.nvim_buf_get_option(bufnr, "modified")
+  return is_dirty, nil
+end
+
+---Setup the diff module
+---@param user_config table? The configuration passed from init.lua
 function M.setup(user_config)
   -- Store the configuration for later use
   config = user_config or {}
 end
 
---- Open a diff view between two files
--- @param old_file_path string Path to the original file
--- @param new_file_path string Path to the new file (used for naming)
--- @param new_file_contents string Contents of the new file
--- @param tab_name string Name for the diff tab/view
--- @return table Result with provider, tab_name, and success status
+---Open a diff view between two files
+---@param old_file_path string Path to the original file
+---@param new_file_path string Path to the new file (used for naming)
+---@param new_file_contents string Contents of the new file
+---@param tab_name string Name for the diff tab/view
+---@return table Result with provider, tab_name, and success status
 function M.open_diff(old_file_path, new_file_path, new_file_contents, tab_name)
   return M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
 end
 
---- Create a temporary file with content
--- @param content string The content to write
--- @param filename string Base filename for the temporary file
--- @return string|nil, string|nil The temporary file path and error message
+---Create a temporary file with content
+---@param content string The content to write
+---@param filename string Base filename for the temporary file
+---@return string? path, string? error The temporary file path and error message
 local function create_temp_file(content, filename)
   local base_dir_cache = vim.fn.stdpath("cache") .. "/claudecode_diffs"
   local mkdir_ok_cache, mkdir_err_cache = pcall(vim.fn.mkdir, base_dir_cache, "p")
@@ -160,8 +176,8 @@ local function create_temp_file(content, filename)
   return tmp_file, nil
 end
 
---- Clean up temporary files and directories
--- @param tmp_file string Path to the temporary file to clean up
+---Clean up temporary files and directories
+---@param tmp_file string Path to the temporary file to clean up
 local function cleanup_temp_file(tmp_file)
   if tmp_file and vim.fn.filereadable(tmp_file) == 1 then
     local tmp_dir = vim.fn.fnamemodify(tmp_file, ":h")
@@ -206,7 +222,7 @@ local function cleanup_temp_file(tmp_file)
   end
 end
 
--- Detect filetype from a path or existing buffer (best-effort)
+---Detect filetype from a path or existing buffer (best-effort)
 local function detect_filetype(path, buf)
   -- 1) Try Neovim's builtin matcher if available (>=0.10)
   if vim.filetype and type(vim.filetype.match) == "function" then
@@ -250,12 +266,13 @@ local function detect_filetype(path, buf)
   }
   return simple_map[ext]
 end
---- Open diff using native Neovim functionality
--- @param old_file_path string Path to the original file
--- @param new_file_path string Path to the new file (used for naming)
--- @param new_file_contents string Contents of the new file
--- @param tab_name string Name for the diff tab/view
--- @return table Result with provider, tab_name, and success status
+
+---Open diff using native Neovim functionality
+---@param old_file_path string Path to the original file
+---@param new_file_path string Path to the new file (used for naming)
+---@param new_file_contents string Contents of the new file
+---@param tab_name string Name for the diff tab/view
+---@return table res Result with provider, tab_name, and success status
 function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
   local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
   local tmp_file, err = create_temp_file(new_file_contents, new_filename)
@@ -318,16 +335,16 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   }
 end
 
---- Register diff state for tracking
--- @param tab_name string Unique identifier for the diff
--- @param diff_data table Diff state data
+---Register diff state for tracking
+---@param tab_name string Unique identifier for the diff
+---@param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
   active_diffs[tab_name] = diff_data
 end
 
---- Resolve diff as saved (user accepted changes)
--- @param tab_name string The diff identifier
--- @param buffer_id number The buffer that was saved
+---Resolve diff as saved (user accepted changes)
+---@param tab_name string The diff identifier
+---@param buffer_id number The buffer that was saved
 function M._resolve_diff_as_saved(tab_name, buffer_id)
   local diff_data = active_diffs[tab_name]
   if not diff_data or diff_data.status ~= "pending" then
@@ -383,9 +400,9 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
 end
 
---- Reload file buffers after external changes (called when diff is closed)
--- @param file_path string Path to the file that was externally modified
--- @param original_cursor_pos table|nil Original cursor position to restore {row, col}
+---Reload file buffers after external changes (called when diff is closed)
+---@param file_path string Path to the file that was externally modified
+---@param original_cursor_pos table? Original cursor position to restore {row, col}
 local function reload_file_buffers(file_path, original_cursor_pos)
   logger.debug("diff", "Reloading buffers for file:", file_path, original_cursor_pos and "(restoring cursor)" or "")
 
@@ -434,8 +451,8 @@ local function reload_file_buffers(file_path, original_cursor_pos)
   logger.debug("diff", "Completed buffer reload - reloaded", reloaded_count, "buffers for file:", file_path)
 end
 
---- Resolve diff as rejected (user closed/rejected)
--- @param tab_name string The diff identifier
+---Resolve diff as rejected (user closed/rejected)
+---@param tab_name string The diff identifier
 function M._resolve_diff_as_rejected(tab_name)
   local diff_data = active_diffs[tab_name]
   if not diff_data or diff_data.status ~= "pending" then
@@ -466,10 +483,10 @@ function M._resolve_diff_as_rejected(tab_name)
   end)
 end
 
---- Register autocmds for a specific diff
--- @param tab_name string The diff identifier
--- @param new_buffer number New file buffer ID
--- @return table List of autocmd IDs
+---Register autocmds for a specific diff
+---@param tab_name string The diff identifier
+---@param new_buffer number New file buffer ID
+---@return table autocmd_ids List of autocmd IDs
 local function register_diff_autocmds(tab_name, new_buffer)
   local autocmd_ids = {}
 
@@ -523,13 +540,13 @@ local function register_diff_autocmds(tab_name, new_buffer)
   return autocmd_ids
 end
 
---- Create diff view from a specific window
--- @param target_window number The window to use as base for the diff
--- @param old_file_path string Path to the original file
--- @param new_buffer number New file buffer ID
--- @param tab_name string The diff identifier
--- @param is_new_file boolean Whether this is a new file (doesn't exist yet)
--- @return table Info about the created diff layout
+---Create diff view from a specific window
+---@param target_window number The window to use as base for the diff
+---@param old_file_path string Path to the original file
+---@param new_buffer number New file buffer ID
+---@param tab_name string The diff identifier
+---@param is_new_file boolean Whether this is a new file (doesn't exist yet)
+---@return table layout Info about the created diff layout
 function M._create_diff_view_from_window(target_window, old_file_path, new_buffer, tab_name, is_new_file)
   -- If no target window provided, create a new window in suitable location
   if not target_window then
@@ -631,9 +648,9 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
   }
 end
 
---- Clean up diff state and resources
--- @param tab_name string The diff identifier
--- @param reason string Reason for cleanup
+---Clean up diff state and resources
+---@param tab_name string The diff identifier
+---@param reason string Reason for cleanup
 function M._cleanup_diff_state(tab_name, reason)
   local diff_data = active_diffs[tab_name]
   if not diff_data then
@@ -668,8 +685,8 @@ function M._cleanup_diff_state(tab_name, reason)
   logger.debug("diff", "Cleaned up diff state for", tab_name, "due to:", reason)
 end
 
---- Clean up all active diffs
--- @param reason string Reason for cleanup
+---Clean up all active diffs
+---@param reason string Reason for cleanup
 -- NOTE: This will become a public closeAllDiffTabs tool in the future
 function M._cleanup_all_active_diffs(reason)
   for tab_name, _ in pairs(active_diffs) do
@@ -677,9 +694,9 @@ function M._cleanup_all_active_diffs(reason)
   end
 end
 
---- Set up blocking diff operation with simpler approach
--- @param params table Parameters for the diff
--- @param resolution_callback function Callback to call when diff resolves
+---Set up blocking diff operation with simpler approach
+---@param params table Parameters for the diff
+---@param resolution_callback function Callback to call when diff resolves
 function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
   logger.debug("diff", "Setting up diff for:", params.old_file_path)
@@ -689,6 +706,18 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- Step 1: Check if the file exists (allow new files)
     local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
     local is_new_file = not old_file_exists
+
+    -- Step 1.5: Check if the file buffer has unsaved changes
+    if old_file_exists then
+      local is_dirty = is_buffer_dirty(params.old_file_path)
+      if is_dirty then
+        error({
+          code = -32000,
+          message = "Cannot create diff: file has unsaved changes",
+          data = "Please save (:w) or discard (:e!) changes to " .. params.old_file_path .. " before creating diff",
+        })
+      end
+    end
 
     -- Step 2: Find if the file is already open in a buffer (only for existing files)
     local existing_buffer = nil
@@ -720,6 +749,14 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- If no existing buffer/window, find a suitable main editor window
     if not target_window then
       target_window = find_main_editor_window()
+    end
+    -- If we still can't find a suitable window, error out
+    if not target_window then
+      error({
+        code = -32000,
+        message = "No suitable editor window found",
+        data = "Could not find a main editor window to display the diff",
+      })
     end
 
     -- Step 3: Create scratch buffer for new content
@@ -779,8 +816,17 @@ function M._setup_blocking_diff(params, resolution_callback)
 
   -- Handle setup errors
   if not setup_success then
-    local error_msg = "Failed to setup diff operation: " .. tostring(setup_error)
-    logger.error("diff", error_msg)
+    local error_msg
+    if type(setup_error) == "table" and setup_error.message then
+      -- Handle structured error objects
+      error_msg = "Failed to setup diff operation: " .. setup_error.message
+      if setup_error.data then
+        error_msg = error_msg .. " (" .. setup_error.data .. ")"
+      end
+    else
+      -- Handle string errors or other types
+      error_msg = "Failed to setup diff operation: " .. tostring(setup_error)
+    end
 
     -- Clean up any partial state that might have been created
     if active_diffs[tab_name] then
@@ -796,12 +842,12 @@ function M._setup_blocking_diff(params, resolution_callback)
   end
 end
 
---- Blocking diff operation for MCP compliance
--- @param old_file_path string Path to the original file
--- @param new_file_path string Path to the new file (used for naming)
--- @param new_file_contents string Contents of the new file
--- @param tab_name string Name for the diff tab/view
--- @return table MCP-compliant response with content array
+---Blocking diff operation for MCP compliance
+---@param old_file_path string Path to the original file
+---@param new_file_path string Path to the new file (used for naming)
+---@param new_file_contents string Contents of the new file
+---@param tab_name string Name for the diff tab/view
+---@return table response MCP-compliant response with content array
 function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name)
   -- Check for existing diff with same tab_name
   if active_diffs[tab_name] then
@@ -856,7 +902,16 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
   end)
 
   if not success then
-    logger.error("diff", "Diff setup failed for", tab_name, "error:", tostring(err))
+    local error_msg
+    if type(err) == "table" and err.message then
+      error_msg = err.message
+      if err.data then
+        error_msg = error_msg .. " - " .. err.data
+      end
+    else
+      error_msg = tostring(err)
+    end
+    logger.error("diff", "Diff setup failed for", '"' .. tab_name .. '"', "error:", error_msg)
     -- If the error is already structured, propagate it directly
     if type(err) == "table" and err.code then
       error(err)
@@ -885,9 +940,9 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
   end,
 })
 
---- Close diff by tab name (used by close_tab tool)
--- @param tab_name string The diff identifier
--- @return boolean success True if diff was found and closed
+---Close diff by tab name (used by close_tab tool)
+---@param tab_name string The diff identifier
+---@return boolean success True if diff was found and closed
 function M.close_diff_by_tab_name(tab_name)
   local diff_data = active_diffs[tab_name]
   if not diff_data then
@@ -916,18 +971,18 @@ function M.close_diff_by_tab_name(tab_name)
   return false
 end
 
--- Test helper function (only for testing)
+--Test helper function (only for testing)
 function M._get_active_diffs()
   return active_diffs
 end
 
--- Manual buffer reload function for testing/debugging
+--Manual buffer reload function for testing/debugging
 function M.reload_file_buffers_manual(file_path, original_cursor_pos)
   return reload_file_buffers(file_path, original_cursor_pos)
 end
 
---- Accept the current diff (user command version)
--- This function reads the diff context from buffer variables
+---Accept the current diff (user command version)
+---This function reads the diff context from buffer variables
 function M.accept_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
@@ -940,8 +995,8 @@ function M.accept_current_diff()
   M._resolve_diff_as_saved(tab_name, current_buffer)
 end
 
---- Deny/reject the current diff (user command version)
--- This function reads the diff context from buffer variables
+---Deny/reject the current diff (user command version)
+---This function reads the diff context from buffer variables
 function M.deny_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name

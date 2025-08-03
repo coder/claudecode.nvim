@@ -17,12 +17,10 @@
 --   },
 -- }
 
---- Handles the close_tab tool invocation.
--- Closes a tab/buffer by its tab name.
--- @param params table The input parameters for the tool.
--- @field params.tab_name string Name of the tab to close.
--- @return table A result message indicating success.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
+---Handles the close_tab tool invocation.
+---Closes a tab/buffer by its tab name.
+---@param params {tab_name: string} The input parameters for the tool
+---@return table success A result message indicating success
 local function handler(params)
   local log_module_ok, log = pcall(require, "claudecode.logger")
   if not log_module_ok then

@@ -21,7 +21,7 @@ M.OPCODE = {
 ---@field mask string|nil 4-byte mask (if masked)
 ---@field payload string Frame payload data
 
----@brief Parse a WebSocket frame from binary data
+---Parse a WebSocket frame from binary data
 ---@param data string The binary frame data
 ---@return WebSocketFrame|nil frame The parsed frame, or nil if incomplete/invalid
 ---@return number bytes_consumed Number of bytes consumed from input
@@ -167,7 +167,7 @@ function M.parse_frame(data)
   return frame, pos - 1
 end
 
----@brief Create a WebSocket frame
+---Create a WebSocket frame
 ---@param opcode number Frame opcode
 ---@param payload string Frame payload
 ---@param fin boolean|nil Final fragment flag (default: true)
@@ -223,7 +223,7 @@ function M.create_frame(opcode, payload, fin, masked)
   return table.concat(frame_data)
 end
 
----@brief Create a text frame
+---Create a text frame
 ---@param text string The text to send
 ---@param fin boolean|nil Final fragment flag (default: true)
 ---@return string frame_data The encoded frame data
@@ -231,7 +231,7 @@ function M.create_text_frame(text, fin)
   return M.create_frame(M.OPCODE.TEXT, text, fin, false)
 end
 
----@brief Create a binary frame
+---Create a binary frame
 ---@param data string The binary data to send
 ---@param fin boolean|nil Final fragment flag (default: true)
 ---@return string frame_data The encoded frame data
@@ -239,7 +239,7 @@ function M.create_binary_frame(data, fin)
   return M.create_frame(M.OPCODE.BINARY, data, fin, false)
 end
 
----@brief Create a close frame
+---Create a close frame
 ---@param code number|nil Close code (default: 1000)
 ---@param reason string|nil Close reason (default: empty)
 ---@return string frame_data The encoded frame data
@@ -251,7 +251,7 @@ function M.create_close_frame(code, reason)
   return M.create_frame(M.OPCODE.CLOSE, payload, true, false)
 end
 
----@brief Create a ping frame
+---Create a ping frame
 ---@param data string|nil Ping data (default: empty)
 ---@return string frame_data The encoded frame data
 function M.create_ping_frame(data)
@@ -259,7 +259,7 @@ function M.create_ping_frame(data)
   return M.create_frame(M.OPCODE.PING, data, true, false)
 end
 
----@brief Create a pong frame
+---Create a pong frame
 ---@param data string|nil Pong data (should match ping data)
 ---@return string frame_data The encoded frame data
 function M.create_pong_frame(data)
@@ -267,14 +267,14 @@ function M.create_pong_frame(data)
   return M.create_frame(M.OPCODE.PONG, data, true, false)
 end
 
----@brief Check if an opcode is a control frame
+---Check if an opcode is a control frame
 ---@param opcode number The opcode to check
 ---@return boolean is_control True if it's a control frame
 function M.is_control_frame(opcode)
   return opcode >= 0x8
 end
 
----@brief Validate a WebSocket frame
+---Validate a WebSocket frame
 ---@param frame WebSocketFrame The frame to validate
 ---@return boolean valid True if the frame is valid
 ---@return string|nil error Error message if invalid
