@@ -1,6 +1,5 @@
----
--- Manages selection tracking and communication with the Claude server.
--- @module claudecode.selection
+---Manages selection tracking and communication with the Claude server.
+---@module 'claudecode.selection'
 local M = {}
 
 local logger = require("claudecode.logger")
@@ -17,9 +16,9 @@ M.state = {
   visual_demotion_delay_ms = 50,
 }
 
---- Enables selection tracking.
--- @param server table The server object to use for communication.
--- @param visual_demotion_delay_ms number The delay for visual selection demotion.
+---Enables selection tracking.
+---@param server table The server object to use for communication.
+---@param visual_demotion_delay_ms number The delay for visual selection demotion.
 function M.enable(server, visual_demotion_delay_ms)
   if M.state.tracking_enabled then
     return
@@ -32,8 +31,8 @@ function M.enable(server, visual_demotion_delay_ms)
   M._create_autocommands()
 end
 
---- Disables selection tracking.
--- Clears autocommands, resets internal state, and stops any active debounce timers.
+---Disables selection tracking.
+---Clears autocommands, resets internal state, and stops any active debounce timers.
 function M.disable()
   if not M.state.tracking_enabled then
     return
@@ -52,9 +51,9 @@ function M.disable()
   end
 end
 
---- Creates autocommands for tracking selections.
--- Sets up listeners for CursorMoved, CursorMovedI, ModeChanged, and TextChanged events.
--- @local
+---Creates autocommands for tracking selections.
+---Sets up listeners for CursorMoved, CursorMovedI, ModeChanged, and TextChanged events.
+---@local
 function M._create_autocommands()
   local group = vim.api.nvim_create_augroup("ClaudeCodeSelection", { clear = true })
 
@@ -80,33 +79,33 @@ function M._create_autocommands()
   })
 end
 
---- Clears the autocommands related to selection tracking.
--- @local
+---Clears the autocommands related to selection tracking.
+---@local
 function M._clear_autocommands()
   vim.api.nvim_clear_autocmds({ group = "ClaudeCodeSelection" })
 end
 
---- Handles cursor movement events.
--- Triggers a debounced update of the selection.
+---Handles cursor movement events.
+---Triggers a debounced update of the selection.
 function M.on_cursor_moved()
   M.debounce_update()
 end
 
---- Handles mode change events.
--- Triggers an immediate update of the selection.
+---Handles mode change events.
+---Triggers an immediate update of the selection.
 function M.on_mode_changed()
   M.debounce_update()
 end
 
---- Handles text change events.
--- Triggers a debounced update of the selection.
+---Handles text change events.
+---Triggers a debounced update of the selection.
 function M.on_text_changed()
   M.debounce_update()
 end
 
---- Debounces selection updates.
--- Ensures that `update_selection` is not called too frequently by deferring
--- its execution.
+---Debounces selection updates.
+---Ensures that `update_selection` is not called too frequently by deferring
+---its execution.
 function M.debounce_update()
   if M.state.debounce_timer then
     vim.loop.timer_stop(M.state.debounce_timer)
@@ -118,9 +117,9 @@ function M.debounce_update()
   end, M.state.debounce_ms)
 end
 
---- Updates the current selection state.
--- Determines the current selection based on the editor mode (visual or normal)
--- and sends an update to the server if the selection has changed.
+---Updates the current selection state.
+---Determines the current selection based on the editor mode (visual or normal)
+---and sends an update to the server if the selection has changed.
 function M.update_selection()
   if not M.state.tracking_enabled then
     return
@@ -243,9 +242,9 @@ function M.update_selection()
   end
 end
 
---- Handles the demotion of a visual selection after a delay.
--- Called by the demotion_timer.
--- @param original_bufnr_when_scheduled number The buffer number that was active when demotion was scheduled.
+---Handles the demotion of a visual selection after a delay.
+---Called by the demotion_timer.
+---@param original_bufnr_when_scheduled number The buffer number that was active when demotion was scheduled.
 function M.handle_selection_demotion(original_bufnr_when_scheduled)
   -- Timer object is already stopped and cleared by its own callback wrapper or cancellation points.
   -- M.state.demotion_timer should be nil here if it fired normally or was cancelled.
@@ -306,8 +305,8 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
   end
 end
 
---- Validates if we're in a valid visual selection mode
--- @return boolean, string|nil - true if valid, false and error message if not
+---Validates if we're in a valid visual selection mode
+---@return boolean valid, string? error - true if valid, false and error message if not
 local function validate_visual_mode()
   local current_nvim_mode = vim.api.nvim_get_mode().mode
   local fixed_anchor_pos_raw = vim.fn.getpos("v")
@@ -323,8 +322,8 @@ local function validate_visual_mode()
   return true, nil
 end
 
---- Determines the effective visual mode character
--- @return string|nil - the visual mode character or nil if invalid
+---Determines the effective visual mode character
+---@return string|nil - the visual mode character or nil if invalid
 local function get_effective_visual_mode()
   local current_nvim_mode = vim.api.nvim_get_mode().mode
   local visual_fn_mode_char = vim.fn.visualmode()
@@ -345,8 +344,8 @@ local function get_effective_visual_mode()
   return nil
 end
 
---- Gets the start and end coordinates of the visual selection
--- @return table, table - start_coords and end_coords with lnum and col fields
+---Gets the start and end coordinates of the visual selection
+---@return table, table - start_coords and end_coords with lnum and col fields
 local function get_selection_coordinates()
   local fixed_anchor_pos_raw = vim.fn.getpos("v")
   local current_cursor_nvim = vim.api.nvim_win_get_cursor(0)
@@ -363,20 +362,20 @@ local function get_selection_coordinates()
   end
 end
 
---- Extracts text for linewise visual selection
--- @param lines_content table - array of line strings
--- @param start_coords table - start coordinates
--- @return string - the extracted text
+---Extracts text for linewise visual selection
+---@param lines_content table - array of line strings
+---@param start_coords table - start coordinates
+---@return string text - the extracted text
 local function extract_linewise_text(lines_content, start_coords)
   start_coords.col = 1 -- Linewise selection effectively starts at column 1
   return table.concat(lines_content, "\n")
 end
 
---- Extracts text for characterwise visual selection
--- @param lines_content table - array of line strings
--- @param start_coords table - start coordinates
--- @param end_coords table - end coordinates
--- @return string|nil - the extracted text or nil if invalid
+---Extracts text for characterwise visual selection
+---@param lines_content table - array of line strings
+---@param start_coords table - start coordinates
+---@param end_coords table - end coordinates
+---@return string|nil text - the extracted text or nil if invalid
 local function extract_characterwise_text(lines_content, start_coords, end_coords)
   if start_coords.lnum == end_coords.lnum then
     if not lines_content[1] then
@@ -398,12 +397,12 @@ local function extract_characterwise_text(lines_content, start_coords, end_coord
   end
 end
 
---- Calculates LSP-compatible position coordinates
--- @param start_coords table - start coordinates
--- @param end_coords table - end coordinates
--- @param visual_mode string - the visual mode character
--- @param lines_content table - array of line strings
--- @return table - LSP position object with start and end fields
+---Calculates LSP-compatible position coordinates
+---@param start_coords table - start coordinates
+---@param end_coords table - end coordinates
+---@param visual_mode string - the visual mode character
+---@param lines_content table - array of line strings
+---@return table position - LSP position object with start and end fields
 local function calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
   local lsp_start_line = start_coords.lnum - 1
   local lsp_end_line = end_coords.lnum - 1
@@ -428,9 +427,9 @@ local function calculate_lsp_positions(start_coords, end_coords, visual_mode, li
   }
 end
 
---- Gets the current visual selection details.
--- @return table|nil A table containing selection text, file path, URL, and
---                   start/end positions, or nil if no visual selection exists.
+---Gets the current visual selection details.
+---@return table|nil selection A table containing selection text, file path, URL, and
+---start/end positions, or nil if no visual selection exists.
 function M.get_visual_selection()
   local valid = validate_visual_mode()
   if not valid then
@@ -484,9 +483,9 @@ function M.get_visual_selection()
   }
 end
 
---- Gets the current cursor position when no visual selection is active.
--- @return table A table containing an empty text, file path, URL, and cursor
---               position as start/end, with isEmpty set to true.
+---Gets the current cursor position when no visual selection is active.
+---@return table A table containing an empty text, file path, URL, and cursor
+---position as start/end, with isEmpty set to true.
 function M.get_cursor_position()
   local cursor_pos = vim.api.nvim_win_get_cursor(0)
   local current_buf = vim.api.nvim_get_current_buf()
@@ -504,9 +503,9 @@ function M.get_cursor_position()
   }
 end
 
---- Checks if the selection has changed compared to the latest stored selection.
--- @param new_selection table|nil The new selection object to compare.
--- @return boolean true if the selection has changed, false otherwise.
+---Checks if the selection has changed compared to the latest stored selection.
+---@param new_selection table|nil The new selection object to compare.
+---@return boolean changed true if the selection has changed, false otherwise.
 function M.has_selection_changed(new_selection)
   local old_selection = M.state.latest_selection
 
@@ -538,21 +537,21 @@ function M.has_selection_changed(new_selection)
   return false
 end
 
---- Sends the selection update to the Claude server.
--- @param selection table The selection object to send.
+---Sends the selection update to the Claude server.
+---@param selection table The selection object to send.
 function M.send_selection_update(selection)
   M.server.broadcast("selection_changed", selection)
 end
 
---- Gets the latest recorded selection.
--- @return table|nil The latest selection object, or nil if none recorded.
+---Gets the latest recorded selection.
+---@return table|nil The latest selection object, or nil if none recorded.
 function M.get_latest_selection()
   return M.state.latest_selection
 end
 
---- Sends the current selection to Claude.
--- This function is typically invoked by a user command. It forces an immediate
--- update and sends the latest selection.
+---Sends the current selection to Claude.
+---This function is typically invoked by a user command. It forces an immediate
+---update and sends the latest selection.
 function M.send_current_selection()
   if not M.state.tracking_enabled or not M.server then
     logger.error("selection", "Claude Code is not running")
@@ -573,11 +572,11 @@ function M.send_current_selection()
   vim.api.nvim_echo({ { "Selection sent to Claude", "Normal" } }, false, {})
 end
 
---- Gets selection from range marks (e.g., when using :'<,'> commands)
--- @param line1 number The start line (1-indexed)
--- @param line2 number The end line (1-indexed)
--- @return table|nil A table containing selection text, file path, URL, and
---                   start/end positions, or nil if invalid range
+---Gets selection from range marks (e.g., when using :'<,'> commands)
+---@param line1 number The start line (1-indexed)
+---@param line2 number The end line (1-indexed)
+---@return table|nil A table containing selection text, file path, URL, and
+---start/end positions, or nil if invalid range
 function M.get_range_selection(line1, line2)
   if not line1 or not line2 or line1 < 1 or line2 < 1 or line1 > line2 then
     return nil
@@ -625,9 +624,9 @@ function M.get_range_selection(line1, line2)
   }
 end
 
---- Sends an at_mentioned notification for the current visual selection.
--- @param line1 number|nil Optional start line for range-based selection
--- @param line2 number|nil Optional end line for range-based selection
+---Sends an at_mentioned notification for the current visual selection.
+---@param line1 number|nil Optional start line for range-based selection
+---@param line2 number|nil Optional end line for range-based selection
 function M.send_at_mention_for_visual_selection(line1, line2)
   if not M.state.tracking_enabled then
     logger.error("selection", "Selection tracking is not enabled.")

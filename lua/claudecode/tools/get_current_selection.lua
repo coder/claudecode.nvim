@@ -9,11 +9,10 @@ local schema = {
   },
 }
 
---- Helper function to safely encode data as JSON with error handling.
--- @param data table The data to encode as JSON.
--- @param error_context string A description of what failed for error messages.
--- @return string The JSON-encoded string.
--- @error table A table with code, message, and data for JSON-RPC error if encoding fails.
+---Helper function to safely encode data as JSON with error handling.
+---@param data table The data to encode as JSON
+---@param error_context string A description of what failed for error messages
+---@return string The JSON-encoded string
 local function safe_json_encode(data, error_context)
   local ok, encoded = pcall(vim.json.encode, data, { indent = 2 })
   if not ok then
@@ -26,12 +25,10 @@ local function safe_json_encode(data, error_context)
   return encoded
 end
 
---- Handles the getCurrentSelection tool invocation.
--- Gets the current text selection in the editor.
--- @param params table The input parameters for the tool (currently unused).
--- @return table The selection data.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
-local function handler(_params) -- Prefix unused params with underscore
+---Handles the getCurrentSelection tool invocation.
+---Gets the current text selection in the editor.
+---@return table response MCP-compliant response with selection data.
+local function handler(params)
   local selection_module_ok, selection_module = pcall(require, "claudecode.selection")
   if not selection_module_ok then
     error({ code = -32000, message = "Internal server error", data = "Failed to load selection module" })

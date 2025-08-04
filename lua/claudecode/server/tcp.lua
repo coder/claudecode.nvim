@@ -8,13 +8,13 @@ local M = {}
 ---@field server table The vim.loop TCP server handle
 ---@field port number The port the server is listening on
 ---@field auth_token string|nil The authentication token for validating connections
----@field clients table Table of connected clients (client_id -> WebSocketClient)
+---@field clients table<string, WebSocketClient> Table of connected clients
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for errors
 
----@brief Find an available port by attempting to bind
+---Find an available port by attempting to bind
 ---@param min_port number Minimum port to try
 ---@param max_port number Maximum port to try
 ---@return number|nil port Available port number, or nil if none found
@@ -34,18 +34,21 @@ function M.find_available_port(min_port, max_port)
   -- Try to bind to a port from the shuffled list
   for _, port in ipairs(ports) do
     local test_server = vim.loop.new_tcp()
-    local success = test_server:bind("127.0.0.1", port)
-    test_server:close()
+    if test_server then
+      local success = test_server:bind("127.0.0.1", port)
+      test_server:close()
 
-    if success then
-      return port
+      if success then
+        return port
+      end
     end
+    -- Continue to next port if test_server creation failed or bind failed
   end
 
   return nil
 end
 
----@brief Create and start a TCP server
+---Create and start a TCP server
 ---@param config table Server configuration
 ---@param callbacks table Callback functions
 ---@param auth_token string|nil Authentication token for validating connections
@@ -98,7 +101,7 @@ function M.create_server(config, callbacks, auth_token)
   return server, nil
 end
 
----@brief Handle a new client connection
+---Handle a new client connection
 ---@param server TCPServer The server object
 function M._handle_new_connection(server)
   local client_tcp = vim.loop.new_tcp()
@@ -148,7 +151,7 @@ function M._handle_new_connection(server)
   server.on_connect(client)
 end
 
----@brief Remove a client from the server
+---Remove a client from the server
 ---@param server TCPServer The server object
 ---@param client WebSocketClient The client to remove
 function M._remove_client(server, client)
@@ -161,7 +164,7 @@ function M._remove_client(server, client)
   end
 end
 
----@brief Send a message to a specific client
+---Send a message to a specific client
 ---@param server TCPServer The server object
 ---@param client_id string The client ID
 ---@param message string The message to send
@@ -178,7 +181,7 @@ function M.send_to_client(server, client_id, message, callback)
   client_manager.send_message(client, message, callback)
 end
 
----@brief Broadcast a message to all connected clients
+---Broadcast a message to all connected clients
 ---@param server TCPServer The server object
 ---@param message string The message to broadcast
 function M.broadcast(server, message)
@@ -187,7 +190,7 @@ function M.broadcast(server, message)
   end
 end
 
----@brief Get the number of connected clients
+---Get the number of connected clients
 ---@param server TCPServer The server object
 ---@return number count Number of connected clients
 function M.get_client_count(server)
@@ -198,7 +201,7 @@ function M.get_client_count(server)
   return count
 end
 
----@brief Get information about all clients
+---Get information about all clients
 ---@param server TCPServer The server object
 ---@return table clients Array of client information
 function M.get_clients_info(server)
@@ -209,7 +212,7 @@ function M.get_clients_info(server)
   return clients
 end
 
----@brief Close a specific client connection
+---Close a specific client connection
 ---@param server TCPServer The server object
 ---@param client_id string The client ID
 ---@param code number|nil Close code
@@ -221,7 +224,7 @@ function M.close_client(server, client_id, code, reason)
   end
 end
 
----@brief Stop the TCP server
+---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)
   -- Close all clients
@@ -238,14 +241,19 @@ function M.stop_server(server)
   end
 end
 
----@brief Start a periodic ping task to keep connections alive
+---Start a periodic ping task to keep connections alive
 ---@param server TCPServer The server object
 ---@param interval number Ping interval in milliseconds (default: 30000)
----@return table timer The timer handle
+---@return table? timer The timer handle, or nil if creation failed
 function M.start_ping_timer(server, interval)
   interval = interval or 30000 -- 30 seconds
 
   local timer = vim.loop.new_timer()
+  if not timer then
+    server.on_error("Failed to create ping timer")
+    return nil
+  end
+
   timer:start(interval, interval, function()
     for _, client in pairs(server.clients) do
       if client.state == "connected" then

@@ -16,12 +16,10 @@ local schema = {
   },
 }
 
---- Handles the saveDocument tool invocation.
--- Saves the specified file (buffer).
--- @param params table The input parameters for the tool.
--- @field params.filePath string Path to the file to save.
--- @return table A table with a message indicating success.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
+---Handles the saveDocument tool invocation.
+---Saves the specified file (buffer).
+---@param params table The input parameters for the tool
+---@return table MCP-compliant response with save status
 local function handler(params)
   if not params.filePath then
     error({

@@ -3,7 +3,7 @@ local utils = require("claudecode.server.utils")
 
 local M = {}
 
----@brief Check if an HTTP request is a valid WebSocket upgrade request
+---Check if an HTTP request is a valid WebSocket upgrade request
 ---@param request string The HTTP request string
 ---@param expected_auth_token string|nil Expected authentication token for validation
 ---@return boolean valid True if it's a valid WebSocket upgrade request
@@ -68,7 +68,7 @@ function M.validate_upgrade_request(request, expected_auth_token)
   return true, headers
 end
 
----@brief Generate a WebSocket handshake response
+---Generate a WebSocket handshake response
 ---@param client_key string The client's Sec-WebSocket-Key header value
 ---@param protocol string|nil Optional subprotocol to accept
 ---@return string|nil response The HTTP response string, or nil on error
@@ -96,7 +96,7 @@ function M.create_handshake_response(client_key, protocol)
   return table.concat(response_lines, "\r\n")
 end
 
----@brief Parse the HTTP request line
+---Parse the HTTP request line
 ---@param request string The HTTP request string
 ---@return string|nil method The HTTP method (GET, POST, etc.)
 ---@return string|nil path The request path
@@ -111,7 +111,7 @@ function M.parse_request_line(request)
   return method, path, version
 end
 
----@brief Check if the request is for the WebSocket endpoint
+---Check if the request is for the WebSocket endpoint
 ---@param request string The HTTP request string
 ---@return boolean valid True if the request is for a valid WebSocket endpoint
 function M.is_websocket_endpoint(request)
@@ -135,7 +135,7 @@ function M.is_websocket_endpoint(request)
   return true
 end
 
----@brief Create a WebSocket handshake error response
+---Create a WebSocket handshake error response
 ---@param code number HTTP status code
 ---@param message string Error message
 ---@return string response The HTTP error response
@@ -161,7 +161,7 @@ function M.create_error_response(code, message)
   return table.concat(response_lines, "\r\n")
 end
 
----@brief Process a complete WebSocket handshake
+---Process a complete WebSocket handshake
 ---@param request string The HTTP request string
 ---@param expected_auth_token string|nil Expected authentication token for validation
 ---@return boolean success True if handshake was successful
@@ -200,7 +200,7 @@ function M.process_handshake(request, expected_auth_token)
   return true, response, headers_table -- headers_table is 'table', compatible with 'table|nil'
 end
 
----@brief Check if a request buffer contains a complete HTTP request
+---Check if a request buffer contains a complete HTTP request
 ---@param buffer string The request buffer
 ---@return boolean complete True if the request is complete
 ---@return string|nil request The complete request if found

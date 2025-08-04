@@ -18,7 +18,7 @@ return {
     { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
 
     -- Context sending
-    { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>", desc = "Add current buffer" },
+    { "<leader>as", "<cmd>ClaudeCodeAdd %<cr>", mode = "n", desc = "Add current buffer" },
     { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
     {
       "<leader>as",
@@ -62,6 +62,7 @@ return {
     --   show_diff_stats = true,                   -- Show diff statistics
     --   vertical_split = true,                    -- Use vertical split for diffs
     --   open_in_current_tab = true,               -- Open diffs in current tab vs new tab
+    --   keep_terminal_focus = false,              -- If true, moves focus back to terminal after diff opens
     -- },
 
     -- Terminal Configuration

@@ -1,12 +1,11 @@
----
--- Tree integration module for ClaudeCode.nvim
--- Handles detection and selection of files from nvim-tree, neo-tree, mini.files, and oil.nvim
--- @module claudecode.integrations
+--- Tree integration module for ClaudeCode.nvim
+--- Handles detection and selection of files from nvim-tree, neo-tree, mini.files, and oil.nvim
+---@module 'claudecode.integrations'
 local M = {}
 
---- Get selected files from the current tree explorer
---- @return table|nil files List of file paths, or nil if error
---- @return string|nil error Error message if operation failed
+---Get selected files from the current tree explorer
+---@return table|nil files List of file paths, or nil if error
+---@return string|nil error Error message if operation failed
 function M.get_selected_files_from_tree()
   local current_ft = vim.bo.filetype
 
@@ -23,10 +22,10 @@ function M.get_selected_files_from_tree()
   end
 end
 
---- Get selected files from nvim-tree
---- Supports both multi-selection (marks) and single file under cursor
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
+---Get selected files from nvim-tree
+---Supports both multi-selection (marks) and single file under cursor
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_nvim_tree_selection()
   local success, nvim_tree_api = pcall(require, "nvim-tree.api")
   if not success then
@@ -38,7 +37,7 @@ function M._get_nvim_tree_selection()
   local marks = nvim_tree_api.marks.list()
 
   if marks and #marks > 0 then
-    for i, mark in ipairs(marks) do
+    for _, mark in ipairs(marks) do
       if mark.type == "file" and mark.absolute_path and mark.absolute_path ~= "" then
         -- Check if it's not a root-level file (basic protection)
         if not string.match(mark.absolute_path, "^/[^/]*$") then
@@ -69,10 +68,10 @@ function M._get_nvim_tree_selection()
   return {}, "No file found under cursor"
 end
 
---- Get selected files from neo-tree
---- Uses neo-tree's own visual selection method when in visual mode
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
+---Get selected files from neo-tree
+---Uses neo-tree's own visual selection method when in visual mode
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_neotree_selection()
   local success, manager = pcall(require, "neo-tree.sources.manager")
   if not success then
@@ -126,7 +125,7 @@ function M._get_neotree_selection()
         end
       end
 
-      for i, node in ipairs(selected_nodes) do
+      for _, node in ipairs(selected_nodes) do
         -- Enhanced validation: check for file type and valid path
         if node.type == "file" and node.path and node.path ~= "" then
           -- Additional check: ensure it's not a root node (depth protection)
@@ -155,7 +154,7 @@ function M._get_neotree_selection()
     end
 
     if selection and #selection > 0 then
-      for i, node in ipairs(selection) do
+      for _, node in ipairs(selection) do
         if node.type == "file" and node.path then
           table.insert(files, node.path)
         end
@@ -182,10 +181,10 @@ function M._get_neotree_selection()
   return {}, "No file found under cursor"
 end
 
---- Get selected files from oil.nvim
---- Supports both visual selection and single file under cursor
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
+---Get selected files from oil.nvim
+---Supports both visual selection and single file under cursor
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_oil_selection()
   local success, oil = pcall(require, "oil")
   if not success then
@@ -263,12 +262,6 @@ function M._get_oil_selection()
   return {}, "No file found under cursor"
 end
 
---- Get selected files from mini.files
---- Supports both visual selection and single file under cursor
---- Reference: mini.files API MiniFiles.get_fs_entry()
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
-
 -- Helper function to get mini.files selection using explicit range
 function M._get_mini_files_selection_with_range(start_line, end_line)
   local success, mini_files = pcall(require, "mini.files")
@@ -305,6 +298,11 @@ function M._get_mini_files_selection_with_range(start_line, end_line)
   end
 end
 
+---Get selected files from mini.files
+---Supports both visual selection and single file under cursor
+---Reference: mini.files API MiniFiles.get_fs_entry()
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_mini_files_selection()
   local success, mini_files = pcall(require, "mini.files")
   if not success then
