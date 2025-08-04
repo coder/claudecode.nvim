@@ -11,6 +11,7 @@
 --- @field focus_toggle fun(cmd_string: string, env_table: table, effective_config: TerminalConfig)
 --- @field get_active_bufnr fun(): number?
 --- @field is_available fun(): boolean
+--- @field ensure_visible? function
 --- @field _get_terminal_for_test fun(): table?
 
 --- @class TerminalConfig
@@ -265,6 +266,13 @@ end
 ---@return boolean visible True if terminal was opened or already visible
 local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
   local provider = get_provider()
+
+  -- Check if provider has an ensure_visible method
+  if provider.ensure_visible then
+    provider.ensure_visible()
+    return true
+  end
+
   local active_bufnr = provider.get_active_bufnr()
 
   if is_terminal_visible(active_bufnr) then
