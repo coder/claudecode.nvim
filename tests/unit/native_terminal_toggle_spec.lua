@@ -283,7 +283,7 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       -- Verify initial state - buffer should exist and have a window
       assert.is_not_nil(mock_state.buffers[initial_bufnr])
-      assert.are.equal("wipe", mock_state.buffers[initial_bufnr].options.bufhidden)
+      assert.are.equal("hide", mock_state.buffers[initial_bufnr].options.bufhidden)
 
       -- Find the window that contains our terminal buffer
       local terminal_winid = nil
@@ -306,10 +306,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal(initial_bufnr, native_provider.get_active_bufnr())
       assert.is_not_nil(mock_state.buffers[initial_bufnr])
 
-      -- 2. bufhidden should have been set to "hide" (this is the core fix)
-      assert.are.equal("hide", mock_state.buffer_options[initial_bufnr].bufhidden)
-
-      -- 3. Window should be closed/invalid
+      -- 2. Window should be closed/invalid
       assert.is_nil(mock_state.windows[terminal_winid])
     end)
 
@@ -383,7 +380,6 @@ describe("claudecode.terminal.native toggle behavior", function()
       -- Toggle should hide but preserve process
       native_provider.toggle(cmd_string, env_table, config)
       assert.are.equal(initial_bufnr, native_provider.get_active_bufnr())
-      assert.are.equal("hide", mock_state.buffer_options[initial_bufnr].bufhidden)
 
       -- Close should kill the process (cleanup_state called)
       native_provider.close()
@@ -415,8 +411,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       mock_state.current_win = 1 -- Different window
       native_provider.simple_toggle(cmd_string, env_table, config)
 
-      -- Should have hidden the terminal (set bufhidden=hide and closed window)
-      assert.are.equal("hide", mock_state.buffer_options[initial_bufnr].bufhidden)
+      -- Should have hidden the terminal (closed window)
       assert.is_nil(mock_state.windows[terminal_winid])
     end)
 
@@ -530,7 +525,6 @@ describe("claudecode.terminal.native toggle behavior", function()
       native_provider.focus_toggle(cmd_string, env_table, config)
 
       -- Should have hidden the terminal
-      assert.are.equal("hide", mock_state.buffer_options[initial_bufnr].bufhidden)
       assert.is_nil(mock_state.windows[terminal_winid])
     end)
   end)
