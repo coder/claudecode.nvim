@@ -257,9 +257,14 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
-      provider = "auto", -- "auto", "snacks", "native", or custom provider table
+      provider = "auto", -- "auto", "snacks", "native", "external", or custom provider table
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
+      
+      -- Provider-specific options
+      provider_opts = {
+        external_terminal_cmd = nil, -- Command template for external terminal provider (e.g., "alacritty -e %s")
+      },
     },
 
     -- Diff Integration
@@ -440,7 +445,27 @@ For complete configuration options, see:
 - [Snacks.nvim Terminal Documentation](https://github.com/folke/snacks.nvim/blob/main/docs/terminal.md)
 - [Snacks.nvim Window Documentation](https://github.com/folke/snacks.nvim/blob/main/docs/win.md)
 
-## Custom Terminal Providers
+## Terminal Providers
+
+### External Terminal Provider
+
+Run Claude Code in a separate terminal application outside of Neovim:
+
+```lua
+{
+  "coder/claudecode.nvim",
+  opts = {
+    terminal = {
+      provider = "external",
+      provider_opts = {
+        external_terminal_cmd = "alacritty -e %s", -- Replace with your preferred terminal program. %s is replaced with claude command
+      },
+    },
+  },
+}
+```
+
+### Custom Terminal Providers
 
 You can create custom terminal providers by passing a table with the required functions instead of a string provider name:
 
