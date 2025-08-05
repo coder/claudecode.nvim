@@ -21,7 +21,7 @@ local function is_valid()
   return jobid and jobid > 0
 end
 
---- @param term_config table
+--- @param term_config TerminalConfig
 function M.setup(term_config)
   config = term_config or {}
 end
