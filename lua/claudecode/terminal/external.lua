@@ -2,14 +2,14 @@
 ---Launches Claude Code in an external terminal application using a user-specified command.
 ---@module 'claudecode.terminal.external'
 
---- @type TerminalProvider
+---@type ClaudeCodeTerminalProvider
 local M = {}
 
 local logger = require("claudecode.logger")
 local utils = require("claudecode.utils")
 
 local jobid = nil
----@type TerminalConfig
+---@type ClaudeCodeTerminalConfig
 local config
 
 local function cleanup_state()
@@ -22,15 +22,15 @@ local function is_valid()
   return jobid and jobid > 0
 end
 
---- @param term_config TerminalConfig
+---@param term_config ClaudeCodeTerminalConfig
 function M.setup(term_config)
   config = term_config or {}
 end
 
---- @param cmd_string string
---- @param env_table table
---- @param effective_config table
---- @param focus boolean|nil
+---@param cmd_string string
+---@param env_table table
+---@param effective_config table
+---@param focus boolean?
 function M.open(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
 
@@ -54,10 +54,7 @@ function M.open(cmd_string, env_table, effective_config, focus)
 
   -- Replace %s in the template with the Claude command
   if not external_cmd:find("%%s") then
-    vim.notify(
-      "external_terminal_cmd must contain '%s' placeholder for the Claude command.",
-      vim.log.levels.ERROR
-    )
+    vim.notify("external_terminal_cmd must contain '%s' placeholder for the Claude command.", vim.log.levels.ERROR)
     return
   end
 
@@ -94,9 +91,9 @@ function M.close()
 end
 
 --- Simple toggle: always start external terminal (can't hide external terminals)
---- @param cmd_string string
---- @param env_table table
---- @param effective_config table
+---@param cmd_string string
+---@param env_table table
+---@param effective_config table
 function M.simple_toggle(cmd_string, env_table, effective_config)
   if is_valid() then
     -- External terminal is running, stop it
@@ -108,9 +105,9 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
 end
 
 --- Smart focus toggle: same as simple toggle for external terminals
---- @param cmd_string string
---- @param env_table table
---- @param effective_config table
+---@param cmd_string string
+---@param env_table table
+---@param effective_config table
 function M.focus_toggle(cmd_string, env_table, effective_config)
   -- For external terminals, focus toggle behaves the same as simple toggle
   -- since we can't detect or control focus of external windows
@@ -118,32 +115,29 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
 end
 
 --- Legacy toggle function for backward compatibility
---- @param cmd_string string
---- @param env_table table
---- @param effective_config table
+---@param cmd_string string
+---@param env_table table
+---@param effective_config table
 function M.toggle(cmd_string, env_table, effective_config)
   M.simple_toggle(cmd_string, env_table, effective_config)
 end
 
---- @return number|nil
+---@return number?
 function M.get_active_bufnr()
   -- External terminals don't have associated Neovim buffers
   return nil
 end
 
 --- No-op function for external terminals since we can't ensure visibility of external windows
-function M.ensure_visible()
-  -- For external terminals, we can't control window visibility
-  -- This is a no-op to prevent unnecessary buffer searches
-end
+function M.ensure_visible() end
 
---- @return boolean
+---@return boolean
 function M.is_available()
   -- Availability is checked by terminal.lua before this provider is selected
   return true
 end
 
---- @return table|nil
+---@return table?
 function M._get_terminal_for_test()
   -- For testing purposes, return job info if available
   if is_valid() then

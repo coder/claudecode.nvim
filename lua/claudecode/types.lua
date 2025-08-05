@@ -32,7 +32,11 @@
 ---@alias ClaudeCodeSplitSide "left"|"right"
 
 -- In-tree terminal provider names
----@alias ClaudeCodeTerminalProviderName "auto"|"snacks"|"native"
+---@alias ClaudeCodeTerminalProviderName "auto"|"snacks"|"native"|"external"
+
+-- Terminal provider-specific options
+---@class ClaudeCodeTerminalProviderOptions
+---@field external_terminal_cmd string? Command template for external terminal (e.g., "alacritty -e %s")
 
 -- @ mention queued for Claude Code
 ---@class ClaudeCodeMention
@@ -61,6 +65,7 @@
 ---@field provider ClaudeCodeTerminalProviderName|ClaudeCodeTerminalProvider
 ---@field show_native_term_exit_tip boolean
 ---@field terminal_cmd string?
+---@field provider_opts ClaudeCodeTerminalProviderOptions?
 ---@field auto_close boolean
 ---@field env table<string, string>
 ---@field snacks_win_opts table
