@@ -423,4 +423,29 @@ function M._get_managed_terminal_for_test()
   return nil
 end
 
+---Restore window layout after closing diff windows
+-- This ensures that Claude's terminal maintains its configured size ratio
+function M.restore_window_layout()
+  local logger = require("claudecode.logger")
+  local effective_config = build_config({})
+
+  -- Get active terminal buffer number
+  local terminal_bufnr = M.get_active_terminal_bufnr()
+  if not terminal_bufnr then
+    return
+  end
+
+  -- Check if terminal is visible and get its window
+  if is_terminal_visible(terminal_bufnr) then
+    local bufinfo = vim.fn.getbufinfo(terminal_bufnr)
+    if bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+      local terminal_win = bufinfo[1].windows[1]
+      local total_width = vim.o.columns
+      local terminal_width = math.floor(total_width * effective_config.split_width_percentage)
+      vim.api.nvim_win_set_width(terminal_win, terminal_width)
+      logger.debug("terminal", "Restored window layout with terminal width:", terminal_width)
+    end
+  end
+end
+
 return M
