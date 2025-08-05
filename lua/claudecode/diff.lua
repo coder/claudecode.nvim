@@ -6,10 +6,11 @@ local logger = require("claudecode.logger")
 
 -- Global state management for active diffs
 
-local active_diffs = {}
-local autocmd_group
+---@type ClaudeCodeConfig
 local config
 
+---@type number
+local autocmd_group
 ---Get or create the autocmd group
 local function get_autocmd_group()
   if not autocmd_group then
@@ -112,7 +113,7 @@ local function is_buffer_dirty(file_path)
 end
 
 ---Setup the diff module
----@param user_config table? The configuration passed from init.lua
+---@param user_config ClaudeCodeConfig? The configuration passed from init.lua
 function M.setup(user_config)
   -- Store the configuration for later use
   config = user_config or {}
@@ -335,6 +336,9 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     temp_file = tmp_file,
   }
 end
+
+---@type table<string, table>
+local active_diffs = {}
 
 ---Register diff state for tracking
 ---@param tab_name string Unique identifier for the diff
@@ -638,7 +642,7 @@ function M._create_diff_view_from_window(target_window, old_file_path, new_buffe
       if terminal_win then
         vim.api.nvim_set_current_win(terminal_win)
       end
-    end, 0)
+    end)
   end
 
   -- Return window information for later storage

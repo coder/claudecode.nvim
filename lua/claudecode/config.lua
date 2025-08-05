@@ -26,8 +26,9 @@ M.defaults = {
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
   },
   models = {
-    { name = "Claude Opus 4 (Latest)", value = "opus" },
+    { name = "Claude Opus 4.1 (Latest)", value = "opus" },
     { name = "Claude Sonnet 4 (Latest)", value = "sonnet" },
+    { name = "Claude Haiku 3.5 (Latest)", value = "haiku" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
 }
