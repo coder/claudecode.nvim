@@ -9,7 +9,8 @@ local logger = require("claudecode.logger")
 local utils = require("claudecode.utils")
 
 local jobid = nil
-local config = {}
+---@type TerminalConfig
+local config
 
 local function cleanup_state()
   jobid = nil
