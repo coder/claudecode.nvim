@@ -142,10 +142,8 @@ local function get_provider()
     if external_provider then
       -- Check availability based on our config instead of provider's internal state
       local external_cmd = defaults.provider_opts and defaults.provider_opts.external_terminal_cmd
-      
-      local has_external_cmd = external_cmd
-        and external_cmd ~= ""
-        and external_cmd:find("%%s")
+
+      local has_external_cmd = external_cmd and external_cmd ~= "" and external_cmd:find("%%s")
       if has_external_cmd then
         return external_provider
       else
@@ -343,10 +341,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
           end
         end
       else
-        vim.notify(
-          "claudecode.terminal.setup: Invalid value for provider_opts: " .. tostring(v),
-          vim.log.levels.WARN
-        )
+        vim.notify("claudecode.terminal.setup: Invalid value for provider_opts: " .. tostring(v), vim.log.levels.WARN)
       end
     elseif defaults[k] ~= nil then -- Other known config keys
       if k == "split_side" and (v == "left" or v == "right") then
