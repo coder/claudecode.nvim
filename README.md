@@ -573,6 +573,87 @@ Provides convenient Claude interaction history management and access for enhance
 
 > **Disclaimer**: These community extensions are developed and maintained by independent contributors. The authors and their extensions are not affiliated with Coder. Use at your own discretion and refer to their respective repositories for installation instructions, documentation, and support.
 
+## Auto-Save Plugin Issues
+
+Using auto-save plugins can cause diff windows opened by Claude to immediately accept without waiting for input. You can avoid this using a custom condition:
+
+<details>
+<summary>Pocco81/auto-save.nvim</summary>
+
+```lua
+opts = {
+  -- ... other options
+  condition = function(buf)
+    local fn = vim.fn
+    local utils = require("auto-save.utils.data")
+
+    -- First check the default conditions
+    if not (fn.getbufvar(buf, "&modifiable") == 1 and utils.not_in(fn.getbufvar(buf, "&filetype"), {})) then
+      return false
+    end
+
+    -- Exclude claudecode diff buffers by buffer name patterns
+    local bufname = vim.api.nvim_buf_get_name(buf)
+    if bufname:match("%(proposed%)") or
+       bufname:match("%(NEW FILE %- proposed%)") or
+       bufname:match("%(New%)") then
+      return false
+    end
+
+    -- Exclude by buffer variables (claudecode sets these)
+    if vim.b[buf].claudecode_diff_tab_name or
+       vim.b[buf].claudecode_diff_new_win or
+       vim.b[buf].claudecode_diff_target_win then
+      return false
+    end
+
+    -- Exclude by buffer type (claudecode diff buffers use "acwrite")
+    local buftype = fn.getbufvar(buf, "&buftype")
+    if buftype == "acwrite" then
+      return false
+    end
+
+    return true -- Safe to auto-save
+  end,
+},
+```
+
+</details>
+<details>
+<summary>okuuva/auto-save.nvim</summary>
+
+```lua
+opts = {
+  -- ... other options
+  condition = function(buf)
+    -- Exclude claudecode diff buffers by buffer name patterns
+    local bufname = vim.api.nvim_buf_get_name(buf)
+    if bufname:match('%(proposed%)') or bufname:match('%(NEW FILE %- proposed%)') or bufname:match('%(New%)') then
+      return false
+    end
+
+    -- Exclude by buffer variables (claudecode sets these)
+    if
+      vim.b[buf].claudecode_diff_tab_name
+      or vim.b[buf].claudecode_diff_new_win
+      or vim.b[buf].claudecode_diff_target_win
+    then
+      return false
+    end
+
+    -- Exclude by buffer type (claudecode diff buffers use "acwrite")
+    local buftype = vim.fn.getbufvar(buf, '&buftype')
+    if buftype == 'acwrite' then
+      return false
+    end
+
+    return true -- Safe to auto-save
+  end,
+},
+```
+
+</details>
+
 ## Troubleshooting
 
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
