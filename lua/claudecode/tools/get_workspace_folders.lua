@@ -9,11 +9,10 @@ local schema = {
   },
 }
 
---- Handles the getWorkspaceFolders tool invocation.
--- Retrieves workspace folders, currently defaulting to CWD and attempting LSP integration.
--- @param _params table The input parameters for the tool (currently unused).
--- @return table A table containing the list of workspace folders.
-local function handler(_params) -- Prefix unused params with underscore
+---Handles the getWorkspaceFolders tool invocation.
+---Retrieves workspace folders, currently defaulting to CWD and attempting LSP integration.
+---@return table MCP-compliant response with workspace folders data
+local function handler(params)
   local cwd = vim.fn.getcwd()
 
   -- TODO: Enhance integration with LSP workspace folders if available,

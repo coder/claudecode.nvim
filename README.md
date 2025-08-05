@@ -40,7 +40,7 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
       "<leader>as",
       "<cmd>ClaudeCodeTreeAdd<cr>",
       desc = "Add file",
-      ft = { "NvimTree", "neo-tree", "oil" },
+      ft = { "NvimTree", "neo-tree", "oil", "minifiles" },
     },
     -- Diff management
     { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
@@ -182,7 +182,7 @@ Configure the plugin with the detected path:
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
 2. **Send context**:
    - Select text in visual mode and use `<leader>as` to send it to Claude
-   - In `nvim-tree`/`neo-tree`/`oil.nvim`, press `<leader>as` on a file to add it to Claude's context
+   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, press `<leader>as` on a file to add it to Claude's context
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor
@@ -267,6 +267,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       auto_close_on_accept = true,
       vertical_split = true,
       open_in_current_tab = true,
+      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
     },
   },
   keys = {
@@ -571,6 +572,87 @@ Integrates fzf-lua's file selection with claudecode.nvim's context management:
 Provides convenient Claude interaction history management and access for enhanced workflow continuity.
 
 > **Disclaimer**: These community extensions are developed and maintained by independent contributors. The authors and their extensions are not affiliated with Coder. Use at your own discretion and refer to their respective repositories for installation instructions, documentation, and support.
+
+## Auto-Save Plugin Issues
+
+Using auto-save plugins can cause diff windows opened by Claude to immediately accept without waiting for input. You can avoid this using a custom condition:
+
+<details>
+<summary>Pocco81/auto-save.nvim</summary>
+
+```lua
+opts = {
+  -- ... other options
+  condition = function(buf)
+    local fn = vim.fn
+    local utils = require("auto-save.utils.data")
+
+    -- First check the default conditions
+    if not (fn.getbufvar(buf, "&modifiable") == 1 and utils.not_in(fn.getbufvar(buf, "&filetype"), {})) then
+      return false
+    end
+
+    -- Exclude claudecode diff buffers by buffer name patterns
+    local bufname = vim.api.nvim_buf_get_name(buf)
+    if bufname:match("%(proposed%)") or
+       bufname:match("%(NEW FILE %- proposed%)") or
+       bufname:match("%(New%)") then
+      return false
+    end
+
+    -- Exclude by buffer variables (claudecode sets these)
+    if vim.b[buf].claudecode_diff_tab_name or
+       vim.b[buf].claudecode_diff_new_win or
+       vim.b[buf].claudecode_diff_target_win then
+      return false
+    end
+
+    -- Exclude by buffer type (claudecode diff buffers use "acwrite")
+    local buftype = fn.getbufvar(buf, "&buftype")
+    if buftype == "acwrite" then
+      return false
+    end
+
+    return true -- Safe to auto-save
+  end,
+},
+```
+
+</details>
+<details>
+<summary>okuuva/auto-save.nvim</summary>
+
+```lua
+opts = {
+  -- ... other options
+  condition = function(buf)
+    -- Exclude claudecode diff buffers by buffer name patterns
+    local bufname = vim.api.nvim_buf_get_name(buf)
+    if bufname:match('%(proposed%)') or bufname:match('%(NEW FILE %- proposed%)') or bufname:match('%(New%)') then
+      return false
+    end
+
+    -- Exclude by buffer variables (claudecode sets these)
+    if
+      vim.b[buf].claudecode_diff_tab_name
+      or vim.b[buf].claudecode_diff_new_win
+      or vim.b[buf].claudecode_diff_target_win
+    then
+      return false
+    end
+
+    -- Exclude by buffer type (claudecode diff buffers use "acwrite")
+    local buftype = vim.fn.getbufvar(buf, '&buftype')
+    if buftype == 'acwrite' then
+      return false
+    end
+
+    return true -- Safe to auto-save
+  end,
+},
+```
+
+</details>
 
 ## Troubleshooting
 

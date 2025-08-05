@@ -4,20 +4,13 @@
 --- seamless AI-assisted coding experiences directly in Neovim.
 ---@brief ]]
 
---- @module 'claudecode'
+---@module 'claudecode'
 local M = {}
 
 local logger = require("claudecode.logger")
 
---- @class ClaudeCode.Version
---- @field major integer Major version number
---- @field minor integer Minor version number
---- @field patch integer Patch version number
---- @field prerelease string|nil Prerelease identifier (e.g., "alpha", "beta")
---- @field string fun(self: ClaudeCode.Version):string Returns the formatted version string
-
---- The current version of the plugin.
---- @type ClaudeCode.Version
+--- Current plugin version
+---@type ClaudeCodeVersion
 M.version = {
   major = 0,
   minor = 2,
@@ -32,52 +25,10 @@ M.version = {
   end,
 }
 
---- @class ClaudeCode.Config
---- @field port_range {min: integer, max: integer} Port range for WebSocket server.
---- @field auto_start boolean Auto-start WebSocket server on Neovim startup.
---- @field terminal_cmd string|nil Custom terminal command to use when launching Claude.
---- @field env table<string,string> Custom environment variables for Claude terminal.
---- @field log_level "trace"|"debug"|"info"|"warn"|"error" Log level.
---- @field track_selection boolean Enable sending selection updates to Claude.
---- @field visual_demotion_delay_ms number Milliseconds to wait before demoting a visual selection.
---- @field connection_wait_delay number Milliseconds to wait after connection before sending queued @ mentions.
---- @field connection_timeout number Maximum time to wait for Claude Code to connect (milliseconds).
---- @field queue_timeout number Maximum time to keep @ mentions in queue (milliseconds).
---- @field diff_opts { auto_close_on_accept: boolean, show_diff_stats: boolean, vertical_split: boolean, open_in_current_tab: boolean } Options for the diff provider.
-
---- @type ClaudeCode.Config
-local default_config = {
-  port_range = { min = 10000, max = 65535 },
-  auto_start = true,
-  terminal_cmd = nil,
-  env = {},
-  log_level = "info",
-  track_selection = true,
-  visual_demotion_delay_ms = 50, -- Reduced from 200ms for better responsiveness in tree navigation
-  connection_wait_delay = 200, -- Milliseconds to wait after connection before sending queued @ mentions
-  connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
-  queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
-  diff_opts = {
-    auto_close_on_accept = true,
-    show_diff_stats = true,
-    vertical_split = true,
-    open_in_current_tab = false,
-  },
-}
-
---- @class ClaudeCode.State
---- @field config ClaudeCode.Config The current plugin configuration.
---- @field server table|nil The WebSocket server instance.
---- @field port number|nil The port the server is running on.
---- @field auth_token string|nil The authentication token for the current session.
---- @field initialized boolean Whether the plugin has been initialized.
---- @field mention_queue table[] Array of queued @ mentions.
---- @field mention_timer table|nil Timer for mention processing.
---- @field connection_timer table|nil Timer for connection timeout.
-
---- @type ClaudeCode.State
+-- Module state
+---@type ClaudeCodeState
 M.state = {
-  config = vim.deepcopy(default_config),
+  config = require("claudecode.config").defaults,
   server = nil,
   port = nil,
   auth_token = nil,
@@ -87,17 +38,7 @@ M.state = {
   connection_timer = nil,
 }
 
----@alias ClaudeCode.TerminalOpts { \
----  split_side?: "left"|"right", \
----  split_width_percentage?: number, \
----  provider?: "auto"|"snacks"|"native"|table, \
----  show_native_term_exit_tip?: boolean, \
----  snacks_win_opts?: table }
----
----@alias ClaudeCode.SetupOpts { \
----  terminal?: ClaudeCode.TerminalOpts }
-
----@brief Check if Claude Code is connected to WebSocket server
+---Check if Claude Code is connected to WebSocket server
 ---@return boolean connected Whether Claude Code has active connections
 function M.is_claude_connected()
   if not M.state.server then
@@ -109,7 +50,7 @@ function M.is_claude_connected()
   return status.running and status.client_count > 0
 end
 
----@brief Clear the mention queue and stop any pending timer
+---Clear the mention queue and stop any pending timer
 local function clear_mention_queue()
   -- Initialize mention_queue if it doesn't exist (for test compatibility)
   if not M.state.mention_queue then
@@ -128,7 +69,7 @@ local function clear_mention_queue()
   end
 end
 
----@brief Process mentions when Claude is connected (debounced mode)
+---Process mentions when Claude is connected (debounced mode)
 local function process_connected_mentions()
   -- Reset the debounce timer
   if M.state.mention_timer then
@@ -149,7 +90,7 @@ local function process_connected_mentions()
   M.state.mention_timer:start(debounce_delay, 0, wrapped_function)
 end
 
----@brief Start connection timeout timer if not already started
+---Start connection timeout timer if not already started
 local function start_connection_timeout_if_needed()
   if not M.state.connection_timer then
     M.state.connection_timer = vim.loop.new_timer()
@@ -164,7 +105,7 @@ local function start_connection_timeout_if_needed()
   end
 end
 
----@brief Add @ mention to queue
+---Add @ mention to queue
 ---@param file_path string The file path to mention
 ---@param start_line number|nil Optional start line
 ---@param end_line number|nil Optional end line
@@ -194,7 +135,7 @@ local function queue_mention(file_path, start_line, end_line)
   end
 end
 
----@brief Process the mention queue (handles both connected and disconnected modes)
+---Process the mention queue (handles both connected and disconnected modes)
 ---@param from_new_connection boolean|nil Whether this is triggered by a new connection (adds delay)
 function M.process_mention_queue(from_new_connection)
   -- Initialize mention_queue if it doesn't exist (for test compatibility)
@@ -283,7 +224,7 @@ function M.process_mention_queue(from_new_connection)
   end
 end
 
----@brief Show terminal if Claude is connected and it's not already visible
+---Show terminal if Claude is connected and it's not already visible
 ---@return boolean success Whether terminal was shown or was already visible
 function M._ensure_terminal_visible_if_connected()
   if not M.is_claude_connected() then
@@ -307,7 +248,7 @@ function M._ensure_terminal_visible_if_connected()
   return true
 end
 
----@brief Send @ mention to Claude Code, handling connection state automatically
+---Send @ mention to Claude Code, handling connection state automatically
 ---@param file_path string The file path to send
 ---@param start_line number|nil Start line (0-indexed for Claude)
 ---@param end_line number|nil End line (0-indexed for Claude)
@@ -345,18 +286,11 @@ function M.send_at_mention(file_path, start_line, end_line, context)
   end
 end
 
----
---- Set up the plugin with user configuration
----@param opts ClaudeCode.SetupOpts|nil Optional configuration table to override defaults.
----@return table The plugin module
+---Set up the plugin with user configuration
+---@param opts ClaudeCodeConfig|nil Optional configuration table to override defaults.
+---@return table module The plugin module
 function M.setup(opts)
   opts = opts or {}
-
-  local terminal_opts = nil
-  if opts.terminal then
-    terminal_opts = opts.terminal
-    opts.terminal = nil -- Remove from main opts to avoid polluting M.state.config
-  end
 
   local config = require("claudecode.config")
   M.state.config = config.apply(opts)
@@ -371,7 +305,7 @@ function M.setup(opts)
     -- Guard in case tests or user replace the module with a minimal stub without `setup`.
     if type(terminal_module.setup) == "function" then
       -- terminal_opts might be nil, which the setup function should handle gracefully.
-      terminal_module.setup(terminal_opts, M.state.config.terminal_cmd, M.state.config.env)
+      terminal_module.setup(opts.terminal, M.state.config.terminal_cmd, M.state.config.env)
     end
   else
     logger.error("init", "Failed to load claudecode.terminal module for setup.")
@@ -403,7 +337,7 @@ function M.setup(opts)
   return M
 end
 
---- Start the Claude Code integration
+---Start the Claude Code integration
 ---@param show_startup_notification? boolean Whether to show a notification upon successful startup (defaults to true)
 ---@return boolean success Whether the operation was successful
 ---@return number|string port_or_error The WebSocket port if successful, or error message if failed
@@ -496,9 +430,9 @@ function M.start(show_startup_notification)
   return true, M.state.port
 end
 
---- Stop the Claude Code integration
+---Stop the Claude Code integration
 ---@return boolean success Whether the operation was successful
----@return string? error Error message if operation failed
+---@return string|nil error Error message if operation failed
 function M.stop()
   if not M.state.server then
     logger.warn("init", "Claude Code integration is not running")
@@ -537,7 +471,7 @@ function M.stop()
   return true
 end
 
---- Set up user commands
+---Set up user commands
 ---@private
 function M._create_commands()
   vim.api.nvim_create_user_command("ClaudeCodeStart", function()
@@ -716,7 +650,7 @@ function M._create_commands()
     end
   end
 
-  local function handle_send_visual(visual_data, _opts)
+  local function handle_send_visual(visual_data, opts)
     -- Check if we're in a tree buffer first
     local current_ft = (vim.bo and vim.bo.filetype) or ""
     local current_bufname = (vim.api and vim.api.nvim_buf_get_name and vim.api.nvim_buf_get_name(0)) or ""
@@ -1088,8 +1022,8 @@ M.open_with_model = function(additional_args)
   end)
 end
 
---- Get version information
----@return table Version information
+---Get version information
+---@return { version: string, major: integer, minor: integer, patch: integer, prerelease: string|nil }
 function M.get_version()
   return {
     version = M.version:string(),
@@ -1100,7 +1034,7 @@ function M.get_version()
   }
 end
 
---- Format file path for at mention (exposed for testing)
+---Format file path for at mention (exposed for testing)
 ---@param file_path string The file path to format
 ---@return string formatted_path The formatted path
 ---@return boolean is_directory Whether the path is a directory
@@ -1147,7 +1081,7 @@ function M._format_path_for_at_mention(file_path)
   return formatted_path, is_directory
 end
 
--- Test helper functions (exposed for testing)
+---Test helper functions (exposed for testing)
 function M._broadcast_at_mention(file_path, start_line, end_line)
   if not M.state.server then
     return false, "Claude Code integration is not running"

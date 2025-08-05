@@ -1,7 +1,6 @@
---- Native Neovim terminal provider for Claude Code.
--- @module claudecode.terminal.native
+---Native Neovim terminal provider for Claude Code.
+---@module 'claudecode.terminal.native'
 
---- @type TerminalProvider
 local M = {}
 
 local logger = require("claudecode.logger")
@@ -11,7 +10,9 @@ local bufnr = nil
 local winid = nil
 local jobid = nil
 local tip_shown = false
-local config = {}
+
+---@type ClaudeCodeTerminalConfig
+local config = require("claudecode.terminal").defaults
 
 local function cleanup_state()
   bufnr = nil
@@ -98,6 +99,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
           cleanup_state() -- Clear our managed state first
 
+          if not effective_config.auto_close then
+            return
+          end
+
           if current_winid_for_job and vim.api.nvim_win_is_valid(current_winid_for_job) then
             if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
               -- Optional: Check if the window still holds the same terminal buffer
@@ -125,7 +130,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
   winid = new_winid
   bufnr = vim.api.nvim_get_current_buf()
-  vim.bo[bufnr].bufhidden = "wipe" -- Wipe buffer when hidden (e.g., window closed)
+  vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
 
   if focus then
@@ -185,9 +190,6 @@ end
 local function hide_terminal()
   -- Hide the terminal window but keep the buffer and job alive
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) and winid and vim.api.nvim_win_is_valid(winid) then
-    -- Set buffer to hide instead of being wiped when window closes
-    vim.api.nvim_buf_set_option(bufnr, "bufhidden", "hide")
-
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
     winid = nil -- Clear window reference
@@ -266,9 +268,10 @@ local function find_existing_claude_terminal()
   return nil, nil
 end
 
---- @param term_config table
+---Setup the terminal module
+---@param term_config ClaudeCodeTerminalConfig
 function M.setup(term_config)
-  config = term_config or {}
+  config = term_config
 end
 
 --- @param cmd_string string
@@ -314,10 +317,10 @@ function M.close()
   close_terminal()
 end
 
---- Simple toggle: always show/hide terminal regardless of focus
---- @param cmd_string string
---- @param env_table table
---- @param effective_config table
+---Simple toggle: always show/hide terminal regardless of focus
+---@param cmd_string string
+---@param env_table table
+---@param effective_config ClaudeCodeTerminalConfig
 function M.simple_toggle(cmd_string, env_table, effective_config)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -354,10 +357,10 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
   end
 end
 
---- Smart focus toggle: switches to terminal if not focused, hides if currently focused
---- @param cmd_string string
---- @param env_table table
---- @param effective_config table
+---Smart focus toggle: switches to terminal if not focused, hides if currently focused
+---@param cmd_string string
+---@param env_table table
+---@param effective_config ClaudeCodeTerminalConfig
 function M.focus_toggle(cmd_string, env_table, effective_config)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -413,7 +416,7 @@ end
 --- Legacy toggle function for backward compatibility (defaults to simple_toggle)
 --- @param cmd_string string
 --- @param env_table table
---- @param effective_config table
+--- @param effective_config ClaudeCodeTerminalConfig
 function M.toggle(cmd_string, env_table, effective_config)
   M.simple_toggle(cmd_string, env_table, effective_config)
 end
@@ -431,4 +434,5 @@ function M.is_available()
   return true -- Native provider is always available
 end
 
+--- @type ClaudeCodeTerminalProvider
 return M

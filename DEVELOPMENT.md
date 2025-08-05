@@ -148,6 +148,7 @@ source fixtures/nvim-aliases.sh
 # Test with specific integration
 vv nvim-tree  # Start Neovim with nvim-tree configuration
 vv oil        # Start Neovim with oil.nvim configuration
+vv mini-files # Start Neovim with mini.files configuration
 vv netrw      # Start Neovim with built-in netrw configuration
 
 # List available configurations

@@ -1,0 +1,117 @@
+---@brief [[
+--- Centralized type definitions for ClaudeCode.nvim public API.
+--- This module contains all user-facing types and configuration structures.
+---@brief ]]
+---@module 'claudecode.types'
+
+-- Version information type
+---@class ClaudeCodeVersion
+---@field major integer
+---@field minor integer
+---@field patch integer
+---@field prerelease? string
+---@field string fun(self: ClaudeCodeVersion): string
+
+-- Diff behavior configuration
+---@class ClaudeCodeDiffOptions
+---@field auto_close_on_accept boolean
+---@field show_diff_stats boolean
+---@field vertical_split boolean
+---@field open_in_current_tab boolean
+---@field keep_terminal_focus boolean
+
+-- Model selection option
+---@class ClaudeCodeModelOption
+---@field name string
+---@field value string
+
+-- Log level type alias
+---@alias ClaudeCodeLogLevel "trace"|"debug"|"info"|"warn"|"error"
+
+-- Terminal split side positioning
+---@alias ClaudeCodeSplitSide "left"|"right"
+
+-- In-tree terminal provider names
+---@alias ClaudeCodeTerminalProviderName "auto"|"snacks"|"native"
+
+-- @ mention queued for Claude Code
+---@class ClaudeCodeMention
+---@field file_path string The absolute file path to mention
+---@field start_line number? Optional start line (0-indexed for Claude compatibility)
+---@field end_line number? Optional end line (0-indexed for Claude compatibility)
+---@field timestamp number Creation timestamp from vim.loop.now() for expiry tracking
+
+-- Terminal provider interface
+---@class ClaudeCodeTerminalProvider
+---@field setup fun(config: ClaudeCodeTerminalConfig)
+---@field open fun(cmd_string: string, env_table: table, config: ClaudeCodeTerminalConfig, focus: boolean?)
+---@field close fun()
+---@field toggle fun(cmd_string: string, env_table: table, effective_config: ClaudeCodeTerminalConfig)
+---@field simple_toggle fun(cmd_string: string, env_table: table, effective_config: ClaudeCodeTerminalConfig)
+---@field focus_toggle fun(cmd_string: string, env_table: table, effective_config: ClaudeCodeTerminalConfig)
+---@field get_active_bufnr fun(): number?
+---@field is_available fun(): boolean
+---@field ensure_visible? function
+---@field _get_terminal_for_test fun(): table?
+
+-- Terminal configuration
+---@class ClaudeCodeTerminalConfig
+---@field split_side ClaudeCodeSplitSide
+---@field split_width_percentage number
+---@field provider ClaudeCodeTerminalProviderName|ClaudeCodeTerminalProvider
+---@field show_native_term_exit_tip boolean
+---@field terminal_cmd string?
+---@field auto_close boolean
+---@field env table<string, string>
+---@field snacks_win_opts table
+
+-- Port range configuration
+---@class ClaudeCodePortRange
+---@field min integer
+---@field max integer
+
+-- Server status information
+---@class ClaudeCodeServerStatus
+---@field running boolean
+---@field port integer?
+---@field client_count integer
+---@field clients? table<string, any>
+
+-- Main configuration structure
+---@class ClaudeCodeConfig
+---@field port_range ClaudeCodePortRange
+---@field auto_start boolean
+---@field terminal_cmd string|nil
+---@field env table<string, string>
+---@field log_level ClaudeCodeLogLevel
+---@field track_selection boolean
+---@field visual_demotion_delay_ms number
+---@field connection_wait_delay number
+---@field connection_timeout number
+---@field queue_timeout number
+---@field diff_opts ClaudeCodeDiffOptions
+---@field models ClaudeCodeModelOption[]
+---@field disable_broadcast_debouncing? boolean
+---@field enable_broadcast_debouncing_in_tests? boolean
+---@field terminal ClaudeCodeTerminalConfig?
+
+-- Server interface for main module
+---@class ClaudeCodeServerFacade
+---@field start fun(config: ClaudeCodeConfig, auth_token: string|nil): (success: boolean, port_or_error: number|string)
+---@field stop fun(): (success: boolean, error_message: string?)
+---@field broadcast fun(method: string, params: table?): boolean
+---@field get_status fun(): ClaudeCodeServerStatus
+
+-- Main module state
+---@class ClaudeCodeState
+---@field config ClaudeCodeConfig
+---@field server ClaudeCodeServerFacade|nil
+---@field port integer|nil
+---@field auth_token string|nil
+---@field initialized boolean
+---@field mention_queue ClaudeCodeMention[]
+---@field mention_timer uv.uv_timer_t?  -- (compatible with vim.loop timer)
+---@field connection_timer uv.uv_timer_t?  -- (compatible with vim.loop timer)
+
+-- This module only defines types, no runtime functionality
+return {}

@@ -41,30 +41,28 @@ function M.open(cmd_string, env_table, effective_config, focus)
     return
   end
 
-  -- Build the external command using the configured template
-  if
-    not config.terminal
-    or not config.terminal.external_terminal_cmd
-    or config.terminal.external_terminal_cmd == ""
-  then
+  -- Get external terminal command from provider_opts
+  local external_cmd = config.provider_opts and config.provider_opts.external_terminal_cmd
+
+  if not external_cmd or external_cmd == "" then
     vim.notify(
-      "terminal.external_terminal_cmd not configured. Please set terminal.external_terminal_cmd in your config.",
+      "external_terminal_cmd not configured. Please set terminal.provider_opts.external_terminal_cmd in your config.",
       vim.log.levels.ERROR
     )
     return
   end
 
   -- Replace %s in the template with the Claude command
-  if not config.terminal.external_terminal_cmd:find("%%s") then
+  if not external_cmd:find("%%s") then
     vim.notify(
-      "terminal.external_terminal_cmd must contain '%s' placeholder for the Claude command.",
+      "external_terminal_cmd must contain '%s' placeholder for the Claude command.",
       vim.log.levels.ERROR
     )
     return
   end
 
   -- Build command by replacing %s with Claude command and splitting
-  local full_command = string.format(config.terminal.external_terminal_cmd, cmd_string)
+  local full_command = string.format(external_cmd, cmd_string)
   local cmd_parts = vim.split(full_command, " ")
 
   -- Start the external terminal as a detached process
@@ -131,6 +129,12 @@ end
 function M.get_active_bufnr()
   -- External terminals don't have associated Neovim buffers
   return nil
+end
+
+--- No-op function for external terminals since we can't ensure visibility of external windows
+function M.ensure_visible()
+  -- For external terminals, we can't control window visibility
+  -- This is a no-op to prevent unnecessary buffer searches
 end
 
 --- @return boolean
