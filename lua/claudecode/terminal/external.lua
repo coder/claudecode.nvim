@@ -1,6 +1,6 @@
 --- External terminal provider for Claude Code.
--- Launches Claude Code in an external terminal application using a user-specified command.
--- @module claudecode.terminal.external
+---Launches Claude Code in an external terminal application using a user-specified command.
+---@module 'claudecode.terminal.external'
 
 --- @type TerminalProvider
 local M = {}
