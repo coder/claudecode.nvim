@@ -2,33 +2,11 @@
 --- Supports Snacks.nvim or a native Neovim terminal fallback.
 --- @module 'claudecode.terminal'
 
---- @class TerminalProvider
---- @field setup fun(config: TerminalConfig)
---- @field open fun(cmd_string: string, env_table: table, config: TerminalConfig, focus: boolean?)
---- @field close fun()
---- @field toggle fun(cmd_string: string, env_table: table, effective_config: TerminalConfig)
---- @field simple_toggle fun(cmd_string: string, env_table: table, effective_config: TerminalConfig)
---- @field focus_toggle fun(cmd_string: string, env_table: table, effective_config: TerminalConfig)
---- @field get_active_bufnr fun(): number?
---- @field is_available fun(): boolean
---- @field ensure_visible? function
---- @field _get_terminal_for_test fun(): table?
-
---- @class TerminalConfig
---- @field split_side "left"|"right"
---- @field split_width_percentage number
---- @field provider "auto"|"snacks"|"native"|TerminalProvider
---- @field show_native_term_exit_tip boolean
---- @field terminal_cmd string|nil
---- @field auto_close boolean
---- @field env table<string, string>
---- @field snacks_win_opts table
-
 local M = {}
 
 local claudecode_server_module = require("claudecode.server.init")
 
---- @type TerminalConfig
+---@type ClaudeCodeTerminalConfig
 local defaults = {
   split_side = "right",
   split_width_percentage = 0.30,
@@ -47,7 +25,7 @@ local providers = {}
 
 ---Loads a terminal provider module
 ---@param provider_name string The name of the provider to load
----@return TerminalProvider? provider The provider module, or nil if loading failed
+---@return ClaudeCodeTerminalProvider? provider The provider module, or nil if loading failed
 local function load_provider(provider_name)
   if not providers[provider_name] then
     local ok, provider = pcall(require, "claudecode.terminal." .. provider_name)
@@ -61,8 +39,8 @@ local function load_provider(provider_name)
 end
 
 ---Validates and enhances a custom table provider with smart defaults
----@param provider TerminalProvider The custom provider table to validate
----@return TerminalProvider? provider The enhanced provider, or nil if invalid
+---@param provider ClaudeCodeTerminalProvider The custom provider table to validate
+---@return ClaudeCodeTerminalProvider? provider The enhanced provider, or nil if invalid
 ---@return string? error Error message if validation failed
 local function validate_and_enhance_provider(provider)
   if type(provider) ~= "table" then
@@ -117,13 +95,13 @@ end
 
 ---Gets the effective terminal provider, guaranteed to return a valid provider
 ---Falls back to native provider if configured provider is unavailable
----@return TerminalProvider provider The terminal provider module (never nil)
+---@return ClaudeCodeTerminalProvider provider The terminal provider module (never nil)
 local function get_provider()
   local logger = require("claudecode.logger")
 
   -- Handle custom table provider
   if type(defaults.provider) == "table" then
-    local custom_provider = defaults.provider --[[@as TerminalProvider]]
+    local custom_provider = defaults.provider --[[@as ClaudeCodeTerminalProvider]]
     local enhanced_provider, error_msg = validate_and_enhance_provider(custom_provider)
     if enhanced_provider then
       -- Check if custom provider is available
@@ -290,7 +268,7 @@ end
 
 ---Configures the terminal module.
 ---Merges user-provided terminal configuration with defaults and sets the terminal command.
----@param user_term_config TerminalConfig? Configuration options for the terminal.
+---@param user_term_config ClaudeCodeTerminalConfig? Configuration options for the terminal.
 ---@param p_terminal_cmd string? The command to run in the terminal (from main config).
 ---@param p_env table? Custom environment variables to pass to the terminal (from main config).
 function M.setup(user_term_config, p_terminal_cmd, p_env)

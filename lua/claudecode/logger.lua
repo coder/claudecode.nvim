@@ -22,7 +22,7 @@ local level_values = {
 local current_log_level_value = M.levels.INFO
 
 ---Setup the logger module
----@param plugin_config ClaudeCode.Config The configuration table (e.g., from claudecode.init.state.config).
+---@param plugin_config ClaudeCodeConfig The configuration table (e.g., from claudecode.init.state.config).
 function M.setup(plugin_config)
   local conf = plugin_config
 
@@ -119,7 +119,7 @@ function M.info(component, ...)
 end
 
 ---Check if a specific log level is enabled
----@param level_name ClaudeCode.LogLevel The level name ("error", "warn", "info", "debug", "trace")
+---@param level_name ClaudeCodeLogLevel The level name ("error", "warn", "info", "debug", "trace")
 ---@return boolean enabled Whether the level is enabled
 function M.is_level_enabled(level_name)
   local level_value = level_values[level_name]

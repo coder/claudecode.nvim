@@ -42,7 +42,7 @@ local function setup_terminal_events(term_instance, config)
 end
 
 ---Builds Snacks terminal options with focus control
----@param config TerminalConfig Terminal configuration
+---@param config ClaudeCodeTerminalConfig Terminal configuration
 ---@param env_table table Environment variables to set for the terminal process
 ---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
 ---@return table options Snacks terminal options with start_insert/auto_insert controlled by focus parameter
@@ -69,7 +69,7 @@ end
 ---Open a terminal using Snacks.nvim
 ---@param cmd_string string
 ---@param env_table table
----@param config TerminalConfig
+---@param config ClaudeCodeTerminalConfig
 ---@param focus boolean?
 function M.open(cmd_string, env_table, config, focus)
   if not is_available() then
@@ -258,5 +258,5 @@ function M._get_terminal_for_test()
   return terminal
 end
 
----@type TerminalProvider
+---@type ClaudeCodeTerminalProvider
 return M

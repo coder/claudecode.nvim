@@ -11,7 +11,7 @@ local winid = nil
 local jobid = nil
 local tip_shown = false
 
----@type TerminalConfig
+---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
 
 local function cleanup_state()
@@ -269,7 +269,7 @@ local function find_existing_claude_terminal()
 end
 
 ---Setup the terminal module
----@param term_config TerminalConfig
+---@param term_config ClaudeCodeTerminalConfig
 function M.setup(term_config)
   config = term_config
 end
@@ -320,7 +320,7 @@ end
 ---Simple toggle: always show/hide terminal regardless of focus
 ---@param cmd_string string
 ---@param env_table table
----@param effective_config TerminalConfig
+---@param effective_config ClaudeCodeTerminalConfig
 function M.simple_toggle(cmd_string, env_table, effective_config)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -360,7 +360,7 @@ end
 ---Smart focus toggle: switches to terminal if not focused, hides if currently focused
 ---@param cmd_string string
 ---@param env_table table
----@param effective_config TerminalConfig
+---@param effective_config ClaudeCodeTerminalConfig
 function M.focus_toggle(cmd_string, env_table, effective_config)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -416,7 +416,7 @@ end
 --- Legacy toggle function for backward compatibility (defaults to simple_toggle)
 --- @param cmd_string string
 --- @param env_table table
---- @param effective_config TerminalConfig
+--- @param effective_config ClaudeCodeTerminalConfig
 function M.toggle(cmd_string, env_table, effective_config)
   M.simple_toggle(cmd_string, env_table, effective_config)
 end
@@ -434,5 +434,5 @@ function M.is_available()
   return true -- Native provider is always available
 end
 
---- @type TerminalProvider
+--- @type ClaudeCodeTerminalProvider
 return M

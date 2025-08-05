@@ -6,36 +6,7 @@
 
 local M = {}
 
--- Types (authoritative for configuration shape):
----@class ClaudeCode.DiffOptions
----@field auto_close_on_accept boolean
----@field show_diff_stats boolean
----@field vertical_split boolean
----@field open_in_current_tab boolean
----@field keep_terminal_focus boolean
-
----@class ClaudeCode.ModelOption
----@field name string
----@field value string
-
----@alias ClaudeCode.LogLevel "trace"|"debug"|"info"|"warn"|"error"
-
----@class ClaudeCode.Config
----@field port_range {min: integer, max: integer}
----@field auto_start boolean
----@field terminal_cmd string|nil
----@field env table<string, string>
----@field log_level ClaudeCode.LogLevel
----@field track_selection boolean
----@field visual_demotion_delay_ms number
----@field connection_wait_delay number
----@field connection_timeout number
----@field queue_timeout number
----@field diff_opts ClaudeCode.DiffOptions
----@field models ClaudeCode.ModelOption[]
----@field disable_broadcast_debouncing? boolean
----@field enable_broadcast_debouncing_in_tests? boolean
----@field terminal TerminalConfig|nil
+---@type ClaudeCodeConfig
 M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
@@ -138,7 +109,7 @@ end
 
 ---Applies user configuration on top of default settings and validates the result.
 ---@param user_config table|nil The user-provided configuration table.
----@return ClaudeCode.Config config The final, validated configuration table.
+---@return ClaudeCodeConfig config The final, validated configuration table.
 function M.apply(user_config)
   local config = vim.deepcopy(M.defaults)
 

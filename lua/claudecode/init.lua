@@ -9,35 +9,8 @@ local M = {}
 
 local logger = require("claudecode.logger")
 
--- Types
-
----@class ClaudeCode.Version
----@field major integer
----@field minor integer
----@field patch integer
----@field prerelease? string
----@field string fun(self: ClaudeCode.Version):string
-
--- Narrow facade of the server module used by this file
----@class ClaudeCode.ServerFacade
----@field start fun(config: ClaudeCode.Config, auth_token: string|nil): boolean, number|string
----@field stop fun(): boolean, string|nil
----@field broadcast fun(method: string, params: table|nil): boolean
----@field get_status fun(): { running: boolean, port: integer|nil, client_count: integer, clients?: table }
-
--- State type for this module
----@class ClaudeCode.State
----@field config ClaudeCode.Config
----@field server ClaudeCode.ServerFacade|nil
----@field port integer|nil
----@field auth_token string|nil
----@field initialized boolean
----@field mention_queue table[]
----@field mention_timer table|nil
----@field connection_timer table|nil
-
 --- Current plugin version
----@type ClaudeCode.Version
+---@type ClaudeCodeVersion
 M.version = {
   major = 0,
   minor = 2,
@@ -53,7 +26,7 @@ M.version = {
 }
 
 -- Module state
----@type ClaudeCode.State
+---@type ClaudeCodeState
 M.state = {
   config = require("claudecode.config").defaults,
   server = nil,
@@ -314,7 +287,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 end
 
 ---Set up the plugin with user configuration
----@param opts ClaudeCode.Config|nil Optional configuration table to override defaults.
+---@param opts ClaudeCodeConfig|nil Optional configuration table to override defaults.
 ---@return table module The plugin module
 function M.setup(opts)
   opts = opts or {}
