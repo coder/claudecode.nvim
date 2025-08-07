@@ -29,11 +29,7 @@ M.defaults = {
     { name = "Claude Opus 4 (Latest)", value = "opus" },
     { name = "Claude Sonnet 4 (Latest)", value = "sonnet" },
   },
-  terminal = {
-    provider_opts = {
-      external_terminal_cmd = nil, -- Command template for external terminal (e.g., "alacritty -e %s")
-    },
-  },
+  terminal = nil, -- Will be lazy-loaded to avoid circular dependency
 }
 
 ---Validates the provided configuration table.
