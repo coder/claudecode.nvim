@@ -153,9 +153,10 @@ describe("MCP-compliant diff operations", function()
       end)
       coroutine.resume(co)
 
-      -- Simulate completion
+      -- Simulate completion and explicit close_tab
       vim.schedule(function()
         diff._resolve_diff_as_saved(test_tab_name, 1)
+        diff.close_diff_by_tab_name(test_tab_name)
       end)
 
       vim.wait(1000, function()
@@ -180,9 +181,10 @@ describe("MCP-compliant diff operations", function()
       local mid_autocmd_count = #vim.api.nvim_get_autocmds({ group = "ClaudeCodeMCPDiff" })
       assert.is_true(mid_autocmd_count > initial_autocmd_count, "Autocmds should be created")
 
-      -- Simulate completion
+      -- Simulate completion and explicit close_tab
       vim.schedule(function()
         diff._resolve_diff_as_rejected(test_tab_name)
+        diff.close_diff_by_tab_name(test_tab_name)
       end)
 
       vim.wait(1000, function()
@@ -205,9 +207,10 @@ describe("MCP-compliant diff operations", function()
       -- Verify diff is tracked
       -- Note: This test may need adjustment based on actual buffer creation
 
-      -- Clean up
+      -- Clean up via reject + close_tab
       vim.schedule(function()
         diff._resolve_diff_as_rejected(test_tab_name)
+        diff.close_diff_by_tab_name(test_tab_name)
       end)
 
       vim.wait(1000, function()
