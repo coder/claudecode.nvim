@@ -15,9 +15,5 @@
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
-  "remoteUser": "vscode",
-  "mounts": [
-    "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached"
-  ],
-  "workspaceFolder": "/workspace"
+  "remoteUser": "vscode"
 }
