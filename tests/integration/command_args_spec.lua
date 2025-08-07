@@ -153,10 +153,9 @@ describe("ClaudeCode command arguments integration", function()
               track_selection = true,
               visual_demotion_delay_ms = 50,
               diff_opts = {
-                auto_close_on_accept = true,
-                show_diff_stats = true,
-                vertical_split = true,
-                open_in_current_tab = false,
+                layout = "vertical",
+                open_in_new_tab = true, -- Note: inverted from open_in_current_tab = false
+                keep_terminal_focus = false,
               },
             }, opts or {})
           end,

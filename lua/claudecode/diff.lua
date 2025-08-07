@@ -4,14 +4,34 @@ local M = {}
 
 local logger = require("claudecode.logger")
 
--- Global state management for active diffs
+-- Window options for terminal display (internal type, not exposed in public API)
+---@class WindowOptions
+---@field number boolean Show line numbers
+---@field relativenumber boolean Show relative line numbers
+---@field signcolumn string Sign column display mode
+---@field statuscolumn string Status column format
+---@field foldcolumn string Fold column width
+---@field cursorline boolean Highlight cursor line
+---@field cursorcolumn boolean Highlight cursor column
+---@field colorcolumn string Columns to highlight
+---@field cursorlineopt string Cursor line options
+---@field spell boolean Enable spell checking
+---@field list boolean Show invisible characters
+---@field wrap boolean Wrap long lines
+---@field linebreak boolean Break lines at word boundaries
+---@field breakindent boolean Indent wrapped lines
+---@field showbreak string String to show at line breaks
+---@field scrolloff number Lines to keep above/below cursor
+---@field sidescrolloff number Columns to keep left/right of cursor
 
 ---@type ClaudeCodeConfig
 local config
 
 ---@type number
 local autocmd_group
----Get or create the autocmd group
+
+---Get or create the autocmd group for diff operations
+---@return number autocmd_group The autocmd group ID
 local function get_autocmd_group()
   if not autocmd_group then
     autocmd_group = vim.api.nvim_create_augroup("ClaudeCodeMCPDiff", { clear = true })
@@ -31,7 +51,6 @@ local function find_main_editor_window()
     local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
     local win_config = vim.api.nvim_win_get_config(win)
 
-    -- Check if this is a suitable window
     local is_suitable = true
 
     -- Skip floating windows
@@ -39,12 +58,10 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
-    -- Skip special buffer types
     if is_suitable and (buftype == "terminal" or buftype == "prompt") then
       is_suitable = false
     end
 
-    -- Skip known sidebar filetypes
     if
       is_suitable
       and (
@@ -60,7 +77,6 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
-    -- This looks like a main editor window
     if is_suitable then
       return win
     end
@@ -87,7 +103,6 @@ local function find_claudecode_terminal_window()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_get_buf(win) == terminal_bufnr then
       local win_config = vim.api.nvim_win_get_config(win)
-      -- Skip floating windows
       if not (win_config.relative and win_config.relative ~= "") then
         return win
       end
@@ -95,6 +110,184 @@ local function find_claudecode_terminal_window()
   end
 
   return nil
+end
+
+---Create a split based on configured layout
+local function create_split()
+  if config and config.diff_opts and config.diff_opts.layout == "horizontal" then
+    -- Ensure the new window is created below the current one regardless of user 'splitbelow' setting
+    vim.cmd("belowright split")
+  else
+    -- Ensure the new window is created to the right of the current one regardless of user 'splitright' setting
+    vim.cmd("rightbelow vsplit")
+  end
+end
+
+---Capture window-local options from a window
+---@param win_id number Window ID to capture options from
+---@return WindowOptions options Window options
+local function capture_window_options(win_id)
+  local options = {}
+
+  -- Display options
+  options.number = vim.api.nvim_get_option_value("number", { win = win_id })
+  options.relativenumber = vim.api.nvim_get_option_value("relativenumber", { win = win_id })
+  options.signcolumn = vim.api.nvim_get_option_value("signcolumn", { win = win_id })
+  options.statuscolumn = vim.api.nvim_get_option_value("statuscolumn", { win = win_id })
+  options.foldcolumn = vim.api.nvim_get_option_value("foldcolumn", { win = win_id })
+
+  -- Visual options
+  options.cursorline = vim.api.nvim_get_option_value("cursorline", { win = win_id })
+  options.cursorcolumn = vim.api.nvim_get_option_value("cursorcolumn", { win = win_id })
+  options.colorcolumn = vim.api.nvim_get_option_value("colorcolumn", { win = win_id })
+  options.cursorlineopt = vim.api.nvim_get_option_value("cursorlineopt", { win = win_id })
+
+  -- Text options
+  options.spell = vim.api.nvim_get_option_value("spell", { win = win_id })
+  options.list = vim.api.nvim_get_option_value("list", { win = win_id })
+  options.wrap = vim.api.nvim_get_option_value("wrap", { win = win_id })
+  options.linebreak = vim.api.nvim_get_option_value("linebreak", { win = win_id })
+  options.breakindent = vim.api.nvim_get_option_value("breakindent", { win = win_id })
+  options.showbreak = vim.api.nvim_get_option_value("showbreak", { win = win_id })
+
+  -- Scroll options
+  options.scrolloff = vim.api.nvim_get_option_value("scrolloff", { win = win_id })
+  options.sidescrolloff = vim.api.nvim_get_option_value("sidescrolloff", { win = win_id })
+
+  return options
+end
+
+---Apply window-local options to a window
+---@param win_id number Window ID to apply options to
+---@param options WindowOptions Window options to apply
+local function apply_window_options(win_id, options)
+  for opt_name, opt_value in pairs(options) do
+    pcall(vim.api.nvim_set_option_value, opt_name, opt_value, { win = win_id })
+  end
+end
+
+---Get default terminal window options
+---@return WindowOptions Default options for terminal windows
+local function get_default_terminal_options()
+  return {
+    number = false,
+    relativenumber = false,
+    signcolumn = "no",
+    statuscolumn = "",
+    foldcolumn = "0",
+    cursorline = false,
+    cursorcolumn = false,
+    colorcolumn = "",
+    cursorlineopt = "both",
+    spell = false,
+    list = false,
+    wrap = true,
+    linebreak = false,
+    breakindent = false,
+    showbreak = "",
+    scrolloff = 0,
+    sidescrolloff = 0,
+  }
+end
+
+---Display existing Claude Code terminal in new tab
+---@return number original_tab The original tab number
+---@return number? terminal_win Terminal window in new tab
+---@return boolean had_terminal_in_original True if terminal was visible in original tab
+---@return number? new_tab The handle of the newly created tab
+local function display_terminal_in_new_tab()
+  local original_tab = vim.api.nvim_get_current_tabpage()
+
+  -- Get existing terminal buffer
+  local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+  if not terminal_ok then
+    vim.cmd("tabnew")
+    local new_tab = vim.api.nvim_get_current_tabpage()
+    return original_tab, nil, false, new_tab
+  end
+
+  local terminal_bufnr = terminal_module.get_active_terminal_bufnr()
+  if not terminal_bufnr or not vim.api.nvim_buf_is_valid(terminal_bufnr) then
+    vim.cmd("tabnew")
+    local new_tab = vim.api.nvim_get_current_tabpage()
+    return original_tab, nil, false, new_tab
+  end
+
+  local existing_terminal_win = find_claudecode_terminal_window()
+  local had_terminal_in_original = existing_terminal_win ~= nil
+  local terminal_options
+  if existing_terminal_win then
+    terminal_options = capture_window_options(existing_terminal_win)
+  else
+    terminal_options = get_default_terminal_options()
+  end
+
+  vim.cmd("tabnew")
+  local new_tab = vim.api.nvim_get_current_tabpage()
+
+  -- Mark the initial, unnamed buffer in the new tab as ephemeral to avoid leaks
+  -- When this buffer gets hidden (replaced or tab closed), wipe it automatically.
+  local initial_buf = vim.api.nvim_get_current_buf()
+  local name_ok, initial_name = pcall(vim.api.nvim_buf_get_name, initial_buf)
+  local mod_ok, initial_modified = pcall(vim.api.nvim_buf_get_option, initial_buf, "modified")
+  local linecount_ok, initial_linecount = pcall(function()
+    return vim.api.nvim_buf_line_count(initial_buf)
+  end)
+  if name_ok and mod_ok and linecount_ok then
+    if (initial_name == nil or initial_name == "") and initial_modified == false and initial_linecount <= 1 then
+      pcall(vim.api.nvim_buf_set_option, initial_buf, "bufhidden", "wipe")
+    end
+  end
+
+  local terminal_config = config.terminal or {}
+  local split_side = terminal_config.split_side or "right"
+  local split_width = terminal_config.split_width_percentage or 0.30
+
+  -- Optionally hide the Claude terminal in the new tab for more review space
+  local hide_in_new_tab = false
+  if config and config.diff_opts and type(config.diff_opts.hide_terminal_in_new_tab) == "boolean" then
+    hide_in_new_tab = config.diff_opts.hide_terminal_in_new_tab
+  end
+
+  if hide_in_new_tab or not terminal_bufnr or not vim.api.nvim_buf_is_valid(terminal_bufnr) then
+    -- Do not create a terminal split in the new tab
+    return original_tab, nil, had_terminal_in_original, new_tab
+  end
+
+  vim.cmd("vsplit")
+
+  local terminal_win = vim.api.nvim_get_current_win()
+
+  if split_side == "left" then
+    vim.cmd("wincmd H")
+  else
+    vim.cmd("wincmd L")
+  end
+
+  vim.api.nvim_win_set_buf(terminal_win, terminal_bufnr)
+
+  apply_window_options(terminal_win, terminal_options)
+
+  -- Set up autocmd to enter terminal mode when focusing this terminal window
+  vim.api.nvim_create_autocmd("BufEnter", {
+    buffer = terminal_bufnr,
+    group = get_autocmd_group(),
+    callback = function()
+      -- Only enter insert mode if we're in a terminal buffer and in normal mode
+      if vim.bo.buftype == "terminal" and vim.fn.mode() == "n" then
+        vim.cmd("startinsert")
+      end
+    end,
+    desc = "Auto-enter terminal mode when focusing Claude Code terminal",
+  })
+
+  local total_width = vim.o.columns
+  local terminal_width = math.floor(total_width * split_width)
+  vim.api.nvim_win_set_width(terminal_win, terminal_width)
+
+  vim.cmd("wincmd " .. (split_side == "right" and "h" or "l"))
+
+  return original_tab, terminal_win, had_terminal_in_original, new_tab
 end
 
 ---Check if a buffer has unsaved changes (is dirty).
@@ -113,10 +306,10 @@ local function is_buffer_dirty(file_path)
 end
 
 ---Setup the diff module
----@param user_config ClaudeCodeConfig? The configuration passed from init.lua
+---@param user_config ClaudeCodeConfig The configuration passed from init.lua
 function M.setup(user_config)
   -- Store the configuration for later use
-  config = user_config or {}
+  config = user_config
 end
 
 ---Open a diff view between two files
@@ -225,6 +418,9 @@ local function cleanup_temp_file(tmp_file)
 end
 
 ---Detect filetype from a path or existing buffer (best-effort)
+---@param path string The file path to detect filetype from
+---@param buf number? Optional buffer number to check for filetype
+---@return string? filetype The detected filetype or nil
 local function detect_filetype(path, buf)
   -- 1) Try Neovim's builtin matcher if available (>=0.10)
   if vim.filetype and type(vim.filetype.match) == "function" then
@@ -269,6 +465,170 @@ local function detect_filetype(path, buf)
   return simple_map[ext]
 end
 
+---Decide whether to reuse the target window or split for the original file
+---@param target_win NvimWin
+---@param old_file_path string
+---@param is_new_file boolean
+---@param terminal_win_in_new_tab NvimWin|nil
+---@return DiffWindowChoice
+local function choose_original_window(target_win, old_file_path, is_new_file, terminal_win_in_new_tab)
+  local in_new_tab = terminal_win_in_new_tab ~= nil
+  local current_buf = vim.api.nvim_win_get_buf(target_win)
+  local current_buf_path = vim.api.nvim_buf_get_name(current_buf)
+  local is_empty_buffer = current_buf_path == "" and vim.api.nvim_buf_get_option(current_buf, "modified") == false
+
+  if in_new_tab then
+    return {
+      decision = "reuse",
+      original_win = target_win,
+      reused_buf = current_buf,
+      in_new_tab = true,
+    }
+  end
+
+  if is_new_file then
+    if is_empty_buffer then
+      return { decision = "reuse", original_win = target_win, reused_buf = current_buf, in_new_tab = false }
+    else
+      return { decision = "split", original_win = target_win, reused_buf = nil, in_new_tab = false }
+    end
+  end
+
+  if current_buf_path == old_file_path then
+    return { decision = "reuse", original_win = target_win, reused_buf = current_buf, in_new_tab = false }
+  elseif is_empty_buffer then
+    return { decision = "reuse", original_win = target_win, reused_buf = current_buf, in_new_tab = false }
+  else
+    return { decision = "split", original_win = target_win, reused_buf = nil, in_new_tab = false }
+  end
+end
+
+---Ensure the original window displays the proper buffer for the diff
+---@param original_win NvimWin
+---@param old_file_path string
+---@param is_new_file boolean
+---@param existing_buffer NvimBuf|nil
+---@return NvimBuf original_buf
+local function load_original_buffer(original_win, old_file_path, is_new_file, existing_buffer)
+  if is_new_file then
+    local empty_buffer = vim.api.nvim_create_buf(false, true)
+    if not empty_buffer or empty_buffer == 0 then
+      local error_msg = "Failed to create empty buffer for new file diff"
+      logger.error("diff", error_msg)
+      error({ code = -32000, message = "Buffer creation failed", data = error_msg })
+    end
+
+    local ok, err = pcall(function()
+      vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
+      vim.api.nvim_buf_set_lines(empty_buffer, 0, -1, false, {})
+      vim.api.nvim_buf_set_option(empty_buffer, "buftype", "nofile")
+      vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
+      vim.api.nvim_buf_set_option(empty_buffer, "readonly", true)
+    end)
+
+    if not ok then
+      pcall(vim.api.nvim_buf_delete, empty_buffer, { force = true })
+      local error_msg = "Failed to configure empty buffer: " .. tostring(err)
+      logger.error("diff", error_msg)
+      error({ code = -32000, message = "Buffer configuration failed", data = error_msg })
+    end
+
+    vim.api.nvim_win_set_buf(original_win, empty_buffer)
+    return empty_buffer
+  end
+
+  if existing_buffer and vim.api.nvim_buf_is_valid(existing_buffer) then
+    vim.api.nvim_win_set_buf(original_win, existing_buffer)
+    return existing_buffer
+  end
+
+  vim.api.nvim_set_current_win(original_win)
+  vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+  return vim.api.nvim_win_get_buf(original_win)
+end
+
+---Create the proposed side split, set diff, filetype, context, and terminal focus/width
+---@param original_win NvimWin
+---@param original_buf NvimBuf
+---@param new_buf NvimBuf
+---@param old_file_path string
+---@param tab_name string
+---@param terminal_win_in_new_tab NvimWin|nil
+---@param target_win_for_meta NvimWin
+---@return NvimWin new_win
+local function setup_new_buffer(
+  original_win,
+  original_buf,
+  new_buf,
+  old_file_path,
+  tab_name,
+  terminal_win_in_new_tab,
+  target_win_for_meta
+)
+  vim.api.nvim_set_current_win(original_win)
+  vim.cmd("diffthis")
+
+  create_split()
+  local new_win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(new_win, new_buf)
+
+  local original_ft = detect_filetype(old_file_path, original_buf)
+  if original_ft and original_ft ~= "" then
+    vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buf })
+  end
+  vim.cmd("diffthis")
+
+  vim.cmd("wincmd =")
+
+  vim.api.nvim_set_current_win(new_win)
+
+  vim.b[new_buf].claudecode_diff_tab_name = tab_name
+  vim.b[new_buf].claudecode_diff_new_win = new_win
+  vim.b[new_buf].claudecode_diff_target_win = target_win_for_meta
+
+  if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+    vim.schedule(function()
+      if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
+        vim.api.nvim_set_current_win(terminal_win_in_new_tab)
+        vim.cmd("startinsert")
+        return
+      end
+
+      local terminal_win = find_claudecode_terminal_window()
+      if terminal_win then
+        vim.api.nvim_set_current_win(terminal_win)
+        vim.cmd("startinsert")
+      end
+    end)
+  end
+
+  if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
+    local terminal_config = config.terminal or {}
+    local split_width = terminal_config.split_width_percentage or 0.30
+    local total_width = vim.o.columns
+    local terminal_width = math.floor(total_width * split_width)
+    vim.api.nvim_win_set_width(terminal_win_in_new_tab, terminal_width)
+  else
+    local terminal_win = find_claudecode_terminal_window()
+    if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+      local current_tab = vim.api.nvim_get_current_tabpage()
+      local term_tab = nil
+      pcall(function()
+        term_tab = vim.api.nvim_win_get_tabpage(terminal_win)
+      end)
+      if term_tab == current_tab then
+        local terminal_config = config.terminal or {}
+        local split_width = terminal_config.split_width_percentage or 0.30
+        local total_width = vim.o.columns
+        local terminal_width = math.floor(total_width * split_width)
+        pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+      end
+    end
+  end
+
+  return new_win
+end
+
 ---Open diff using native Neovim functionality
 ---@param old_file_path string Path to the original file
 ---@param new_file_path string Path to the new file (used for naming)
@@ -293,13 +653,13 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
 
     if buftype == "terminal" or buftype == "nofile" then
-      vim.cmd("vsplit")
+      create_split()
     end
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
   vim.cmd("diffthis")
-  vim.cmd("vsplit")
+  create_split()
   vim.cmd("edit " .. vim.fn.fnameescape(tmp_file))
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
@@ -356,7 +716,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return
   end
 
-  logger.debug("diff", "Resolving diff as saved for", tab_name, "from buffer", buffer_id)
+  logger.debug("diff", "Accepting diff for", tab_name)
 
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
@@ -366,14 +726,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     final_content = final_content .. "\n"
   end
 
-  -- Close diff windows (unified behavior)
-  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-    vim.api.nvim_win_close(diff_data.new_window, true)
-  end
-  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-    vim.api.nvim_set_current_win(diff_data.target_window)
-    vim.cmd("diffoff")
-  end
+  -- Do not modify windows/tabs here; wait for explicit close_tab tool call to clean up UI
 
   -- Create MCP-compliant response
   local result = {
@@ -388,29 +741,19 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   -- Resume the coroutine with the result (for deferred response system)
   if diff_data.resolution_callback then
-    logger.debug("diff", "Resuming coroutine for saved diff", tab_name)
     diff_data.resolution_callback(result)
   else
     logger.debug("diff", "No resolution callback found for saved diff", tab_name)
   end
 
-  -- Reload the original file buffer after a delay to ensure Claude CLI has written the file
-  vim.defer_fn(function()
-    local current_diff_data = active_diffs[tab_name]
-    local original_cursor_pos = current_diff_data and current_diff_data.original_cursor_pos
-    M.reload_file_buffers_manual(diff_data.old_file_path, original_cursor_pos)
-  end, 200)
-
-  -- NOTE: Diff state cleanup is handled by close_tab tool or explicit cleanup calls
-  logger.debug("diff", "Diff saved, awaiting close_tab command for cleanup")
+  -- NOTE: Diff state cleanup is handled exclusively by the close_tab tool call
+  logger.debug("diff", "Diff saved; awaiting close_tab for cleanup")
 end
 
----Reload file buffers after external changes (called when diff is closed)
+---Reload file buffers after external changes
 ---@param file_path string Path to the file that was externally modified
 ---@param original_cursor_pos table? Original cursor position to restore {row, col}
 local function reload_file_buffers(file_path, original_cursor_pos)
-  logger.debug("diff", "Reloading buffers for file:", file_path, original_cursor_pos and "(restoring cursor)" or "")
-
   local reloaded_count = 0
   -- Find and reload any open buffers for this file
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -421,8 +764,6 @@ local function reload_file_buffers(file_path, original_cursor_pos)
       if buf_name == file_path then
         -- Check if buffer is modified - only reload unmodified buffers for safety
         local modified = vim.api.nvim_buf_get_option(buf, "modified")
-        logger.debug("diff", "Found matching buffer", buf, "modified:", modified)
-
         if not modified then
           -- Try to find a window displaying this buffer for proper context
           local win_id = nil
@@ -452,8 +793,6 @@ local function reload_file_buffers(file_path, original_cursor_pos)
       end
     end
   end
-
-  logger.debug("diff", "Completed buffer reload - reloaded", reloaded_count, "buffers for file:", file_path)
 end
 
 ---Resolve diff as rejected (user closed/rejected)
@@ -475,23 +814,17 @@ function M._resolve_diff_as_rejected(tab_name)
   diff_data.status = "rejected"
   diff_data.result_content = result
 
-  -- Clean up diff state and resources BEFORE resolving to prevent any interference
-  M._cleanup_diff_state(tab_name, "diff rejected")
-
-  -- Use vim.schedule to ensure the resolution callback happens after all cleanup
-  vim.schedule(function()
-    -- Resume the coroutine with the result (for deferred response system)
-    if diff_data.resolution_callback then
-      logger.debug("diff", "Resuming coroutine for rejected diff", tab_name)
-      diff_data.resolution_callback(result)
-    end
-  end)
+  -- Do not perform UI cleanup here; wait for explicit close_tab tool call.
+  -- Resume the coroutine with the result (for deferred response system)
+  if diff_data.resolution_callback then
+    diff_data.resolution_callback(result)
+  end
 end
 
 ---Register autocmds for a specific diff
 ---@param tab_name string The diff identifier
 ---@param new_buffer number New file buffer ID
----@return table autocmd_ids List of autocmd IDs
+---@return table List of autocmd IDs
 local function register_diff_autocmds(tab_name, new_buffer)
   local autocmd_ids = {}
 
@@ -500,7 +833,6 @@ local function register_diff_autocmds(tab_name, new_buffer)
     group = get_autocmd_group(),
     buffer = new_buffer,
     callback = function()
-      logger.debug("diff", "BufWriteCmd (:w) triggered - accepting diff changes for", tab_name)
       M._resolve_diff_as_saved(tab_name, new_buffer)
       -- Prevent actual file write since we're handling it through MCP
       return true
@@ -514,7 +846,6 @@ local function register_diff_autocmds(tab_name, new_buffer)
     group = get_autocmd_group(),
     buffer = new_buffer,
     callback = function()
-      logger.debug("diff", "BufDelete triggered for new buffer", new_buffer, "tab:", tab_name)
       M._resolve_diff_as_rejected(tab_name)
     end,
   })
@@ -524,7 +855,6 @@ local function register_diff_autocmds(tab_name, new_buffer)
     group = get_autocmd_group(),
     buffer = new_buffer,
     callback = function()
-      logger.debug("diff", "BufUnload triggered for new buffer", new_buffer, "tab:", tab_name)
       M._resolve_diff_as_rejected(tab_name)
     end,
   })
@@ -534,7 +864,6 @@ local function register_diff_autocmds(tab_name, new_buffer)
     group = get_autocmd_group(),
     buffer = new_buffer,
     callback = function()
-      logger.debug("diff", "BufWipeout triggered for new buffer", new_buffer, "tab:", tab_name)
       M._resolve_diff_as_rejected(tab_name)
     end,
   })
@@ -546,109 +875,75 @@ local function register_diff_autocmds(tab_name, new_buffer)
 end
 
 ---Create diff view from a specific window
----@param target_window number The window to use as base for the diff
+---@param target_window NvimWin|nil The window to use as base for the diff
 ---@param old_file_path string Path to the original file
----@param new_buffer number New file buffer ID
+---@param new_buffer NvimBuf New file buffer ID
 ---@param tab_name string The diff identifier
 ---@param is_new_file boolean Whether this is a new file (doesn't exist yet)
----@return table layout Info about the created diff layout
-function M._create_diff_view_from_window(target_window, old_file_path, new_buffer, tab_name, is_new_file)
+---@param terminal_win_in_new_tab NvimWin|nil Terminal window in new tab if created
+---@param existing_buffer NvimBuf|nil Existing buffer for the file if already loaded
+---@return DiffLayoutInfo layout Info about the created diff layout
+function M._create_diff_view_from_window(
+  target_window,
+  old_file_path,
+  new_buffer,
+  tab_name,
+  is_new_file,
+  terminal_win_in_new_tab,
+  existing_buffer
+)
   -- If no target window provided, create a new window in suitable location
   if not target_window then
-    -- Try to create a new window in the main area
-    vim.cmd("wincmd t") -- Go to top-left
-    vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
+    -- If we have a terminal window in the new tab, we're already positioned correctly
+    if terminal_win_in_new_tab then
+      -- We're already in the main area after display_terminal_in_new_tab
+      target_window = vim.api.nvim_get_current_win()
+    else
+      -- Try to create a new window in the main area
+      vim.cmd("wincmd t") -- Go to top-left
+      vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
 
-    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
-    local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
+      local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+      local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+      local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
 
-    if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" then
-      vim.cmd("vsplit")
+      if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" then
+        create_split()
+      end
+
+      target_window = vim.api.nvim_get_current_win()
     end
-
-    target_window = vim.api.nvim_get_current_win()
   else
     vim.api.nvim_set_current_win(target_window)
   end
 
-  local original_buffer
-  if is_new_file then
-    local empty_buffer = vim.api.nvim_create_buf(false, true)
-    if not empty_buffer or empty_buffer == 0 then
-      local error_msg = "Failed to create empty buffer for new file diff"
-      logger.error("diff", error_msg)
-      error({
-        code = -32000,
-        message = "Buffer creation failed",
-        data = error_msg,
-      })
-    end
+  -- Decide window placement for the original file
+  local choice = choose_original_window(target_window, old_file_path, is_new_file, terminal_win_in_new_tab)
 
-    -- Set buffer properties with error handling
-    local success, err = pcall(function()
-      vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
-      vim.api.nvim_buf_set_lines(empty_buffer, 0, -1, false, {})
-      vim.api.nvim_buf_set_option(empty_buffer, "buftype", "nofile")
-      vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
-      vim.api.nvim_buf_set_option(empty_buffer, "readonly", true)
-    end)
-
-    if not success then
-      pcall(vim.api.nvim_buf_delete, empty_buffer, { force = true })
-      local error_msg = "Failed to configure empty buffer: " .. tostring(err)
-      logger.error("diff", error_msg)
-      error({
-        code = -32000,
-        message = "Buffer configuration failed",
-        data = error_msg,
-      })
-    end
-
-    vim.api.nvim_win_set_buf(target_window, empty_buffer)
-    original_buffer = empty_buffer
+  local original_window
+  if choice.decision == "split" then
+    vim.api.nvim_set_current_win(target_window)
+    create_split()
+    original_window = vim.api.nvim_get_current_win()
   else
-    vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-    original_buffer = vim.api.nvim_win_get_buf(target_window)
+    original_window = choice.original_win
   end
 
-  vim.cmd("diffthis")
+  local original_buffer = load_original_buffer(original_window, old_file_path, is_new_file, existing_buffer)
 
-  vim.cmd("vsplit")
-  local new_win = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_buf(new_win, new_buffer)
+  local new_win = setup_new_buffer(
+    original_window,
+    original_buffer,
+    new_buffer,
+    old_file_path,
+    tab_name,
+    terminal_win_in_new_tab,
+    target_window
+  )
 
-  -- Ensure new buffer inherits filetype from original for syntax highlighting (#20)
-  local original_ft = detect_filetype(old_file_path, original_buffer)
-  if original_ft and original_ft ~= "" then
-    vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buffer })
-  end
-  vim.cmd("diffthis")
-
-  vim.cmd("wincmd =")
-
-  -- Always focus the diff window first for proper visual flow and window arrangement
-  vim.api.nvim_set_current_win(new_win)
-
-  -- Store diff context in buffer variables for user commands
-  vim.b[new_buffer].claudecode_diff_tab_name = tab_name
-  vim.b[new_buffer].claudecode_diff_new_win = new_win
-  vim.b[new_buffer].claudecode_diff_target_win = target_window
-
-  -- After all diff setup is complete, optionally return focus to terminal
-  if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
-    vim.schedule(function()
-      local terminal_win = find_claudecode_terminal_window()
-      if terminal_win then
-        vim.api.nvim_set_current_win(terminal_win)
-      end
-    end)
-  end
-
-  -- Return window information for later storage
   return {
     new_window = new_win,
-    target_window = target_window,
+    target_window = original_window,
     original_buffer = original_buffer,
   }
 end
@@ -667,32 +962,87 @@ function M._cleanup_diff_state(tab_name, reason)
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
   end
 
-  -- Clean up the new buffer only (not the old buffer which is the user's file)
+  -- Clean up new tab if we created one (do this first to avoid double cleanup)
+  if diff_data.created_new_tab then
+    -- Always switch to the original tab first (if valid)
+    if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
+      pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
+    end
+
+    -- Prefer closing the specific new tab we created, if we tracked its handle/number
+    if diff_data.new_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
+      -- Prefer closing by switching to the new tab then executing :tabclose
+      pcall(vim.api.nvim_set_current_tabpage, diff_data.new_tab_number)
+      pcall(vim.cmd, "tabclose")
+      -- Restore original tab focus if still valid
+      if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
+        pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
+      end
+    else
+      -- Fallback: close the previously current tab if it's still around and not the original
+      local current_tab = vim.api.nvim_get_current_tabpage()
+      if vim.api.nvim_tabpage_is_valid(current_tab) and current_tab ~= diff_data.original_tab_number then
+        pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(current_tab))
+      end
+    end
+
+    -- Optionally ensure the Claude terminal remains visible in the original tab
+    local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+    if terminal_ok and diff_data.had_terminal_in_original then
+      pcall(terminal_module.ensure_visible)
+      -- And restore its configured width if it is visible
+      local terminal_win = find_claudecode_terminal_window()
+      if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+        local terminal_config = config.terminal or {}
+        local split_width = terminal_config.split_width_percentage or 0.30
+        local total_width = vim.o.columns
+        local terminal_width = math.floor(total_width * split_width)
+        pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+      end
+    end
+  else
+    -- Close new diff window if still open (only if not in a new tab)
+    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+      pcall(vim.api.nvim_win_close, diff_data.new_window, true)
+    end
+
+    -- Turn off diff mode in target window if it still exists
+    if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+      vim.api.nvim_win_call(diff_data.target_window, function()
+        vim.cmd("diffoff")
+      end)
+    end
+
+    -- After closing the diff in the same tab, restore terminal width if visible
+    local terminal_win = find_claudecode_terminal_window()
+    if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+      local terminal_config = config.terminal or {}
+      local split_width = terminal_config.split_width_percentage or 0.30
+      local total_width = vim.o.columns
+      local terminal_width = math.floor(total_width * split_width)
+      pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+    end
+  end
+
+  -- ALWAYS clean up buffers regardless of tab mode (fixes buffer leak)
+  -- Clean up the new buffer (proposed changes)
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
     pcall(vim.api.nvim_buf_delete, diff_data.new_buffer, { force = true })
   end
 
-  -- Close new diff window if still open
-  if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-    pcall(vim.api.nvim_win_close, diff_data.new_window, true)
-  end
-
-  -- Turn off diff mode in target window if it still exists
-  if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-    vim.api.nvim_win_call(diff_data.target_window, function()
-      vim.cmd("diffoff")
-    end)
+  -- Clean up the original buffer if it was created for a new file
+  if diff_data.is_new_file and diff_data.original_buffer and vim.api.nvim_buf_is_valid(diff_data.original_buffer) then
+    pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
   end
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil
 
-  logger.debug("diff", "Cleaned up diff state for", tab_name, "due to:", reason)
+  logger.debug("diff", "Cleaned up diff for", tab_name)
 end
 
 ---Clean up all active diffs
 ---@param reason string Reason for cleanup
--- NOTE: This will become a public closeAllDiffTabs tool in the future
 function M._cleanup_all_active_diffs(reason)
   for tab_name, _ in pairs(active_diffs) do
     M._cleanup_diff_state(tab_name, reason)
@@ -708,11 +1058,9 @@ function M._setup_blocking_diff(params, resolution_callback)
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
-    -- Step 1: Check if the file exists (allow new files)
     local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
     local is_new_file = not old_file_exists
 
-    -- Step 1.5: Check if the file buffer has unsaved changes
     if old_file_exists then
       local is_dirty = is_buffer_dirty(params.old_file_path)
       if is_dirty then
@@ -724,39 +1072,58 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    -- Step 2: Find if the file is already open in a buffer (only for existing files)
+    local original_tab_number = vim.api.nvim_get_current_tabpage()
+    local created_new_tab = false
+    local terminal_win_in_new_tab = nil
     local existing_buffer = nil
     local target_window = nil
+    -- Track new tab handle and original terminal visibility for robust cleanup
+    local new_tab_handle = nil
+    local had_terminal_in_original = false
 
-    if old_file_exists then
-      -- Look for existing buffer with this file
-      for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-          local buf_name = vim.api.nvim_buf_get_name(buf)
-          if buf_name == params.old_file_path then
-            existing_buffer = buf
-            break
+    if config and config.diff_opts and config.diff_opts.open_in_new_tab then
+      original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
+        display_terminal_in_new_tab()
+      created_new_tab = true
+
+      -- In new tab, no existing windows to use, so target_window will be created
+      target_window = nil
+      existing_buffer = nil
+      -- Track extra metadata about terminal/tab for robust cleanup
+      M._last_had_terminal_in_original = had_terminal_in_original -- for debugging
+      M._last_new_tab_number = new_tab_handle -- for debugging
+    end
+
+    -- Only look for existing windows if we're NOT in a new tab
+    if not created_new_tab then
+      if old_file_exists then
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+            local buf_name = vim.api.nvim_buf_get_name(buf)
+            if buf_name == params.old_file_path then
+              existing_buffer = buf
+              break
+            end
+          end
+        end
+
+        if existing_buffer then
+          for _, win in ipairs(vim.api.nvim_list_wins()) do
+            if vim.api.nvim_win_get_buf(win) == existing_buffer then
+              target_window = win
+              break
+            end
           end
         end
       end
 
-      -- Find window containing this buffer (if any)
-      if existing_buffer then
-        for _, win in ipairs(vim.api.nvim_list_wins()) do
-          if vim.api.nvim_win_get_buf(win) == existing_buffer then
-            target_window = win
-            break
-          end
-        end
+      if not target_window then
+        target_window = find_main_editor_window()
       end
     end
-
-    -- If no existing buffer/window, find a suitable main editor window
-    if not target_window then
-      target_window = find_main_editor_window()
-    end
-    -- If we still can't find a suitable window, error out
-    if not target_window then
+    -- If created_new_tab is true, target_window stays nil and will be created in the new tab
+    -- If we still can't find a suitable window AND we're not in a new tab, error out
+    if not target_window and not created_new_tab then
       error({
         code = -32000,
         message = "No suitable editor window found",
@@ -764,7 +1131,6 @@ function M._setup_blocking_diff(params, resolution_callback)
       })
     end
 
-    -- Step 3: Create scratch buffer for new content
     local new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
     if new_buffer == 0 then
       error({
@@ -786,16 +1152,18 @@ function M._setup_blocking_diff(params, resolution_callback)
     vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
     vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
 
-    -- Step 4: Set up diff view using the target window
-    local diff_info =
-      M._create_diff_view_from_window(target_window, params.old_file_path, new_buffer, tab_name, is_new_file)
+    local diff_info = M._create_diff_view_from_window(
+      target_window,
+      params.old_file_path,
+      new_buffer,
+      tab_name,
+      is_new_file,
+      terminal_win_in_new_tab,
+      existing_buffer
+    )
 
-    -- Step 5: Register autocmds for user interaction monitoring
     local autocmd_ids = register_diff_autocmds(tab_name, new_buffer)
 
-    -- Step 6: Store diff state
-
-    -- Save the original cursor position before storing diff state
     local original_cursor_pos = nil
     if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
       original_cursor_pos = vim.api.nvim_win_get_cursor(diff_info.target_window)
@@ -810,6 +1178,11 @@ function M._setup_blocking_diff(params, resolution_callback)
       target_window = diff_info.target_window,
       original_buffer = diff_info.original_buffer,
       original_cursor_pos = original_cursor_pos,
+      original_tab_number = original_tab_number,
+      created_new_tab = created_new_tab,
+      new_tab_number = new_tab_handle,
+      had_terminal_in_original = had_terminal_in_original,
+      terminal_win_in_new_tab = terminal_win_in_new_tab,
       autocmd_ids = autocmd_ids,
       created_at = vim.fn.localtime(),
       status = "pending",
@@ -931,8 +1304,6 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
 
   -- Yield and wait indefinitely for user interaction - the resolve functions will resume us
   local user_action_result = coroutine.yield()
-  logger.debug("diff", "User action completed for", tab_name)
-
   -- Return the result directly - this will be sent by the deferred response system
   return user_action_result
 end
@@ -967,21 +1338,33 @@ function M.close_diff_by_tab_name(tab_name)
     return true
   end
 
-  -- If still pending, treat as rejection
+  -- If the diff was already rejected, just clean up now
+  if diff_data.status == "rejected" then
+    M._cleanup_diff_state(tab_name, "diff tab closed after reject")
+    return true
+  end
+
+  -- If still pending, treat as rejection and clean up
   if diff_data.status == "pending" then
+    -- Mark as rejected and then clean up UI state now that we received explicit close request
     M._resolve_diff_as_rejected(tab_name)
+    M._cleanup_diff_state(tab_name, "diff tab closed after reject")
     return true
   end
 
   return false
 end
 
---Test helper function (only for testing)
+---Test helper function (only for testing)
+---@return table active_diffs The active diffs table
 function M._get_active_diffs()
   return active_diffs
 end
 
---Manual buffer reload function for testing/debugging
+---Manual buffer reload function for testing/debugging
+---@param file_path string Path to the file to reload
+---@param original_cursor_pos table? Original cursor position {row, col}
+---@return nil
 function M.reload_file_buffers_manual(file_path, original_cursor_pos)
   return reload_file_buffers(file_path, original_cursor_pos)
 end
@@ -1005,24 +1388,29 @@ end
 function M.deny_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
-  local new_win = vim.b[current_buffer].claudecode_diff_new_win
-  local target_window = vim.b[current_buffer].claudecode_diff_target_win
 
   if not tab_name then
     vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
     return
   end
 
-  -- Close windows and clean up (same logic as the original keymap)
-  if new_win and vim.api.nvim_win_is_valid(new_win) then
-    vim.api.nvim_win_close(new_win, true)
-  end
-  if target_window and vim.api.nvim_win_is_valid(target_window) then
-    vim.api.nvim_set_current_win(target_window)
-    vim.cmd("diffoff")
-  end
-
+  -- Do not close windows/tabs here; just mark as rejected.
   M._resolve_diff_as_rejected(tab_name)
 end
 
 return M
+---@alias NvimWin integer
+---@alias NvimBuf integer
+
+---@alias DiffWindowDecision "reuse"|"split"
+
+---@class DiffLayoutInfo
+---@field new_window NvimWin
+---@field target_window NvimWin
+---@field original_buffer NvimBuf
+
+---@class DiffWindowChoice
+---@field decision DiffWindowDecision
+---@field original_win NvimWin
+---@field reused_buf NvimBuf|nil
+---@field in_new_tab boolean
