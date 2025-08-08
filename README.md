@@ -249,6 +249,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
                         -- For local installations: "~/.claude/local/claude"
                         -- For native binary: use output from 'which claude'
 
+    -- Send/Focus Behavior
+    -- When true, successful sends will focus the Claude terminal if already connected
+    focus_after_send = false,
+
     -- Selection Tracking
     track_selection = true,
     visual_demotion_delay_ms = 50,
