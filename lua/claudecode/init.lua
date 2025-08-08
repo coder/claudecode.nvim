@@ -287,7 +287,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
 end
 
 ---Set up the plugin with user configuration
----@param opts ClaudeCodeConfig|nil Optional configuration table to override defaults.
+---@param opts PartialClaudeCodeConfig|nil Optional configuration table to override defaults.
 ---@return table module The plugin module
 function M.setup(opts)
   opts = opts or {}
