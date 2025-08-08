@@ -393,5 +393,54 @@ describe("ClaudeCode command arguments integration", function()
 
       assert.is_true(close_command_found, "ClaudeCodeClose command should still be registered")
     end)
+
+    it("should pass cwd in termopen opts when terminal.cwd is set", function()
+      claudecode.setup({
+        auto_start = false,
+        terminal = { provider = "native", cwd = "/mock/repo" },
+      })
+
+      local handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          handler = call.vals[2]
+          break
+        end
+      end
+      assert.is_function(handler)
+
+      handler({})
+      assert.is_true(#executed_commands > 0, "No terminal commands were executed")
+      local last = executed_commands[#executed_commands]
+      assert.is_table(last.opts, "termopen options missing")
+      assert.are.equal("/mock/repo", last.opts.cwd)
+    end)
+
+    it("should support cwd_provider function for working directory", function()
+      claudecode.setup({
+        auto_start = false,
+        terminal = {
+          provider = "native",
+          cwd_provider = function(ctx)
+            return "/from/provider"
+          end,
+        },
+      })
+
+      local handler
+      for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
+        if call.vals[1] == "ClaudeCode" then
+          handler = call.vals[2]
+          break
+        end
+      end
+      assert.is_function(handler)
+
+      handler({})
+      assert.is_true(#executed_commands > 0, "No terminal commands were executed")
+      local last = executed_commands[#executed_commands]
+      assert.is_table(last.opts, "termopen options missing")
+      assert.are.equal("/from/provider", last.opts.cwd)
+    end)
   end)
 end)

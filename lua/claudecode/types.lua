@@ -45,6 +45,14 @@
 ---@class ClaudeCodeTerminalProviderOptions
 ---@field external_terminal_cmd string|fun(cmd: string, env: table): string|table|nil Command for external terminal (string template with %s or function)
 
+-- Working directory resolution context and provider
+---@class ClaudeCodeCwdContext
+---@field file string|nil   -- absolute path of current buffer file (if any)
+---@field file_dir string|nil -- directory of current buffer file (if any)
+---@field cwd string        -- current Neovim working directory
+
+---@alias ClaudeCodeCwdProvider fun(ctx: ClaudeCodeCwdContext): string|nil
+
 -- @ mention queued for Claude Code
 ---@class ClaudeCodeMention
 ---@field file_path string The absolute file path to mention
@@ -76,6 +84,9 @@
 ---@field auto_close boolean
 ---@field env table<string, string>
 ---@field snacks_win_opts snacks.win.Config
+---@field cwd string|nil                 -- static working directory for Claude terminal
+---@field git_repo_cwd boolean|nil      -- use git root of current file/cwd as working directory
+---@field cwd_provider? ClaudeCodeCwdProvider -- custom function to compute working directory
 
 -- Port range configuration
 ---@class ClaudeCodePortRange

@@ -19,6 +19,10 @@ local defaults = {
   auto_close = true,
   env = {},
   snacks_win_opts = {},
+  -- Working directory control
+  cwd = nil, -- static cwd override
+  git_repo_cwd = false, -- resolve to git root when spawning
+  cwd_provider = nil, -- function(ctx) -> cwd string
 }
 
 M.defaults = defaults
@@ -197,6 +201,23 @@ local function build_config(opts_override)
       snacks_win_opts = function(val)
         return type(val) == "table"
       end,
+      cwd = function(val)
+        return val == nil or type(val) == "string"
+      end,
+      git_repo_cwd = function(val)
+        return type(val) == "boolean"
+      end,
+      cwd_provider = function(val)
+        local t = type(val)
+        if t == "function" then
+          return true
+        end
+        if t == "table" then
+          local mt = getmetatable(val)
+          return mt and mt.__call ~= nil
+        end
+        return false
+      end,
     }
     for key, val in pairs(opts_override) do
       if effective_config[key] ~= nil and validators[key] and validators[key](val) then
@@ -204,11 +225,43 @@ local function build_config(opts_override)
       end
     end
   end
+  -- Resolve cwd at config-build time so providers receive it directly
+  local cwd_ctx = {
+    file = (function()
+      local path = vim.fn.expand("%:p")
+      if type(path) == "string" and path ~= "" then
+        return path
+      end
+      return nil
+    end)(),
+    cwd = vim.fn.getcwd(),
+  }
+  cwd_ctx.file_dir = cwd_ctx.file and vim.fn.fnamemodify(cwd_ctx.file, ":h") or nil
+
+  local resolved_cwd = nil
+  -- Prefer provider function, then static cwd, then git root via resolver
+  if effective_config.cwd_provider then
+    local ok_p, res = pcall(effective_config.cwd_provider, cwd_ctx)
+    if ok_p and type(res) == "string" and res ~= "" then
+      resolved_cwd = vim.fn.expand(res)
+    end
+  end
+  if not resolved_cwd and type(effective_config.cwd) == "string" and effective_config.cwd ~= "" then
+    resolved_cwd = vim.fn.expand(effective_config.cwd)
+  end
+  if not resolved_cwd and effective_config.git_repo_cwd then
+    local ok_r, cwd_mod = pcall(require, "claudecode.cwd")
+    if ok_r and cwd_mod and type(cwd_mod.git_root) == "function" then
+      resolved_cwd = cwd_mod.git_root(cwd_ctx.file_dir or cwd_ctx.cwd)
+    end
+  end
+
   return {
     split_side = effective_config.split_side,
     split_width_percentage = effective_config.split_width_percentage,
     auto_close = effective_config.auto_close,
     snacks_win_opts = effective_config.snacks_win_opts,
+    cwd = resolved_cwd,
   }
 end
 
@@ -325,9 +378,30 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
   end
 
   for k, v in pairs(user_term_config) do
-    if k == "terminal_cmd" then
-      -- terminal_cmd is handled above, skip
-      break
+    if k == "split_side" then
+      if v == "left" or v == "right" then
+        defaults.split_side = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for split_side: " .. tostring(v), vim.log.levels.WARN)
+      end
+    elseif k == "split_width_percentage" then
+      if type(v) == "number" and v > 0 and v < 1 then
+        defaults.split_width_percentage = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for split_width_percentage: " .. tostring(v),
+          vim.log.levels.WARN
+        )
+      end
+    elseif k == "provider" then
+      if type(v) == "table" or v == "snacks" or v == "native" or v == "external" or v == "auto" then
+        defaults.provider = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for provider: " .. tostring(v) .. ". Defaulting to 'native'.",
+          vim.log.levels.WARN
+        )
+      end
     elseif k == "provider_opts" then
       -- Handle nested provider options
       if type(v) == "table" then
@@ -350,26 +424,60 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify("claudecode.terminal.setup: Invalid value for provider_opts: " .. tostring(v), vim.log.levels.WARN)
       end
-    elseif defaults[k] ~= nil then -- Other known config keys
-      if k == "split_side" and (v == "left" or v == "right") then
-        defaults[k] = v
-      elseif k == "split_width_percentage" and type(v) == "number" and v > 0 and v < 1 then
-        defaults[k] = v
-      elseif
-        k == "provider" and (v == "snacks" or v == "native" or v == "external" or v == "auto" or type(v) == "table")
-      then
-        defaults[k] = v
-      elseif k == "show_native_term_exit_tip" and type(v) == "boolean" then
-        defaults[k] = v
-      elseif k == "auto_close" and type(v) == "boolean" then
-        defaults[k] = v
-      elseif k == "snacks_win_opts" and type(v) == "table" then
-        defaults[k] = v
+    elseif k == "show_native_term_exit_tip" then
+      if type(v) == "boolean" then
+        defaults.show_native_term_exit_tip = v
       else
-        vim.notify("claudecode.terminal.setup: Invalid value for " .. k .. ": " .. tostring(v), vim.log.levels.WARN)
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for show_native_term_exit_tip: " .. tostring(v),
+          vim.log.levels.WARN
+        )
+      end
+    elseif k == "auto_close" then
+      if type(v) == "boolean" then
+        defaults.auto_close = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for auto_close: " .. tostring(v), vim.log.levels.WARN)
+      end
+    elseif k == "snacks_win_opts" then
+      if type(v) == "table" then
+        defaults.snacks_win_opts = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for snacks_win_opts", vim.log.levels.WARN)
+      end
+    elseif k == "cwd" then
+      if v == nil or type(v) == "string" then
+        defaults.cwd = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for cwd: " .. tostring(v), vim.log.levels.WARN)
+      end
+    elseif k == "git_repo_cwd" then
+      if type(v) == "boolean" then
+        defaults.git_repo_cwd = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for git_repo_cwd: " .. tostring(v), vim.log.levels.WARN)
+      end
+    elseif k == "cwd_provider" then
+      local t = type(v)
+      if t == "function" then
+        defaults.cwd_provider = v
+      elseif t == "table" then
+        local mt = getmetatable(v)
+        if mt and mt.__call then
+          defaults.cwd_provider = v
+        else
+          vim.notify(
+            "claudecode.terminal.setup: cwd_provider table is not callable (missing __call)",
+            vim.log.levels.WARN
+          )
+        end
+      else
+        vim.notify("claudecode.terminal.setup: Invalid cwd_provider type: " .. tostring(t), vim.log.levels.WARN)
       end
     else
-      vim.notify("claudecode.terminal.setup: Unknown configuration key: " .. k, vim.log.levels.WARN)
+      if k ~= "terminal_cmd" then
+        vim.notify("claudecode.terminal.setup: Unknown configuration key: " .. k, vim.log.levels.WARN)
+      end
     end
   end
 
