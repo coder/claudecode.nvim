@@ -45,7 +45,7 @@ end
 ---@param config ClaudeCodeTerminalConfig Terminal configuration
 ---@param env_table table Environment variables to set for the terminal process
 ---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
----@return table options Snacks terminal options with start_insert/auto_insert controlled by focus parameter
+---@return snacks.terminal.Opts opts Snacks terminal options with start_insert/auto_insert controlled by focus parameter
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   return {
@@ -58,8 +58,21 @@ local function build_opts(config, env_table, focus)
       width = config.split_width_percentage,
       height = 0,
       relative = "editor",
-    }, config.snacks_win_opts or {}),
-  }
+      keys = {
+        claude_new_line = {
+          "<S-CR>",
+          function()
+            vim.api.nvim_feedkeys("\\", "t", true)
+            vim.defer_fn(function()
+              vim.api.nvim_feedkeys("\r", "t", true)
+            end, 10)
+          end,
+          mode = "t",
+          desc = "New line",
+        },
+      },
+    } --[[@as snacks.win.Config]], config.snacks_win_opts or {}),
+  } --[[@as snacks.terminal.Opts]]
 end
 
 function M.setup()
