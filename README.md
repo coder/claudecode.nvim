@@ -285,6 +285,39 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 }
 ```
 
+### Working Directory Control
+
+You can fix the Claude terminal's working directory regardless of `autochdir` and buffer-local cwd changes. Options (precedence order):
+
+- `cwd_provider(ctx)`: function that returns a directory string. Receives `{ file, file_dir, cwd }`.
+- `cwd`: static path to use as working directory.
+- `git_repo_cwd = true`: resolves git root from the current file directory (or cwd if no file).
+
+Examples:
+
+```lua
+require("claudecode").setup({
+  -- Top-level aliases are supported and forwarded to terminal config
+  git_repo_cwd = true,
+})
+
+require("claudecode").setup({
+  terminal = {
+    cwd = vim.fn.expand("~/projects/my-app"),
+  },
+})
+
+require("claudecode").setup({
+  terminal = {
+    cwd_provider = function(ctx)
+      -- Prefer repo root; fallback to file's directory
+      local cwd = require("claudecode.cwd").git_root(ctx.file_dir or ctx.cwd) or ctx.file_dir or ctx.cwd
+      return cwd
+    end,
+  },
+})
+```
+
 ## Floating Window Configuration
 
 The `snacks_win_opts` configuration allows you to create floating Claude Code terminals with custom positioning, sizing, and key bindings. Here are several practical examples:
