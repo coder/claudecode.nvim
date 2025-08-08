@@ -269,7 +269,12 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
     if success then
       local terminal = require("claudecode.terminal")
-      terminal.ensure_visible()
+      if M.state.config and M.state.config.focus_after_send then
+        -- Open focuses the terminal without toggling/hiding if already focused
+        terminal.open()
+      else
+        terminal.ensure_visible()
+      end
     end
     return success, error_msg
   else

@@ -14,6 +14,8 @@ M.defaults = {
   env = {}, -- Custom environment variables for Claude terminal
   log_level = "info",
   track_selection = true,
+  -- When true, focus Claude terminal after a successful send while connected
+  focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
   connection_wait_delay = 200, -- Milliseconds to wait after connection before sending queued @ mentions
   connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
@@ -87,6 +89,7 @@ function M.validate(config)
   assert(is_valid_log_level, "log_level must be one of: " .. table.concat(valid_log_levels, ", "))
 
   assert(type(config.track_selection) == "boolean", "track_selection must be a boolean")
+  assert(type(config.focus_after_send) == "boolean", "focus_after_send must be a boolean")
 
   assert(
     type(config.visual_demotion_delay_ms) == "number" and config.visual_demotion_delay_ms >= 0,

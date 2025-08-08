@@ -48,6 +48,9 @@ return {
     -- log_level = "info", -- "trace", "debug", "info", "warn", "error"
     -- terminal_cmd = nil, -- Custom terminal command (default: "claude")
 
+    -- Send/Focus Behavior
+    focus_after_send = true, -- Focus Claude terminal after successful send while connected
+
     -- Selection Tracking
     -- track_selection = true, -- Enable real-time selection tracking
     -- visual_demotion_delay_ms = 50, -- Delay before demoting visual selection (ms)
