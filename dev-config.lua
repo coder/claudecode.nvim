@@ -40,7 +40,7 @@ return {
   },
 
   -- Development configuration - all options shown with defaults commented out
-  ---@type ClaudeCodeConfig
+  ---@type PartialClaudeCodeConfig
   opts = {
     -- Server Configuration
     -- port_range = { min = 10000, max = 65535 }, -- WebSocket server port range
