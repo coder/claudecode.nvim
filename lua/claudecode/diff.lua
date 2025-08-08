@@ -701,6 +701,7 @@ function M._create_diff_view_from_window(
   terminal_win_in_new_tab,
   existing_buffer
 )
+  local original_buffer_created_by_plugin = false
   -- If no target window provided, create a new window in suitable location
   if not target_window then
     -- If we have a terminal window in the new tab, we're already positioned correctly
@@ -808,6 +809,7 @@ function M._create_diff_view_from_window(
 
       vim.api.nvim_win_set_buf(original_window, empty_buffer)
       original_buffer = empty_buffer
+      original_buffer_created_by_plugin = true
     else
       -- Load existing file in the main window of new tab
       if existing_buffer then
@@ -860,6 +862,7 @@ function M._create_diff_view_from_window(
 
       vim.api.nvim_win_set_buf(original_window, empty_buffer)
       original_buffer = empty_buffer
+      original_buffer_created_by_plugin = true
     else
       -- Load existing file in the new window
       if existing_buffer then
@@ -955,6 +958,7 @@ function M._create_diff_view_from_window(
     new_window = new_win,
     target_window = original_window, -- This is now the window actually showing the original file
     original_buffer = original_buffer,
+    original_buffer_created_by_plugin = original_buffer_created_by_plugin,
   }
 end
 
@@ -1021,8 +1025,13 @@ function M._cleanup_diff_state(tab_name, reason)
     pcall(vim.api.nvim_buf_delete, diff_data.new_buffer, { force = true })
   end
 
-  -- Clean up the original buffer if it was created for a new file
-  if diff_data.is_new_file and diff_data.original_buffer and vim.api.nvim_buf_is_valid(diff_data.original_buffer) then
+  -- Clean up the original buffer only if it was created by the plugin for a new file
+  if
+    diff_data.is_new_file
+    and diff_data.original_buffer
+    and vim.api.nvim_buf_is_valid(diff_data.original_buffer)
+    and diff_data.original_buffer_created_by_plugin
+  then
     pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
   end
 
@@ -1168,6 +1177,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       new_window = diff_info.new_window,
       target_window = diff_info.target_window,
       original_buffer = diff_info.original_buffer,
+      original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,
       original_tab_number = original_tab_number,
       created_new_tab = created_new_tab,
