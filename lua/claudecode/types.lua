@@ -75,7 +75,7 @@
 ---@field provider_opts ClaudeCodeTerminalProviderOptions?
 ---@field auto_close boolean
 ---@field env table<string, string>
----@field snacks_win_opts table
+---@field snacks_win_opts snacks.win.Config
 
 -- Port range configuration
 ---@class ClaudeCodePortRange
