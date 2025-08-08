@@ -67,6 +67,8 @@ local vim = {
   _vars = {},
   _options = {},
   _current_window = 1000,
+  _tabs = { [1] = true },
+  _current_tabpage = 1,
 
   api = {
     nvim_create_user_command = function(name, callback, opts)
@@ -334,7 +336,21 @@ local vim = {
     end,
 
     nvim_get_current_tabpage = function()
-      return 1
+      return vim._current_tabpage
+    end,
+
+    nvim_set_current_tabpage = function(tab)
+      if vim._tabs[tab] then
+        vim._current_tabpage = tab
+      end
+    end,
+
+    nvim_tabpage_is_valid = function(tab)
+      return vim._tabs[tab] == true
+    end,
+
+    nvim_tabpage_get_number = function(tab)
+      return tab
     end,
 
     nvim_tabpage_set_var = function(tabpage, name, value)
