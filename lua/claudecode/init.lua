@@ -300,6 +300,27 @@ function M.setup(opts)
 
   -- Setup terminal module: always try to call setup to pass terminal_cmd and env,
   -- even if terminal_opts (for split_side etc.) are not provided.
+  -- Map top-level cwd-related aliases into terminal config for convenience
+  do
+    local t = opts.terminal or {}
+    local had_alias = false
+    if opts.git_repo_cwd ~= nil then
+      t.git_repo_cwd = opts.git_repo_cwd
+      had_alias = true
+    end
+    if opts.cwd ~= nil then
+      t.cwd = opts.cwd
+      had_alias = true
+    end
+    if opts.cwd_provider ~= nil then
+      t.cwd_provider = opts.cwd_provider
+      had_alias = true
+    end
+    if had_alias then
+      opts.terminal = t
+    end
+  end
+
   local terminal_setup_ok, terminal_module = pcall(require, "claudecode.terminal")
   if terminal_setup_ok then
     -- Guard in case tests or user replace the module with a minimal stub without `setup`.
