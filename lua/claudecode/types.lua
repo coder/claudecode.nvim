@@ -19,6 +19,7 @@
 ---@field open_in_new_tab boolean Open diff in a new tab (false = use current tab)
 ---@field keep_terminal_focus boolean Keep focus in terminal after opening diff
 ---@field hide_terminal_in_new_tab boolean Hide Claude terminal in newly created diff tab
+---@field on_new_file_reject ClaudeCodeNewFileRejectBehavior Behavior when rejecting a new-file diff
 
 -- Model selection option
 ---@class ClaudeCodeModelOption
@@ -30,6 +31,9 @@
 
 -- Diff layout type alias
 ---@alias ClaudeCodeDiffLayout "vertical"|"horizontal"
+
+-- Behavior when rejecting new-file diffs
+---@alias ClaudeCodeNewFileRejectBehavior "keep_empty"|"close_window"
 
 -- Terminal split side positioning
 ---@alias ClaudeCodeSplitSide "left"|"right"
