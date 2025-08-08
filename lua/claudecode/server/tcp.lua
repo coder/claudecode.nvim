@@ -49,7 +49,7 @@ function M.find_available_port(min_port, max_port)
 end
 
 ---Create and start a TCP server
----@param config table Server configuration
+---@param config ClaudeCodeConfig Server configuration
 ---@param callbacks table Callback functions
 ---@param auth_token string|nil Authentication token for validating connections
 ---@return TCPServer|nil server The server object, or nil on error

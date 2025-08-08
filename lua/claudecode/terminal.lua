@@ -321,6 +321,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
   for k, v in pairs(user_term_config) do
     if k == "terminal_cmd" then
       -- terminal_cmd is handled above, skip
+      break
     elseif k == "provider_opts" then
       -- Handle nested provider options
       if type(v) == "table" then

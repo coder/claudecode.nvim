@@ -260,7 +260,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       provider = "auto", -- "auto", "snacks", "native", "external", or custom provider table
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
-      
+
       -- Provider-specific options
       provider_opts = {
         external_terminal_cmd = nil, -- Command template for external terminal provider (e.g., "alacritty -e %s")

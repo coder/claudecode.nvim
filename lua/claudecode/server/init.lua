@@ -25,7 +25,7 @@ M.state = {
 }
 
 ---Initialize the WebSocket server
----@param config table Configuration options
+---@param config ClaudeCodeConfig Configuration options
 ---@param auth_token string|nil The authentication token for validating connections
 ---@return boolean success Whether server started successfully
 ---@return number|string port_or_error Port number or error message

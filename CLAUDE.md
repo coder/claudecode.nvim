@@ -362,11 +362,13 @@ When updating the version number for a new release, you must update **ALL** of t
    ```
 
 2. **`scripts/claude_interactive.sh`** - Multiple client version references:
+
    - Line ~52: `"version": "0.2.0"` (handshake)
    - Line ~223: `"version": "0.2.0"` (initialize)
    - Line ~309: `"version": "0.2.0"` (reconnect)
 
 3. **`scripts/lib_claude.sh`** - ClaudeCodeNvim version:
+
    - Line ~120: `"version": "0.2.0"` (init message)
 
 4. **`CHANGELOG.md`** - Add new release section with:

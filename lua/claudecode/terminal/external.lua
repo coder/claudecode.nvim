@@ -6,7 +6,6 @@
 local M = {}
 
 local logger = require("claudecode.logger")
-local utils = require("claudecode.utils")
 
 local jobid = nil
 ---@type ClaudeCodeTerminalConfig
@@ -29,11 +28,7 @@ end
 
 ---@param cmd_string string
 ---@param env_table table
----@param effective_config table
----@param focus boolean?
-function M.open(cmd_string, env_table, effective_config, focus)
-  focus = utils.normalize_focus(focus)
-
+function M.open(cmd_string, env_table)
   if is_valid() then
     -- External terminal is already running, we can't focus it programmatically
     -- Just log that it's already running
