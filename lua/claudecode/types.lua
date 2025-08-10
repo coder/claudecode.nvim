@@ -1,3 +1,4 @@
+---@meta
 ---@brief [[
 --- Centralized type definitions for ClaudeCode.nvim public API.
 --- This module contains all user-facing types and configuration structures.
@@ -14,11 +15,10 @@
 
 -- Diff behavior configuration
 ---@class ClaudeCodeDiffOptions
----@field auto_close_on_accept boolean
----@field show_diff_stats boolean
----@field vertical_split boolean
----@field open_in_current_tab boolean
----@field keep_terminal_focus boolean
+---@field layout ClaudeCodeDiffLayout
+---@field open_in_new_tab boolean Open diff in a new tab (false = use current tab)
+---@field keep_terminal_focus boolean Keep focus in terminal after opening diff
+---@field hide_terminal_in_new_tab boolean Hide Claude terminal in newly created diff tab
 
 -- Model selection option
 ---@class ClaudeCodeModelOption
@@ -27,6 +27,9 @@
 
 -- Log level type alias
 ---@alias ClaudeCodeLogLevel "trace"|"debug"|"info"|"warn"|"error"
+
+-- Diff layout type alias
+---@alias ClaudeCodeDiffLayout "vertical"|"horizontal"
 
 -- Terminal split side positioning
 ---@alias ClaudeCodeSplitSide "left"|"right"

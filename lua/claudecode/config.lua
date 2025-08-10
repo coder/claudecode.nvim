@@ -19,11 +19,10 @@ M.defaults = {
   connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
   queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
   diff_opts = {
-    auto_close_on_accept = true,
-    show_diff_stats = true,
-    vertical_split = true,
-    open_in_current_tab = true, -- Use current tab instead of creating new tab
+    layout = "vertical",
+    open_in_new_tab = false, -- Open diff in a new tab (false = use current tab)
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+    hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -104,11 +103,16 @@ function M.validate(config)
   assert(type(config.queue_timeout) == "number" and config.queue_timeout > 0, "queue_timeout must be a positive number")
 
   assert(type(config.diff_opts) == "table", "diff_opts must be a table")
-  assert(type(config.diff_opts.auto_close_on_accept) == "boolean", "diff_opts.auto_close_on_accept must be a boolean")
-  assert(type(config.diff_opts.show_diff_stats) == "boolean", "diff_opts.show_diff_stats must be a boolean")
-  assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
-  assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
+  assert(
+    config.diff_opts.layout == "vertical" or config.diff_opts.layout == "horizontal",
+    "diff_opts.layout must be 'vertical' or 'horizontal'"
+  )
+  assert(type(config.diff_opts.open_in_new_tab) == "boolean", "diff_opts.open_in_new_tab must be a boolean")
   assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
+  assert(
+    type(config.diff_opts.hide_terminal_in_new_tab) == "boolean",
+    "diff_opts.hide_terminal_in_new_tab must be a boolean"
+  )
 
   -- Validate env
   assert(type(config.env) == "table", "env must be a table")

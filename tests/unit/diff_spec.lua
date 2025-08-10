@@ -127,9 +127,9 @@ describe("Diff Module", function()
     it("should create diff with correct parameters", function()
       diff.setup({
         diff_opts = {
-          vertical_split = true,
-          show_diff_stats = false,
-          auto_close_on_accept = true,
+          layout = "vertical",
+          open_in_new_tab = false,
+          keep_terminal_focus = false,
         },
       })
 
@@ -182,9 +182,9 @@ describe("Diff Module", function()
     it("should use horizontal split when configured", function()
       diff.setup({
         diff_opts = {
-          vertical_split = false,
-          show_diff_stats = false,
-          auto_close_on_accept = true,
+          layout = "horizontal",
+          open_in_new_tab = false,
+          keep_terminal_focus = false,
         },
       })
 
@@ -209,19 +209,19 @@ describe("Diff Module", function()
 
       expect(result.success).to_be_true()
       local found_split = false
-      local found_vertical_split = false
+      local found_vsplit = false
 
       for _, cmd in ipairs(commands) do
-        if cmd:find("split", 1, true) and not cmd:find("vertical split", 1, true) then
-          found_split = true
+        if cmd:find("vsplit", 1, true) then
+          found_vsplit = true
         end
-        if cmd:find("vertical split", 1, true) then
-          found_vertical_split = true
+        if cmd:find("split", 1, true) and not cmd:find("vsplit", 1, true) then
+          found_split = true
         end
       end
 
-      expect(found_split).to_be_true()
-      expect(found_vertical_split).to_be_false()
+      expect(found_split).to_be_true() -- Should use horizontal split (accepts modifiers like belowright)
+      expect(found_vsplit).to_be_false() -- Should not use vertical split
 
       rawset(io, "open", old_io_open)
     end)
