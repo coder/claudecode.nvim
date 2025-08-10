@@ -50,6 +50,7 @@ local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   return {
     env = env_table,
+    cwd = config.cwd,
     start_insert = focus,
     auto_insert = focus,
     auto_close = false,
