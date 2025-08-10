@@ -23,6 +23,7 @@ M.defaults = {
     open_in_new_tab = false, -- Open diff in a new tab (false = use current tab)
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
+    on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -112,6 +113,11 @@ function M.validate(config)
   assert(
     type(config.diff_opts.hide_terminal_in_new_tab) == "boolean",
     "diff_opts.hide_terminal_in_new_tab must be a boolean"
+  )
+  assert(
+    type(config.diff_opts.on_new_file_reject) == "string"
+      and (config.diff_opts.on_new_file_reject == "keep_empty" or config.diff_opts.on_new_file_reject == "close_window"),
+    "diff_opts.on_new_file_reject must be 'keep_empty' or 'close_window'"
   )
 
   -- Validate env
