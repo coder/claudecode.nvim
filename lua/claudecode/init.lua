@@ -488,12 +488,48 @@ function M._create_commands()
 
   vim.api.nvim_create_user_command("ClaudeCodeStatus", function()
     if M.state.server and M.state.port then
-      logger.info("command", "Claude Code integration is running on port " .. tostring(M.state.port))
+      local server_module = require("claudecode.server.init")
+      local status = server_module.get_status()
+      
+      -- Basic status
+      local msg = "Claude Code integration is running on port " .. tostring(M.state.port)
+      
+      -- Connection status
+      if status.client_count > 0 then
+        msg = msg .. "\n  Connected clients: " .. status.client_count
+      else
+        msg = msg .. "\n  No clients connected"
+      end
+      
+      -- Reconnection status
+      if status.reconnect then
+        msg = msg .. "\n  Reconnect status: " .. status.reconnect.status
+        if status.reconnect.status == "reconnecting" then
+          msg = msg .. string.format(" (attempt %d/%d)", 
+            status.reconnect.attempt, 
+            status.reconnect.max_attempts)
+        end
+        if status.reconnect.total_reconnects > 0 then
+          msg = msg .. "\n  Total reconnects: " .. status.reconnect.total_reconnects
+        end
+      end
+      
+      -- Error statistics
+      if status.error_stats then
+        local errors = status.error_stats
+        if errors.tcp_errors > 0 or errors.parse_errors > 0 or errors.callback_errors > 0 then
+          msg = msg .. "\n  Errors: TCP=" .. errors.tcp_errors .. 
+                       " Parse=" .. errors.parse_errors .. 
+                       " Callback=" .. errors.callback_errors
+        end
+      end
+      
+      logger.info("command", msg)
     else
       logger.info("command", "Claude Code integration is not running")
     end
   end, {
-    desc = "Show Claude Code integration status",
+    desc = "Show Claude Code integration status with connection details",
   })
 
   ---@param file_paths table List of file paths to add
@@ -984,6 +1020,18 @@ function M._create_commands()
     desc = "Deny/reject the current diff changes",
   })
 
+  vim.api.nvim_create_user_command("ClaudeCodeReconnect", function()
+    local server_module = require("claudecode.server.init")
+    local success, err = server_module.reconnect()
+    if success then
+      logger.info("command", "Initiating reconnection...")
+    else
+      logger.error("command", "Failed to reconnect: " .. (err or "unknown error"))
+    end
+  end, {
+    desc = "Manually trigger WebSocket reconnection",
+  })
+  
   vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)
     local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
     M.open_with_model(cmd_args)

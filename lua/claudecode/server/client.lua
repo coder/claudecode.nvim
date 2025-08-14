@@ -2,6 +2,7 @@
 local frame = require("claudecode.server.frame")
 local handshake = require("claudecode.server.handshake")
 local logger = require("claudecode.logger")
+local safe_tcp = require("claudecode.server.safe_tcp")
 
 local M = {}
 
@@ -85,10 +86,13 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         end
       end
 
-      client.tcp_handle:write(response_from_handshake, function(err)
+      -- Use safe write to prevent stack errors
+      local write_success = safe_tcp.safe_write(client.tcp_handle, response_from_handshake, function(err)
         if err then
           logger.error("client", "Failed to send handshake response to client " .. client.id .. ": " .. err)
-          on_error(client, "Failed to send handshake response: " .. err)
+          safe_tcp.safe_schedule(function()
+            on_error(client, "Failed to send handshake response: " .. err)
+          end, "handshake_error")
           return
         end
 
@@ -104,9 +108,9 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         else
           client.state = "closing"
           logger.debug("client", "Closing connection for client due to failed handshake:", client.id)
-          vim.schedule(function()
-            client.tcp_handle:close()
-          end)
+          safe_tcp.safe_schedule(function()
+            safe_tcp.safe_close(client.tcp_handle)
+          end, "close_after_failed_handshake")
         end
       end)
     end
@@ -126,14 +130,14 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
     client.buffer = client.buffer:sub(bytes_consumed + 1)
 
     if parsed_frame.opcode == frame.OPCODE.TEXT then
-      vim.schedule(function()
+      safe_tcp.safe_schedule(function()
         on_message(client, parsed_frame.payload)
-      end)
+      end, "on_message_text")
     elseif parsed_frame.opcode == frame.OPCODE.BINARY then
       -- Binary message (treat as text for JSON-RPC)
-      vim.schedule(function()
+      safe_tcp.safe_schedule(function()
         on_message(client, parsed_frame.payload)
-      end)
+      end, "on_message_binary")
     elseif parsed_frame.opcode == frame.OPCODE.CLOSE then
       local code = 1000
       local reason = ""
@@ -148,16 +152,16 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
       if client.state == "connected" then
         local close_frame = frame.create_close_frame(code, reason)
-        client.tcp_handle:write(close_frame)
+        safe_tcp.safe_write(client.tcp_handle, close_frame)
         client.state = "closing"
       end
 
-      vim.schedule(function()
+      safe_tcp.safe_schedule(function()
         on_close(client, code, reason)
-      end)
+      end, "on_close")
     elseif parsed_frame.opcode == frame.OPCODE.PING then
       local pong_frame = frame.create_pong_frame(parsed_frame.payload)
-      client.tcp_handle:write(pong_frame)
+      safe_tcp.safe_write(client.tcp_handle, pong_frame)
     elseif parsed_frame.opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
     elseif parsed_frame.opcode == frame.OPCODE.CONTINUATION then
@@ -176,28 +180,36 @@ end
 ---@param message string The message to send
 ---@param callback function? Optional callback: function(err)
 function M.send_message(client, message, callback)
-  if client.state ~= "connected" then
+  -- Validate client state before sending
+  local valid, error_msg = safe_tcp.validate_client_state(client, "send_message")
+  if not valid then
     if callback then
-      callback("Client not connected")
+      safe_tcp.safe_schedule(function()
+        callback(error_msg)
+      end, "send_message_error_callback")
     end
     return
   end
 
   local text_frame = frame.create_text_frame(message)
-  client.tcp_handle:write(text_frame, callback)
+  safe_tcp.safe_write(client.tcp_handle, text_frame, callback)
 end
 
 ---Send a ping to a client
 ---@param client WebSocketClient The client object
 ---@param data string|nil Optional ping data
 function M.send_ping(client, data)
-  if client.state ~= "connected" then
+  -- Validate client state before sending ping
+  local valid = safe_tcp.validate_client_state(client, "send_ping")
+  if not valid then
     return
   end
 
   local ping_frame = frame.create_ping_frame(data or "")
-  client.tcp_handle:write(ping_frame)
-  client.last_ping = vim.loop.now()
+  local success = safe_tcp.safe_write(client.tcp_handle, ping_frame)
+  if success then
+    client.last_ping = vim.loop.now()
+  end
 end
 
 ---Close a client connection
@@ -211,19 +223,18 @@ function M.close_client(client, code, reason)
 
   code = code or 1000
   reason = reason or ""
+  client.state = "closing"
 
   if client.handshake_complete then
     local close_frame = frame.create_close_frame(code, reason)
-    client.tcp_handle:write(close_frame, function()
+    safe_tcp.safe_write(client.tcp_handle, close_frame, function()
       client.state = "closed"
-      client.tcp_handle:close()
+      safe_tcp.safe_close(client.tcp_handle)
     end)
   else
     client.state = "closed"
-    client.tcp_handle:close()
+    safe_tcp.safe_close(client.tcp_handle)
   end
-
-  client.state = "closing"
 end
 
 ---Check if a client connection is alive

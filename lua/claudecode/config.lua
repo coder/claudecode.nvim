@@ -8,7 +8,9 @@ local M = {}
 
 ---@type ClaudeCodeConfig
 M.defaults = {
-  port_range = { min = 10000, max = 65535 },
+  -- Use a smaller port range for better performance on Windows
+  -- The large range (10000-65535) causes slow startup on Windows
+  port_range = { min = 30000, max = 30100 },
   auto_start = true,
   terminal_cmd = nil,
   env = {}, -- Custom environment variables for Claude terminal
@@ -31,6 +33,19 @@ M.defaults = {
     { name = "Claude Haiku 3.5 (Latest)", value = "haiku" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
+  reconnect = {
+    enabled = true,
+    max_attempts = 10,
+    initial_delay = 1000,
+    max_delay = 30000,
+    backoff_factor = 2,
+    show_notifications = true,
+  },
+  -- Windows-specific optimizations
+  windows_optimizations = {
+    tcp_nodelay = true,  -- Disable Nagle's algorithm for lower latency
+    reuse_addr = true,   -- Allow faster port reuse
+  },
 }
 
 ---Validates the provided configuration table.
@@ -102,6 +117,27 @@ function M.validate(config)
   )
 
   assert(type(config.queue_timeout) == "number" and config.queue_timeout > 0, "queue_timeout must be a positive number")
+  
+  -- Validate reconnect configuration
+  assert(type(config.reconnect) == "table", "reconnect must be a table")
+  assert(type(config.reconnect.enabled) == "boolean", "reconnect.enabled must be a boolean")
+  assert(
+    type(config.reconnect.max_attempts) == "number" and config.reconnect.max_attempts > 0,
+    "reconnect.max_attempts must be a positive number"
+  )
+  assert(
+    type(config.reconnect.initial_delay) == "number" and config.reconnect.initial_delay > 0,
+    "reconnect.initial_delay must be a positive number"
+  )
+  assert(
+    type(config.reconnect.max_delay) == "number" and config.reconnect.max_delay >= config.reconnect.initial_delay,
+    "reconnect.max_delay must be >= initial_delay"
+  )
+  assert(
+    type(config.reconnect.backoff_factor) == "number" and config.reconnect.backoff_factor >= 1,
+    "reconnect.backoff_factor must be >= 1"
+  )
+  assert(type(config.reconnect.show_notifications) == "boolean", "reconnect.show_notifications must be a boolean")
 
   assert(type(config.diff_opts) == "table", "diff_opts must be a table")
   assert(type(config.diff_opts.auto_close_on_accept) == "boolean", "diff_opts.auto_close_on_accept must be a boolean")
@@ -115,6 +151,17 @@ function M.validate(config)
   for key, value in pairs(config.env) do
     assert(type(key) == "string", "env keys must be strings")
     assert(type(value) == "string", "env values must be strings")
+  end
+
+  -- Validate Windows optimizations if present
+  if config.windows_optimizations then
+    assert(type(config.windows_optimizations) == "table", "windows_optimizations must be a table")
+    if config.windows_optimizations.tcp_nodelay ~= nil then
+      assert(type(config.windows_optimizations.tcp_nodelay) == "boolean", "windows_optimizations.tcp_nodelay must be a boolean")
+    end
+    if config.windows_optimizations.reuse_addr ~= nil then
+      assert(type(config.windows_optimizations.reuse_addr) == "boolean", "windows_optimizations.reuse_addr must be a boolean")
+    end
   end
 
   -- Validate models

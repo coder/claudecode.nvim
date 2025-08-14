@@ -3,6 +3,8 @@ local claudecode_main = require("claudecode") -- Added for version access
 local logger = require("claudecode.logger")
 local tcp_server = require("claudecode.server.tcp")
 local tools = require("claudecode.tools.init") -- Added: Require the tools module
+local reconnect = require("claudecode.server.reconnect")
+local safe_tcp = require("claudecode.server.safe_tcp")
 
 local MCP_PROTOCOL_VERSION = "2024-11-05"
 
@@ -15,6 +17,7 @@ local M = {}
 ---@field clients table<string, WebSocketClient> A list of connected clients
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
+---@field reconnect_enabled boolean Whether reconnection is enabled
 M.state = {
   server = nil,
   port = nil,
@@ -22,6 +25,7 @@ M.state = {
   clients = {},
   handlers = {},
   ping_timer = nil,
+  reconnect_enabled = false,
 }
 
 ---Initialize the WebSocket server
@@ -61,13 +65,18 @@ function M.start(config, auth_token)
       else
         logger.debug("server", "WebSocket client connected (no auth):", client.id)
       end
+      
+      -- Notify reconnect manager about successful connection
+      if M.state.reconnect_enabled then
+        reconnect.on_connected()
+      end
 
       -- Notify main module about new connection for queue processing
       local main_module = require("claudecode")
       if main_module.process_mention_queue then
-        vim.schedule(function()
+        safe_tcp.safe_schedule(function()
           main_module.process_mention_queue(true)
-        end)
+        end, "process_mention_queue")
       end
     end,
     on_disconnect = function(client, code, reason)
@@ -81,6 +90,19 @@ function M.start(config, auth_token)
         ", reason:",
         (reason or "N/A") .. ")"
       )
+      
+      -- Notify reconnect manager about disconnection
+      if M.state.reconnect_enabled then
+        -- Check if all clients are disconnected
+        local client_count = 0
+        for _ in pairs(M.state.clients) do
+          client_count = client_count + 1
+        end
+        
+        if client_count == 0 then
+          reconnect.on_disconnected(code, reason)
+        end
+      end
     end,
     on_error = function(error_msg)
       logger.error("server", "WebSocket server error:", error_msg)
@@ -96,22 +118,41 @@ function M.start(config, auth_token)
   M.state.port = server.port
 
   M.state.ping_timer = tcp_server.start_ping_timer(server, 30000) -- Start ping timer to keep connections alive
+  
+  -- Setup reconnection if enabled in config
+  if config.reconnect and config.reconnect.enabled then
+    M.state.reconnect_enabled = true
+    reconnect.setup(config.reconnect, function()
+      -- Reconnect callback - restart the server
+      logger.info("server", "Attempting to reconnect...")
+      local success, port_or_error = M.start(config, M.state.auth_token)
+      if not success then
+        logger.error("server", "Reconnection failed:", port_or_error)
+      end
+    end)
+  end
 
   return true, server.port
 end
 
 ---Stop the WebSocket server
+---@param is_for_reconnect boolean|nil Whether this stop is for reconnection
 ---@return boolean success Whether server stopped successfully
 ---@return string|nil error_message Error message if any
-function M.stop()
+function M.stop(is_for_reconnect)
   if not M.state.server then
     return false, "Server not running"
   end
 
   if M.state.ping_timer then
-    M.state.ping_timer:stop()
-    M.state.ping_timer:close()
+    safe_tcp.safe_timer_stop(M.state.ping_timer)
     M.state.ping_timer = nil
+  end
+  
+  -- Stop reconnection manager if not stopping for reconnect
+  if not is_for_reconnect and M.state.reconnect_enabled then
+    reconnect.stop()
+    M.state.reconnect_enabled = false
   end
 
   tcp_server.stop_server(M.state.server)
@@ -123,8 +164,15 @@ function M.stop()
 
   M.state.server = nil
   M.state.port = nil
-  M.state.auth_token = nil
+  if not is_for_reconnect then
+    M.state.auth_token = nil
+  end
   M.state.clients = {}
+  
+  -- Reset error statistics if not reconnecting
+  if not is_for_reconnect then
+    safe_tcp.reset_error_stats()
+  end
 
   return true
 end
@@ -405,20 +453,36 @@ end
 ---Get server status information
 ---@return table status Server status information
 function M.get_status()
-  if not M.state.server then
-    return {
-      running = false,
-      port = nil,
-      client_count = 0,
-    }
-  end
-
-  return {
-    running = true,
+  local status = {
+    running = M.state.server ~= nil,
     port = M.state.port,
-    client_count = tcp_server.get_client_count(M.state.server),
-    clients = tcp_server.get_clients_info(M.state.server),
+    client_count = 0,
+    clients = {},
+    reconnect = nil,
+    error_stats = safe_tcp.get_error_stats(),
   }
+  
+  if M.state.server then
+    status.client_count = tcp_server.get_client_count(M.state.server)
+    status.clients = tcp_server.get_clients_info(M.state.server)
+  end
+  
+  if M.state.reconnect_enabled then
+    status.reconnect = reconnect.get_status()
+  end
+  
+  return status
+end
+
+---Manually trigger reconnection
+function M.reconnect()
+  if not M.state.reconnect_enabled then
+    logger.warn("server", "Reconnection is not enabled")
+    return false, "Reconnection is not enabled"
+  end
+  
+  reconnect.reconnect()
+  return true
 end
 
 return M
