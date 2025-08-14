@@ -61,11 +61,13 @@ function M.validate(config)
 
     -- Validate external_terminal_cmd in provider_opts
     if config.terminal.provider_opts.external_terminal_cmd then
+      local cmd_type = type(config.terminal.provider_opts.external_terminal_cmd)
       assert(
-        type(config.terminal.provider_opts.external_terminal_cmd) == "string",
-        "terminal.provider_opts.external_terminal_cmd must be a string"
+        cmd_type == "string" or cmd_type == "function",
+        "terminal.provider_opts.external_terminal_cmd must be a string or function"
       )
-      if config.terminal.provider_opts.external_terminal_cmd ~= "" then
+      -- Only validate %s placeholder for strings
+      if cmd_type == "string" and config.terminal.provider_opts.external_terminal_cmd ~= "" then
         assert(
           config.terminal.provider_opts.external_terminal_cmd:find("%%s"),
           "terminal.provider_opts.external_terminal_cmd must contain '%s' placeholder for the Claude command"
@@ -108,7 +110,9 @@ function M.validate(config)
   assert(type(config.diff_opts.show_diff_stats) == "boolean", "diff_opts.show_diff_stats must be a boolean")
   assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
   assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
-  assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
+  if config.diff_opts.keep_terminal_focus ~= nil then
+    assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
+  end
 
   -- Validate env
   assert(type(config.env) == "table", "env must be a table")

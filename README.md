@@ -263,7 +263,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
       -- Provider-specific options
       provider_opts = {
-        external_terminal_cmd = nil, -- Command template for external terminal provider (e.g., "alacritty -e %s")
+        -- Command for external terminal provider. Can be:
+        -- 1. String with %s placeholder: "alacritty -e %s"
+        -- 2. Function returning command: function(cmd, env) return "alacritty -e " .. cmd end
+        external_terminal_cmd = nil,
       },
     },
 
@@ -452,13 +455,34 @@ For complete configuration options, see:
 Run Claude Code in a separate terminal application outside of Neovim:
 
 ```lua
+-- Using a string template (simple)
 {
   "coder/claudecode.nvim",
   opts = {
     terminal = {
       provider = "external",
       provider_opts = {
-        external_terminal_cmd = "alacritty -e %s", -- Replace with your preferred terminal program. %s is replaced with claude command
+        external_terminal_cmd = "alacritty -e %s", -- %s is replaced with claude command
+      },
+    },
+  },
+}
+
+-- Using a function for dynamic command generation (advanced)
+{
+  "coder/claudecode.nvim",
+  opts = {
+    terminal = {
+      provider = "external",
+      provider_opts = {
+        external_terminal_cmd = function(cmd, env)
+          -- You can build complex commands based on environment or conditions
+          if vim.fn.has("mac") == 1 then
+            return { "osascript", "-e", string.format('tell app "Terminal" to do script "%s"', cmd) }
+          else
+            return "alacritty -e " .. cmd
+          end
+        end,
       },
     },
   },

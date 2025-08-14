@@ -39,7 +39,7 @@ function M.open(cmd_string, env_table)
   -- Get external terminal command from provider_opts
   local external_cmd = config.provider_opts and config.provider_opts.external_terminal_cmd
 
-  if not external_cmd or external_cmd == "" then
+  if not external_cmd then
     vim.notify(
       "external_terminal_cmd not configured. Please set terminal.provider_opts.external_terminal_cmd in your config.",
       vim.log.levels.ERROR
@@ -47,15 +47,53 @@ function M.open(cmd_string, env_table)
     return
   end
 
-  -- Replace %s in the template with the Claude command
-  if not external_cmd:find("%%s") then
-    vim.notify("external_terminal_cmd must contain '%s' placeholder for the Claude command.", vim.log.levels.ERROR)
+  local cmd_parts
+  local full_command
+
+  -- Handle both string and function types
+  if type(external_cmd) == "function" then
+    -- Call the function with the Claude command and env table
+    local result = external_cmd(cmd_string, env_table)
+    if not result then
+      vim.notify("external_terminal_cmd function returned nil or false", vim.log.levels.ERROR)
+      return
+    end
+
+    -- Result can be either a string or a table
+    if type(result) == "string" then
+      -- Parse the string into command parts
+      cmd_parts = vim.split(result, " ")
+      full_command = result
+    elseif type(result) == "table" then
+      -- Use the table directly as command parts
+      cmd_parts = result
+      full_command = table.concat(result, " ")
+    else
+      vim.notify(
+        "external_terminal_cmd function must return a string or table, got: " .. type(result),
+        vim.log.levels.ERROR
+      )
+      return
+    end
+  elseif type(external_cmd) == "string" then
+    if external_cmd == "" then
+      vim.notify("external_terminal_cmd string cannot be empty", vim.log.levels.ERROR)
+      return
+    end
+
+    -- Replace %s in the template with the Claude command
+    if not external_cmd:find("%%s") then
+      vim.notify("external_terminal_cmd must contain '%s' placeholder for the Claude command.", vim.log.levels.ERROR)
+      return
+    end
+
+    -- Build command by replacing %s with Claude command and splitting
+    full_command = string.format(external_cmd, cmd_string)
+    cmd_parts = vim.split(full_command, " ")
+  else
+    vim.notify("external_terminal_cmd must be a string or function, got: " .. type(external_cmd), vim.log.levels.ERROR)
     return
   end
-
-  -- Build command by replacing %s with Claude command and splitting
-  local full_command = string.format(external_cmd, cmd_string)
-  local cmd_parts = vim.split(full_command, " ")
 
   -- Start the external terminal as a detached process
   jobid = vim.fn.jobstart(cmd_parts, {
