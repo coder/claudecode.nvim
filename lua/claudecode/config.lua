@@ -31,6 +31,14 @@ M.defaults = {
     { name = "Claude Haiku 3.5 (Latest)", value = "haiku" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
+  reconnect = {
+    enabled = true,
+    max_attempts = 10,
+    initial_delay = 1000,
+    max_delay = 30000,
+    backoff_factor = 2,
+    show_notifications = true,
+  },
 }
 
 ---Validates the provided configuration table.
@@ -102,6 +110,27 @@ function M.validate(config)
   )
 
   assert(type(config.queue_timeout) == "number" and config.queue_timeout > 0, "queue_timeout must be a positive number")
+  
+  -- Validate reconnect configuration
+  assert(type(config.reconnect) == "table", "reconnect must be a table")
+  assert(type(config.reconnect.enabled) == "boolean", "reconnect.enabled must be a boolean")
+  assert(
+    type(config.reconnect.max_attempts) == "number" and config.reconnect.max_attempts > 0,
+    "reconnect.max_attempts must be a positive number"
+  )
+  assert(
+    type(config.reconnect.initial_delay) == "number" and config.reconnect.initial_delay > 0,
+    "reconnect.initial_delay must be a positive number"
+  )
+  assert(
+    type(config.reconnect.max_delay) == "number" and config.reconnect.max_delay >= config.reconnect.initial_delay,
+    "reconnect.max_delay must be >= initial_delay"
+  )
+  assert(
+    type(config.reconnect.backoff_factor) == "number" and config.reconnect.backoff_factor >= 1,
+    "reconnect.backoff_factor must be >= 1"
+  )
+  assert(type(config.reconnect.show_notifications) == "boolean", "reconnect.show_notifications must be a boolean")
 
   assert(type(config.diff_opts) == "table", "diff_opts must be a table")
   assert(type(config.diff_opts.auto_close_on_accept) == "boolean", "diff_opts.auto_close_on_accept must be a boolean")

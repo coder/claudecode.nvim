@@ -1,6 +1,8 @@
 ---@brief TCP server implementation using vim.loop
 local client_manager = require("claudecode.server.client")
 local utils = require("claudecode.server.utils")
+local safe_tcp = require("claudecode.server.safe_tcp")
+local logger = require("claudecode.logger")
 
 local M = {}
 
@@ -121,30 +123,57 @@ function M._handle_new_connection(server)
   local client = client_manager.create_client(client_tcp)
   server.clients[client.id] = client
 
-  -- Set up data handler
-  client_tcp:read_start(function(err, data)
-    if err then
-      server.on_error("Client read error: " .. err)
-      M._remove_client(server, client)
-      return
-    end
+  -- Set up data handler with error protection
+  safe_tcp.safe_read_start(client_tcp, function(err, data)
+    -- Wrap entire handler in pcall to prevent stack errors
+    local handler_success, handler_error = pcall(function()
+      if err then
+        safe_tcp.record_error("tcp_errors", err)
+        server.on_error("Client read error: " .. err)
+        M._remove_client(server, client)
+        return
+      end
 
-    if not data then
-      -- EOF - client disconnected
-      M._remove_client(server, client)
-      return
-    end
+      if not data then
+        -- EOF - client disconnected
+        M._remove_client(server, client)
+        return
+      end
 
-    -- Process incoming data
-    client_manager.process_data(client, data, function(cl, message)
-      server.on_message(cl, message)
-    end, function(cl, code, reason)
-      server.on_disconnect(cl, code, reason)
-      M._remove_client(server, cl)
-    end, function(cl, error_msg)
-      server.on_error("Client " .. cl.id .. " error: " .. error_msg)
-      M._remove_client(server, cl)
-    end, server.auth_token)
+      -- Process incoming data with safe callbacks
+      local process_success, process_error = pcall(client_manager.process_data, 
+        client, data,
+        function(cl, message)
+          safe_tcp.safe_schedule(function()
+            server.on_message(cl, message)
+          end, "tcp_on_message")
+        end,
+        function(cl, code, reason)
+          safe_tcp.safe_schedule(function()
+            server.on_disconnect(cl, code, reason)
+            M._remove_client(server, cl)
+          end, "tcp_on_disconnect")
+        end,
+        function(cl, error_msg)
+          safe_tcp.safe_schedule(function()
+            server.on_error("Client " .. cl.id .. " error: " .. error_msg)
+            M._remove_client(server, cl)
+          end, "tcp_on_error")
+        end,
+        server.auth_token
+      )
+      
+      if not process_success then
+        logger.error("tcp", "Data processing failed for client", client.id, ":", tostring(process_error))
+        safe_tcp.record_error("callback_errors", tostring(process_error))
+        M._remove_client(server, client)
+      end
+    end)
+    
+    if not handler_success then
+      logger.error("tcp", "Read handler failed:", tostring(handler_error))
+      safe_tcp.record_error("callback_errors", tostring(handler_error))
+    end
   end)
 
   -- Notify about new connection
@@ -155,12 +184,15 @@ end
 ---@param server TCPServer The server object
 ---@param client WebSocketClient The client to remove
 function M._remove_client(server, client)
+  if not client or not client.id then
+    return
+  end
+  
   if server.clients[client.id] then
     server.clients[client.id] = nil
-
-    if not client.tcp_handle:is_closing() then
-      client.tcp_handle:close()
-    end
+    
+    -- Use safe cleanup to prevent errors
+    safe_tcp.graceful_client_cleanup(client, "removed_from_server")
   end
 end
 
@@ -227,17 +259,17 @@ end
 ---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)
-  -- Close all clients
+  -- Close all clients gracefully
   for _, client in pairs(server.clients) do
-    client_manager.close_client(client, 1001, "Server shutting down")
+    pcall(client_manager.close_client, client, 1001, "Server shutting down")
   end
 
   -- Clear clients
   server.clients = {}
 
-  -- Close server
-  if server.server and not server.server:is_closing() then
-    server.server:close()
+  -- Close server safely
+  if server.server then
+    safe_tcp.safe_close(server.server)
   end
 end
 
@@ -248,29 +280,31 @@ end
 function M.start_ping_timer(server, interval)
   interval = interval or 30000 -- 30 seconds
 
-  local timer = vim.loop.new_timer()
-  if not timer then
-    server.on_error("Failed to create ping timer")
-    return nil
-  end
-
-  timer:start(interval, interval, function()
-    for _, client in pairs(server.clients) do
-      if client.state == "connected" then
-        -- Check if client is alive
-        if client_manager.is_client_alive(client, interval * 2) then
-          client_manager.send_ping(client, "ping")
-        else
-          -- Client appears dead, close it
-          server.on_error("Client " .. client.id .. " appears dead, closing")
-          client_manager.close_client(client, 1006, "Connection timeout")
-          M._remove_client(server, client)
+  local ping_callback = function()
+    -- Wrap ping logic in pcall to prevent timer failures
+    local success, err = pcall(function()
+      for _, client in pairs(server.clients) do
+        if client.state == "connected" then
+          -- Check if client is alive
+          if client_manager.is_client_alive(client, interval * 2) then
+            client_manager.send_ping(client, "ping")
+          else
+            -- Client appears dead, close it
+            logger.debug("tcp", "Client", client.id, "appears dead, closing")
+            client_manager.close_client(client, 1006, "Connection timeout")
+            M._remove_client(server, client)
+          end
         end
       end
+    end)
+    
+    if not success then
+      logger.error("tcp", "Ping timer callback failed:", tostring(err))
+      safe_tcp.record_error("callback_errors", tostring(err))
     end
-  end)
+  end
 
-  return timer
+  return safe_tcp.safe_timer(ping_callback, interval, interval)
 end
 
 return M
