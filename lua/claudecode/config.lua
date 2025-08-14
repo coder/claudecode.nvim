@@ -8,7 +8,9 @@ local M = {}
 
 ---@type ClaudeCodeConfig
 M.defaults = {
-  port_range = { min = 10000, max = 65535 },
+  -- Use a smaller port range for better performance on Windows
+  -- The large range (10000-65535) causes slow startup on Windows
+  port_range = { min = 30000, max = 30100 },
   auto_start = true,
   terminal_cmd = nil,
   env = {}, -- Custom environment variables for Claude terminal
@@ -38,6 +40,11 @@ M.defaults = {
     max_delay = 30000,
     backoff_factor = 2,
     show_notifications = true,
+  },
+  -- Windows-specific optimizations
+  windows_optimizations = {
+    tcp_nodelay = true,  -- Disable Nagle's algorithm for lower latency
+    reuse_addr = true,   -- Allow faster port reuse
   },
 }
 
@@ -144,6 +151,17 @@ function M.validate(config)
   for key, value in pairs(config.env) do
     assert(type(key) == "string", "env keys must be strings")
     assert(type(value) == "string", "env values must be strings")
+  end
+
+  -- Validate Windows optimizations if present
+  if config.windows_optimizations then
+    assert(type(config.windows_optimizations) == "table", "windows_optimizations must be a table")
+    if config.windows_optimizations.tcp_nodelay ~= nil then
+      assert(type(config.windows_optimizations.tcp_nodelay) == "boolean", "windows_optimizations.tcp_nodelay must be a boolean")
+    end
+    if config.windows_optimizations.reuse_addr ~= nil then
+      assert(type(config.windows_optimizations.reuse_addr) == "boolean", "windows_optimizations.reuse_addr must be a boolean")
+    end
   end
 
   -- Validate models

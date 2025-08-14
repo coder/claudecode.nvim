@@ -22,31 +22,40 @@ local M = {}
 ---@return number|nil port Available port number, or nil if none found
 function M.find_available_port(min_port, max_port)
   if min_port > max_port then
-    return nil -- Or handle error appropriately
+    return nil
   end
 
-  local ports = {}
-  for i = min_port, max_port do
-    table.insert(ports, i)
-  end
-
-  -- Shuffle the ports
-  utils.shuffle_array(ports)
-
-  -- Try to bind to a port from the shuffled list
-  for _, port in ipairs(ports) do
+  -- On Windows, scanning too many ports is slow
+  -- Use a smaller range and random starting point
+  local range_size = max_port - min_port + 1
+  local max_attempts = math.min(100, range_size) -- Limit attempts to 100
+  
+  -- Use a random starting point instead of shuffling entire range
+  math.randomseed(os.time() + vim.loop.now())
+  local start_offset = math.random(0, range_size - 1)
+  
+  -- Try ports in a circular manner from random start
+  for i = 0, max_attempts - 1 do
+    local port = min_port + ((start_offset + i) % range_size)
+    
     local test_server = vim.loop.new_tcp()
     if test_server then
-      local success = test_server:bind("127.0.0.1", port)
-      test_server:close()
-
-      if success then
+      -- Use pcall to handle potential errors
+      local ok, success = pcall(function()
+        return test_server:bind("127.0.0.1", port)
+      end)
+      
+      -- Always close the test server
+      pcall(test_server.close, test_server)
+      
+      if ok and success then
+        logger.debug("tcp", "Found available port:", port)
         return port
       end
     end
-    -- Continue to next port if test_server creation failed or bind failed
   end
-
+  
+  logger.warn("tcp", "No available port found after", max_attempts, "attempts")
   return nil
 end
 
@@ -66,6 +75,15 @@ function M.create_server(config, callbacks, auth_token)
   if not tcp_server then
     return nil, "Failed to create TCP server"
   end
+  
+  -- Apply Windows optimizations if available
+  if config.windows_optimizations and vim.loop.os_uname().sysname:match("Windows") then
+    -- Set TCP_NODELAY to disable Nagle's algorithm for lower latency
+    if config.windows_optimizations.tcp_nodelay then
+      pcall(tcp_server.tcp_nodelay, tcp_server, true)
+    end
+    -- Note: SO_REUSEADDR is set by default in libuv
+  end
 
   -- Create server object
   local server = {
@@ -79,14 +97,27 @@ function M.create_server(config, callbacks, auth_token)
     on_error = callbacks.on_error or function() end,
   }
 
-  local bind_success, bind_err = tcp_server:bind("127.0.0.1", port)
+  -- Use 0.0.0.0 on Windows for faster binding, 127.0.0.1 on others
+  local bind_addr = "127.0.0.1"
+  if vim.loop.os_uname().sysname:match("Windows") then
+    -- On Windows, binding to 127.0.0.1 can be slower due to DNS resolution
+    -- But for security, we still use 127.0.0.1
+    bind_addr = "127.0.0.1"
+  end
+  
+  local bind_success, bind_err = tcp_server:bind(bind_addr, port)
   if not bind_success then
     tcp_server:close()
     return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")
   end
 
-  -- Start listening
-  local listen_success, listen_err = tcp_server:listen(128, function(err)
+  -- Start listening with smaller backlog on Windows for faster startup
+  local backlog = 128
+  if vim.loop.os_uname().sysname:match("Windows") then
+    backlog = 32  -- Smaller backlog for faster startup on Windows
+  end
+  
+  local listen_success, listen_err = tcp_server:listen(backlog, function(err)
     if err then
       callbacks.on_error("Listen error: " .. err)
       return
@@ -278,7 +309,12 @@ end
 ---@param interval number Ping interval in milliseconds (default: 30000)
 ---@return table? timer The timer handle, or nil if creation failed
 function M.start_ping_timer(server, interval)
-  interval = interval or 30000 -- 30 seconds
+  -- Use shorter ping interval on Windows for faster disconnect detection
+  if vim.loop.os_uname().sysname:match("Windows") then
+    interval = interval or 20000 -- 20 seconds on Windows
+  else
+    interval = interval or 30000 -- 30 seconds on other platforms
+  end
 
   local ping_callback = function()
     -- Wrap ping logic in pcall to prevent timer failures

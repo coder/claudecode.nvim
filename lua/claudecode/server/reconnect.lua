@@ -39,6 +39,8 @@ M.default_config = {
   max_delay = 30000,
   backoff_factor = 2,
   show_notifications = true,
+  -- Windows-specific settings
+  windows_fast_detection = true,  -- Use faster disconnect detection on Windows
 }
 
 ---Current reconnection state
@@ -94,6 +96,11 @@ local function classify_disconnect(code, reason)
   
   -- Network errors or abnormal closure (reconnect)
   if code == 1006 or not code then
+    -- On Windows, connection drops are common during sleep/hibernate
+    -- Use faster initial reconnect for better UX
+    if vim.loop.os_uname().sysname:match("Windows") and M.config.windows_fast_detection then
+      M.state.next_delay = 500  -- Start with 500ms on Windows
+    end
     return "network", true
   end
   
@@ -121,7 +128,10 @@ local function notify_user(message, level)
   end
   
   level = level or vim.log.levels.INFO
-  vim.notify("ClaudeCode: " .. message, level)
+  -- Use vim.schedule to avoid fast event context error
+  vim.schedule(function()
+    vim.notify("ClaudeCode: " .. message, level)
+  end)
 end
 
 ---Update connection status
