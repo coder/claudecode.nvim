@@ -6,6 +6,7 @@ describe("Configuration", function()
 
   local function setup()
     package.loaded["claudecode.config"] = nil
+    package.loaded["claudecode.terminal"] = nil
 
     config = require("claudecode.config")
   end
@@ -301,7 +302,7 @@ describe("Configuration", function()
     end)
 
     expect(success).to_be_false()
-    expect(err).to_match("must be a string or function")
+    expect(tostring(err)).to_match("must be a string or function")
   end)
 
   teardown()

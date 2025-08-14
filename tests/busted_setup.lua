@@ -53,6 +53,13 @@ _G.expect = function(value)
     to_be_truthy = function()
       assert.is_truthy(value)
     end,
+    to_match = function(pattern)
+      assert.is_string(value)
+      assert.is_true(
+        string.find(value, pattern, 1, true) ~= nil,
+        "Expected string '" .. value .. "' to match pattern '" .. pattern .. "'"
+      )
+    end,
   }
 end
 
