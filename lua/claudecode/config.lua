@@ -61,11 +61,13 @@ function M.validate(config)
 
     -- Validate external_terminal_cmd in provider_opts
     if config.terminal.provider_opts.external_terminal_cmd then
+      local cmd_type = type(config.terminal.provider_opts.external_terminal_cmd)
       assert(
-        type(config.terminal.provider_opts.external_terminal_cmd) == "string",
-        "terminal.provider_opts.external_terminal_cmd must be a string"
+        cmd_type == "string" or cmd_type == "function",
+        "terminal.provider_opts.external_terminal_cmd must be a string or function"
       )
-      if config.terminal.provider_opts.external_terminal_cmd ~= "" then
+      -- Only validate %s placeholder for strings
+      if cmd_type == "string" and config.terminal.provider_opts.external_terminal_cmd ~= "" then
         assert(
           config.terminal.provider_opts.external_terminal_cmd:find("%%s"),
           "terminal.provider_opts.external_terminal_cmd must contain '%s' placeholder for the Claude command"

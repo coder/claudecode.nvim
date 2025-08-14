@@ -36,7 +36,7 @@
 
 -- Terminal provider-specific options
 ---@class ClaudeCodeTerminalProviderOptions
----@field external_terminal_cmd string? Command template for external terminal (e.g., "alacritty -e %s")
+---@field external_terminal_cmd string|fun(cmd: string, env: table): string|table|nil Command for external terminal (string template with %s or function)
 
 -- @ mention queued for Claude Code
 ---@class ClaudeCodeMention

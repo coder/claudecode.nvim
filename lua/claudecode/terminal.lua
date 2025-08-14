@@ -143,7 +143,13 @@ local function get_provider()
       -- Check availability based on our config instead of provider's internal state
       local external_cmd = defaults.provider_opts and defaults.provider_opts.external_terminal_cmd
 
-      local has_external_cmd = external_cmd and external_cmd ~= "" and external_cmd:find("%%s")
+      local has_external_cmd = false
+      if type(external_cmd) == "function" then
+        has_external_cmd = true
+      elseif type(external_cmd) == "string" and external_cmd ~= "" and external_cmd:find("%%s") then
+        has_external_cmd = true
+      end
+
       if has_external_cmd then
         return external_provider
       else
@@ -328,7 +334,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         defaults[k] = defaults[k] or {}
         for opt_k, opt_v in pairs(v) do
           if opt_k == "external_terminal_cmd" then
-            if opt_v == nil or type(opt_v) == "string" then
+            if opt_v == nil or type(opt_v) == "string" or type(opt_v) == "function" then
               defaults[k][opt_k] = opt_v
             else
               vim.notify(

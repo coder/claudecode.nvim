@@ -196,5 +196,113 @@ describe("Configuration", function()
     expect(success).to_be_false()
   end)
 
+  it("should accept function for external_terminal_cmd", function()
+    local valid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = {
+        auto_close_on_accept = true,
+        show_diff_stats = true,
+        vertical_split = true,
+        open_in_current_tab = true,
+      },
+      env = {},
+      models = {
+        { name = "Test Model", value = "test" },
+      },
+      terminal = {
+        provider = "external",
+        provider_opts = {
+          external_terminal_cmd = function(cmd, env)
+            return "terminal " .. cmd
+          end,
+        },
+      },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(valid_config)
+    end)
+
+    expect(success).to_be_true()
+  end)
+
+  it("should accept string for external_terminal_cmd", function()
+    local valid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = {
+        auto_close_on_accept = true,
+        show_diff_stats = true,
+        vertical_split = true,
+        open_in_current_tab = true,
+      },
+      env = {},
+      models = {
+        { name = "Test Model", value = "test" },
+      },
+      terminal = {
+        provider = "external",
+        provider_opts = {
+          external_terminal_cmd = "alacritty -e %s",
+        },
+      },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(valid_config)
+    end)
+
+    expect(success).to_be_true()
+  end)
+
+  it("should reject invalid type for external_terminal_cmd", function()
+    local invalid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = {
+        auto_close_on_accept = true,
+        show_diff_stats = true,
+        vertical_split = true,
+        open_in_current_tab = true,
+      },
+      env = {},
+      models = {
+        { name = "Test Model", value = "test" },
+      },
+      terminal = {
+        provider = "external",
+        provider_opts = {
+          external_terminal_cmd = 123, -- Invalid: number
+        },
+      },
+    }
+
+    local success, err = pcall(function()
+      config.validate(invalid_config)
+    end)
+
+    expect(success).to_be_false()
+    expect(err).to_match("must be a string or function")
+  end)
+
   teardown()
 end)
