@@ -26,6 +26,7 @@ M.defaults = {
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
     on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
+    on_unsaved_changes = "error", -- "error", "discard" - How to handle unsaved changes when creating diffs
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -154,6 +155,16 @@ function M.validate(config)
   if config.diff_opts.open_in_current_tab ~= nil then
     assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
   end
+
+  local valid_behaviors = { "error", "discard" }
+  local is_valid_behavior = false
+  for _, behavior in ipairs(valid_behaviors) do
+    if config.diff_opts.on_unsaved_changes == behavior then
+      is_valid_behavior = true
+      break
+    end
+  end
+  assert(is_valid_behavior, "diff_opts.on_unsaved_changes must be one of: " .. table.concat(valid_behaviors, ", "))
 
   -- Validate env
   assert(type(config.env) == "table", "env must be a table")
