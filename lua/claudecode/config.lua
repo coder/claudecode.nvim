@@ -24,6 +24,7 @@ M.defaults = {
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+    on_unsaved_changes = "error", -- "error", "discard" - How to handle unsaved changes when creating diffs
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -109,6 +110,16 @@ function M.validate(config)
   assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
   assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
   assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
+
+  local valid_behaviors = { "error", "discard" }
+  local is_valid_behavior = false
+  for _, behavior in ipairs(valid_behaviors) do
+    if config.diff_opts.on_unsaved_changes == behavior then
+      is_valid_behavior = true
+      break
+    end
+  end
+  assert(is_valid_behavior, "diff_opts.on_unsaved_changes must be one of: " .. table.concat(valid_behaviors, ", "))
 
   -- Validate env
   assert(type(config.env) == "table", "env must be a table")
