@@ -208,7 +208,6 @@ end
 Key features across all integrations:
 
 - **Visual mode support**: Select multiple files using vim visual mode
-- **Security protection**: Filters out root-level files (`/etc/passwd`, `/usr/bin/vim`)
 - **Directory handling**: Adds trailing slashes to directories for consistency
 - **Fallback behavior**: Selected items → current item → error
 

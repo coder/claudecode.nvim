@@ -308,27 +308,6 @@ function M._get_snacks_explorer_selection(visual_start, visual_end)
     return file_path
   end
 
-  -- Helper function to check if path is safe (not root-level)
-  local function is_safe_path(file_path)
-    if not file_path or file_path == "" then
-      return false
-    end
-    -- Not root-level file & this prevents selecting files like /etc/passwd, /usr/bin/vim, etc.
-    -- Check for system directories and root-level files
-    if string.match(file_path, "^/[^/]*$") then
-      return false -- True root-level files like /etc, /usr, /bin
-    end
-    if
-      string.match(file_path, "^/etc/")
-      or string.match(file_path, "^/usr/")
-      or string.match(file_path, "^/bin/")
-      or string.match(file_path, "^/sbin/")
-    then
-      return false -- System directories
-    end
-    return true
-  end
-
   -- Handle visual mode selection if range is provided
   if visual_start and visual_end and explorer.list then
     -- Process each line in the visual selection
@@ -340,7 +319,7 @@ function M._get_snacks_explorer_selection(visual_start, visual_end)
         local item = explorer.list:get(idx)
         if item then
           local file_path = extract_file_path(item)
-          if file_path and file_path ~= "" and is_safe_path(file_path) then
+          if file_path and file_path ~= "" then
             table.insert(files, file_path)
           end
         end
@@ -357,7 +336,7 @@ function M._get_snacks_explorer_selection(visual_start, visual_end)
     -- Process selected items
     for _, item in ipairs(selected) do
       local file_path = extract_file_path(item)
-      if file_path and file_path ~= "" and is_safe_path(file_path) then
+      if file_path and file_path ~= "" then
         table.insert(files, file_path)
       end
     end
@@ -371,11 +350,7 @@ function M._get_snacks_explorer_selection(visual_start, visual_end)
   if current then
     local file_path = extract_file_path(current)
     if file_path and file_path ~= "" then
-      if is_safe_path(file_path) then
-        return { file_path }, nil
-      else
-        return {}, "Cannot add root-level file. Please select a file in a subdirectory."
-      end
+      return { file_path }, nil
     end
   end
 
