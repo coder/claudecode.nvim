@@ -228,6 +228,18 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     package.loaded["claudecode.server.init"] = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.config"] = nil
+    package.loaded["claudecode.logger"] = nil
+
+    -- Mock logger
+    package.loaded["claudecode.logger"] = {
+      debug = function() end,
+      warn = function(context, message)
+        vim.notify(message, vim.log.levels.WARN)
+      end,
+      error = function(context, message)
+        vim.notify(message, vim.log.levels.ERROR)
+      end,
+    }
 
     -- Mock the server module
     local mock_server_module = {
@@ -350,7 +362,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     vim.notify = spy.new(function(_msg, _level) end)
 
     terminal_wrapper = require("claudecode.terminal")
-    terminal_wrapper.setup({})
+    -- Don't call setup({}) here to allow custom provider tests to work
   end)
 
   after_each(function()
@@ -360,6 +372,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     package.loaded["claudecode.server.init"] = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.config"] = nil
+    package.loaded["claudecode.logger"] = nil
     if _G.vim and _G.vim._mock and _G.vim._mock.reset then
       _G.vim._mock.reset()
     end
@@ -698,6 +711,514 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       mock_snacks_provider.simple_toggle:was_called(1)
       local toggle_cmd = mock_snacks_provider.simple_toggle:get_call(1).refs[1]
       assert.are.equal("claude", toggle_cmd)
+    end)
+  end)
+
+  describe("custom table provider functionality", function()
+    describe("valid custom provider", function()
+      it("should call setup method during terminal wrapper setup", function()
+        local setup_spy = spy.new(function() end)
+        local custom_provider = {
+          setup = setup_spy,
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = spy.new(function() end),
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            return true
+          end),
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+
+        setup_spy:was_called(1)
+        setup_spy:was_called_with(spy.matching.is_type("table"))
+      end)
+
+      it("should check is_available during open operation", function()
+        local is_available_spy = spy.new(function()
+          return true
+        end)
+        local open_spy = spy.new(function() end)
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = open_spy,
+          close = spy.new(function() end),
+          simple_toggle = spy.new(function() end),
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = is_available_spy,
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+        terminal_wrapper.open()
+
+        is_available_spy:was_called()
+        open_spy:was_called()
+      end)
+
+      it("should auto-generate toggle function if missing", function()
+        local simple_toggle_spy = spy.new(function() end)
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = simple_toggle_spy,
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            return true
+          end),
+          -- Note: toggle function is intentionally missing
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+
+        -- Verify that toggle function was auto-generated and calls simple_toggle
+        assert.is_function(custom_provider.toggle)
+        local test_env = {}
+        local test_config = {}
+        custom_provider.toggle("test_cmd", test_env, test_config)
+        simple_toggle_spy:was_called(1)
+        -- Check that the first argument (command string) is correct
+        local call_args = simple_toggle_spy:get_call(1).refs
+        assert.are.equal("test_cmd", call_args[1])
+        assert.are.equal(3, #call_args) -- Should have 3 arguments
+      end)
+
+      it("should auto-generate _get_terminal_for_test function if missing", function()
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = spy.new(function() end),
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            return true
+          end),
+          -- Note: _get_terminal_for_test function is intentionally missing
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+
+        -- Verify that _get_terminal_for_test function was auto-generated
+        assert.is_function(custom_provider._get_terminal_for_test)
+        assert.is_nil(custom_provider._get_terminal_for_test())
+      end)
+
+      it("should pass correct parameters to custom provider functions", function()
+        local open_spy = spy.new(function() end)
+        local simple_toggle_spy = spy.new(function() end)
+        local focus_toggle_spy = spy.new(function() end)
+
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = open_spy,
+          close = spy.new(function() end),
+          simple_toggle = simple_toggle_spy,
+          focus_toggle = focus_toggle_spy,
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            return true
+          end),
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+
+        -- Test open with parameters
+        terminal_wrapper.open({ split_side = "left" }, "test_args")
+        open_spy:was_called()
+        local open_call = open_spy:get_call(1)
+        assert.is_string(open_call.refs[1]) -- cmd_string
+        assert.is_table(open_call.refs[2]) -- env_table
+        assert.is_table(open_call.refs[3]) -- effective_config
+
+        -- Test simple_toggle with parameters
+        terminal_wrapper.simple_toggle({ split_width_percentage = 0.4 }, "toggle_args")
+        simple_toggle_spy:was_called()
+        local toggle_call = simple_toggle_spy:get_call(1)
+        assert.is_string(toggle_call.refs[1]) -- cmd_string
+        assert.is_table(toggle_call.refs[2]) -- env_table
+        assert.is_table(toggle_call.refs[3]) -- effective_config
+      end)
+    end)
+
+    describe("fallback behavior", function()
+      it("should fallback to native provider when is_available returns false", function()
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = spy.new(function() end),
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            return false
+          end), -- Returns false
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+        terminal_wrapper.open()
+
+        -- Should use native provider instead
+        mock_native_provider.open:was_called()
+        custom_provider.open:was_not_called()
+      end)
+
+      it("should fallback to native provider when is_available throws error", function()
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = spy.new(function() end),
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            error("Availability check failed")
+          end),
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+        terminal_wrapper.open()
+
+        -- Should use native provider instead
+        mock_native_provider.open:was_called()
+        custom_provider.open:was_not_called()
+      end)
+    end)
+
+    describe("invalid provider rejection", function()
+      it("should reject non-table providers", function()
+        -- Make snacks provider unavailable to force fallback to native
+        mock_snacks_provider.is_available = spy.new(function()
+          return false
+        end)
+        mock_native_provider.open:reset() -- Reset the spy before the test
+
+        terminal_wrapper.setup({ provider = "invalid_string" })
+
+        -- Check that vim.notify was called with the expected warning about invalid value
+        local notify_calls = vim.notify.calls
+        local found_warning = false
+        for _, call in ipairs(notify_calls) do
+          local message = call.refs[1]
+          if message and message:match("Invalid value for provider.*invalid_string") then
+            found_warning = true
+            break
+          end
+        end
+        assert.is_true(found_warning, "Expected warning about invalid provider value")
+
+        terminal_wrapper.open()
+
+        -- Should fallback to native provider (since snacks is unavailable and invalid string was rejected)
+        mock_native_provider.open:was_called()
+      end)
+
+      it("should reject providers missing required functions", function()
+        local incomplete_provider = {
+          setup = function() end,
+          open = function() end,
+          -- Missing other required functions
+        }
+
+        terminal_wrapper.setup({ provider = incomplete_provider })
+        terminal_wrapper.open()
+
+        -- Should fallback to native provider
+        mock_native_provider.open:was_called()
+      end)
+
+      it("should reject providers with non-function required fields", function()
+        local invalid_provider = {
+          setup = function() end,
+          open = "not_a_function", -- Invalid type
+          close = function() end,
+          simple_toggle = function() end,
+          focus_toggle = function() end,
+          get_active_bufnr = function()
+            return 123
+          end,
+          is_available = function()
+            return true
+          end,
+        }
+
+        terminal_wrapper.setup({ provider = invalid_provider })
+        terminal_wrapper.open()
+
+        -- Should fallback to native provider
+        mock_native_provider.open:was_called()
+      end)
+    end)
+
+    describe("wrapper function invocations", function()
+      it("should properly invoke all wrapper functions with custom provider", function()
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = spy.new(function() end),
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 456
+          end),
+          is_available = spy.new(function()
+            return true
+          end),
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+
+        -- Test all wrapper functions
+        terminal_wrapper.open()
+        custom_provider.open:was_called()
+
+        terminal_wrapper.close()
+        custom_provider.close:was_called()
+
+        terminal_wrapper.simple_toggle()
+        custom_provider.simple_toggle:was_called()
+
+        terminal_wrapper.focus_toggle()
+        custom_provider.focus_toggle:was_called()
+
+        local bufnr = terminal_wrapper.get_active_terminal_bufnr()
+        custom_provider.get_active_bufnr:was_called()
+        assert.are.equal(456, bufnr)
+      end)
+
+      it("should handle toggle function (legacy) correctly", function()
+        local simple_toggle_spy = spy.new(function() end)
+        local custom_provider = {
+          setup = spy.new(function() end),
+          open = spy.new(function() end),
+          close = spy.new(function() end),
+          simple_toggle = simple_toggle_spy,
+          focus_toggle = spy.new(function() end),
+          get_active_bufnr = spy.new(function()
+            return 123
+          end),
+          is_available = spy.new(function()
+            return true
+          end),
+        }
+
+        terminal_wrapper.setup({ provider = custom_provider })
+
+        -- Legacy toggle should call simple_toggle
+        terminal_wrapper.toggle()
+        simple_toggle_spy:was_called()
+      end)
+    end)
+  end)
+
+  describe("custom provider validation", function()
+    it("should reject provider missing required functions", function()
+      local invalid_provider = { setup = function() end } -- missing other functions
+      terminal_wrapper.setup({ provider = invalid_provider })
+      terminal_wrapper.open()
+
+      -- Verify fallback to native provider
+      mock_native_provider.open:was_called()
+      -- Check that the warning was logged (vim.notify gets called with logger output)
+      local notify_calls = vim.notify.calls
+      local found_warning = false
+      for _, call in ipairs(notify_calls) do
+        local message = call.refs[1]
+        if message and message:match("Invalid custom table provider.*missing required function") then
+          found_warning = true
+          break
+        end
+      end
+      assert.is_true(found_warning, "Expected warning about missing required function")
+    end)
+
+    it("should handle provider availability check failures", function()
+      local provider_with_error = {
+        setup = function() end,
+        open = function() end,
+        close = function() end,
+        simple_toggle = function() end,
+        focus_toggle = function() end,
+        get_active_bufnr = function()
+          return 123
+        end,
+        is_available = function()
+          error("test error")
+        end,
+      }
+
+      vim.notify:reset()
+      terminal_wrapper.setup({ provider = provider_with_error })
+      terminal_wrapper.open()
+
+      -- Verify graceful fallback to native provider
+      mock_native_provider.open:was_called()
+
+      -- Check that the warning was logged about availability error
+      local notify_calls = vim.notify.calls
+      local found_warning = false
+      for _, call in ipairs(notify_calls) do
+        local message = call.refs[1]
+        if message and message:match("error checking availability") then
+          found_warning = true
+          break
+        end
+      end
+      assert.is_true(found_warning, "Expected warning about availability check error")
+    end)
+
+    it("should validate provider function types", function()
+      local invalid_provider = {
+        setup = function() end,
+        open = "not_a_function", -- Wrong type
+        close = function() end,
+        simple_toggle = function() end,
+        focus_toggle = function() end,
+        get_active_bufnr = function()
+          return 123
+        end,
+        is_available = function()
+          return true
+        end,
+      }
+
+      vim.notify:reset()
+      terminal_wrapper.setup({ provider = invalid_provider })
+      terminal_wrapper.open()
+
+      -- Should fallback to native provider
+      mock_native_provider.open:was_called()
+
+      -- Check for function type validation error
+      local notify_calls = vim.notify.calls
+      local found_error = false
+      for _, call in ipairs(notify_calls) do
+        local message = call.refs[1]
+        if message and message:match("must be callable.*got.*string") then
+          found_error = true
+          break
+        end
+      end
+      assert.is_true(found_error, "Expected error about function type validation")
+    end)
+
+    it("should verify fallback on availability check failure", function()
+      local provider_unavailable = {
+        setup = function() end,
+        open = function() end,
+        close = function() end,
+        simple_toggle = function() end,
+        focus_toggle = function() end,
+        get_active_bufnr = function()
+          return 123
+        end,
+        is_available = function()
+          return false
+        end, -- Provider says it's not available
+      }
+
+      vim.notify:reset()
+      terminal_wrapper.setup({ provider = provider_unavailable })
+      terminal_wrapper.open()
+
+      -- Should use native provider
+      mock_native_provider.open:was_called()
+
+      -- Check for availability warning
+      local notify_calls = vim.notify.calls
+      local found_warning = false
+      for _, call in ipairs(notify_calls) do
+        local message = call.refs[1]
+        if message and message:match("provider reports not available") then
+          found_warning = true
+          break
+        end
+      end
+      assert.is_true(found_warning, "Expected warning about provider not available")
+    end)
+
+    it("should test auto-generated optional functions with working provider", function()
+      local simple_toggle_called = false
+      local provider_minimal = {
+        setup = function() end,
+        open = function() end,
+        close = function() end,
+        simple_toggle = function()
+          simple_toggle_called = true
+        end,
+        focus_toggle = function() end,
+        get_active_bufnr = function()
+          return 123
+        end,
+        is_available = function()
+          return true
+        end,
+        -- Missing toggle and _get_terminal_for_test functions
+      }
+
+      terminal_wrapper.setup({ provider = provider_minimal })
+
+      -- Test auto-generated toggle function
+      assert.is_function(provider_minimal.toggle)
+      provider_minimal.toggle("test_cmd", { TEST = "env" }, { split_side = "left" })
+      assert.is_true(simple_toggle_called)
+
+      -- Test auto-generated _get_terminal_for_test function
+      assert.is_function(provider_minimal._get_terminal_for_test)
+      assert.is_nil(provider_minimal._get_terminal_for_test())
+    end)
+
+    it("should handle edge case where provider returns nil for required function", function()
+      local provider_with_nil_function = {
+        setup = function() end,
+        open = function() end,
+        close = nil, -- Explicitly nil instead of missing
+        simple_toggle = function() end,
+        focus_toggle = function() end,
+        get_active_bufnr = function()
+          return 123
+        end,
+        is_available = function()
+          return true
+        end,
+      }
+
+      vim.notify:reset()
+      terminal_wrapper.setup({ provider = provider_with_nil_function })
+      terminal_wrapper.open()
+
+      -- Should fallback to native provider
+      mock_native_provider.open:was_called()
+
+      -- Check for missing function error
+      local notify_calls = vim.notify.calls
+      local found_error = false
+      for _, call in ipairs(notify_calls) do
+        local message = call.refs[1]
+        if message and message:match("missing required function.*close") then
+          found_error = true
+          break
+        end
+      end
+      assert.is_true(found_error, "Expected error about missing close function")
     end)
   end)
 end)

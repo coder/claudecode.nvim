@@ -9,6 +9,7 @@ claudecode.nvim/
 ├── .github/workflows/       # CI workflow definitions
 ├── fixtures/                # Test Neovim configurations for integration testing
 │   ├── bin/                 # Helper scripts (vv, vve, list-configs)
+│   ├── mini-files/          # Neovim config testing with mini.files
 │   ├── netrw/               # Neovim config testing with built-in file explorer
 │   ├── nvim-tree/           # Neovim config testing with nvim-tree.lua
 │   ├── oil/                 # Neovim config testing with oil.nvim
@@ -147,6 +148,7 @@ source fixtures/nvim-aliases.sh
 # Test with specific integration
 vv nvim-tree  # Start Neovim with nvim-tree configuration
 vv oil        # Start Neovim with oil.nvim configuration
+vv mini-files # Start Neovim with mini.files configuration
 vv netrw      # Start Neovim with built-in netrw configuration
 
 # List available configurations

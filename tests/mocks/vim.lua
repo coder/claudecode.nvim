@@ -116,10 +116,6 @@ local vim = {
       return vim._buffers[bufnr] and vim._buffers[bufnr].name or ""
     end,
 
-    nvim_buf_is_loaded = function(bufnr)
-      return vim._buffers[bufnr] ~= nil
-    end,
-
     nvim_win_get_cursor = function(winid)
       return vim._windows[winid] and vim._windows[winid].cursor or { 1, 0 }
     end,
@@ -147,20 +143,8 @@ local vim = {
       return vim._buffers[bufnr].options and vim._buffers[bufnr].options[name] or nil
     end,
 
-    nvim_list_bufs = function()
-      local bufs = {}
-      for bufnr, _ in pairs(vim._buffers) do
-        table.insert(bufs, bufnr)
-      end
-      return bufs
-    end,
-
     nvim_buf_delete = function(bufnr, opts)
       vim._buffers[bufnr] = nil
-    end,
-
-    nvim_buf_call = function(bufnr, callback)
-      callback()
     end,
 
     nvim_echo = function(chunks, history, opts)
@@ -531,17 +515,6 @@ local vim = {
     return false
   end,
 
-  schedule = function(fn)
-    -- For tests, execute immediately
-    fn()
-  end,
-
-  defer_fn = function(fn, timeout)
-    -- For tests, we'll store the deferred function to potentially call it manually
-    vim._deferred_fns = vim._deferred_fns or {}
-    table.insert(vim._deferred_fns, { fn = fn, timeout = timeout })
-  end,
-
   keymap = {
     set = function(mode, lhs, rhs, opts)
       -- Mock keymap setting
@@ -560,16 +533,6 @@ local vim = {
     return result
   end,
 
-  log = {
-    levels = {
-      TRACE = 0,
-      DEBUG = 1,
-      INFO = 2,
-      WARN = 3,
-      ERROR = 4,
-    },
-  },
-
   -- Add tbl_extend function for compatibility
   tbl_extend = function(behavior, ...)
     local tables = { ... }
@@ -584,15 +547,6 @@ local vim = {
     end
 
     return result
-  end,
-
-  notify = function(msg, level, opts)
-    -- Store the last notification for test assertions
-    vim._last_notify = {
-      msg = msg,
-      level = level,
-      opts = opts,
-    }
   end,
 
   g = setmetatable({}, {

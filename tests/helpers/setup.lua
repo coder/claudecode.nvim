@@ -32,31 +32,6 @@ return function()
     fn()
   end
 
-  -- Helper to assert an expectation
-  _G.expect = function(value)
-    return {
-      to_be = function(expected)
-        assert.are.equal(expected, value)
-      end,
-      to_be_nil = function()
-        assert.is_nil(value)
-      end,
-      to_be_true = function()
-        assert.is_true(value)
-      end,
-      to_be_false = function()
-        assert.is_false(value)
-      end,
-      to_be_table = function()
-        assert.is_table(value)
-      end,
-      to_have_key = function(key)
-        assert.is_table(value)
-        assert.not_nil(value[key])
-      end,
-    }
-  end
-
   -- Load the plugin under test
   package.loaded["claudecode"] = nil
 

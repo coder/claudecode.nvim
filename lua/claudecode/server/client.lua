@@ -14,7 +14,7 @@ local M = {}
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
 
----@brief Create a new WebSocket client
+---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
 ---@return WebSocketClient client The client object
 function M.create_client(tcp_handle)
@@ -33,7 +33,7 @@ function M.create_client(tcp_handle)
   return client
 end
 
----@brief Process incoming data for a client
+---Process incoming data for a client
 ---@param client WebSocketClient The client object
 ---@param data string The incoming data
 ---@param on_message function Callback for complete messages: function(client, message_text)
@@ -45,7 +45,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
   if not client.handshake_complete then
     local complete, request, remaining = handshake.extract_http_request(client.buffer)
-    if complete then
+    if complete and request then
       logger.debug("client", "Processing WebSocket handshake for client:", client.id)
 
       -- Log if auth token is required
@@ -171,10 +171,10 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
   end
 end
 
----@brief Send a text message to a client
+---Send a text message to a client
 ---@param client WebSocketClient The client object
 ---@param message string The message to send
----@param callback function|nil Optional callback: function(err)
+---@param callback function? Optional callback: function(err)
 function M.send_message(client, message, callback)
   if client.state ~= "connected" then
     if callback then
@@ -187,7 +187,7 @@ function M.send_message(client, message, callback)
   client.tcp_handle:write(text_frame, callback)
 end
 
----@brief Send a ping to a client
+---Send a ping to a client
 ---@param client WebSocketClient The client object
 ---@param data string|nil Optional ping data
 function M.send_ping(client, data)
@@ -200,7 +200,7 @@ function M.send_ping(client, data)
   client.last_ping = vim.loop.now()
 end
 
----@brief Close a client connection
+---Close a client connection
 ---@param client WebSocketClient The client object
 ---@param code number|nil Close code (default: 1000)
 ---@param reason string|nil Close reason
@@ -226,7 +226,7 @@ function M.close_client(client, code, reason)
   client.state = "closing"
 end
 
----@brief Check if a client connection is alive
+---Check if a client connection is alive
 ---@param client WebSocketClient The client object
 ---@param timeout number Timeout in milliseconds (default: 30000)
 ---@return boolean alive True if the client is considered alive
@@ -241,7 +241,7 @@ function M.is_client_alive(client, timeout)
   return (now - client.last_pong) < timeout
 end
 
----@brief Get client info for debugging
+---Get client info for debugging
 ---@param client WebSocketClient The client object
 ---@return table info Client information
 function M.get_client_info(client)

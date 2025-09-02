@@ -71,6 +71,10 @@ local function test_opendiff_directly()
 
     -- Set up a timer to check when it completes
     local timer = vim.loop.new_timer()
+    if not timer then
+      print("❌ Failed to create timer")
+      return
+    end
     timer:start(
       1000,
       1000,

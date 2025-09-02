@@ -19,12 +19,10 @@ local schema = {
   },
 }
 
---- Handles the getDiagnostics tool invocation.
--- Retrieves diagnostics from Neovim's diagnostic system.
--- @param params table The input parameters for the tool.
--- @field params.uri string|nil Optional file URI to get diagnostics for.
--- @return table A table containing the list of diagnostics.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
+---Handles the getDiagnostics tool invocation.
+---Retrieves diagnostics from Neovim's diagnostic system.
+---@param params table The input parameters for the tool
+---@return table diagnostics MCP-compliant response with diagnostics data
 local function handler(params)
   if not vim.lsp or not vim.diagnostic or not vim.diagnostic.get then
     -- Returning an empty list or a specific status could be an alternative.

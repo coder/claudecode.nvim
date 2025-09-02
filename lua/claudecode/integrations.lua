@@ -1,12 +1,12 @@
 ---
 -- Tree integration module for ClaudeCode.nvim
--- Handles detection and selection of files from nvim-tree, neo-tree, oil.nvim and snacks.explorer
--- @module claudecode.integrations
+-- Handles detection and selection of files from nvim-tree, neo-tree, oil.nvim, mini-files and snacks.explorer
+---@module 'claudecode.integrations'
 local M = {}
 
---- Get selected files from the current tree explorer
---- @return table|nil files List of file paths, or nil if error
---- @return string|nil error Error message if operation failed
+---Get selected files from the current tree explorer
+---@return table|nil files List of file paths, or nil if error
+---@return string|nil error Error message if operation failed
 function M.get_selected_files_from_tree()
   local current_ft = vim.bo.filetype
 
@@ -18,15 +18,17 @@ function M.get_selected_files_from_tree()
     return M._get_oil_selection()
   elseif current_ft == "snacks_picker_list" then
     return M._get_snacks_explorer_selection()
+  elseif current_ft == "minifiles" then
+    return M._get_mini_files_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
 end
 
---- Get selected files from nvim-tree
---- Supports both multi-selection (marks) and single file under cursor
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
+---Get selected files from nvim-tree
+---Supports both multi-selection (marks) and single file under cursor
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_nvim_tree_selection()
   local success, nvim_tree_api = pcall(require, "nvim-tree.api")
   if not success then
@@ -38,7 +40,7 @@ function M._get_nvim_tree_selection()
   local marks = nvim_tree_api.marks.list()
 
   if marks and #marks > 0 then
-    for i, mark in ipairs(marks) do
+    for _, mark in ipairs(marks) do
       if mark.type == "file" and mark.absolute_path and mark.absolute_path ~= "" then
         -- Check if it's not a root-level file (basic protection)
         if not string.match(mark.absolute_path, "^/[^/]*$") then
@@ -69,10 +71,10 @@ function M._get_nvim_tree_selection()
   return {}, "No file found under cursor"
 end
 
---- Get selected files from neo-tree
---- Uses neo-tree's own visual selection method when in visual mode
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
+---Get selected files from neo-tree
+---Uses neo-tree's own visual selection method when in visual mode
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_neotree_selection()
   local success, manager = pcall(require, "neo-tree.sources.manager")
   if not success then
@@ -126,7 +128,7 @@ function M._get_neotree_selection()
         end
       end
 
-      for i, node in ipairs(selected_nodes) do
+      for _, node in ipairs(selected_nodes) do
         -- Enhanced validation: check for file type and valid path
         if node.type == "file" and node.path and node.path ~= "" then
           -- Additional check: ensure it's not a root node (depth protection)
@@ -155,7 +157,7 @@ function M._get_neotree_selection()
     end
 
     if selection and #selection > 0 then
-      for i, node in ipairs(selection) do
+      for _, node in ipairs(selection) do
         if node.type == "file" and node.path then
           table.insert(files, node.path)
         end
@@ -182,10 +184,10 @@ function M._get_neotree_selection()
   return {}, "No file found under cursor"
 end
 
---- Get selected files from oil.nvim
---- Supports both visual selection and single file under cursor
---- @return table files List of file paths
---- @return string|nil error Error message if operation failed
+---Get selected files from oil.nvim
+---Supports both visual selection and single file under cursor
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
 function M._get_oil_selection()
   local success, oil = pcall(require, "oil")
   if not success then

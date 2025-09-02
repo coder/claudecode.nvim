@@ -9,12 +9,10 @@ local schema = {
   },
 }
 
---- Handles the closeAllDiffTabs tool invocation.
--- Closes all diff tabs/windows in the editor.
--- @param _params table The input parameters for the tool (currently unused).
--- @return table MCP-compliant response with content array indicating number of closed tabs.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
-local function handler(_params) -- Prefix unused params with underscore
+---Handles the closeAllDiffTabs tool invocation.
+---Closes all diff tabs/windows in the editor.
+---@return table response MCP-compliant response with content array indicating number of closed tabs.
+local function handler(params)
   local closed_count = 0
 
   -- Get all windows

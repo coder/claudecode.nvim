@@ -3,10 +3,10 @@
 --- This module handles creation, removal and updating of lock files
 --- which allow Claude Code CLI to discover the Neovim integration.
 ---@brief ]]
-
+---@module 'claudecode.lockfile'
 local M = {}
 
---- Path to the lock file directory
+---Path to the lock file directory
 ---@return string lock_dir The path to the lock file directory
 local function get_lock_dir()
   local claude_config_dir = os.getenv("CLAUDE_CONFIG_DIR")
@@ -22,7 +22,7 @@ M.lock_dir = get_lock_dir()
 -- Track if random seed has been initialized
 local random_initialized = false
 
---- Generate a random UUID for authentication
+---Generate a random UUID for authentication
 ---@return string uuid A randomly generated UUID string
 local function generate_auth_token()
   -- Initialize random seed only once
@@ -60,15 +60,15 @@ local function generate_auth_token()
   return uuid
 end
 
---- Generate a new authentication token
+---Generate a new authentication token
 ---@return string auth_token A newly generated authentication token
 function M.generate_auth_token()
   return generate_auth_token()
 end
 
---- Create the lock file for a specified WebSocket port
+---Create the lock file for a specified WebSocket port
 ---@param port number The port number for the WebSocket server
----@param auth_token string|nil Optional pre-generated auth token (generates new one if not provided)
+---@param auth_token? string Optional pre-generated auth token (generates new one if not provided)
 ---@return boolean success Whether the operation was successful
 ---@return string result_or_error The lock file path if successful, or error message if failed
 ---@return string? auth_token The authentication token if successful
@@ -150,7 +150,7 @@ function M.create(port, auth_token)
   return true, lock_path, auth_token
 end
 
---- Remove the lock file for the given port
+---Remove the lock file for the given port
 ---@param port number The port number of the WebSocket server
 ---@return boolean success Whether the operation was successful
 ---@return string? error Error message if operation failed
@@ -176,7 +176,7 @@ function M.remove(port)
   return true
 end
 
---- Update the lock file for the given port
+---Update the lock file for the given port
 ---@param port number The port number of the WebSocket server
 ---@return boolean success Whether the operation was successful
 ---@return string result_or_error The lock file path if successful, or error message if failed
@@ -197,7 +197,7 @@ function M.update(port)
   return M.create(port)
 end
 
---- Read the authentication token from a lock file
+---Read the authentication token from a lock file
 ---@param port number The port number of the WebSocket server
 ---@return boolean success Whether the operation was successful
 ---@return string? auth_token The authentication token if successful, or nil if failed
@@ -238,7 +238,7 @@ function M.get_auth_token(port)
   return true, auth_token, nil
 end
 
---- Get active LSP clients using available API
+---Get active LSP clients using available API
 ---@return table Array of LSP clients
 local function get_lsp_clients()
   if vim.lsp then
@@ -253,7 +253,7 @@ local function get_lsp_clients()
   return {}
 end
 
---- Get workspace folders for the lock file
+---Get workspace folders for the lock file
 ---@return table Array of workspace folder paths
 function M.get_workspace_folders()
   local folders = {}

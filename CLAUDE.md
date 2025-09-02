@@ -51,6 +51,7 @@ The `fixtures/` directory contains test Neovim configurations for verifying plug
 - `netrw` - Tests with Neovim's built-in file explorer
 - `nvim-tree` - Tests with nvim-tree.lua file explorer
 - `oil` - Tests with oil.nvim file explorer
+- `mini-files` - Tests with mini.files file explorer
 
 **Usage**: `source fixtures/nvim-aliases.sh && vv oil` starts Neovim with oil.nvim configuration
 
@@ -63,7 +64,7 @@ The `fixtures/` directory contains test Neovim configurations for verifying plug
 3. **Lock File System** (`lua/claudecode/lockfile.lua`) - Creates discovery files for Claude CLI at `~/.claude/ide/`
 4. **Selection Tracking** (`lua/claudecode/selection.lua`) - Monitors text selections and sends updates to Claude
 5. **Diff Integration** (`lua/claudecode/diff.lua`) - Native Neovim diff support for Claude's file comparisons
-6. **Terminal Integration** (`lua/claudecode/terminal.lua`) - Manages Claude CLI terminal sessions
+6. **Terminal Integration** (`lua/claudecode/terminal.lua`) - Manages Claude CLI terminal sessions with support for internal Neovim terminals and external terminal applications
 
 ### WebSocket Server Implementation
 
@@ -104,6 +105,28 @@ The WebSocket server implements secure authentication using:
 - `close_tab` - Internal-only tool for tab management (hardcoded in Claude Code)
 
 **Format Compliance**: All tools return MCP-compliant format: `{content: [{type: "text", text: "JSON-stringified-data"}]}`
+
+### Terminal Integration Options
+
+**Internal Terminals** (within Neovim):
+
+- **Snacks.nvim**: `terminal/snacks.lua` - Advanced terminal with floating windows
+- **Native**: `terminal/native.lua` - Built-in Neovim terminal as fallback
+
+**External Terminals** (separate applications):
+
+- **External Provider**: `terminal/external.lua` - Launches Claude in external terminal apps
+
+**Configuration Example**:
+
+```lua
+opts = {
+  terminal = {
+    provider = "external",  -- "auto", "snacks", "native", or "external"
+    external_terminal_cmd = "alacritty -e %s"  -- Required for external provider
+  }
+}
+```
 
 ### Key File Locations
 
@@ -252,7 +275,32 @@ Enable detailed authentication logging by setting:
 
 ```lua
 require("claudecode").setup({
-  log_level = "debug"  -- Shows auth token generation, validation, and failures
+  log_level = "debug",  -- Shows auth token generation, validation, and failures
+  diff_opts = {
+    keep_terminal_focus = true,  -- If true, moves focus back to terminal after diff opens
+  },
+})
+```
+
+### Configuration Options
+
+#### Diff Options
+
+The `diff_opts` configuration allows you to customize diff behavior:
+
+- `keep_terminal_focus` (boolean, default: `false`) - When enabled, keeps focus in the Claude Code terminal when a diff opens instead of moving focus to the diff buffer. This allows you to continue using terminal keybindings like `<CR>` for accepting/rejecting diffs without accidentally triggering other mappings.
+
+**Example use case**: If you frequently use `<CR>` or arrow keys in the Claude Code terminal to accept/reject diffs, enable this option to prevent focus from moving to the diff buffer where `<CR>` might trigger unintended actions.
+
+```lua
+require("claudecode").setup({
+  diff_opts = {
+    keep_terminal_focus = true,  -- If true, moves focus back to terminal after diff opens
+    auto_close_on_accept = true,
+    show_diff_stats = true,
+    vertical_split = true,
+    open_in_current_tab = true,
+  },
 })
 ```
 
@@ -293,7 +341,7 @@ Log levels for authentication events:
 ### Integration Support
 
 - Terminal integration supports both snacks.nvim and native Neovim terminal
-- Compatible with popular file explorers (nvim-tree, oil.nvim)
+- Compatible with popular file explorers (nvim-tree, oil.nvim, neo-tree, mini.files)
 - Visual selection tracking across different selection modes
 
 ## Release Process

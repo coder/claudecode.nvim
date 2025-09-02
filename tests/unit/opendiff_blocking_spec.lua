@@ -18,6 +18,13 @@ describe("openDiff blocking behavior", function()
 
     package.loaded["claudecode.logger"] = mock_logger
 
+    -- Mock diff module to prevent loading issues
+    package.loaded["claudecode.diff"] = {
+      open_diff_blocking = function()
+        error("This should not be called in coroutine context test")
+      end,
+    }
+
     -- Load the module under test
     open_diff_module = require("claudecode.tools.open_diff")
   end)
@@ -121,7 +128,11 @@ describe("openDiff blocking behavior", function()
     assert.is_table(err)
     assert.equals(-32000, err.code) -- Error gets wrapped by open_diff_blocking
     -- The exact error message may vary depending on where it fails in the test environment
-    assert.is_true(err.message == "Error setting up diff" or err.message == "Internal server error")
+    assert.is_true(
+      err.message == "Error setting up diff"
+        or err.message == "Internal server error"
+        or err.message == "Error opening blocking diff"
+    )
   end)
 
   it("should validate required parameters", function()

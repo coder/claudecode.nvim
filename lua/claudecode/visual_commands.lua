@@ -1,12 +1,11 @@
----
--- Visual command handling module for ClaudeCode.nvim
--- Implements neo-tree-style visual mode exit and command processing
--- @module claudecode.visual_commands
+---Visual command handling module for ClaudeCode.nvim
+---Implements neo-tree-style visual mode exit and command processing
+---@module 'claudecode.visual_commands'
 local M = {}
 
---- Get current vim mode with fallback for test environments
---- @param full_mode boolean|nil Whether to get full mode info (passed to vim.fn.mode)
---- @return string current_mode The current vim mode
+---Get current vim mode with fallback for test environments
+---@param full_mode? boolean Whether to get full mode info (passed to vim.fn.mode)
+---@return string current_mode The current vim mode
 local function get_current_mode(full_mode)
   local current_mode = "n" -- Default fallback
 
@@ -21,7 +20,7 @@ local function get_current_mode(full_mode)
   return current_mode
 end
 
--- ESC key constant matching neo-tree's implementation
+---ESC key constant matching neo-tree's implementation
 local ESC_KEY
 local success = pcall(function()
   ESC_KEY = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
@@ -30,9 +29,9 @@ if not success then
   ESC_KEY = "\27"
 end
 
---- Exit visual mode properly and schedule command execution
---- @param callback function The function to call after exiting visual mode
---- @param ... any Arguments to pass to the callback
+---Exit visual mode properly and schedule command execution
+---@param callback function The function to call after exiting visual mode
+---@param ... any Arguments to pass to the callback
 function M.exit_visual_and_schedule(callback, ...)
   local args = { ... }
 
@@ -53,9 +52,9 @@ function M.exit_visual_and_schedule(callback, ...)
   end)
 end
 
---- Validate that we're currently in a visual mode
---- @return boolean true if in visual mode, false otherwise
---- @return string|nil error message if not in visual mode
+---Validate that we're currently in a visual mode
+---@return boolean valid true if in visual mode, false otherwise
+---@return string? error error message if not in visual mode
 function M.validate_visual_mode()
   local current_mode = get_current_mode(true)
 
@@ -78,8 +77,8 @@ function M.validate_visual_mode()
   return true, nil
 end
 
---- Get visual selection range using vim marks or current cursor position
---- @return number, number start_line, end_line (1-indexed)
+---Get visual selection range using vim marks or current cursor position
+---@return number start_line, number end_line (1-indexed)
 function M.get_visual_range()
   local start_pos, end_pos = 1, 1 -- Default fallback
 
@@ -196,10 +195,10 @@ function M.get_tree_state()
   end
 end
 
---- Create a visual command wrapper that follows neo-tree patterns
---- @param normal_handler function The normal command handler
---- @param visual_handler function The visual command handler
---- @return function The wrapped command function
+---Create a visual command wrapper that follows neo-tree patterns
+---@param normal_handler function The normal command handler
+---@param visual_handler function The visual command handler
+---@return function wrapped_func The wrapped command function
 function M.create_visual_command_wrapper(normal_handler, visual_handler)
   return function(...)
     local current_mode = get_current_mode(true)
@@ -213,8 +212,8 @@ function M.create_visual_command_wrapper(normal_handler, visual_handler)
   end
 end
 
---- Capture visual selection data while still in visual mode
---- @return table|nil visual_data Captured data or nil if not in visual mode
+---Capture visual selection data while still in visual mode
+---@return table|nil visual_data Captured data or nil if not in visual mode
 function M.capture_visual_selection_data()
   local valid = M.validate_visual_mode()
   if not valid then
@@ -241,10 +240,10 @@ function M.capture_visual_selection_data()
   }
 end
 
---- Extract files from visual selection in tree buffers
---- @param visual_data table|nil Pre-captured visual selection data
---- @return table files List of file paths
---- @return string|nil error Error message if failed
+---Extract files from visual selection in tree buffers
+---@param visual_data table? Pre-captured visual selection data
+---@return table files List of file paths
+---@return string? error Error message if failed
 function M.get_files_from_visual_selection(visual_data)
   -- If we have pre-captured data, use it; otherwise try to get current data
   local tree_state, tree_type, start_pos, end_pos
@@ -319,7 +318,7 @@ function M.get_files_from_visual_selection(visual_data)
     require("claudecode.logger").debug("visual_commands", "Found", #lines, "lines in visual selection")
 
     -- For each line in the visual selection, try to get the corresponding node
-    for i, line_content in ipairs(lines) do
+    for i, _ in ipairs(lines) do
       local line_num = start_pos + i - 1
 
       -- Set cursor to this line to get the node

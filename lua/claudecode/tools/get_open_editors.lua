@@ -9,11 +9,10 @@ local schema = {
   },
 }
 
---- Handles the getOpenEditors tool invocation.
--- Gets a list of currently open and listed files in Neovim.
--- @param _params table The input parameters for the tool (currently unused).
--- @return table A list of open editor information.
-local function handler(_params) -- Prefix unused params with underscore
+---Handles the getOpenEditors tool invocation.
+---Gets a list of currently open and listed files in Neovim.
+---@return table response MCP-compliant response with editor tabs data
+local function handler(params)
   local tabs = {}
   local buffers = vim.api.nvim_list_bufs()
   local current_buf = vim.api.nvim_get_current_buf()

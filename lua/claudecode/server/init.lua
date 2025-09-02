@@ -12,7 +12,7 @@ local M = {}
 ---@field server table|nil The TCP server instance
 ---@field port number|nil The port server is running on
 ---@field auth_token string|nil The authentication token for validating connections
----@field clients table A list of connected clients
+---@field clients table<string, WebSocketClient> A list of connected clients
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
 M.state = {
@@ -24,8 +24,8 @@ M.state = {
   ping_timer = nil,
 }
 
----@brief Initialize the WebSocket server
----@param config table Configuration options
+---Initialize the WebSocket server
+---@param config ClaudeCodeConfig Configuration options
 ---@param auth_token string|nil The authentication token for validating connections
 ---@return boolean success Whether server started successfully
 ---@return number|string port_or_error Port number or error message
@@ -64,9 +64,9 @@ function M.start(config, auth_token)
 
       -- Notify main module about new connection for queue processing
       local main_module = require("claudecode")
-      if main_module._process_queued_mentions then
+      if main_module.process_mention_queue then
         vim.schedule(function()
-          main_module._process_queued_mentions()
+          main_module.process_mention_queue(true)
         end)
       end
     end,
@@ -100,7 +100,7 @@ function M.start(config, auth_token)
   return true, server.port
 end
 
----@brief Stop the WebSocket server
+---Stop the WebSocket server
 ---@return boolean success Whether server stopped successfully
 ---@return string|nil error_message Error message if any
 function M.stop()
@@ -129,7 +129,7 @@ function M.stop()
   return true
 end
 
----@brief Handle incoming WebSocket message
+---Handle incoming WebSocket message
 ---@param client table The client that sent the message
 ---@param message string The JSON-RPC message
 function M._handle_message(client, message)
@@ -159,7 +159,7 @@ function M._handle_message(client, message)
   end
 end
 
----@brief Handle JSON-RPC request (requires response)
+---Handle JSON-RPC request (requires response)
 ---@param client table The client that sent the request
 ---@param request table The parsed JSON-RPC request
 function M._handle_request(client, request)
@@ -209,10 +209,6 @@ function M._handle_request(client, request)
   end
 end
 
----@brief Set up deferred response handling for blocking tools
----@param deferred_info table Information about the deferred request
--- Note: deferred_responses table removed - using global _G.claude_deferred_responses instead
-
 -- Add a unique module ID to detect reloading
 local module_instance_id = math.random(10000, 99999)
 logger.debug("server", "Server module loaded with instance ID:", module_instance_id)
@@ -254,11 +250,7 @@ function M._setup_deferred_response(deferred_info)
   logger.debug("server", "Stored response sender in global table for coroutine:", tostring(co))
 end
 
--- Note: _send_deferred_response is no longer needed
--- Responses are now handled via the global _G.claude_deferred_responses table
--- to avoid module reloading issues
-
----@brief Handle JSON-RPC notification (no response)
+---Handle JSON-RPC notification (no response)
 ---@param client table The client that sent the notification
 ---@param notification table The parsed JSON-RPC notification
 function M._handle_notification(client, notification)
@@ -271,10 +263,10 @@ function M._handle_notification(client, notification)
   end
 end
 
----@brief Register message handlers for the server
+---Register message handlers for the server
 function M.register_handlers()
   M.state.handlers = {
-    ["initialize"] = function(client, params) -- Renamed from mcp.connect
+    ["initialize"] = function(client, params)
       return {
         protocolVersion = MCP_PROTOCOL_VERSION,
         capabilities = {
@@ -299,7 +291,7 @@ function M.register_handlers()
       }
     end,
 
-    ["tools/list"] = function(_client, _params)
+    ["tools/list"] = function(client, params)
       return {
         tools = tools.get_tool_list(),
       }
@@ -342,7 +334,7 @@ function M.register_handlers()
   }
 end
 
----@brief Send a message to a client
+---Send a message to a client
 ---@param client table The client to send to
 ---@param method string The method name
 ---@param params table|nil The parameters to send
@@ -363,8 +355,8 @@ function M.send(client, method, params)
   return true
 end
 
----@brief Send a response to a client
----@param client table The client to send to
+---Send a response to a client
+---@param client WebSocketClient The client to send to
 ---@param id number|string|nil The request ID to respond to
 ---@param result any|nil The result data if successful
 ---@param error_data table|nil The error data if failed
@@ -390,7 +382,7 @@ function M.send_response(client, id, result, error_data)
   return true
 end
 
----@brief Broadcast a message to all connected clients
+---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table|nil The parameters to send
 ---@return boolean success Whether broadcast was successful
@@ -410,7 +402,7 @@ function M.broadcast(method, params)
   return true
 end
 
----@brief Get server status information
+---Get server status information
 ---@return table status Server status information
 function M.get_status()
   if not M.state.server then

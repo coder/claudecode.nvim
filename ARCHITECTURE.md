@@ -275,6 +275,7 @@ Manual testing with real Neovim configurations in the `fixtures/` directory:
 source fixtures/nvim-aliases.sh
 vv nvim-tree  # Test with nvim-tree integration
 vv oil        # Test with oil.nvim integration
+vv mini-files # Test with mini.files integration
 vv netrw      # Test with built-in netrw
 
 # Each fixture provides:

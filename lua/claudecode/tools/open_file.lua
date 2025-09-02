@@ -47,19 +47,9 @@ local schema = {
   },
 }
 
---- Handles the openFile tool invocation.
--- Opens a file in the editor with optional selection.
--- @param params table The input parameters for the tool.
--- @field params.filePath string Path to the file to open.
--- @field params.startLine integer (Optional) Line number to start selection.
--- @field params.endLine integer (Optional) Line number to end selection.
--- @field params.startText string (Optional) Text pattern to start selection.
--- @field params.endText string (Optional) Text pattern to end selection.
--- @return table A table with a message indicating success.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
---- Finds a suitable main editor window to open files in.
--- Excludes terminals, sidebars, and floating windows.
--- @return number|nil Window ID of the main editor window, or nil if not found
+---Finds a suitable main editor window to open files in.
+---Excludes terminals, sidebars, and floating windows.
+---@return integer? win_id Window ID of the main editor window, or nil if not found
 local function find_main_editor_window()
   local windows = vim.api.nvim_list_wins()
 
@@ -88,9 +78,9 @@ local function find_main_editor_window()
       and (
         filetype == "neo-tree"
         or filetype == "neo-tree-popup"
-        or filetype == "ClaudeCode"
         or filetype == "NvimTree"
         or filetype == "oil"
+        or filetype == "minifiles"
         or filetype == "aerial"
         or filetype == "tagbar"
         or filetype == "snacks_picker_list"
@@ -108,6 +98,10 @@ local function find_main_editor_window()
   return nil
 end
 
+--- Handles the openFile tool invocation.
+--- Opens a file in the editor with optional selection.
+---@param params table The input parameters for the tool
+---@return table MCP-compliant response with content array
 local function handler(params)
   if not params.filePath then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })

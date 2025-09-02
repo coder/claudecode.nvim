@@ -61,4 +61,6 @@ luacov.stats.out
 # direnv
 .direnv
 
-.claude
+.claude/*
+!.claude/settings.json
+!.claude/hooks/

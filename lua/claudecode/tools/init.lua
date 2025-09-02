@@ -12,13 +12,14 @@ M.ERROR_CODES = {
 
 M.tools = {}
 
+---Setup the tools module
 function M.setup(server)
   M.server = server
 
   M.register_all()
 end
 
---- Get the complete tool list for MCP tools/list handler
+---Get the complete tool list for MCP tools/list handler
 function M.get_tool_list()
   local tool_list = {}
 
@@ -37,6 +38,7 @@ function M.get_tool_list()
   return tool_list
 end
 
+---Register all tools
 function M.register_all()
   -- Register MCP-exposed tools with schemas
   M.register(require("claudecode.tools.open_file"))
@@ -51,9 +53,10 @@ function M.register_all()
   M.register(require("claudecode.tools.save_document"))
 
   -- Register internal tools without schemas (not exposed via MCP)
-  M.register(require("claudecode.tools.close_tab")) -- Must remain internal per user requirement
+  M.register(require("claudecode.tools.close_tab"))
 end
 
+---Register a tool
 function M.register(tool_module)
   if not tool_module or not tool_module.name or not tool_module.handler then
     local name = "unknown"
@@ -77,6 +80,7 @@ function M.register(tool_module)
   }
 end
 
+---Handle an invocation of a tool
 function M.handle_invoke(client, params) -- client needed for blocking tools
   local tool_name = params.name
   local input = params.arguments

@@ -28,16 +28,11 @@ local schema = {
   },
 }
 
---- Handles the openDiff tool invocation with MCP compliance.
--- Opens a diff view and blocks until user interaction (save/close).
--- Returns MCP-compliant response with content array format.
--- @param params table The input parameters for the tool.
--- @field params.old_file_path string Path to the old file.
--- @field params.new_file_path string Path for the new file (for naming).
--- @field params.new_file_contents string Contents of the new file version.
--- @field params.tab_name string Name for the diff tab/view.
--- @return table MCP-compliant response with content array.
--- @error table A table with code, message, and data for JSON-RPC error if failed.
+---Handles the openDiff tool invocation with MCP compliance.
+---Opens a diff view and blocks until user interaction (save/close).
+---Returns MCP-compliant response with content array format.
+---@param params table The input parameters for the tool
+---@return table response MCP-compliant response with content array
 local function handler(params)
   -- Validate required parameters
   local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
@@ -52,8 +47,8 @@ local function handler(params)
   end
 
   -- Ensure we're running in a coroutine context for blocking operation
-  local co = coroutine.running()
-  if not co then
+  local co, is_main = coroutine.running()
+  if not co or is_main then
     error({
       code = -32000,
       message = "Internal server error",
