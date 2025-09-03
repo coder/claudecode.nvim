@@ -19,11 +19,10 @@ M.defaults = {
   connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
   queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
   diff_opts = {
-    auto_close_on_accept = true,
-    show_diff_stats = true,
-    vertical_split = true,
-    open_in_current_tab = true, -- Use current tab instead of creating new tab
+    layout = "vertical",
+    open_in_new_tab = false, -- Open diff in a new tab (false = use current tab)
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+    hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -106,12 +105,38 @@ function M.validate(config)
   assert(type(config.queue_timeout) == "number" and config.queue_timeout > 0, "queue_timeout must be a positive number")
 
   assert(type(config.diff_opts) == "table", "diff_opts must be a table")
-  assert(type(config.diff_opts.auto_close_on_accept) == "boolean", "diff_opts.auto_close_on_accept must be a boolean")
-  assert(type(config.diff_opts.show_diff_stats) == "boolean", "diff_opts.show_diff_stats must be a boolean")
-  assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
-  assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
+  -- New diff options (optional validation to allow backward compatibility)
+  if config.diff_opts.layout ~= nil then
+    assert(
+      config.diff_opts.layout == "vertical" or config.diff_opts.layout == "horizontal",
+      "diff_opts.layout must be 'vertical' or 'horizontal'"
+    )
+  end
+  if config.diff_opts.open_in_new_tab ~= nil then
+    assert(type(config.diff_opts.open_in_new_tab) == "boolean", "diff_opts.open_in_new_tab must be a boolean")
+  end
   if config.diff_opts.keep_terminal_focus ~= nil then
     assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
+  end
+  if config.diff_opts.hide_terminal_in_new_tab ~= nil then
+    assert(
+      type(config.diff_opts.hide_terminal_in_new_tab) == "boolean",
+      "diff_opts.hide_terminal_in_new_tab must be a boolean"
+    )
+  end
+
+  -- Legacy diff options (accept if present to avoid breaking old configs)
+  if config.diff_opts.auto_close_on_accept ~= nil then
+    assert(type(config.diff_opts.auto_close_on_accept) == "boolean", "diff_opts.auto_close_on_accept must be a boolean")
+  end
+  if config.diff_opts.show_diff_stats ~= nil then
+    assert(type(config.diff_opts.show_diff_stats) == "boolean", "diff_opts.show_diff_stats must be a boolean")
+  end
+  if config.diff_opts.vertical_split ~= nil then
+    assert(type(config.diff_opts.vertical_split) == "boolean", "diff_opts.vertical_split must be a boolean")
+  end
+  if config.diff_opts.open_in_current_tab ~= nil then
+    assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
   end
 
   -- Validate env
@@ -157,6 +182,19 @@ function M.apply(user_config)
       for k, v in pairs(user_config) do
         config[k] = v
       end
+    end
+  end
+
+  -- Backward compatibility: map legacy diff options to new fields if provided
+  if config.diff_opts then
+    local d = config.diff_opts
+    -- Map vertical_split -> layout (only if layout not explicitly set)
+    if d.layout == nil and type(d.vertical_split) == "boolean" then
+      d.layout = d.vertical_split and "vertical" or "horizontal"
+    end
+    -- Map open_in_current_tab -> open_in_new_tab (invert; only if not explicitly set)
+    if d.open_in_new_tab == nil and type(d.open_in_current_tab) == "boolean" then
+      d.open_in_new_tab = not d.open_in_current_tab
     end
   end
 

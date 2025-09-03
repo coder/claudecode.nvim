@@ -40,29 +40,29 @@ return {
   },
 
   -- Development configuration - all options shown with defaults commented out
+  ---@type ClaudeCodeConfig
   opts = {
     -- Server Configuration
-    -- port_range = { min = 10000, max = 65535 },  -- WebSocket server port range
-    -- auto_start = true,                          -- Auto-start server on Neovim startup
-    -- log_level = "info",                         -- "trace", "debug", "info", "warn", "error"
-    -- terminal_cmd = nil,                         -- Custom terminal command (default: "claude")
+    -- port_range = { min = 10000, max = 65535 }, -- WebSocket server port range
+    -- auto_start = true, -- Auto-start server on Neovim startup
+    -- log_level = "info", -- "trace", "debug", "info", "warn", "error"
+    -- terminal_cmd = nil, -- Custom terminal command (default: "claude")
 
     -- Selection Tracking
-    -- track_selection = true,                     -- Enable real-time selection tracking
-    -- visual_demotion_delay_ms = 50,             -- Delay before demoting visual selection (ms)
+    -- track_selection = true, -- Enable real-time selection tracking
+    -- visual_demotion_delay_ms = 50, -- Delay before demoting visual selection (ms)
 
     -- Connection Management
-    -- connection_wait_delay = 200,                -- Wait time after connection before sending queued @ mentions (ms)
-    -- connection_timeout = 10000,                 -- Max time to wait for Claude Code connection (ms)
-    -- queue_timeout = 5000,                       -- Max time to keep @ mentions in queue (ms)
+    -- connection_wait_delay = 200, -- Wait time after connection before sending queued @ mentions (ms)
+    -- connection_timeout = 10000, -- Max time to wait for Claude Code connection (ms)
+    -- queue_timeout = 5000, -- Max time to keep @ mentions in queue (ms)
 
     -- Diff Integration
     -- diff_opts = {
-    --   auto_close_on_accept = true,              -- Close diff view after accepting changes
-    --   show_diff_stats = true,                   -- Show diff statistics
-    --   vertical_split = true,                    -- Use vertical split for diffs
-    --   open_in_current_tab = true,               -- Open diffs in current tab vs new tab
-    --   keep_terminal_focus = false,              -- If true, moves focus back to terminal after diff opens
+    --   layout = "horizontal", -- "vertical" or "horizontal" diff layout
+    --   open_in_new_tab = true, -- Open diff in a new tab (false = use current tab)
+    --   keep_terminal_focus = true, -- Keep focus in terminal after opening diff
+    --   hide_terminal_in_new_tab = true, -- Hide Claude terminal in the new diff tab for more review space
     -- },
 
     -- Terminal Configuration

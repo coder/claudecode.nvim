@@ -61,12 +61,17 @@ end
 
 local vim = {
   _buffers = {},
-  _windows = { [1000] = { buf = 1 } }, -- Initialize with a default window
+  _windows = { [1000] = { buf = 1, width = 80 } }, -- winid -> { buf, width, cursor, config }
+  _win_tab = { [1000] = 1 }, -- winid -> tabpage
+  _tab_windows = { [1] = { 1000 } }, -- tabpage -> { winids }
+  _next_winid = 1001,
   _commands = {},
   _autocmds = {},
   _vars = {},
   _options = {},
   _current_window = 1000,
+  _tabs = { [1] = true },
+  _current_tabpage = 1,
 
   api = {
     nvim_create_user_command = function(name, callback, opts)
@@ -172,7 +177,7 @@ local vim = {
       -- buffer or window. Here, it's stored in a general options table if not
       -- a buffer-local option, or in the buffer's options table if `opts.buf` is provided.
       -- A more complex mock might be needed for intricate scope-related tests.
-      if opts and opts.scope == "local" and opts.buf then
+      if opts and opts.buf then
         if vim._buffers[opts.buf] then
           if not vim._buffers[opts.buf].options then
             vim._buffers[opts.buf].options = {}
@@ -273,7 +278,7 @@ local vim = {
     end,
 
     nvim_get_current_win = function()
-      return 1000 -- Mock window ID
+      return vim._current_window
     end,
 
     nvim_set_current_win = function(winid)
@@ -283,14 +288,17 @@ local vim = {
     end,
 
     nvim_list_wins = function()
-      -- Return a list of window IDs
+      -- Return a list of window IDs for the current tab
       local wins = {}
-      for winid, _ in pairs(vim._windows) do
-        table.insert(wins, winid)
+      local list = vim._tab_windows[vim._current_tabpage] or {}
+      for _, winid in ipairs(list) do
+        if vim._windows[winid] then
+          table.insert(wins, winid)
+        end
       end
       if #wins == 0 then
         -- Always have at least one window
-        table.insert(wins, 1000)
+        table.insert(wins, vim._current_window)
       end
       return wins
     end,
@@ -299,7 +307,24 @@ local vim = {
       if not vim._windows[winid] then
         vim._windows[winid] = {}
       end
+      local old_buf = vim._windows[winid].buf
       vim._windows[winid].buf = bufnr
+      -- If old buffer is no longer displayed in any window, and has bufhidden=wipe, delete it
+      if old_buf and vim._buffers[old_buf] then
+        local still_visible = false
+        for _, w in pairs(vim._windows) do
+          if w.buf == old_buf then
+            still_visible = true
+            break
+          end
+        end
+        if not still_visible then
+          local opts = vim._buffers[old_buf].options or {}
+          if opts.bufhidden == "wipe" then
+            vim._buffers[old_buf] = nil
+          end
+        end
+      end
     end,
 
     nvim_win_get_buf = function(winid)
@@ -314,7 +339,36 @@ local vim = {
     end,
 
     nvim_win_close = function(winid, force)
+      local old_buf = vim._windows[winid] and vim._windows[winid].buf
       vim._windows[winid] = nil
+      -- remove from tab mapping
+      local tab = vim._win_tab[winid]
+      if tab and vim._tab_windows[tab] then
+        local new_list = {}
+        for _, w in ipairs(vim._tab_windows[tab]) do
+          if w ~= winid then
+            table.insert(new_list, w)
+          end
+        end
+        vim._tab_windows[tab] = new_list
+      end
+      vim._win_tab[winid] = nil
+      -- Apply bufhidden=wipe if now hidden
+      if old_buf and vim._buffers[old_buf] then
+        local still_visible = false
+        for _, w in pairs(vim._windows) do
+          if w.buf == old_buf then
+            still_visible = true
+            break
+          end
+        end
+        if not still_visible then
+          local opts = vim._buffers[old_buf].options or {}
+          if opts.bufhidden == "wipe" then
+            vim._buffers[old_buf] = nil
+          end
+        end
+      end
     end,
 
     nvim_win_call = function(winid, callback)
@@ -333,12 +387,48 @@ local vim = {
       return {}
     end,
 
+    nvim_win_set_width = function(winid, width)
+      if vim._windows[winid] then
+        vim._windows[winid].width = width
+      end
+    end,
+
+    nvim_win_get_width = function(winid)
+      return (vim._windows[winid] and vim._windows[winid].width) or 80
+    end,
+
     nvim_get_current_tabpage = function()
-      return 1
+      return vim._current_tabpage
+    end,
+
+    nvim_set_current_tabpage = function(tab)
+      if vim._tabs[tab] then
+        vim._current_tabpage = tab
+      end
+    end,
+
+    nvim_tabpage_is_valid = function(tab)
+      return vim._tabs[tab] == true
+    end,
+
+    nvim_tabpage_get_number = function(tab)
+      return tab
     end,
 
     nvim_tabpage_set_var = function(tabpage, name, value)
       -- Mock tabpage variable setting
+    end,
+
+    nvim_win_get_tabpage = function(winid)
+      return vim._win_tab[winid] or vim._current_tabpage
+    end,
+
+    nvim_buf_line_count = function(bufnr)
+      local b = vim._buffers[bufnr]
+      if not b or not b.lines then
+        return 0
+      end
+      return #b.lines
     end,
   },
 
@@ -446,6 +536,133 @@ local vim = {
   cmd = function(command)
     -- Store the last command for test assertions.
     vim._last_command = command
+    -- Implement minimal behavior for essential commands
+    if command == "tabnew" then
+      -- Create new tab with a new window and an unnamed buffer
+      local new_tab = 1
+      for k, _ in pairs(vim._tabs) do
+        if k >= new_tab then
+          new_tab = k + 1
+        end
+      end
+      vim._tabs[new_tab] = true
+      vim._current_tabpage = new_tab
+
+      -- Create a new unnamed buffer
+      local bufnr = vim.api.nvim_create_buf(false, true)
+      vim._buffers[bufnr].name = ""
+      vim._buffers[bufnr].options = vim._buffers[bufnr].options or {}
+      vim._buffers[bufnr].options.modified = false
+      vim._buffers[bufnr].lines = { "" }
+
+      -- Create a new window for this tab
+      local winid = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[winid] = { buf = bufnr, width = 80 }
+      vim._win_tab[winid] = new_tab
+      vim._tab_windows[new_tab] = { winid }
+      vim._current_window = winid
+    elseif command:match("vsplit") then
+      -- Split current window vertically; new window shows same buffer
+      local cur = vim._current_window
+      local curtab = vim._current_tabpage
+      local bufnr = vim._windows[cur] and vim._windows[cur].buf or 1
+      local winid = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[winid] = { buf = bufnr, width = 80 }
+      vim._win_tab[winid] = curtab
+      local list = vim._tab_windows[curtab] or {}
+      table.insert(list, winid)
+      vim._tab_windows[curtab] = list
+      vim._current_window = winid
+    elseif command:match("[^%w]split$") or command == "split" then
+      -- Horizontal split: model similarly by creating a new window entry
+      local cur = vim._current_window
+      local curtab = vim._current_tabpage
+      local bufnr = vim._windows[cur] and vim._windows[cur].buf or 1
+      local winid = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[winid] = { buf = bufnr, width = 80 }
+      vim._win_tab[winid] = curtab
+      local list = vim._tab_windows[curtab] or {}
+      table.insert(list, winid)
+      vim._tab_windows[curtab] = list
+      vim._current_window = winid
+    elseif command:match("^edit ") then
+      local path = command:sub(6)
+      -- Remove surrounding quotes if any
+      path = path:gsub("^'", ""):gsub("'$", "")
+      -- Find or create buffer for this path
+      local bufnr = -1
+      for id, b in pairs(vim._buffers) do
+        if b.name == path then
+          bufnr = id
+          break
+        end
+      end
+      if bufnr == -1 then
+        bufnr = vim.api.nvim_create_buf(true, false)
+        vim._buffers[bufnr].name = path
+        -- Try to read file content if exists
+        local f = io.open(path, "r")
+        if f then
+          -- Only read if the handle supports :read (avoid tests that stub io.open for writing only)
+          local ok_read = (type(f) == "userdata") or (type(f) == "table" and type(f.read) == "function")
+          if ok_read then
+            local content = f:read("*a") or ""
+            if type(f.close) == "function" then
+              pcall(f.close, f)
+            end
+            vim._buffers[bufnr].lines = {}
+            for line in (content .. "\n"):gmatch("(.-)\n") do
+              table.insert(vim._buffers[bufnr].lines, line)
+            end
+          else
+            -- Gracefully ignore non-readable stubs
+          end
+        end
+      end
+      vim.api.nvim_win_set_buf(vim._current_window, bufnr)
+    elseif command:match("^tabclose") then
+      -- Close current tab: remove all its windows and switch to the lowest-numbered remaining tab
+      local curtab = vim._current_tabpage
+      local wins = vim._tab_windows[curtab] or {}
+      for _, w in ipairs(wins) do
+        if vim._windows[w] then
+          vim.api.nvim_win_close(w, true)
+        end
+      end
+      vim._tab_windows[curtab] = nil
+      vim._tabs[curtab] = nil
+      -- switch to lowest-numbered existing tab
+      local new_cur = nil
+      for t, _ in pairs(vim._tabs) do
+        if not new_cur or t < new_cur then
+          new_cur = t
+        end
+      end
+      if not new_cur then
+        -- recreate a default tab and window
+        vim._tabs[1] = true
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim._buffers[bufnr].name = "/home/user/project/test.lua"
+        local winid = vim._next_winid
+        vim._next_winid = vim._next_winid + 1
+        vim._windows[winid] = { buf = bufnr, width = 80 }
+        vim._win_tab[winid] = 1
+        vim._tab_windows[1] = { winid }
+        vim._current_window = winid
+        vim._current_tabpage = 1
+      else
+        vim._current_tabpage = new_cur
+        local list = vim._tab_windows[new_cur]
+        if list and #list > 0 then
+          vim._current_window = list[1]
+        end
+      end
+    else
+      -- other commands (wincmd etc.) are recorded but not simulated
+    end
   end,
 
   json = {
@@ -767,14 +984,18 @@ vim._mock = {
 
   add_window = function(winid, bufnr, cursor)
     vim._windows[winid] = {
-      buffer = bufnr,
+      buf = bufnr,
       cursor = cursor or { 1, 0 },
+      width = 80,
     }
   end,
 
   reset = function()
     vim._buffers = {}
     vim._windows = {}
+    vim._win_tab = {}
+    vim._tab_windows = {}
+    vim._next_winid = 1000
     vim._commands = {}
     vim._autocmds = {}
     vim._vars = {}
@@ -789,6 +1010,19 @@ if _G.vim == nil then
   _G.vim = vim
 end
 vim._mock.add_buffer(1, "/home/user/project/test.lua", "local test = {}\nreturn test")
-vim._mock.add_window(0, 1, { 1, 0 })
+vim._mock.add_window(1000, 1, { 1, 0 })
+vim._win_tab[1000] = 1
+vim._tab_windows[1] = { 1000 }
+vim._current_window = 1000
+
+-- Global options table (minimal)
+vim.o = setmetatable({ columns = 120, lines = 40 }, {
+  __index = function(_, k)
+    return vim._options[k]
+  end,
+  __newindex = function(_, k, v)
+    vim._options[k] = v
+  end,
+})
 
 return vim

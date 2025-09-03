@@ -85,10 +85,9 @@ describe("Configuration", function()
       track_selection = false,
       visual_demotion_delay_ms = 50,
       diff_opts = {
-        auto_close_on_accept = true,
-        show_diff_stats = true,
-        vertical_split = true,
-        open_in_current_tab = true,
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = false,
       },
       models = {}, -- Empty models array should be rejected
     }
@@ -108,10 +107,9 @@ describe("Configuration", function()
       track_selection = false,
       visual_demotion_delay_ms = 50,
       diff_opts = {
-        auto_close_on_accept = true,
-        show_diff_stats = true,
-        vertical_split = true,
-        open_in_current_tab = true,
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = false,
       },
       models = {
         { name = "Test Model" }, -- Missing value field
@@ -151,10 +149,8 @@ describe("Configuration", function()
       connection_timeout = 10000,
       queue_timeout = 5000,
       diff_opts = {
-        auto_close_on_accept = true,
-        show_diff_stats = true,
-        vertical_split = true,
-        open_in_current_tab = true,
+        layout = "vertical",
+        open_in_new_tab = false,
         keep_terminal_focus = true,
       },
       env = {},
@@ -178,10 +174,8 @@ describe("Configuration", function()
       connection_timeout = 10000,
       queue_timeout = 5000,
       diff_opts = {
-        auto_close_on_accept = true,
-        show_diff_stats = true,
-        vertical_split = true,
-        open_in_current_tab = true,
+        layout = "vertical",
+        open_in_new_tab = false,
         keep_terminal_focus = "invalid", -- Should be boolean
       },
       env = {},
