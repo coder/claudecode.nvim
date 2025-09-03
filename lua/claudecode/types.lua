@@ -19,6 +19,7 @@
 ---@field vertical_split boolean
 ---@field open_in_current_tab boolean
 ---@field keep_terminal_focus boolean
+---@field on_unsaved_changes "error"|"discard"
 
 -- Model selection option
 ---@class ClaudeCodeModelOption
