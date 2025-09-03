@@ -24,6 +24,7 @@ M.defaults = {
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+    on_unsaved_changes = "error", -- "error", "discard" (discard uses :edit! to reload the file and will lose unsaved changes)
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -113,6 +114,16 @@ function M.validate(config)
   if config.diff_opts.keep_terminal_focus ~= nil then
     assert(type(config.diff_opts.keep_terminal_focus) == "boolean", "diff_opts.keep_terminal_focus must be a boolean")
   end
+
+  local valid_behaviors = { "error", "discard" }
+  local is_valid_behavior = false
+  for _, behavior in ipairs(valid_behaviors) do
+    if config.diff_opts.on_unsaved_changes == behavior then
+      is_valid_behavior = true
+      break
+    end
+  end
+  assert(is_valid_behavior, "diff_opts.on_unsaved_changes must be one of: " .. table.concat(valid_behaviors, ", "))
 
   -- Validate env
   assert(type(config.env) == "table", "env must be a table")
