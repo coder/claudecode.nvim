@@ -1132,6 +1132,8 @@ function M._setup_blocking_diff(params, resolution_callback)
               message = "Failed to discard unsaved changes before creating diff",
               data = discard_err,
             })
+          else
+            logger.warn("diff", "Discarded unsaved changes in " .. params.old_file_path)
           end
         end
       end
