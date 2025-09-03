@@ -112,6 +112,14 @@ local function is_buffer_dirty(file_path)
   return is_dirty, nil
 end
 
+---Restore window layout by delegating to terminal module
+local function restore_window_layout()
+  local ok, terminal = pcall(require, "claudecode.terminal")
+  if ok and terminal.restore_window_layout then
+    terminal.restore_window_layout()
+  end
+end
+
 ---Setup the diff module
 ---@param user_config ClaudeCodeConfig? The configuration passed from init.lua
 function M.setup(user_config)
@@ -373,6 +381,8 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
     vim.api.nvim_set_current_win(diff_data.target_window)
     vim.cmd("diffoff")
+    -- Restore proper window layout after closing diff
+    restore_window_layout()
   end
 
   -- Create MCP-compliant response
@@ -682,6 +692,8 @@ function M._cleanup_diff_state(tab_name, reason)
     vim.api.nvim_win_call(diff_data.target_window, function()
       vim.cmd("diffoff")
     end)
+    -- Restore proper window layout after cleanup
+    restore_window_layout()
   end
 
   -- Remove from active diffs
@@ -1020,6 +1032,8 @@ function M.deny_current_diff()
   if target_window and vim.api.nvim_win_is_valid(target_window) then
     vim.api.nvim_set_current_win(target_window)
     vim.cmd("diffoff")
+    -- Restore proper window layout after rejecting diff
+    restore_window_layout()
   end
 
   M._resolve_diff_as_rejected(tab_name)
