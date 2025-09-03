@@ -26,7 +26,7 @@ M.defaults = {
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
     on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
-    on_unsaved_changes = "error", -- "error", "discard" - How to handle unsaved changes when creating diffs
+    on_unsaved_changes = "error", -- "error", "discard" (discard uses :edit! to reload the file and will lose unsaved changes)
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },

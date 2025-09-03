@@ -281,7 +281,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       vertical_split = true,
       open_in_current_tab = true,
       keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
-      on_unsaved_changes = "error" -- "error" or "discard"
+      on_unsaved_changes = "error" -- "error" or "discard" (discard uses :edit! to reload the file and will lose unsaved changes)
     },
   },
   keys = {
