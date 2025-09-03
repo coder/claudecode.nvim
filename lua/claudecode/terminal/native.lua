@@ -88,6 +88,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
   jobid = vim.fn.termopen(term_cmd_arg, {
     env = env_table,
+    cwd = effective_config.cwd,
     on_exit = function(job_id, _, _)
       vim.schedule(function()
         if job_id == jobid then
