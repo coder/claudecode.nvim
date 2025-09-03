@@ -24,7 +24,7 @@ M.defaults = {
     vertical_split = true,
     open_in_current_tab = true, -- Use current tab instead of creating new tab
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
-    on_unsaved_changes = "error", -- "error", "discard" - How to handle unsaved changes when creating diffs
+    on_unsaved_changes = "error", -- "error", "discard" (discard uses :edit! to reload the file and will lose unsaved changes)
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
