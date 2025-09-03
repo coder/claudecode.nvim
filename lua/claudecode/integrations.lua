@@ -1,5 +1,6 @@
---- Tree integration module for ClaudeCode.nvim
---- Handles detection and selection of files from nvim-tree, neo-tree, mini.files, and oil.nvim
+---
+-- Tree integration module for ClaudeCode.nvim
+-- Handles detection and selection of files from nvim-tree, neo-tree, oil.nvim, mini-files and snacks.explorer
 ---@module 'claudecode.integrations'
 local M = {}
 
@@ -15,6 +16,8 @@ function M.get_selected_files_from_tree()
     return M._get_neotree_selection()
   elseif current_ft == "oil" then
     return M._get_oil_selection()
+  elseif current_ft == "snacks_picker_list" then
+    return M._get_snacks_explorer_selection()
   elseif current_ft == "minifiles" then
     return M._get_mini_files_selection()
   else
@@ -262,74 +265,92 @@ function M._get_oil_selection()
   return {}, "No file found under cursor"
 end
 
--- Helper function to get mini.files selection using explicit range
-function M._get_mini_files_selection_with_range(start_line, end_line)
-  local success, mini_files = pcall(require, "mini.files")
-  if not success then
-    return {}, "mini.files not available"
+--- Get selected files from snacks.explorer
+--- Uses the picker API to get the current selection
+--- @param visual_start number|nil Start line of visual selection (optional)
+--- @param visual_end number|nil End line of visual selection (optional)
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_snacks_explorer_selection(visual_start, visual_end)
+  local snacks_ok, snacks = pcall(require, "snacks")
+  if not snacks_ok or not snacks.picker then
+    return {}, "snacks.nvim not available"
+  end
+
+  -- Get the current explorer picker
+  local explorers = snacks.picker.get({ source = "explorer" })
+  if not explorers or #explorers == 0 then
+    return {}, "No active snacks.explorer found"
+  end
+
+  -- Get the first (and likely only) explorer instance
+  local explorer = explorers[1]
+  if not explorer then
+    return {}, "No active snacks.explorer found"
   end
 
   local files = {}
-  local bufnr = vim.api.nvim_get_current_buf()
 
-  -- Process each line in the range
-  for line = start_line, end_line do
-    local entry_ok, entry = pcall(mini_files.get_fs_entry, bufnr, line)
+  -- Helper function to extract file path from various item structures
+  local function extract_file_path(item)
+    if not item then
+      return nil
+    end
+    local file_path = item.file or item.path or (item.item and item.item.file) or (item.item and item.item.path)
 
-    if entry_ok and entry and entry.path and entry.path ~= "" then
-      -- Extract real filesystem path from mini.files buffer path
-      local real_path = entry.path
-      -- Remove mini.files buffer protocol prefix if present
-      if real_path:match("^minifiles://") then
-        real_path = real_path:gsub("^minifiles://[^/]*/", "")
+    -- Add trailing slash for directories
+    if file_path and file_path ~= "" and vim.fn.isdirectory(file_path) == 1 then
+      if not file_path:match("/$") then
+        file_path = file_path .. "/"
       end
+    end
 
-      -- Validate that the path exists
-      if vim.fn.filereadable(real_path) == 1 or vim.fn.isdirectory(real_path) == 1 then
-        table.insert(files, real_path)
+    return file_path
+  end
+
+  -- Handle visual mode selection if range is provided
+  if visual_start and visual_end and explorer.list then
+    -- Process each line in the visual selection
+    for row = visual_start, visual_end do
+      -- Convert row to picker index
+      local idx = explorer.list:row2idx(row)
+      if idx then
+        -- Get the item at this index
+        local item = explorer.list:get(idx)
+        if item then
+          local file_path = extract_file_path(item)
+          if file_path and file_path ~= "" then
+            table.insert(files, file_path)
+          end
+        end
       end
+    end
+    if #files > 0 then
+      return files, nil
     end
   end
 
-  if #files > 0 then
-    return files, nil
-  else
-    return {}, "No files found in range"
-  end
-end
-
----Get selected files from mini.files
----Supports both visual selection and single file under cursor
----Reference: mini.files API MiniFiles.get_fs_entry()
----@return table files List of file paths
----@return string|nil error Error message if operation failed
-function M._get_mini_files_selection()
-  local success, mini_files = pcall(require, "mini.files")
-  if not success then
-    return {}, "mini.files not available"
-  end
-
-  local bufnr = vim.api.nvim_get_current_buf()
-
-  -- Normal mode: get file under cursor
-  local entry_ok, entry = pcall(mini_files.get_fs_entry, bufnr)
-  if not entry_ok or not entry then
-    return {}, "Failed to get entry from mini.files"
-  end
-
-  if entry.path and entry.path ~= "" then
-    -- Extract real filesystem path from mini.files buffer path
-    local real_path = entry.path
-    -- Remove mini.files buffer protocol prefix if present
-    if real_path:match("^minifiles://") then
-      real_path = real_path:gsub("^minifiles://[^/]*/", "")
+  -- Check if there are selected items (using toggle selection)
+  local selected = explorer:selected({ fallback = false })
+  if selected and #selected > 0 then
+    -- Process selected items
+    for _, item in ipairs(selected) do
+      local file_path = extract_file_path(item)
+      if file_path and file_path ~= "" then
+        table.insert(files, file_path)
+      end
     end
+    if #files > 0 then
+      return files, nil
+    end
+  end
 
-    -- Validate that the path exists
-    if vim.fn.filereadable(real_path) == 1 or vim.fn.isdirectory(real_path) == 1 then
-      return { real_path }, nil
-    else
-      return {}, "Invalid file or directory path: " .. real_path
+  -- Fall back to current item under cursor
+  local current = explorer:current({ resolve = true })
+  if current then
+    local file_path = extract_file_path(current)
+    if file_path and file_path ~= "" then
+      return { file_path }, nil
     end
   end
 

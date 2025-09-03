@@ -133,8 +133,8 @@ function M.get_visual_range()
   return start_pos, end_pos
 end
 
----Check if we're in a tree buffer and get the tree state
----@return table? tree_state, string? tree_type ("neo-tree" or "nvim-tree")
+--- Check if we're in a tree buffer and get the tree state
+--- @return table|nil, string|nil tree_state, tree_type ("neo-tree", "nvim-tree", "oil", or "snacks-explorer")
 function M.get_tree_state()
   local current_ft = "" -- Default fallback
   local current_win = 0 -- Default fallback
@@ -180,6 +180,16 @@ function M.get_tree_state()
     end
 
     return oil, "oil"
+  elseif current_ft == "snacks_picker_list" then
+    local snacks_success, snacks = pcall(require, "snacks")
+    if not snacks_success or not snacks.picker then
+      return nil, nil
+    end
+
+    local explorers = snacks.picker.get({ source = "explorer" })
+    if explorers and #explorers > 0 then
+      return explorers[1], "snacks-explorer"
+    end
   else
     return nil, nil
   end
@@ -378,6 +388,16 @@ function M.get_files_from_visual_selection(visual_data)
             end
           end
         end
+      end
+    end
+  elseif tree_type == "snacks-explorer" then
+    -- For snacks.explorer, pass the visual range to handle multi-selection
+    local integrations = require("claudecode.integrations")
+    local selected_files, error = integrations._get_snacks_explorer_selection(start_pos, end_pos)
+
+    if not error and selected_files and #selected_files > 0 then
+      for _, file in ipairs(selected_files) do
+        table.insert(files, file)
       end
     end
   end

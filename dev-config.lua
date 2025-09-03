@@ -24,7 +24,7 @@ return {
       "<leader>as",
       "<cmd>ClaudeCodeTreeAdd<cr>",
       desc = "Add file from tree",
-      ft = { "NvimTree", "neo-tree", "oil", "minifiles" },
+      ft = { "NvimTree", "neo-tree", "oil", "minifiles", "snacks_picker_list" },
     },
 
     -- Development helpers
