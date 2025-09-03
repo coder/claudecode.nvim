@@ -107,6 +107,8 @@
 ---@field enable_broadcast_debouncing_in_tests? boolean
 ---@field terminal ClaudeCodeTerminalConfig?
 
+---@class (partial) PartialClaudeCodeConfig: ClaudeCodeConfig
+
 -- Server interface for main module
 ---@class ClaudeCodeServerFacade
 ---@field start fun(config: ClaudeCodeConfig, auth_token: string|nil): (success: boolean, port_or_error: number|string)
