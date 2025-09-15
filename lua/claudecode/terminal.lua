@@ -166,6 +166,14 @@ local function get_provider()
   elseif defaults.provider == "native" then
     -- noop, will use native provider as default below
     logger.debug("terminal", "Using native terminal provider")
+  elseif defaults.provider == "none" then
+    local none_provider = load_provider("none")
+    if none_provider then
+      logger.debug("terminal", "Using no-op terminal provider ('none')")
+      return none_provider
+    else
+      logger.warn("terminal", "'none' provider configured but failed to load. Falling back to 'native'.")
+    end
   elseif type(defaults.provider) == "string" then
     logger.warn(
       "terminal",
@@ -394,7 +402,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         )
       end
     elseif k == "provider" then
-      if type(v) == "table" or v == "snacks" or v == "native" or v == "external" or v == "auto" then
+      if type(v) == "table" or v == "snacks" or v == "native" or v == "external" or v == "auto" or v == "none" then
         defaults.provider = v
       else
         vim.notify(

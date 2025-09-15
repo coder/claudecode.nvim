@@ -39,11 +39,11 @@
 ---@alias ClaudeCodeSplitSide "left"|"right"
 
 -- In-tree terminal provider names
----@alias ClaudeCodeTerminalProviderName "auto"|"snacks"|"native"|"external"
+---@alias ClaudeCodeTerminalProviderName "auto"|"snacks"|"native"|"external"|"none"
 
 -- Terminal provider-specific options
 ---@class ClaudeCodeTerminalProviderOptions
----@field external_terminal_cmd string|fun(cmd: string, env: table): string|table|nil Command for external terminal (string template with %s or function)
+---@field external_terminal_cmd string|(fun(cmd: string, env: table): string)|table|nil Command for external terminal (string template with %s or function)
 
 -- Working directory resolution context and provider
 ---@class ClaudeCodeCwdContext
