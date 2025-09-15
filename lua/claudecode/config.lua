@@ -17,7 +17,7 @@ M.defaults = {
   -- When true, focus Claude terminal after a successful send while connected
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
-  connection_wait_delay = 200, -- Milliseconds to wait after connection before sending queued @ mentions
+  connection_wait_delay = 600, -- Milliseconds to wait after connection before sending queued @ mentions
   connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
   queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
   diff_opts = {
