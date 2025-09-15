@@ -47,7 +47,21 @@ function M.is_claude_connected()
 
   local server_module = require("claudecode.server.init")
   local status = server_module.get_status()
-  return status.running and status.client_count > 0
+  if not status.running then
+    return false
+  end
+
+  -- Prefer handshake-aware check when client info is available; otherwise fall back to client_count
+  if status.clients and #status.clients > 0 then
+    for _, info in ipairs(status.clients) do
+      if (info.state == "connected" or info.handshake_complete == true) and info.handshake_complete == true then
+        return true
+      end
+    end
+    return false
+  else
+    return status.client_count and status.client_count > 0
+  end
 end
 
 ---Clear the mention queue and stop any pending timer
@@ -149,8 +163,16 @@ function M.process_mention_queue(from_new_connection)
   end
 
   if not M.is_claude_connected() then
-    -- Still disconnected, wait for connection
-    logger.debug("queue", "Claude not connected, keeping " .. #M.state.mention_queue .. " mentions queued")
+    -- Still disconnected or handshake not complete yet, wait for readiness
+    logger.debug("queue", "Claude not ready (no handshake). Keeping ", #M.state.mention_queue, " mentions queued")
+
+    -- If triggered by a new connection, poll until handshake completes (bounded by connection_timeout timer)
+    if from_new_connection then
+      local retry_delay = math.max(50, math.floor((M.state.config.connection_wait_delay or 200) / 4))
+      vim.defer_fn(function()
+        M.process_mention_queue(true)
+      end, retry_delay)
+    end
     return
   end
 
@@ -173,7 +195,7 @@ function M.process_mention_queue(from_new_connection)
 
   logger.debug("queue", "Processing " .. #mentions_to_send .. " queued @ mentions")
 
-  -- Send mentions with 10ms delay between each to prevent WebSocket buffer overflow
+  -- Send mentions with a small delay between each to prevent WebSocket/extension overwhelm
   local function send_mention_sequential(index)
     if index > #mentions_to_send then
       logger.debug("queue", "All queued mentions sent successfully")
@@ -204,9 +226,10 @@ function M.process_mention_queue(from_new_connection)
 
     -- Process next mention with delay
     if index < #mentions_to_send then
+      local inter_message_delay = 25 -- ms
       vim.defer_fn(function()
         send_mention_sequential(index + 1)
-      end, 10) -- 10ms delay between mentions
+      end, inter_message_delay)
     end
   end
 
@@ -214,9 +237,11 @@ function M.process_mention_queue(from_new_connection)
   if #mentions_to_send > 0 then
     if from_new_connection then
       -- Wait for connection_wait_delay when processing queue after new connection
+      local initial_delay = (M.state.config and M.state.config.connection_wait_delay) or 200
+      logger.debug("queue", "Waiting ", initial_delay, "ms after connect before flushing queue")
       vim.defer_fn(function()
         send_mention_sequential(1)
-      end, M.state.config.connection_wait_delay)
+      end, initial_delay)
     else
       -- Send immediately for debounced processing (Claude already connected)
       send_mention_sequential(1)
