@@ -691,22 +691,27 @@ function M._create_commands()
 
     if is_tree_buffer then
       local integrations = require("claudecode.integrations")
+      local visual_cmd_module = require("claudecode.visual_commands")
       local files, error
 
-      -- For mini.files, try to get the range from visual marks
+      -- For mini.files, try to get the range from visual marks for accuracy
       if current_ft == "minifiles" or string.match(current_bufname, "minifiles://") then
         local start_line = vim.fn.line("'<")
         local end_line = vim.fn.line("'>")
 
         if start_line > 0 and end_line > 0 and start_line <= end_line then
-          -- Use range-based selection for mini.files
           files, error = integrations._get_mini_files_selection_with_range(start_line, end_line)
         else
-          -- Fall back to regular method
-          files, error = integrations.get_selected_files_from_tree()
+          -- If range invalid, try visual selection fallback (uses pre-captured visual_data)
+          files, error = visual_cmd_module.get_files_from_visual_selection(visual_data)
         end
       else
-        files, error = integrations.get_selected_files_from_tree()
+        -- Use visual selection-aware extraction for tree buffers (neo-tree, nvim-tree, oil)
+        files, error = visual_cmd_module.get_files_from_visual_selection(visual_data)
+        if (not files or #files == 0) and not error then
+          -- Fallback: try generic selection if visual data was unavailable
+          files, error = integrations.get_selected_files_from_tree()
+        end
       end
 
       if error then

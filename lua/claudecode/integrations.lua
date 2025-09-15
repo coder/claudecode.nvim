@@ -2,6 +2,7 @@
 --- Handles detection and selection of files from nvim-tree, neo-tree, mini.files, and oil.nvim
 ---@module 'claudecode.integrations'
 local M = {}
+local logger = require("claudecode.logger")
 
 ---Get selected files from the current tree explorer
 ---@return table|nil files List of file paths, or nil if error
@@ -75,11 +76,13 @@ end
 function M._get_neotree_selection()
   local success, manager = pcall(require, "neo-tree.sources.manager")
   if not success then
+    logger.debug("integrations/neotree", "neo-tree not available (require failed)")
     return {}, "neo-tree not available"
   end
 
   local state = manager.get_state("filesystem")
   if not state then
+    logger.debug("integrations/neotree", "filesystem state not available from manager")
     return {}, "neo-tree filesystem state not available"
   end
 
@@ -87,10 +90,19 @@ function M._get_neotree_selection()
 
   -- Use neo-tree's own visual selection method (like their copy/paste feature)
   local mode = vim.fn.mode()
+  local current_win = vim.api.nvim_get_current_win()
+  logger.debug(
+    "integrations/neotree",
+    "begin selection",
+    "mode=",
+    mode,
+    "current_win=",
+    current_win,
+    "state.winid=",
+    tostring(state.winid)
+  )
 
   if mode == "V" or mode == "v" or mode == "\22" then
-    local current_win = vim.api.nvim_get_current_win()
-
     if state.winid and state.winid == current_win then
       -- Use neo-tree's exact method to get visual range (from their get_selected_nodes implementation)
       local start_pos = vim.fn.getpos("'<")[2]
@@ -113,6 +125,8 @@ function M._get_neotree_selection()
         start_pos, end_pos = end_pos, start_pos
       end
 
+      logger.debug("integrations/neotree", "visual selection range", start_pos, "to", end_pos)
+
       local selected_nodes = {}
 
       for line = start_pos, end_pos do
@@ -121,9 +135,27 @@ function M._get_neotree_selection()
           -- Add validation for node types before adding to selection
           if node.type and node.type ~= "message" then
             table.insert(selected_nodes, node)
+            local depth = (node.get_depth and node:get_depth()) and node:get_depth() or 0
+            logger.debug(
+              "integrations/neotree",
+              "line",
+              line,
+              "node type=",
+              tostring(node.type),
+              "depth=",
+              depth,
+              "path=",
+              tostring(node.path)
+            )
+          else
+            logger.debug("integrations/neotree", "line", line, "node rejected (type)", tostring(node and node.type))
           end
+        else
+          logger.debug("integrations/neotree", "line", line, "no node returned from state.tree:get_node")
         end
       end
+
+      logger.debug("integrations/neotree", "selected_nodes count=", #selected_nodes)
 
       for _, node in ipairs(selected_nodes) do
         -- Enhanced validation: check for file type and valid path
@@ -132,11 +164,30 @@ function M._get_neotree_selection()
           local depth = (node.get_depth and node:get_depth()) and node:get_depth() or 0
           if depth > 1 then
             table.insert(files, node.path)
+            logger.debug("integrations/neotree", "accepted file", node.path)
+          else
+            logger.debug("integrations/neotree", "rejected file (depth<=1)", node.path)
           end
+        elseif node.type == "directory" and node.path and node.path ~= "" then
+          local depth = (node.get_depth and node:get_depth()) and node:get_depth() or 0
+          if depth > 1 then
+            table.insert(files, node.path)
+            logger.debug("integrations/neotree", "accepted directory", node.path)
+          else
+            logger.debug("integrations/neotree", "rejected directory (depth<=1)", node.path)
+          end
+        else
+          logger.debug(
+            "integrations/neotree",
+            "rejected node (missing path or unsupported type)",
+            tostring(node and node.type),
+            tostring(node and node.path)
+          )
         end
       end
 
       if #files > 0 then
+        logger.debug("integrations/neotree", "files from visual selection:", files)
         return files, nil
       end
     end
@@ -154,13 +205,23 @@ function M._get_neotree_selection()
     end
 
     if selection and #selection > 0 then
+      logger.debug("integrations/neotree", "using state selection count=", #selection)
       for _, node in ipairs(selection) do
         if node.type == "file" and node.path then
           table.insert(files, node.path)
+          logger.debug("integrations/neotree", "accepted file from state selection", node.path)
+        else
+          logger.debug(
+            "integrations/neotree",
+            "ignored non-file in state selection",
+            tostring(node and node.type),
+            tostring(node and node.path)
+          )
         end
       end
 
       if #files > 0 then
+        logger.debug("integrations/neotree", "files from state selection:", files)
         return files, nil
       end
     end
@@ -170,6 +231,14 @@ function M._get_neotree_selection()
     local node = state.tree:get_node()
 
     if node then
+      logger.debug(
+        "integrations/neotree",
+        "fallback single node",
+        "type=",
+        tostring(node.type),
+        "path=",
+        tostring(node.path)
+      )
       if node.type == "file" and node.path then
         return { node.path }, nil
       elseif node.type == "directory" and node.path then
@@ -178,6 +247,7 @@ function M._get_neotree_selection()
     end
   end
 
+  logger.debug("integrations/neotree", "no file found under cursor/selection")
   return {}, "No file found under cursor"
 end
 

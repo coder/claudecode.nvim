@@ -2,6 +2,7 @@
 ---Implements neo-tree-style visual mode exit and command processing
 ---@module 'claudecode.visual_commands'
 local M = {}
+local logger = require("claudecode.logger")
 
 ---Get current vim mode with fallback for test environments
 ---@param full_mode? boolean Whether to get full mode info (passed to vim.fn.mode)
@@ -37,6 +38,17 @@ function M.exit_visual_and_schedule(callback, ...)
 
   -- Capture visual selection data BEFORE exiting visual mode
   local visual_data = M.capture_visual_selection_data()
+
+  if visual_data and visual_data.tree_type == "neo-tree" then
+    logger.debug(
+      "visual_commands/neotree",
+      "captured visual before exit",
+      "range=",
+      visual_data.start_pos,
+      "to",
+      visual_data.end_pos
+    )
+  end
 
   pcall(function()
     vim.api.nvim_feedkeys(ESC_KEY, "i", true)
@@ -162,8 +174,17 @@ function M.get_tree_state()
 
     -- Validate we're in the correct neo-tree window
     if state.winid and state.winid == current_win then
+      logger.debug("visual_commands/neotree", "tree state detected for current window", "win=", current_win)
       return state, "neo-tree"
     else
+      logger.debug(
+        "visual_commands/neotree",
+        "tree state win mismatch",
+        "current_win=",
+        current_win,
+        "state.winid=",
+        tostring(state.winid)
+      )
       return nil, nil
     end
   elseif current_ft == "NvimTree" then
@@ -264,6 +285,7 @@ function M.get_files_from_visual_selection(visual_data)
   local files = {}
 
   if tree_type == "neo-tree" then
+    logger.debug("visual_commands/neotree", "processing visual selection", "range=", start_pos, "to", end_pos)
     local selected_nodes = {}
     for line = start_pos, end_pos do
       -- Neo-tree's tree:get_node() uses the line number directly (1-based)
@@ -271,23 +293,53 @@ function M.get_files_from_visual_selection(visual_data)
       if node then
         if node.type and node.type ~= "message" then
           table.insert(selected_nodes, node)
+          local depth = (node.get_depth and node:get_depth()) or 0
+          logger.debug(
+            "visual_commands/neotree",
+            "line",
+            line,
+            "node type=",
+            tostring(node.type),
+            "depth=",
+            depth,
+            "path=",
+            tostring(node.path)
+          )
+        else
+          logger.debug("visual_commands/neotree", "line", line, "node rejected (type)", tostring(node and node.type))
         end
+      else
+        logger.debug("visual_commands/neotree", "line", line, "no node returned from tree:get_node")
       end
     end
+
+    logger.debug("visual_commands/neotree", "selected_nodes count=", #selected_nodes)
 
     for _, node in ipairs(selected_nodes) do
       if node.type == "file" and node.path and node.path ~= "" then
         local depth = (node.get_depth and node:get_depth()) or 0
         if depth > 1 then
           table.insert(files, node.path)
+        else
+          logger.debug("visual_commands/neotree", "rejected file (depth<=1)", node.path)
         end
       elseif node.type == "directory" and node.path and node.path ~= "" then
         local depth = (node.get_depth and node:get_depth()) or 0
         if depth > 1 then
           table.insert(files, node.path)
+        else
+          logger.debug("visual_commands/neotree", "rejected directory (depth<=1)", node.path)
         end
+      else
+        logger.debug(
+          "visual_commands/neotree",
+          "rejected node (missing path or unsupported type)",
+          tostring(node and node.type),
+          tostring(node and node.path)
+        )
       end
     end
+    logger.debug("visual_commands/neotree", "files from visual selection:", files)
   elseif tree_type == "nvim-tree" then
     -- For nvim-tree, we need to manually map visual lines to tree nodes
     -- since nvim-tree doesn't have direct line-to-node mapping like neo-tree
