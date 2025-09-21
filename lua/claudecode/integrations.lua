@@ -18,6 +18,8 @@ function M.get_selected_files_from_tree()
     return M._get_oil_selection()
   elseif current_ft == "minifiles" then
     return M._get_mini_files_selection()
+  elseif current_ft == "netrw" then
+    return M._get_netrw_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
@@ -404,6 +406,75 @@ function M._get_mini_files_selection()
   end
 
   return {}, "No file found under cursor"
+end
+
+--- Get selected files from netrw
+--- Supports both marked files and single file under cursor
+--- Reference: :help netrw-mf, :help markfilelist
+--- @return table files List of file paths
+--- @return string|nil error Error message if operation failed
+function M._get_netrw_selection()
+  local has_call = (vim.fn.exists("*netrw#Call") == 1)
+  local has_expose = (vim.fn.exists("*netrw#Expose") == 1)
+  if not (has_call and has_expose) then
+    return {}, "netrw not available"
+  end
+
+  -- function to resolve a 'word' (filename in netrw listing) to an absolute path using b:netrw_curdir
+  local function resolve_word_to_path(word)
+    if type(word) ~= "string" or word == "" then
+      return nil
+    end
+    if word == "." or word == ".." or word == "../" then
+      return nil
+    end
+    local curdir = vim.b.netrw_curdir or vim.fn.getcwd()
+    local joined = curdir .. "/" .. word
+    return vim.fn.fnamemodify(joined, ":p")
+  end
+
+  -- 1. Check for marked files
+  do
+    local mf_ok, mf_result = pcall(function()
+      if has_expose then
+        return vim.fn.call("netrw#Expose", { "netrwmarkfilelist" })
+      end
+      return nil
+    end)
+
+    local marked_files = {}
+    if mf_ok and type(mf_result) == "table" and #mf_result > 0 then
+      for _, file_path in ipairs(mf_result) do
+        if vim.fn.filereadable(file_path) == 1 or vim.fn.isdirectory(file_path) == 1 then
+          table.insert(marked_files, vim.fn.fnamemodify(file_path, ":p"))
+        end
+      end
+    end
+
+    if #marked_files > 0 then
+      return marked_files, nil
+    end
+  end
+
+  -- 2. No marked files. Check for a file or dir under cursor
+  local path_ok, path_result = pcall(function()
+    if has_call then
+      local word = vim.fn.call("netrw#Call", { "NetrwGetWord" })
+      local p = resolve_word_to_path(word)
+      return p
+    end
+    return nil
+  end)
+
+  if not path_ok or not path_result or path_result == "" then
+    return {}, "Failed to get path from netrw"
+  end
+
+  if vim.fn.filereadable(path_result) == 1 or vim.fn.isdirectory(path_result) == 1 then
+    return { path_result }, nil
+  end
+
+  return {}, "Invalid file or directory path: " .. path_result
 end
 
 return M

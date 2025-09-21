@@ -81,6 +81,7 @@ local function find_main_editor_window()
         or filetype == "NvimTree"
         or filetype == "oil"
         or filetype == "minifiles"
+        or filetype == "netrw"
         or filetype == "aerial"
         or filetype == "tagbar"
       )

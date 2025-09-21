@@ -201,6 +201,8 @@ function M.get_tree_state()
     end
 
     return oil, "oil"
+  elseif current_ft == "netrw" then
+    return { curdir = vim.b.netrw_curdir }, "netrw"
   else
     return nil, nil
   end
@@ -431,6 +433,40 @@ function M.get_files_from_visual_selection(visual_data)
           end
         end
       end
+    end
+  elseif tree_type == "netrw" then
+    local netrw = tree_state
+
+    local function resolve_word_to_path(word)
+      if type(word) ~= "string" or word == "" then
+        return nil
+      end
+      if word == "." or word == ".." or word == "../" then
+        return nil
+      end
+      local curdir = netrw.curdir or vim.b.netrw_curdir or vim.fn.getcwd()
+      local joined = curdir .. "/" .. word
+      return vim.fn.fnamemodify(joined, ":p")
+    end
+
+    if start_pos and end_pos then
+      local cursor_pos = vim.api.nvim_win_get_cursor(0)
+
+      -- Move cursor to each line and do NetrwGetWord
+      for lnum = start_pos, end_pos do
+        pcall(vim.api.nvim_win_set_cursor, 0, { lnum, 0 })
+        local ok, word = pcall(function()
+          return vim.fn.call("netrw#Call", { "NetrwGetWord" })
+        end)
+        if ok then
+          local path = resolve_word_to_path(word)
+          if path and (vim.fn.filereadable(path) == 1 or vim.fn.isdirectory(path) == 1) then
+            table.insert(files, path)
+          end
+        end
+      end
+
+      pcall(vim.api.nvim_win_set_cursor, 0, cursor_pos)
     end
   end
 
