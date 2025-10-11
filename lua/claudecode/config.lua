@@ -205,12 +205,12 @@ function M.apply(user_config)
   -- Backward compatibility: map legacy diff options to new fields if provided
   if config.diff_opts then
     local d = config.diff_opts
-    -- Map vertical_split -> layout (only if layout not explicitly set)
-    if d.layout == nil and type(d.vertical_split) == "boolean" then
+    -- Map vertical_split -> layout (legacy option takes precedence)
+    if type(d.vertical_split) == "boolean" then
       d.layout = d.vertical_split and "vertical" or "horizontal"
     end
-    -- Map open_in_current_tab -> open_in_new_tab (invert; only if not explicitly set)
-    if d.open_in_new_tab == nil and type(d.open_in_current_tab) == "boolean" then
+    -- Map open_in_current_tab -> open_in_new_tab (legacy option takes precedence)
+    if type(d.open_in_current_tab) == "boolean" then
       d.open_in_new_tab = not d.open_in_current_tab
     end
   end
