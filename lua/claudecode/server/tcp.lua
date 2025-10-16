@@ -247,6 +247,7 @@ end
 ---@return table? timer The timer handle, or nil if creation failed
 function M.start_ping_timer(server, interval)
   interval = interval or 30000 -- 30 seconds
+  local last_run = vim.loop.now()
 
   local timer = vim.loop.new_timer()
   if not timer then
@@ -255,19 +256,49 @@ function M.start_ping_timer(server, interval)
   end
 
   timer:start(interval, interval, function()
+    local now = vim.loop.now()
+    local elapsed = now - last_run
+
+    -- Detect potential system sleep: timer interval was significantly exceeded
+    -- Allow 50% grace period (e.g., 45s instead of 30s) to account for system load
+    local is_wake_from_sleep = elapsed > (interval * 1.5)
+
+    if is_wake_from_sleep then
+      -- After system sleep/wake, reset all client pong timestamps to prevent false timeouts
+      -- This gives clients a fresh keepalive window since the time jump isn't their fault
+      require("claudecode.logger").debug(
+        "server",
+        string.format(
+          "Detected potential wake from sleep (%.1fs elapsed), resetting client keepalive timers",
+          elapsed / 1000
+        )
+      )
+      for _, client in pairs(server.clients) do
+        if client.state == "connected" then
+          client.last_pong = now
+        end
+      end
+    end
+
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
-        -- Check if client is alive
+        -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, interval * 2) then
           client_manager.send_ping(client, "ping")
         else
-          -- Client appears dead, close it
-          server.on_error("Client " .. client.id .. " appears dead, closing")
+          -- Client connection timed out - log at INFO level (this is expected behavior)
+          local time_since_pong = math.floor((now - client.last_pong) / 1000)
+          require("claudecode.logger").info(
+            "server",
+            string.format("Client %s keepalive timeout (%ds idle), closing connection", client.id, time_since_pong)
+          )
           client_manager.close_client(client, 1006, "Connection timeout")
           M._remove_client(server, client)
         end
       end
     end
+
+    last_run = now
   end)
 
   return timer
