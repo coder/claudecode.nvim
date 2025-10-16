@@ -268,7 +268,10 @@ function M.start_ping_timer(server, interval)
       -- This gives clients a fresh keepalive window since the time jump isn't their fault
       require("claudecode.logger").debug(
         "server",
-        string.format("Detected potential wake from sleep (%.1fs elapsed), resetting client keepalive timers", elapsed / 1000)
+        string.format(
+          "Detected potential wake from sleep (%.1fs elapsed), resetting client keepalive timers",
+          elapsed / 1000
+        )
       )
       for _, client in pairs(server.clients) do
         if client.state == "connected" then
