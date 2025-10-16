@@ -88,6 +88,7 @@ describe("Configuration", function()
         layout = "vertical",
         open_in_new_tab = false,
         keep_terminal_focus = false,
+        on_unsaved_changes = "error",
       },
       models = {}, -- Empty models array should be rejected
     }
@@ -110,6 +111,7 @@ describe("Configuration", function()
         layout = "vertical",
         open_in_new_tab = false,
         keep_terminal_focus = false,
+        on_unsaved_changes = "error",
       },
       models = {
         { name = "Test Model" }, -- Missing value field
@@ -152,6 +154,7 @@ describe("Configuration", function()
         layout = "vertical",
         open_in_new_tab = false,
         keep_terminal_focus = true,
+        on_unsaved_changes = "error",
       },
       env = {},
       models = {
@@ -177,6 +180,7 @@ describe("Configuration", function()
         layout = "vertical",
         open_in_new_tab = false,
         keep_terminal_focus = "invalid", -- Should be boolean
+        on_unsaved_changes = "error",
       },
       env = {},
       models = {
@@ -206,6 +210,7 @@ describe("Configuration", function()
         show_diff_stats = true,
         vertical_split = true,
         open_in_current_tab = true,
+        on_unsaved_changes = "error",
       },
       env = {},
       models = {
@@ -243,6 +248,7 @@ describe("Configuration", function()
         show_diff_stats = true,
         vertical_split = true,
         open_in_current_tab = true,
+        on_unsaved_changes = "error",
       },
       env = {},
       models = {
@@ -278,6 +284,7 @@ describe("Configuration", function()
         show_diff_stats = true,
         vertical_split = true,
         open_in_current_tab = true,
+        on_unsaved_changes = "error",
       },
       env = {},
       models = {

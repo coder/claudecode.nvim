@@ -20,6 +20,7 @@
 ---@field keep_terminal_focus boolean Keep focus in terminal after opening diff
 ---@field hide_terminal_in_new_tab boolean Hide Claude terminal in newly created diff tab
 ---@field on_new_file_reject ClaudeCodeNewFileRejectBehavior Behavior when rejecting a new-file diff
+---@field on_unsaved_changes "error"|"discard" Behavior when opening a diff in a ditty buffer
 
 -- Model selection option
 ---@class ClaudeCodeModelOption
