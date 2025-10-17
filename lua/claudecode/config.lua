@@ -31,7 +31,7 @@ M.defaults = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
     { name = "Claude Sonnet 4.5 (Latest)", value = "sonnet" },
     { name = "Opusplan: Claude Opus 4.1 (Latest) + Sonnet 4.5 (Latest)", value = "opusplan" },
-    { name = "Claude Haiku 3.5 (Latest)", value = "haiku" },
+    { name = "Claude Haiku 4.5 (Latest)", value = "haiku" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
 }
