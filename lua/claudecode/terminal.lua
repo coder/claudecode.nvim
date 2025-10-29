@@ -6,6 +6,9 @@ local M = {}
 
 local claudecode_server_module = require("claudecode.server.init")
 
+-- Cache the terminal's working directory (set when terminal is opened)
+local last_terminal_cwd = nil
+
 ---@type ClaudeCodeTerminalConfig
 local defaults = {
   split_side = "right",
@@ -498,6 +501,7 @@ end
 ---@param cmd_args string? Arguments to append to the claude command.
 function M.open(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
+  last_terminal_cwd = effective_config.cwd
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   get_provider().open(cmd_string, claude_env_table, effective_config)
@@ -513,6 +517,7 @@ end
 ---@param cmd_args string? Arguments to append to the claude command.
 function M.simple_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
+  last_terminal_cwd = effective_config.cwd
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   get_provider().simple_toggle(cmd_string, claude_env_table, effective_config)
@@ -523,6 +528,7 @@ end
 ---@param cmd_args string|nil (optional) Arguments to append to the claude command.
 function M.focus_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
+  last_terminal_cwd = effective_config.cwd
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   get_provider().focus_toggle(cmd_string, claude_env_table, effective_config)
@@ -567,6 +573,13 @@ function M._get_managed_terminal_for_test()
     return provider._get_terminal_for_test()
   end
   return nil
+end
+
+---Gets the cached terminal working directory.
+---This returns the CWD that was resolved when the terminal was opened.
+---@return string|nil The terminal's working directory, or nil if no terminal has been opened.
+function M.get_terminal_cwd()
+  return last_terminal_cwd
 end
 
 return M
