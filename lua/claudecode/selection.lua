@@ -128,8 +128,8 @@ function M.update_selection()
   local current_buf = vim.api.nvim_get_current_buf()
   local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  -- If the buffer name starts with "✻ [Claude Code]", do not update selection
-  if buf_name and string.sub(buf_name, 1, string.len("✻ [Claude Code]")) == "✻ [Claude Code]" then
+  -- If the buffer name starts with "term://" and contains "claude", do not update selection
+  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
     -- Optionally, cancel demotion timer like for the terminal
     if M.state.demotion_timer then
       M.state.demotion_timer:stop()
