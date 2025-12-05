@@ -492,6 +492,8 @@ For complete configuration options, see:
 
 Run Claude Code without any terminal management inside Neovim. This is useful for advanced setups where you manage the CLI externally (tmux, kitty, separate terminal windows) while still using the WebSocket server and tools.
 
+You have to take care of launching CC and connecting it to the IDE yourself. (e.g. `claude --ide` or launching claude and then selecting the IDE using the `/ide` command)
+
 ```lua
 {
   "coder/claudecode.nvim",
