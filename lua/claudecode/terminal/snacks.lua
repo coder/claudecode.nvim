@@ -272,5 +272,36 @@ function M._get_terminal_for_test()
   return terminal
 end
 
+---Creates a new terminal instance, ignoring any existing terminals
+---@param cmd_string string
+---@param env_table table
+---@param config table
+function M.create_new_instance(cmd_string, env_table, config)
+  if not is_available() then
+    vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
+    return
+  end
+
+  -- Save existing terminal
+  local old_terminal = terminal
+
+  -- Clear terminal state to force creation
+  terminal = nil
+
+  -- Create new terminal (M.open will create a new one since terminal is nil)
+  local opts = build_opts(config, env_table, true)
+  local term_instance = Snacks.terminal.open(cmd_string, opts)
+
+  if term_instance and term_instance:buf_valid() then
+    setup_terminal_events(term_instance, config)
+    -- Don't set terminal = term_instance, keep it nil or use a separate tracking if needed
+    -- This allows the new terminal to exist independently
+  else
+    terminal = old_terminal  -- Restore if creation failed
+    local logger = require("claudecode.logger")
+    logger.error("terminal", "Failed to create new terminal instance")
+  end
+end
+
 ---@type ClaudeCodeTerminalProvider
 return M

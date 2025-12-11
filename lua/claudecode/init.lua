@@ -390,12 +390,22 @@ end
 
 ---Start the Claude Code integration
 ---@param show_startup_notification? boolean Whether to show a notification upon successful startup (defaults to true)
+---@param force_new_terminal? boolean If true, creates a new terminal instance even if server is running
 ---@return boolean success Whether the operation was successful
 ---@return number|string port_or_error The WebSocket port if successful, or error message if failed
-function M.start(show_startup_notification)
+function M.start(show_startup_notification, force_new_terminal)
   if show_startup_notification == nil then
     show_startup_notification = true
   end
+
+  -- If server is already running and we're forcing a new terminal, just create it
+  if M.state.server and force_new_terminal then
+    logger.info("init", "Creating new Claude Code terminal on existing port " .. tostring(M.state.port))
+    local terminal = require("claudecode.terminal")
+    terminal.create_new_instance()
+    return true, M.state.port
+  end
+
   if M.state.server then
     local msg = "Claude Code integration is already running on port " .. tostring(M.state.port)
     logger.warn("init", msg)
@@ -525,10 +535,11 @@ end
 ---Set up user commands
 ---@private
 function M._create_commands()
-  vim.api.nvim_create_user_command("ClaudeCodeStart", function()
-    M.start()
+  vim.api.nvim_create_user_command("ClaudeCodeStart", function(opts)
+    M.start(nil, opts.bang)
   end, {
-    desc = "Start Claude Code integration",
+    bang = true,
+    desc = "Start Claude Code integration (use ! to create multiple instances)",
   })
 
   vim.api.nvim_create_user_command("ClaudeCodeStop", function()
