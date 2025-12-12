@@ -48,6 +48,9 @@ describe("Tool: get_diagnostics", function()
       -- Real vim.uri_to_fname throws an error for URIs without proper scheme
       error("URI must contain a scheme: " .. uri)
     end)
+    _G.vim.startswith = function(str, prefix)
+      return str:sub(1, #prefix) == prefix
+    end
   end)
 
   after_each(function()
@@ -58,6 +61,7 @@ describe("Tool: get_diagnostics", function()
     _G.vim.json.encode = nil
     _G.vim.fn.bufnr = nil
     _G.vim.uri_to_fname = nil
+    _G.vim.startswith = nil
     -- Note: We don't nullify _G.vim.lsp or _G.vim.diagnostic entirely
     -- as they are checked for existence.
   end)
