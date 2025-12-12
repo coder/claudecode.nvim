@@ -47,8 +47,7 @@ local function handler(params)
     diagnostics = vim.diagnostic.get(nil)
   else
     local uri = params.uri
-    -- Strips the file:// scheme
-    local filepath = vim.uri_to_fname(uri)
+    local filepath = vim.startswith(uri, "file://") and vim.uri_to_fname(uri) or uri
 
     -- Get buffer number for the specific file
     local bufnr = vim.fn.bufnr(filepath)
