@@ -1094,9 +1094,10 @@ end
 
 ---Format file path for at mention (exposed for testing)
 ---@param file_path string The file path to format
+---@param base_cwd string|nil Optional base working directory (defaults to Neovim's CWD)
 ---@return string formatted_path The formatted path
 ---@return boolean is_directory Whether the path is a directory
-function M._format_path_for_at_mention(file_path)
+function M._format_path_for_at_mention(file_path, base_cwd)
   -- Input validation
   if not file_path or type(file_path) ~= "string" or file_path == "" then
     error("format_path_for_at_mention: file_path must be a non-empty string")
@@ -1112,9 +1113,9 @@ function M._format_path_for_at_mention(file_path)
 
   local is_directory = vim.fn.isdirectory(file_path) == 1
   local formatted_path = file_path
+  local cwd = base_cwd or vim.fn.getcwd()
 
   if is_directory then
-    local cwd = vim.fn.getcwd()
     if string.find(file_path, cwd, 1, true) == 1 then
       local relative_path = string.sub(file_path, #cwd + 2)
       if relative_path ~= "" then
@@ -1127,7 +1128,6 @@ function M._format_path_for_at_mention(file_path)
       formatted_path = formatted_path .. "/"
     end
   else
-    local cwd = vim.fn.getcwd()
     if string.find(file_path, cwd, 1, true) == 1 then
       local relative_path = string.sub(file_path, #cwd + 2)
       if relative_path ~= "" then
@@ -1145,9 +1145,13 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
     return false, "Claude Code integration is not running"
   end
 
+  -- Get terminal CWD for path formatting (falls back to Neovim CWD if nil)
+  local terminal = require("claudecode.terminal")
+  local terminal_cwd = terminal.get_terminal_cwd()
+
   -- Safely format the path and handle validation errors
   local formatted_path, is_directory
-  local format_success, format_result, is_dir_result = pcall(M._format_path_for_at_mention, file_path)
+  local format_success, format_result, is_dir_result = pcall(M._format_path_for_at_mention, file_path, terminal_cwd)
   if not format_success then
     return false, format_result -- format_result contains the error message
   end
