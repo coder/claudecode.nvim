@@ -1,8 +1,10 @@
 ---Manages selection tracking and communication with the Claude server.
+---Supports session-aware selection tracking for multi-session environments.
 ---@module 'claudecode.selection'
 local M = {}
 
 local logger = require("claudecode.logger")
+local session_manager = require("claudecode.session")
 local terminal = require("claudecode.terminal")
 
 M.state = {
@@ -236,6 +238,13 @@ function M.update_selection()
 
   if changed then
     M.state.latest_selection = current_selection
+
+    -- Also update the active session's selection state
+    local active_session_id = session_manager.get_active_session_id()
+    if active_session_id then
+      session_manager.update_selection(active_session_id, current_selection)
+    end
+
     if M.server then
       M.send_selection_update(current_selection)
     end
@@ -538,14 +547,46 @@ function M.has_selection_changed(new_selection)
 end
 
 ---Sends the selection update to the Claude server.
+---Uses session-aware sending if available, otherwise broadcasts to all.
 ---@param selection table The selection object to send.
 function M.send_selection_update(selection)
+  -- Try to send to active session first
+  if M.server.send_to_active_session then
+    local sent = M.server.send_to_active_session("selection_changed", selection)
+    if sent then
+      return
+    end
+  end
+
+  -- Fallback to broadcast
   M.server.broadcast("selection_changed", selection)
 end
 
 ---Gets the latest recorded selection.
 ---@return table|nil The latest selection object, or nil if none recorded.
 function M.get_latest_selection()
+  return M.state.latest_selection
+end
+
+---Gets the selection for a specific session.
+---@param session_id string The session ID
+---@return table|nil The selection object for the session, or nil if none recorded.
+function M.get_session_selection(session_id)
+  return session_manager.get_selection(session_id)
+end
+
+---Gets the selection for the active session.
+---Falls back to global latest_selection if no session-specific selection.
+---@return table|nil The selection object, or nil if none recorded.
+function M.get_active_session_selection()
+  local active_session_id = session_manager.get_active_session_id()
+  if active_session_id then
+    local session_selection = session_manager.get_selection(active_session_id)
+    if session_selection then
+      return session_selection
+    end
+  end
+  -- Fallback to global selection
   return M.state.latest_selection
 end
 

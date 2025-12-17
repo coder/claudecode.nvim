@@ -1,15 +1,31 @@
 ---Native Neovim terminal provider for Claude Code.
+---Supports multiple terminal sessions.
 ---@module 'claudecode.terminal.native'
 
 local M = {}
 
 local logger = require("claudecode.logger")
+local osc_handler = require("claudecode.terminal.osc_handler")
+local session_manager = require("claudecode.session")
 local utils = require("claudecode.utils")
 
+-- Legacy single terminal support (backward compatibility)
 local bufnr = nil
 local winid = nil
 local jobid = nil
 local tip_shown = false
+
+-- Multi-session terminal storage
+---@class NativeTerminalState
+---@field bufnr number|nil
+---@field winid number|nil
+---@field jobid number|nil
+
+---@type table<string, NativeTerminalState> Map of session_id -> terminal state
+local terminals = {}
+
+-- Forward declaration for show_hidden_session_terminal
+local show_hidden_session_terminal
 
 ---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
@@ -134,6 +150,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
 
+  -- Set up terminal keymaps (smart ESC handling)
+  local terminal_module = require("claudecode.terminal")
+  terminal_module.setup_terminal_keymaps(bufnr, config)
+
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
@@ -144,7 +164,8 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   if config.show_native_term_exit_tip and not tip_shown then
-    vim.notify("Native terminal opened. Press Ctrl-\\ Ctrl-N to return to Normal mode.", vim.log.levels.INFO)
+    local exit_key = config.keymaps and config.keymaps.exit_terminal or "Ctrl-\\ Ctrl-N"
+    vim.notify("Native terminal opened. Press " .. exit_key .. " to return to Normal mode.", vim.log.levels.INFO)
     tip_shown = true
   end
   return true
@@ -433,6 +454,396 @@ end
 --- @return boolean
 function M.is_available()
   return true -- Native provider is always available
+end
+
+-- ============================================================================
+-- Multi-session support functions
+-- ============================================================================
+
+---Helper to check if a session's terminal is valid
+---@param session_id string
+---@return boolean
+local function is_session_valid(session_id)
+  local state = terminals[session_id]
+  if not state or not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    return false
+  end
+  return true
+end
+
+---Helper to find window displaying a session's terminal
+---@param session_id string
+---@return number|nil winid
+local function find_session_window(session_id)
+  local state = terminals[session_id]
+  if not state or not state.bufnr then
+    return nil
+  end
+
+  local windows = vim.api.nvim_list_wins()
+  for _, win in ipairs(windows) do
+    if vim.api.nvim_win_get_buf(win) == state.bufnr then
+      state.winid = win
+      return win
+    end
+  end
+  return nil
+end
+
+---Hide all visible session terminals
+---@param except_session_id string|nil Optional session ID to exclude from hiding
+local function hide_all_session_terminals(except_session_id)
+  for sid, state in pairs(terminals) do
+    if sid ~= except_session_id and state and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+      -- Find and close the window if it's visible
+      local win = find_session_window(sid)
+      if win and vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_win_close(win, false)
+        state.winid = nil
+      end
+    end
+  end
+
+  -- Also hide the legacy terminal if it's not one of the session terminals
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+    local is_session_terminal = false
+    for _, state in pairs(terminals) do
+      if state.bufnr == bufnr then
+        is_session_terminal = true
+        break
+      end
+    end
+
+    if not is_session_terminal and winid and vim.api.nvim_win_is_valid(winid) then
+      vim.api.nvim_win_close(winid, false)
+      winid = nil
+    end
+  end
+end
+
+---Open a terminal for a specific session
+---@param session_id string The session ID
+---@param cmd_string string The command to run
+---@param env_table table Environment variables
+---@param effective_config ClaudeCodeTerminalConfig Terminal configuration
+---@param focus boolean? Whether to focus the terminal
+function M.open_session(session_id, cmd_string, env_table, effective_config, focus)
+  focus = utils.normalize_focus(focus)
+
+  -- Check if this session already has a valid terminal
+  if is_session_valid(session_id) then
+    -- Hide other session terminals first
+    hide_all_session_terminals(session_id)
+
+    local win = find_session_window(session_id)
+
+    if not win then
+      -- Terminal is hidden, show it
+      show_hidden_session_terminal(session_id, effective_config, focus)
+    elseif focus then
+      vim.api.nvim_set_current_win(win)
+      vim.cmd("startinsert")
+    end
+    return
+  end
+
+  -- Hide all other session terminals before creating new one
+  hide_all_session_terminals(nil)
+
+  -- Create new terminal for this session
+  local original_win = vim.api.nvim_get_current_win()
+  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
+  local full_height = vim.o.lines
+  local placement_modifier
+
+  if effective_config.split_side == "left" then
+    placement_modifier = "topleft "
+  else
+    placement_modifier = "botright "
+  end
+
+  vim.cmd(placement_modifier .. width .. "vsplit")
+  local new_winid = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_height(new_winid, full_height)
+
+  vim.api.nvim_win_call(new_winid, function()
+    vim.cmd("enew")
+  end)
+
+  local term_cmd_arg
+  if cmd_string:find(" ", 1, true) then
+    term_cmd_arg = vim.split(cmd_string, " ", { plain = true, trimempty = false })
+  else
+    term_cmd_arg = { cmd_string }
+  end
+
+  local new_jobid = vim.fn.termopen(term_cmd_arg, {
+    env = env_table,
+    cwd = effective_config.cwd,
+    on_exit = function(job_id, _, _)
+      vim.schedule(function()
+        local state = terminals[session_id]
+        if state and job_id == state.jobid then
+          logger.debug("terminal", "Terminal process exited for session: " .. session_id)
+
+          local current_winid = state.winid
+          local current_bufnr = state.bufnr
+
+          -- Cleanup OSC handler before clearing state
+          if current_bufnr then
+            osc_handler.cleanup_buffer_handler(current_bufnr)
+          end
+
+          -- Clear session state
+          terminals[session_id] = nil
+
+          if not effective_config.auto_close then
+            return
+          end
+
+          if current_winid and vim.api.nvim_win_is_valid(current_winid) then
+            if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
+              if vim.api.nvim_win_get_buf(current_winid) == current_bufnr then
+                vim.api.nvim_win_close(current_winid, true)
+              end
+            else
+              vim.api.nvim_win_close(current_winid, true)
+            end
+          end
+        end
+      end)
+    end,
+  })
+
+  if not new_jobid or new_jobid == 0 then
+    vim.notify("Failed to open native terminal for session: " .. session_id, vim.log.levels.ERROR)
+    vim.api.nvim_win_close(new_winid, true)
+    vim.api.nvim_set_current_win(original_win)
+    return
+  end
+
+  local new_bufnr = vim.api.nvim_get_current_buf()
+  vim.bo[new_bufnr].bufhidden = "hide"
+
+  -- Set up terminal keymaps (smart ESC handling)
+  local terminal_module = require("claudecode.terminal")
+  terminal_module.setup_terminal_keymaps(new_bufnr, config)
+
+  -- Store session state
+  terminals[session_id] = {
+    bufnr = new_bufnr,
+    winid = new_winid,
+    jobid = new_jobid,
+  }
+
+  -- Also update legacy state for backward compatibility
+  bufnr = new_bufnr
+  winid = new_winid
+  jobid = new_jobid
+
+  -- Update session manager with terminal info
+  terminal_module.update_session_terminal_info(session_id, {
+    bufnr = new_bufnr,
+    winid = new_winid,
+    jobid = new_jobid,
+  })
+
+  -- Setup OSC title handler to capture terminal title changes
+  osc_handler.setup_buffer_handler(new_bufnr, function(title)
+    if title and title ~= "" then
+      session_manager.update_session_name(session_id, title)
+    end
+  end)
+
+  if focus then
+    vim.api.nvim_set_current_win(new_winid)
+    vim.cmd("startinsert")
+  else
+    vim.api.nvim_set_current_win(original_win)
+  end
+
+  if config.show_native_term_exit_tip and not tip_shown then
+    local exit_key = config.keymaps and config.keymaps.exit_terminal or "Ctrl-\\ Ctrl-N"
+    vim.notify("Native terminal opened. Press " .. exit_key .. " to return to Normal mode.", vim.log.levels.INFO)
+    tip_shown = true
+  end
+
+  logger.debug("terminal", "Opened terminal for session: " .. session_id)
+end
+
+---Show a hidden session terminal
+---@param session_id string
+---@param effective_config table
+---@param focus boolean?
+local function show_hidden_session_terminal_impl(session_id, effective_config, focus)
+  local state = terminals[session_id]
+  if not state or not state.bufnr or not vim.api.nvim_buf_is_valid(state.bufnr) then
+    return false
+  end
+
+  -- Check if already visible
+  local existing_win = find_session_window(session_id)
+  if existing_win then
+    if focus then
+      vim.api.nvim_set_current_win(existing_win)
+      vim.cmd("startinsert")
+    end
+    return true
+  end
+
+  local original_win = vim.api.nvim_get_current_win()
+
+  -- Create a new window for the existing buffer
+  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
+  local full_height = vim.o.lines
+  local placement_modifier
+
+  if effective_config.split_side == "left" then
+    placement_modifier = "topleft "
+  else
+    placement_modifier = "botright "
+  end
+
+  vim.cmd(placement_modifier .. width .. "vsplit")
+  local new_winid = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_height(new_winid, full_height)
+
+  -- Set the existing buffer in the new window
+  vim.api.nvim_win_set_buf(new_winid, state.bufnr)
+  state.winid = new_winid
+
+  if focus then
+    vim.api.nvim_set_current_win(new_winid)
+    vim.cmd("startinsert")
+  else
+    vim.api.nvim_set_current_win(original_win)
+  end
+
+  logger.debug("terminal", "Showed hidden terminal for session: " .. session_id)
+  return true
+end
+
+-- Assign the implementation to forward declaration
+show_hidden_session_terminal = show_hidden_session_terminal_impl
+
+---Close a terminal for a specific session
+---@param session_id string The session ID
+function M.close_session(session_id)
+  local state = terminals[session_id]
+  if not state then
+    return
+  end
+
+  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+    vim.api.nvim_win_close(state.winid, true)
+  end
+
+  terminals[session_id] = nil
+
+  -- If this was the legacy terminal, clear it too
+  if bufnr == state.bufnr then
+    cleanup_state()
+  end
+end
+
+---Focus a terminal for a specific session
+---@param session_id string The session ID
+---@param effective_config ClaudeCodeTerminalConfig|nil Terminal configuration
+function M.focus_session(session_id, effective_config)
+  -- Check if session is valid in terminals table
+  if not is_session_valid(session_id) then
+    -- Fallback: Check if legacy terminal matches the session's bufnr from session_manager
+    local session_mod = require("claudecode.session")
+    local session = session_mod.get_session(session_id)
+    if session and session.terminal_bufnr and bufnr and bufnr == session.terminal_bufnr then
+      -- Legacy terminal matches this session, register it now
+      logger.debug("terminal", "Registering legacy terminal for session: " .. session_id)
+      M.register_terminal_for_session(session_id, bufnr)
+    else
+      logger.debug("terminal", "Cannot focus invalid session: " .. session_id)
+      return
+    end
+  end
+
+  -- Hide other session terminals first
+  hide_all_session_terminals(session_id)
+
+  local win = find_session_window(session_id)
+  if not win then
+    -- Terminal is hidden, show it
+    if effective_config then
+      show_hidden_session_terminal(session_id, effective_config, true)
+    end
+    return
+  end
+
+  vim.api.nvim_set_current_win(win)
+  vim.cmd("startinsert")
+end
+
+---Get the buffer number for a session's terminal
+---@param session_id string The session ID
+---@return number|nil bufnr The buffer number or nil
+function M.get_session_bufnr(session_id)
+  local state = terminals[session_id]
+  if state and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+    return state.bufnr
+  end
+  return nil
+end
+
+---Get all session IDs with active terminals
+---@return string[] session_ids Array of session IDs
+function M.get_active_session_ids()
+  local ids = {}
+  for session_id, state in pairs(terminals) do
+    if state and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+      table.insert(ids, session_id)
+    end
+  end
+  return ids
+end
+
+---Register an existing terminal (from legacy path) with a session ID
+---This is called when a terminal was created via simple_toggle/focus_toggle
+---and we need to associate it with a session for multi-session support.
+---@param session_id string The session ID
+---@param term_bufnr number|nil The buffer number (uses legacy bufnr if nil)
+function M.register_terminal_for_session(session_id, term_bufnr)
+  term_bufnr = term_bufnr or bufnr
+
+  if not term_bufnr or not vim.api.nvim_buf_is_valid(term_bufnr) then
+    logger.debug("terminal", "Cannot register invalid terminal for session: " .. session_id)
+    return
+  end
+
+  -- Check if this terminal is already registered to another session
+  for sid, state in pairs(terminals) do
+    if state and state.bufnr == term_bufnr and sid ~= session_id then
+      -- Already registered to a different session, skip
+      logger.debug(
+        "terminal",
+        "Terminal already registered to session " .. sid .. ", not registering to " .. session_id
+      )
+      return
+    end
+  end
+
+  -- Check if this session already has a different terminal
+  local existing_state = terminals[session_id]
+  if existing_state and existing_state.bufnr and existing_state.bufnr ~= term_bufnr then
+    logger.debug("terminal", "Session " .. session_id .. " already has a different terminal")
+    return
+  end
+
+  -- Register the legacy terminal with the session
+  terminals[session_id] = {
+    bufnr = term_bufnr,
+    winid = winid,
+    jobid = jobid,
+  }
+
+  logger.debug("terminal", "Registered terminal (bufnr=" .. term_bufnr .. ") for session: " .. session_id)
 end
 
 --- @type ClaudeCodeTerminalProvider

@@ -1,10 +1,13 @@
---- Module to manage a dedicated vertical split terminal for Claude Code.
+--- Module to manage dedicated vertical split terminals for Claude Code.
 --- Supports Snacks.nvim or a native Neovim terminal fallback.
+--- Now supports multiple concurrent terminal sessions.
 --- @module 'claudecode.terminal'
 
 local M = {}
 
 local claudecode_server_module = require("claudecode.server.init")
+local osc_handler = require("claudecode.terminal.osc_handler")
+local session_manager = require("claudecode.session")
 
 ---@type ClaudeCodeTerminalConfig
 local defaults = {
@@ -23,9 +26,124 @@ local defaults = {
   cwd = nil, -- static cwd override
   git_repo_cwd = false, -- resolve to git root when spawning
   cwd_provider = nil, -- function(ctx) -> cwd string
+  -- Terminal keymaps
+  keymaps = {
+    exit_terminal = "<Esc><Esc>", -- Double-ESC to exit terminal mode (set to false to disable)
+  },
+  -- Smart ESC handling: timeout in ms to wait for second ESC before sending ESC to terminal
+  -- Set to nil or 0 to disable smart ESC handling (use simple keymap instead)
+  esc_timeout = 200,
 }
 
 M.defaults = defaults
+
+-- ============================================================================
+-- Smart ESC handler for terminal mode
+-- ============================================================================
+
+-- State for tracking ESC key presses per buffer
+local esc_state = {}
+
+---Creates a smart ESC handler for a terminal buffer.
+---This handler intercepts ESC presses and waits for a second ESC within the timeout.
+---If a second ESC arrives, it exits terminal mode. Otherwise, sends ESC to the terminal.
+---@param bufnr number The terminal buffer number
+---@param timeout_ms number Timeout in milliseconds to wait for second ESC
+---@return function handler The ESC key handler function
+function M.create_smart_esc_handler(bufnr, timeout_ms)
+  return function()
+    local state = esc_state[bufnr]
+
+    if state and state.waiting then
+      -- Second ESC within timeout - exit terminal mode
+      state.waiting = false
+      if state.timer then
+        state.timer:stop()
+        state.timer:close()
+        state.timer = nil
+      end
+      -- Exit terminal mode
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-\\><C-n>", true, false, true), "n", false)
+    else
+      -- First ESC - start waiting for second ESC
+      esc_state[bufnr] = { waiting = true, timer = nil }
+      state = esc_state[bufnr]
+
+      state.timer = vim.uv.new_timer()
+      state.timer:start(
+        timeout_ms,
+        0,
+        vim.schedule_wrap(function()
+          -- Timeout expired - send ESC to the terminal
+          if esc_state[bufnr] and esc_state[bufnr].waiting then
+            esc_state[bufnr].waiting = false
+            if esc_state[bufnr].timer then
+              esc_state[bufnr].timer:stop()
+              esc_state[bufnr].timer:close()
+              esc_state[bufnr].timer = nil
+            end
+            -- Send ESC directly to the terminal channel, bypassing keymaps
+            -- Get the terminal channel from the buffer
+            if vim.api.nvim_buf_is_valid(bufnr) then
+              local channel = vim.bo[bufnr].channel
+              if channel and channel > 0 then
+                -- Send raw ESC byte (0x1b = 27) directly to terminal
+                vim.fn.chansend(channel, "\027")
+              end
+            end
+          end
+        end)
+      )
+    end
+  end
+end
+
+---Sets up smart ESC handling for a terminal buffer.
+---If smart ESC is enabled (esc_timeout > 0), maps single ESC to smart handler.
+---Otherwise falls back to simple double-ESC mapping.
+---@param bufnr number The terminal buffer number
+---@param config table The terminal configuration (with keymaps and esc_timeout)
+function M.setup_terminal_keymaps(bufnr, config)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  local timeout = config.esc_timeout
+  local exit_key = config.keymaps and config.keymaps.exit_terminal
+
+  if exit_key == false then
+    -- ESC handling disabled
+    return
+  end
+
+  if timeout and timeout > 0 then
+    -- Smart ESC handling: intercept single ESC
+    local handler = M.create_smart_esc_handler(bufnr, timeout)
+    vim.keymap.set("t", "<Esc>", handler, {
+      buffer = bufnr,
+      desc = "Smart ESC: double-tap to exit terminal mode, single to send ESC",
+    })
+  elseif exit_key then
+    -- Fallback: simple keymap (legacy behavior)
+    vim.keymap.set("t", exit_key, "<C-\\><C-n>", {
+      buffer = bufnr,
+      desc = "Exit terminal mode",
+    })
+  end
+end
+
+---Cleanup ESC state for a buffer (call when buffer is deleted)
+---@param bufnr number The terminal buffer number
+function M.cleanup_esc_state(bufnr)
+  local state = esc_state[bufnr]
+  if state then
+    if state.timer then
+      state.timer:stop()
+      state.timer:close()
+    end
+    esc_state[bufnr] = nil
+  end
+end
 
 -- Lazy load providers
 local providers = {}
@@ -270,6 +388,8 @@ local function build_config(opts_override)
     auto_close = effective_config.auto_close,
     snacks_win_opts = effective_config.snacks_win_opts,
     cwd = resolved_cwd,
+    keymaps = effective_config.keymaps,
+    esc_timeout = effective_config.esc_timeout,
   }
 end
 
@@ -338,6 +458,7 @@ local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
   end
 
   local active_bufnr = provider.get_active_bufnr()
+  local had_terminal = active_bufnr ~= nil
 
   if is_terminal_visible(active_bufnr) then
     -- Terminal is already visible, do nothing
@@ -349,6 +470,24 @@ local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
   provider.open(cmd_string, claude_env_table, effective_config, false) -- false = don't focus
+
+  -- If we didn't have a terminal before but do now, ensure a session exists
+  if not had_terminal then
+    local new_bufnr = provider.get_active_bufnr()
+    if new_bufnr then
+      -- Ensure we have a session for this terminal
+      local session_id = session_manager.ensure_session()
+      -- Update session with terminal info
+      session_manager.update_terminal_info(session_id, {
+        bufnr = new_bufnr,
+      })
+      -- Register terminal with provider for session switching support
+      if provider.register_terminal_for_session then
+        provider.register_terminal_for_session(session_id, new_bufnr)
+      end
+    end
+  end
+
   return true
 end
 
@@ -482,6 +621,42 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify("claudecode.terminal.setup: Invalid cwd_provider type: " .. tostring(t), vim.log.levels.WARN)
       end
+    elseif k == "keymaps" then
+      if type(v) == "table" then
+        defaults.keymaps = defaults.keymaps or {}
+        for keymap_k, keymap_v in pairs(v) do
+          if keymap_k == "exit_terminal" then
+            if keymap_v == false or type(keymap_v) == "string" then
+              defaults.keymaps.exit_terminal = keymap_v
+            else
+              vim.notify(
+                "claudecode.terminal.setup: Invalid value for keymaps.exit_terminal: "
+                  .. tostring(keymap_v)
+                  .. ". Must be a string or false.",
+                vim.log.levels.WARN
+              )
+            end
+          else
+            vim.notify("claudecode.terminal.setup: Unknown keymap key: " .. tostring(keymap_k), vim.log.levels.WARN)
+          end
+        end
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for keymaps: " .. tostring(v) .. ". Must be a table.",
+          vim.log.levels.WARN
+        )
+      end
+    elseif k == "esc_timeout" then
+      if v == nil or (type(v) == "number" and v >= 0) then
+        defaults.esc_timeout = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for esc_timeout: "
+            .. tostring(v)
+            .. ". Must be a number >= 0 or nil.",
+          vim.log.levels.WARN
+        )
+      end
     else
       if k ~= "terminal_cmd" then
         vim.notify("claudecode.terminal.setup: Unknown configuration key: " .. k, vim.log.levels.WARN)
@@ -500,7 +675,27 @@ function M.open(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
-  get_provider().open(cmd_string, claude_env_table, effective_config)
+  local provider = get_provider()
+  local had_terminal = provider.get_active_bufnr() ~= nil
+
+  provider.open(cmd_string, claude_env_table, effective_config)
+
+  -- If we didn't have a terminal before but do now, ensure a session exists
+  if not had_terminal then
+    local active_bufnr = provider.get_active_bufnr()
+    if active_bufnr then
+      -- Ensure we have a session for this terminal
+      local session_id = session_manager.ensure_session()
+      -- Update session with terminal info
+      session_manager.update_terminal_info(session_id, {
+        bufnr = active_bufnr,
+      })
+      -- Register terminal with provider for session switching support
+      if provider.register_terminal_for_session then
+        provider.register_terminal_for_session(session_id, active_bufnr)
+      end
+    end
+  end
 end
 
 ---Closes the managed Claude terminal if it's open and valid.
@@ -515,7 +710,34 @@ function M.simple_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
-  get_provider().simple_toggle(cmd_string, claude_env_table, effective_config)
+  -- Check if we had a terminal before the toggle
+  local provider = get_provider()
+  local had_terminal = provider.get_active_bufnr() ~= nil
+
+  provider.simple_toggle(cmd_string, claude_env_table, effective_config)
+
+  -- If we didn't have a terminal before but do now, ensure a session exists
+  if not had_terminal then
+    local active_bufnr = provider.get_active_bufnr()
+    if active_bufnr then
+      -- Ensure we have a session for this terminal
+      local session_id = session_manager.ensure_session()
+      -- Update session with terminal info
+      session_manager.update_terminal_info(session_id, {
+        bufnr = active_bufnr,
+      })
+      -- Register terminal with provider for session switching support
+      if provider.register_terminal_for_session then
+        provider.register_terminal_for_session(session_id, active_bufnr)
+      end
+      -- Setup title watcher to capture terminal title changes
+      osc_handler.setup_buffer_handler(active_bufnr, function(title)
+        if title and title ~= "" then
+          session_manager.update_session_name(session_id, title)
+        end
+      end)
+    end
+  end
 end
 
 ---Smart focus toggle: switches to terminal if not focused, hides if currently focused.
@@ -525,7 +747,34 @@ function M.focus_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
-  get_provider().focus_toggle(cmd_string, claude_env_table, effective_config)
+  -- Check if we had a terminal before the toggle
+  local provider = get_provider()
+  local had_terminal = provider.get_active_bufnr() ~= nil
+
+  provider.focus_toggle(cmd_string, claude_env_table, effective_config)
+
+  -- If we didn't have a terminal before but do now, ensure a session exists
+  if not had_terminal then
+    local active_bufnr = provider.get_active_bufnr()
+    if active_bufnr then
+      -- Ensure we have a session for this terminal
+      local session_id = session_manager.ensure_session()
+      -- Update session with terminal info
+      session_manager.update_terminal_info(session_id, {
+        bufnr = active_bufnr,
+      })
+      -- Register terminal with provider for session switching support
+      if provider.register_terminal_for_session then
+        provider.register_terminal_for_session(session_id, active_bufnr)
+      end
+      -- Setup OSC title handler to capture terminal title changes
+      osc_handler.setup_buffer_handler(active_bufnr, function(title)
+        if title and title ~= "" then
+          session_manager.update_session_name(session_id, title)
+        end
+      end)
+    end
+  end
 end
 
 ---Toggle open terminal without focus if not already visible, otherwise do nothing.
@@ -567,6 +816,125 @@ function M._get_managed_terminal_for_test()
     return provider._get_terminal_for_test()
   end
   return nil
+end
+
+-- ============================================================================
+-- Multi-session support functions
+-- ============================================================================
+
+---Opens a new Claude terminal session.
+---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
+---@param cmd_args string? Arguments to append to the claude command.
+---@return string session_id The ID of the new session
+function M.open_new_session(opts_override, cmd_args)
+  local session_id = session_manager.create_session()
+  local effective_config = build_config(opts_override)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+
+  local provider = get_provider()
+
+  -- For multi-session, we need to pass session_id to providers
+  if provider.open_session then
+    provider.open_session(session_id, cmd_string, claude_env_table, effective_config)
+  else
+    -- Fallback: use regular open (single terminal mode)
+    provider.open(cmd_string, claude_env_table, effective_config)
+  end
+
+  return session_id
+end
+
+---Closes a specific session.
+---@param session_id string? The session ID to close (defaults to active session)
+function M.close_session(session_id)
+  session_id = session_id or session_manager.get_active_session_id()
+  if not session_id then
+    return
+  end
+
+  local provider = get_provider()
+
+  if provider.close_session then
+    provider.close_session(session_id)
+  else
+    -- Fallback: use regular close
+    provider.close()
+  end
+
+  session_manager.destroy_session(session_id)
+end
+
+---Switches to a specific session.
+---@param session_id string The session ID to switch to
+---@param opts_override table? Optional config overrides
+function M.switch_to_session(session_id, opts_override)
+  local session = session_manager.get_session(session_id)
+  if not session then
+    local logger = require("claudecode.logger")
+    logger.warn("terminal", "Cannot switch to non-existent session: " .. session_id)
+    return
+  end
+
+  session_manager.set_active_session(session_id)
+
+  local provider = get_provider()
+
+  if provider.focus_session then
+    local effective_config = build_config(opts_override)
+    provider.focus_session(session_id, effective_config)
+  elseif session.terminal_bufnr and vim.api.nvim_buf_is_valid(session.terminal_bufnr) then
+    -- Fallback: try to find and focus the window
+    local windows = vim.api.nvim_list_wins()
+    for _, win in ipairs(windows) do
+      if vim.api.nvim_win_get_buf(win) == session.terminal_bufnr then
+        vim.api.nvim_set_current_win(win)
+        vim.cmd("startinsert")
+        return
+      end
+    end
+  end
+end
+
+---Gets the session ID for the currently focused terminal.
+---@return string|nil session_id The session ID or nil if not in a session terminal
+function M.get_current_session_id()
+  local current_buf = vim.api.nvim_get_current_buf()
+  local session = session_manager.find_session_by_bufnr(current_buf)
+  if session then
+    return session.id
+  end
+  return nil
+end
+
+---Lists all active sessions.
+---@return table[] sessions Array of session info
+function M.list_sessions()
+  return session_manager.list_sessions()
+end
+
+---Gets the number of active sessions.
+---@return number count Number of active sessions
+function M.get_session_count()
+  return session_manager.get_session_count()
+end
+
+---Updates terminal info for a session (called by providers).
+---@param session_id string The session ID
+---@param terminal_info table { bufnr?: number, winid?: number, jobid?: number }
+function M.update_session_terminal_info(session_id, terminal_info)
+  session_manager.update_terminal_info(session_id, terminal_info)
+end
+
+---Gets the active session ID.
+---@return string|nil session_id The active session ID
+function M.get_active_session_id()
+  return session_manager.get_active_session_id()
+end
+
+---Ensures at least one session exists and returns its ID.
+---@return string session_id The session ID
+function M.ensure_session()
+  return session_manager.ensure_session()
 end
 
 return M

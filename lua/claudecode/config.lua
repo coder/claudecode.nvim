@@ -79,6 +79,18 @@ function M.validate(config)
     end
   end
 
+  -- Validate terminal keymaps if present
+  if config.terminal.keymaps then
+    assert(type(config.terminal.keymaps) == "table", "terminal.keymaps must be a table")
+    if config.terminal.keymaps.exit_terminal ~= nil then
+      local exit_type = type(config.terminal.keymaps.exit_terminal)
+      assert(
+        exit_type == "string" or (exit_type == "boolean" and config.terminal.keymaps.exit_terminal == false),
+        "terminal.keymaps.exit_terminal must be a string or false"
+      )
+    end
+  end
+
   local valid_log_levels = { "trace", "debug", "info", "warn", "error" }
   local is_valid_log_level = false
   for _, level in ipairs(valid_log_levels) do
