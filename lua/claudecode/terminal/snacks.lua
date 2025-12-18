@@ -498,6 +498,14 @@ function M.focus_session(session_id, config)
   local term_buf_id = term_instance.buf
   if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
     if term_instance.win and vim.api.nvim_win_is_valid(term_instance.win) then
+      -- Notify terminal of window dimensions to fix cursor position after session switch
+      local chan = vim.bo[term_buf_id].channel
+      if chan and chan > 0 then
+        local width = vim.api.nvim_win_get_width(term_instance.win)
+        local height = vim.api.nvim_win_get_height(term_instance.win)
+        pcall(vim.fn.jobresize, chan, width, height)
+      end
+
       vim.api.nvim_win_call(term_instance.win, function()
         vim.cmd("startinsert")
       end)

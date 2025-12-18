@@ -712,6 +712,12 @@ local function show_hidden_session_terminal_impl(session_id, effective_config, f
   vim.api.nvim_win_set_buf(new_winid, state.bufnr)
   state.winid = new_winid
 
+  -- Notify terminal of window dimensions to fix cursor position after session switch
+  local chan = vim.bo[state.bufnr].channel
+  if chan and chan > 0 then
+    pcall(vim.fn.jobresize, chan, width, full_height)
+  end
+
   if focus then
     vim.api.nvim_set_current_win(new_winid)
     vim.cmd("startinsert")
@@ -775,6 +781,17 @@ function M.focus_session(session_id, effective_config)
       show_hidden_session_terminal(session_id, effective_config, true)
     end
     return
+  end
+
+  -- Notify terminal of window dimensions to fix cursor position after session switch
+  local state = terminals[session_id]
+  if state and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+    local chan = vim.bo[state.bufnr].channel
+    if chan and chan > 0 then
+      local width = vim.api.nvim_win_get_width(win)
+      local height = vim.api.nvim_win_get_height(win)
+      pcall(vim.fn.jobresize, chan, width, height)
+    end
   end
 
   vim.api.nvim_set_current_win(win)

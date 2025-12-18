@@ -1197,11 +1197,64 @@ function M.show_session_picker()
   end
 end
 
----Try to use an enhanced picker (fzf-lua)
+---Try to use an enhanced picker (Snacks or fzf-lua)
 ---@param items table[] Items to pick from
 ---@param on_select function Callback when item is selected
 ---@return boolean success Whether an enhanced picker was used
 function M._try_picker(items, on_select)
+  -- Try Snacks picker first
+  local snacks_ok, Snacks = pcall(require, "snacks")
+  if snacks_ok and Snacks and Snacks.picker then
+    local picker_items = {}
+    for _, item in ipairs(items) do
+      table.insert(picker_items, {
+        text = item.display,
+        item = item,
+      })
+    end
+
+    Snacks.picker.pick({
+      source = "claude_sessions",
+      items = picker_items,
+      format = function(item)
+        return { { item.text } }
+      end,
+      layout = {
+        preview = false,
+      },
+      confirm = function(picker, item)
+        picker:close()
+        if item and item.item then
+          on_select(item.item)
+        end
+      end,
+      actions = {
+        close_session = function(picker, item)
+          if item and item.item and item.item.session then
+            local terminal_mod = require("claudecode.terminal")
+            terminal_mod.close_session(item.item.session.id)
+            vim.notify("Closed session: " .. item.item.session.name, vim.log.levels.INFO)
+            picker:close()
+          end
+        end,
+      },
+      win = {
+        input = {
+          keys = {
+            ["<C-x>"] = { "close_session", mode = { "i", "n" }, desc = "Close session" },
+          },
+        },
+        list = {
+          keys = {
+            ["<C-x>"] = { "close_session", mode = { "n" }, desc = "Close session" },
+          },
+        },
+      },
+      title = "Claude Sessions (Ctrl-X: close)",
+    })
+    return true
+  end
+
   -- Try fzf-lua
   local fzf_ok, fzf = pcall(require, "fzf-lua")
   if fzf_ok and fzf then
@@ -1223,6 +1276,23 @@ function M._try_picker(items, on_select)
             end
           end
         end,
+        ["ctrl-x"] = {
+          fn = function(selected)
+            if selected and selected[1] then
+              local item = item_map[selected[1]]
+              if item and item.session then
+                local terminal_mod = require("claudecode.terminal")
+                terminal_mod.close_session(item.session.id)
+                vim.notify("Closed session: " .. item.session.name, vim.log.levels.INFO)
+              end
+            end
+          end,
+          -- Close picker after action since session list changed
+          exec_silent = true,
+        },
+      },
+      fzf_opts = {
+        ["--header"] = "Enter: switch | Ctrl-X: close session",
       },
     })
     return true
