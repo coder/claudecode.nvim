@@ -73,6 +73,7 @@ local function find_main_editor_window()
         or filetype == "netrw"
         or filetype == "aerial"
         or filetype == "tagbar"
+        or filetype == "snacks_picker_list"
       )
     then
       is_suitable = false
@@ -918,7 +919,7 @@ function M._create_diff_view_from_window(
       local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
       local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
 
-      if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" then
+      if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" or filetype == "snacks_picker_list" then
         create_split()
       end
 
