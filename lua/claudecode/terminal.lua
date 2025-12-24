@@ -33,6 +33,22 @@ local defaults = {
   -- Smart ESC handling: timeout in ms to wait for second ESC before sending ESC to terminal
   -- Set to nil or 0 to disable smart ESC handling (use simple keymap instead)
   esc_timeout = 200,
+  -- Tab bar for session switching (optional)
+  tabs = {
+    enabled = false, -- Off by default
+    height = 1, -- Height of tab bar in lines
+    show_close_button = true, -- Show [x] close button on tabs
+    show_new_button = true, -- Show [+] button for new session
+    separator = " | ", -- Separator between tabs
+    active_indicator = "*", -- Indicator for active tab
+    mouse_enabled = false, -- Mouse clicks optional, off by default
+    keymaps = {
+      next_tab = "<A-Tab>", -- Switch to next session (Alt+Tab)
+      prev_tab = "<A-S-Tab>", -- Switch to previous session (Alt+Shift+Tab)
+      close_tab = "<A-w>", -- Close current tab (Alt+w)
+      new_tab = "<A-+>", -- Create new session (Alt++)
+    },
+  },
 }
 
 M.defaults = defaults
@@ -401,8 +417,46 @@ local function is_terminal_visible(bufnr)
     return false
   end
 
-  local bufinfo = vim.fn.getbufinfo(bufnr)
+  -- Protect against missing vim.fn.getbufinfo in test environment
+  if not vim.fn or not vim.fn.getbufinfo then
+    return false
+  end
+
+  local ok, bufinfo = pcall(vim.fn.getbufinfo, bufnr)
+  if not ok then
+    return false
+  end
   return bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0
+end
+
+---Attach the tab bar to a terminal window if tabs are enabled
+---@param terminal_winid number The terminal window ID
+---@param terminal_bufnr number|nil The terminal buffer number (for keymaps)
+local function attach_tabbar(terminal_winid, terminal_bufnr)
+  if not defaults.tabs or not defaults.tabs.enabled then
+    return
+  end
+
+  if not terminal_winid or not vim.api.nvim_win_is_valid(terminal_winid) then
+    return
+  end
+
+  local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+  if ok then
+    tabbar.attach(terminal_winid, terminal_bufnr)
+  end
+end
+
+---Detach the tab bar from the terminal
+local function detach_tabbar()
+  if not defaults.tabs or not defaults.tabs.enabled then
+    return
+  end
+
+  local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+  if ok then
+    tabbar.detach()
+  end
 end
 
 ---Gets the claude command string and necessary environment variables
@@ -657,6 +711,65 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
           vim.log.levels.WARN
         )
       end
+    elseif k == "tabs" then
+      if type(v) == "table" then
+        defaults.tabs = defaults.tabs or {}
+        for tabs_k, tabs_v in pairs(v) do
+          if tabs_k == "enabled" then
+            if type(tabs_v) == "boolean" then
+              defaults.tabs.enabled = tabs_v
+            else
+              vim.notify(
+                "claudecode.terminal.setup: Invalid value for tabs.enabled: " .. tostring(tabs_v),
+                vim.log.levels.WARN
+              )
+            end
+          elseif tabs_k == "height" then
+            if type(tabs_v) == "number" and tabs_v >= 1 then
+              defaults.tabs.height = tabs_v
+            else
+              vim.notify(
+                "claudecode.terminal.setup: Invalid value for tabs.height: " .. tostring(tabs_v),
+                vim.log.levels.WARN
+              )
+            end
+          elseif tabs_k == "show_close_button" then
+            if type(tabs_v) == "boolean" then
+              defaults.tabs.show_close_button = tabs_v
+            end
+          elseif tabs_k == "show_new_button" then
+            if type(tabs_v) == "boolean" then
+              defaults.tabs.show_new_button = tabs_v
+            end
+          elseif tabs_k == "separator" then
+            if type(tabs_v) == "string" then
+              defaults.tabs.separator = tabs_v
+            end
+          elseif tabs_k == "active_indicator" then
+            if type(tabs_v) == "string" then
+              defaults.tabs.active_indicator = tabs_v
+            end
+          elseif tabs_k == "mouse_enabled" then
+            if type(tabs_v) == "boolean" then
+              defaults.tabs.mouse_enabled = tabs_v
+            end
+          elseif tabs_k == "keymaps" then
+            if type(tabs_v) == "table" then
+              defaults.tabs.keymaps = defaults.tabs.keymaps or {}
+              for km_k, km_v in pairs(tabs_v) do
+                if km_v == false or type(km_v) == "string" then
+                  defaults.tabs.keymaps[km_k] = km_v
+                end
+              end
+            end
+          end
+        end
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for tabs: " .. tostring(v) .. ". Must be a table.",
+          vim.log.levels.WARN
+        )
+      end
     else
       if k ~= "terminal_cmd" then
         vim.notify("claudecode.terminal.setup: Unknown configuration key: " .. k, vim.log.levels.WARN)
@@ -666,6 +779,14 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
 
   -- Setup providers with config
   get_provider().setup(defaults)
+
+  -- Setup tab bar if configured
+  if defaults.tabs then
+    local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+    if ok then
+      tabbar.setup(defaults.tabs)
+    end
+  end
 end
 
 ---Opens or focuses the Claude terminal.
@@ -696,10 +817,20 @@ function M.open(opts_override, cmd_args)
       end
     end
   end
+
+  -- Attach tab bar if enabled (find terminal window from buffer)
+  local active_bufnr = provider.get_active_bufnr()
+  if active_bufnr and vim.fn.getbufinfo then
+    local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
+    if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+      attach_tabbar(bufinfo[1].windows[1], active_bufnr)
+    end
+  end
 end
 
 ---Closes the managed Claude terminal if it's open and valid.
 function M.close()
+  detach_tabbar()
   get_provider().close()
 end
 
@@ -713,6 +844,7 @@ function M.simple_toggle(opts_override, cmd_args)
   -- Check if we had a terminal before the toggle
   local provider = get_provider()
   local had_terminal = provider.get_active_bufnr() ~= nil
+  local was_visible = is_terminal_visible(provider.get_active_bufnr())
 
   provider.simple_toggle(cmd_string, claude_env_table, effective_config)
 
@@ -738,6 +870,23 @@ function M.simple_toggle(opts_override, cmd_args)
       end)
     end
   end
+
+  -- Handle tab bar visibility based on terminal visibility
+  local active_bufnr = provider.get_active_bufnr()
+  local is_visible_now = is_terminal_visible(active_bufnr)
+
+  if is_visible_now and not was_visible then
+    -- Terminal just became visible, attach tab bar
+    if active_bufnr and vim.fn.getbufinfo then
+      local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
+      if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+        attach_tabbar(bufinfo[1].windows[1], active_bufnr)
+      end
+    end
+  elseif was_visible and not is_visible_now then
+    -- Terminal was hidden, detach tab bar
+    detach_tabbar()
+  end
 end
 
 ---Smart focus toggle: switches to terminal if not focused, hides if currently focused.
@@ -750,6 +899,7 @@ function M.focus_toggle(opts_override, cmd_args)
   -- Check if we had a terminal before the toggle
   local provider = get_provider()
   local had_terminal = provider.get_active_bufnr() ~= nil
+  local was_visible = is_terminal_visible(provider.get_active_bufnr())
 
   provider.focus_toggle(cmd_string, claude_env_table, effective_config)
 
@@ -774,6 +924,23 @@ function M.focus_toggle(opts_override, cmd_args)
         end
       end)
     end
+  end
+
+  -- Handle tab bar visibility based on terminal visibility
+  local active_bufnr = provider.get_active_bufnr()
+  local is_visible_now = is_terminal_visible(active_bufnr)
+
+  if is_visible_now and not was_visible then
+    -- Terminal just became visible, attach tab bar
+    if active_bufnr and vim.fn.getbufinfo then
+      local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
+      if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+        attach_tabbar(bufinfo[1].windows[1], active_bufnr)
+      end
+    end
+  elseif was_visible and not is_visible_now then
+    -- Terminal was hidden, detach tab bar
+    detach_tabbar()
   end
 end
 
@@ -854,6 +1021,9 @@ function M.close_session(session_id)
 
   local provider = get_provider()
 
+  -- Detach tabbar before closing the terminal window
+  detach_tabbar()
+
   if provider.close_session then
     provider.close_session(session_id)
   else
@@ -862,6 +1032,30 @@ function M.close_session(session_id)
   end
 
   session_manager.destroy_session(session_id)
+
+  -- If there are remaining sessions, switch to the new active session
+  local new_active_id = session_manager.get_active_session_id()
+  if new_active_id then
+    local effective_config = build_config(nil)
+    if provider.focus_session then
+      provider.focus_session(new_active_id, effective_config)
+    end
+
+    -- Re-attach tabbar to the new session's terminal
+    local new_bufnr
+    if provider.get_session_bufnr then
+      new_bufnr = provider.get_session_bufnr(new_active_id)
+    else
+      new_bufnr = provider.get_active_bufnr()
+    end
+
+    if new_bufnr and vim.fn.getbufinfo then
+      local ok, bufinfo = pcall(vim.fn.getbufinfo, new_bufnr)
+      if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+        attach_tabbar(bufinfo[1].windows[1], new_bufnr)
+      end
+    end
+  end
 end
 
 ---Switches to a specific session.

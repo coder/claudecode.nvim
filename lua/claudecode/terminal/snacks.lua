@@ -16,6 +16,10 @@ local terminal = nil
 ---@type table<string, table> Map of session_id -> terminal instance
 local terminals = {}
 
+-- Track sessions being intentionally closed (to suppress exit error messages)
+---@type table<string, boolean>
+local closing_sessions = {}
+
 --- @return boolean
 local function is_available()
   return snacks_available and Snacks and Snacks.terminal ~= nil
@@ -31,13 +35,16 @@ local function setup_terminal_events(term_instance, config, session_id)
   -- Handle command completion/exit - only if auto_close is enabled
   if config.auto_close then
     term_instance:on("TermClose", function()
-      if vim.v.event.status ~= 0 then
+      -- Only show error if this wasn't an intentional close
+      local is_intentional_close = session_id and closing_sessions[session_id]
+      if vim.v.event.status ~= 0 and not is_intentional_close then
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
       -- Clean up
       if session_id then
         terminals[session_id] = nil
+        closing_sessions[session_id] = nil
       else
         terminal = nil
       end
@@ -65,12 +72,42 @@ local function setup_terminal_events(term_instance, config, session_id)
   end, { buf = true })
 end
 
+---Build initial title for session tabs
+---@param session_id string|nil Optional session ID
+---@return string title The title string
+local function build_initial_title(session_id)
+  local sm = require("claudecode.session")
+  local sessions = sm.list_sessions()
+  local active_id = session_id or sm.get_active_session_id()
+
+  if #sessions == 0 then
+    return "Claude Code"
+  end
+
+  local parts = {}
+  for i, session in ipairs(sessions) do
+    local is_active = session.id == active_id
+    local name = session.name or ("Session " .. i)
+    if #name > 15 then
+      name = name:sub(1, 12) .. "..."
+    end
+    local label = string.format("%d:%s", i, name)
+    if is_active then
+      label = "[" .. label .. "]"
+    end
+    table.insert(parts, label)
+  end
+  table.insert(parts, "[+]")
+  return table.concat(parts, " | ")
+end
+
 ---Builds Snacks terminal options with focus control
 ---@param config ClaudeCodeTerminalConfig Terminal configuration
 ---@param env_table table Environment variables to set for the terminal process
 ---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
+---@param session_id string|nil Optional session ID for title
 ---@return snacks.terminal.Opts opts Snacks terminal options with start_insert/auto_insert controlled by focus parameter
-local function build_opts(config, env_table, focus)
+local function build_opts(config, env_table, focus, session_id)
   focus = utils.normalize_focus(focus)
 
   -- Build keys table with optional exit_terminal keymap
@@ -100,19 +137,32 @@ local function build_opts(config, env_table, focus)
     }
   end
 
+  -- Build title for tabs if enabled
+  local title = nil
+  if config.tabs and config.tabs.enabled then
+    title = build_initial_title(session_id)
+  end
+
+  -- Merge user's snacks_win_opts, preserving wo options for winbar support
+  local win_opts = vim.tbl_deep_extend("force", {
+    position = config.split_side,
+    width = config.split_width_percentage,
+    height = 0,
+    relative = "editor",
+    keys = keys,
+    title = title,
+    title_pos = title and "center" or nil,
+    -- Don't clear winbar - we set it dynamically for session tabs
+    wo = {},
+  } --[[@as snacks.win.Config]], config.snacks_win_opts or {})
+
   return {
     env = env_table,
     cwd = config.cwd,
     start_insert = focus,
     auto_insert = focus,
     auto_close = false,
-    win = vim.tbl_deep_extend("force", {
-      position = config.split_side,
-      width = config.split_width_percentage,
-      height = 0,
-      relative = "editor",
-      keys = keys,
-    } --[[@as snacks.win.Config]], config.snacks_win_opts or {}),
+    win = win_opts,
   } --[[@as snacks.terminal.Opts]]
 end
 
@@ -174,9 +224,32 @@ function M.open(cmd_string, env_table, config, focus)
     terminal = term_instance
 
     -- Set up smart ESC handling if enabled
+    local terminal_module = require("claudecode.terminal")
     if config.esc_timeout and config.esc_timeout > 0 and term_instance.buf then
-      local terminal_module = require("claudecode.terminal")
       terminal_module.setup_terminal_keymaps(term_instance.buf, config)
+    end
+
+    -- Ensure a session exists before attaching tabbar (session is needed for tabbar content)
+    local session_id = session_manager.ensure_session()
+    session_manager.update_terminal_info(session_id, {
+      bufnr = term_instance.buf,
+      winid = term_instance.win,
+    })
+
+    -- Attach tabbar directly with known window ID and snacks terminal instance
+    -- Use vim.schedule to ensure snacks has finished its window setup
+    if term_instance.win and vim.api.nvim_win_is_valid(term_instance.win) then
+      local win_id = term_instance.win
+      local buf_id = term_instance.buf
+      local term_ref = term_instance
+      vim.schedule(function()
+        if vim.api.nvim_win_is_valid(win_id) then
+          local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+          if ok then
+            tabbar.attach(win_id, buf_id, term_ref)
+          end
+        end
+      end)
     end
   else
     terminal = nil
@@ -394,7 +467,7 @@ function M.open_session(session_id, cmd_string, env_table, config, focus)
   hide_all_session_terminals(nil)
 
   -- Create new terminal for this session
-  local opts = build_opts(config, env_table, focus)
+  local opts = build_opts(config, env_table, focus, session_id)
   local term_instance = Snacks.terminal.open(cmd_string, opts)
 
   if term_instance and term_instance:buf_valid() then
@@ -425,6 +498,21 @@ function M.open_session(session_id, cmd_string, env_table, config, focus)
       end)
     end
 
+    -- Attach tabbar with snacks terminal instance for floating window title
+    if term_instance.win and vim.api.nvim_win_is_valid(term_instance.win) then
+      local win_id = term_instance.win
+      local buf_id = term_instance.buf
+      local term_ref = term_instance
+      vim.schedule(function()
+        if vim.api.nvim_win_is_valid(win_id) then
+          local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+          if ok then
+            tabbar.attach(win_id, buf_id, term_ref)
+          end
+        end
+      end)
+    end
+
     logger.debug("terminal", "Opened terminal for session: " .. session_id)
   else
     logger.error("terminal", "Failed to open terminal for session: " .. session_id)
@@ -440,6 +528,8 @@ function M.close_session(session_id)
 
   local term_instance = terminals[session_id]
   if term_instance and term_instance:buf_valid() then
+    -- Mark as intentional close to suppress error message
+    closing_sessions[session_id] = true
     term_instance:close({ buf = true })
     terminals[session_id] = nil
 
@@ -509,6 +599,14 @@ function M.focus_session(session_id, config)
       vim.api.nvim_win_call(term_instance.win, function()
         vim.cmd("startinsert")
       end)
+    end
+  end
+
+  -- Update tabbar with the new terminal instance
+  if term_instance.win and vim.api.nvim_win_is_valid(term_instance.win) then
+    local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+    if ok then
+      tabbar.attach(term_instance.win, term_instance.buf, term_instance)
     end
   end
 end

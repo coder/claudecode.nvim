@@ -1205,17 +1205,35 @@ function M._try_picker(items, on_select)
   -- Try Snacks picker first
   local snacks_ok, Snacks = pcall(require, "snacks")
   if snacks_ok and Snacks and Snacks.picker then
-    local picker_items = {}
-    for _, item in ipairs(items) do
-      table.insert(picker_items, {
-        text = item.display,
-        item = item,
-      })
+    -- Use a finder function for dynamic refresh support
+    local function session_finder()
+      local terminal_mod = require("claudecode.terminal")
+      local sessions = terminal_mod.list_sessions()
+      local active_session_id = terminal_mod.get_active_session_id()
+      local picker_items = {}
+      for i, session in ipairs(sessions) do
+        local age = math.floor((vim.loop.now() - session.created_at) / 1000 / 60)
+        local age_str
+        if age < 1 then
+          age_str = "just now"
+        elseif age == 1 then
+          age_str = "1 min ago"
+        else
+          age_str = age .. " mins ago"
+        end
+        local active_marker = session.id == active_session_id and " (active)" or ""
+        local display = string.format("[%d] %s - %s%s", i, session.name, age_str, active_marker)
+        table.insert(picker_items, {
+          text = display,
+          item = { index = i, session = session, display = display },
+        })
+      end
+      return picker_items
     end
 
     Snacks.picker.pick({
       source = "claude_sessions",
-      items = picker_items,
+      finder = session_finder,
       format = function(item)
         return { { item.text } }
       end,
@@ -1234,7 +1252,13 @@ function M._try_picker(items, on_select)
             local terminal_mod = require("claudecode.terminal")
             terminal_mod.close_session(item.item.session.id)
             vim.notify("Closed session: " .. item.item.session.name, vim.log.levels.INFO)
-            picker:close()
+            -- Refresh the picker to show updated session list
+            local sessions = terminal_mod.list_sessions()
+            if #sessions == 0 then
+              picker:close()
+            else
+              picker:refresh()
+            end
           end
         end,
       },
@@ -1284,10 +1308,16 @@ function M._try_picker(items, on_select)
                 local terminal_mod = require("claudecode.terminal")
                 terminal_mod.close_session(item.session.id)
                 vim.notify("Closed session: " .. item.session.name, vim.log.levels.INFO)
+                -- Reopen picker with updated sessions if any remain
+                local sessions = terminal_mod.list_sessions()
+                if #sessions > 0 then
+                  vim.schedule(function()
+                    M.show_session_picker()
+                  end)
+                end
               end
             end
           end,
-          -- Close picker after action since session list changed
           exec_silent = true,
         },
       },

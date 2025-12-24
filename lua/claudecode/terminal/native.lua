@@ -713,9 +713,12 @@ local function show_hidden_session_terminal_impl(session_id, effective_config, f
   state.winid = new_winid
 
   -- Notify terminal of window dimensions to fix cursor position after session switch
+  -- Use actual window dimensions, not calculated ones (vim.o.lines includes statusline, cmdline, etc.)
   local chan = vim.bo[state.bufnr].channel
   if chan and chan > 0 then
-    pcall(vim.fn.jobresize, chan, width, full_height)
+    local actual_width = vim.api.nvim_win_get_width(new_winid)
+    local actual_height = vim.api.nvim_win_get_height(new_winid)
+    pcall(vim.fn.jobresize, chan, actual_width, actual_height)
   end
 
   if focus then

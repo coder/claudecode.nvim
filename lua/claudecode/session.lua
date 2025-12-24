@@ -62,6 +62,12 @@ function M.create_session(opts)
 
   logger.debug("session", "Created session: " .. session_id .. " (" .. session.name .. ")")
 
+  -- Emit autocmd event for UI integrations (tab bar, statusline, etc.)
+  pcall(vim.api.nvim_exec_autocmds, "User", {
+    pattern = "ClaudeCodeSessionCreated",
+    data = { session_id = session_id, name = session.name },
+  })
+
   return session_id
 end
 
@@ -92,6 +98,12 @@ function M.destroy_session(session_id)
   end
 
   logger.debug("session", "Destroyed session: " .. session_id)
+
+  -- Emit autocmd event for UI integrations (tab bar, statusline, etc.)
+  pcall(vim.api.nvim_exec_autocmds, "User", {
+    pattern = "ClaudeCodeSessionDestroyed",
+    data = { session_id = session_id },
+  })
 
   return true
 end

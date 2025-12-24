@@ -91,6 +91,41 @@ function M.validate(config)
     end
   end
 
+  -- Validate terminal tabs config if present
+  if config.terminal.tabs then
+    assert(type(config.terminal.tabs) == "table", "terminal.tabs must be a table")
+    if config.terminal.tabs.enabled ~= nil then
+      assert(type(config.terminal.tabs.enabled) == "boolean", "terminal.tabs.enabled must be a boolean")
+    end
+    if config.terminal.tabs.height ~= nil then
+      assert(
+        type(config.terminal.tabs.height) == "number" and config.terminal.tabs.height >= 1,
+        "terminal.tabs.height must be a number >= 1"
+      )
+    end
+    if config.terminal.tabs.mouse_enabled ~= nil then
+      assert(type(config.terminal.tabs.mouse_enabled) == "boolean", "terminal.tabs.mouse_enabled must be a boolean")
+    end
+    if config.terminal.tabs.show_close_button ~= nil then
+      assert(
+        type(config.terminal.tabs.show_close_button) == "boolean",
+        "terminal.tabs.show_close_button must be a boolean"
+      )
+    end
+    if config.terminal.tabs.show_new_button ~= nil then
+      assert(type(config.terminal.tabs.show_new_button) == "boolean", "terminal.tabs.show_new_button must be a boolean")
+    end
+    if config.terminal.tabs.separator ~= nil then
+      assert(type(config.terminal.tabs.separator) == "string", "terminal.tabs.separator must be a string")
+    end
+    if config.terminal.tabs.active_indicator ~= nil then
+      assert(type(config.terminal.tabs.active_indicator) == "string", "terminal.tabs.active_indicator must be a string")
+    end
+    if config.terminal.tabs.keymaps then
+      assert(type(config.terminal.tabs.keymaps) == "table", "terminal.tabs.keymaps must be a table")
+    end
+  end
+
   local valid_log_levels = { "trace", "debug", "info", "warn", "error" }
   local is_valid_log_level = false
   for _, level in ipairs(valid_log_levels) do
