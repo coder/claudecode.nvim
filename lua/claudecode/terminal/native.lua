@@ -91,6 +91,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
 
+  -- Prevent terminal window from being resized by Neovim's equalalways
+  vim.wo[new_winid].winfixwidth = true
+
   vim.api.nvim_win_call(new_winid, function()
     vim.cmd("enew")
   end)
@@ -111,8 +114,40 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
           logger.debug("terminal", "Terminal process exited, cleaning up")
 
           -- Ensure we are operating on the correct window and buffer before closing
-          local current_winid_for_job = winid
           local current_bufnr_for_job = bufnr
+
+          -- Find the window currently displaying this terminal buffer
+          local current_winid_for_job = nil
+          if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
+            local windows = vim.api.nvim_list_wins()
+            for _, win in ipairs(windows) do
+              if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == current_bufnr_for_job then
+                current_winid_for_job = win
+                break
+              end
+            end
+          end
+          if not current_winid_for_job then
+            current_winid_for_job = winid
+          end
+
+          -- Clean up OSC handler before clearing state
+          if current_bufnr_for_job then
+            osc_handler.cleanup_buffer_handler(current_bufnr_for_job)
+          end
+
+          -- Check session count BEFORE destroying
+          local session_count = session_manager.get_session_count()
+
+          -- Find and destroy any session associated with this terminal
+          local session = session_manager.find_session_by_bufnr(current_bufnr_for_job)
+          if session then
+            logger.debug("terminal", "Destroying session for exited terminal: " .. session.id)
+            -- Only destroy if session still exists (may have been destroyed by another handler)
+            if session_manager.get_session(session.id) then
+              session_manager.destroy_session(session.id)
+            end
+          end
 
           cleanup_state() -- Clear our managed state first
 
@@ -120,15 +155,85 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
             return
           end
 
+          -- If there are other sessions, switch to one instead of closing window
+          if session_count > 1 then
+            local new_active_id = session_manager.get_active_session_id()
+            if new_active_id then
+              local new_state = terminals[new_active_id]
+
+              -- Fallback: check session manager for terminal buffer
+              if not new_state or not new_state.bufnr or not vim.api.nvim_buf_is_valid(new_state.bufnr) then
+                local session_data = session_manager.get_session(new_active_id)
+                if
+                  session_data
+                  and session_data.terminal_bufnr
+                  and vim.api.nvim_buf_is_valid(session_data.terminal_bufnr)
+                then
+                  new_state = {
+                    bufnr = session_data.terminal_bufnr,
+                    winid = nil,
+                    jobid = session_data.terminal_jobid,
+                  }
+                  terminals[new_active_id] = new_state
+                  logger.debug("terminal", "Recovered terminal from session manager for: " .. new_active_id)
+                end
+              end
+
+              if new_state and new_state.bufnr and vim.api.nvim_buf_is_valid(new_state.bufnr) then
+                if current_winid_for_job and vim.api.nvim_win_is_valid(current_winid_for_job) then
+                  -- Switch the window to show the new session's buffer
+                  vim.api.nvim_win_set_buf(current_winid_for_job, new_state.bufnr)
+                  new_state.winid = current_winid_for_job
+
+                  -- Update legacy state
+                  bufnr = new_state.bufnr
+                  winid = new_state.winid
+                  jobid = new_state.jobid
+
+                  -- Notify terminal of window dimensions
+                  local chan = vim.bo[new_state.bufnr].channel
+                  if chan and chan > 0 then
+                    local win_width = vim.api.nvim_win_get_width(current_winid_for_job)
+                    local win_height = vim.api.nvim_win_get_height(current_winid_for_job)
+                    pcall(vim.fn.jobresize, chan, win_width, win_height)
+                  end
+
+                  vim.api.nvim_set_current_win(current_winid_for_job)
+                  vim.cmd("startinsert")
+
+                  -- Re-attach tabbar
+                  local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+                  if ok then
+                    tabbar.attach(current_winid_for_job, new_state.bufnr)
+                  end
+
+                  logger.debug("terminal", "Legacy terminal switched to session " .. new_active_id)
+
+                  -- Delete the old buffer
+                  if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
+                    vim.api.nvim_buf_delete(current_bufnr_for_job, { force = true })
+                  end
+                  return
+                else
+                  -- No valid window, show session in new window
+                  logger.debug("terminal", "No valid window, showing session " .. new_active_id)
+                  show_hidden_session_terminal(new_active_id, effective_config, true)
+                  if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
+                    vim.api.nvim_buf_delete(current_bufnr_for_job, { force = true })
+                  end
+                  return
+                end
+              end
+            end
+          end
+
+          -- No other sessions, close the window
           if current_winid_for_job and vim.api.nvim_win_is_valid(current_winid_for_job) then
             if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
-              -- Optional: Check if the window still holds the same terminal buffer
               if vim.api.nvim_win_get_buf(current_winid_for_job) == current_bufnr_for_job then
                 vim.api.nvim_win_close(current_winid_for_job, true)
               end
             else
-              -- Buffer is invalid, but window might still be there (e.g. if user changed buffer in term window)
-              -- Still try to close the window we tracked.
               vim.api.nvim_win_close(current_winid_for_job, true)
             end
           end
@@ -250,6 +355,9 @@ local function show_hidden_terminal(effective_config, focus)
   vim.cmd(placement_modifier .. width .. "vsplit")
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
+
+  -- Prevent terminal window from being resized by Neovim's equalalways
+  vim.wo[new_winid].winfixwidth = true
 
   -- Set the existing buffer in the new window
   vim.api.nvim_win_set_buf(new_winid, bufnr)
@@ -566,6 +674,9 @@ function M.open_session(session_id, cmd_string, env_table, effective_config, foc
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
 
+  -- Prevent terminal window from being resized by Neovim's equalalways
+  vim.wo[new_winid].winfixwidth = true
+
   vim.api.nvim_win_call(new_winid, function()
     vim.cmd("enew")
   end)
@@ -586,21 +697,140 @@ function M.open_session(session_id, cmd_string, env_table, effective_config, foc
         if state and job_id == state.jobid then
           logger.debug("terminal", "Terminal process exited for session: " .. session_id)
 
-          local current_winid = state.winid
           local current_bufnr = state.bufnr
+
+          -- Find the window currently displaying this terminal buffer
+          -- (more reliable than stored winid which might be stale)
+          local current_winid = nil
+          if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
+            local windows = vim.api.nvim_list_wins()
+            for _, win in ipairs(windows) do
+              if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == current_bufnr then
+                current_winid = win
+                break
+              end
+            end
+          end
+          -- Fallback to stored winid if buffer not visible
+          if not current_winid then
+            current_winid = state.winid
+          end
 
           -- Cleanup OSC handler before clearing state
           if current_bufnr then
             osc_handler.cleanup_buffer_handler(current_bufnr)
           end
 
-          -- Clear session state
+          -- Check if there are other sessions before destroying
+          local session_count = session_manager.get_session_count()
+
+          -- Clear terminal state
           terminals[session_id] = nil
+
+          -- Destroy the session in session manager (only if it still exists)
+          if session_manager.get_session(session_id) then
+            session_manager.destroy_session(session_id)
+          end
 
           if not effective_config.auto_close then
             return
           end
 
+          -- If there are other sessions, switch to the new active session instead of closing window
+          if session_count > 1 then
+            local new_active_id = session_manager.get_active_session_id()
+            if new_active_id then
+              local new_state = terminals[new_active_id]
+
+              -- Fallback 1: check if any other terminal in our table is valid
+              if not new_state or not new_state.bufnr or not vim.api.nvim_buf_is_valid(new_state.bufnr) then
+                for sid, term_state in pairs(terminals) do
+                  if
+                    sid ~= session_id
+                    and term_state
+                    and term_state.bufnr
+                    and vim.api.nvim_buf_is_valid(term_state.bufnr)
+                  then
+                    new_state = term_state
+                    terminals[new_active_id] = new_state
+                    logger.debug("terminal", "Recovered terminal from table for: " .. new_active_id)
+                    break
+                  end
+                end
+              end
+
+              -- Fallback 2: check session manager for terminal buffer if not in terminals table
+              if not new_state or not new_state.bufnr or not vim.api.nvim_buf_is_valid(new_state.bufnr) then
+                local session_data = session_manager.get_session(new_active_id)
+                if
+                  session_data
+                  and session_data.terminal_bufnr
+                  and vim.api.nvim_buf_is_valid(session_data.terminal_bufnr)
+                then
+                  -- Register this terminal in our table
+                  new_state = {
+                    bufnr = session_data.terminal_bufnr,
+                    winid = nil,
+                    jobid = session_data.terminal_jobid,
+                  }
+                  terminals[new_active_id] = new_state
+                  logger.debug("terminal", "Recovered terminal from session manager for: " .. new_active_id)
+                end
+              end
+
+              if new_state and new_state.bufnr and vim.api.nvim_buf_is_valid(new_state.bufnr) then
+                -- Check if we have a valid window to reuse
+                if current_winid and vim.api.nvim_win_is_valid(current_winid) then
+                  -- Switch the window to show the new session's buffer
+                  vim.api.nvim_win_set_buf(current_winid, new_state.bufnr)
+                  new_state.winid = current_winid
+
+                  -- Notify terminal of window dimensions
+                  local chan = vim.bo[new_state.bufnr].channel
+                  if chan and chan > 0 then
+                    local win_width = vim.api.nvim_win_get_width(current_winid)
+                    local win_height = vim.api.nvim_win_get_height(current_winid)
+                    pcall(vim.fn.jobresize, chan, win_width, win_height)
+                  end
+
+                  -- Update legacy state
+                  bufnr = new_state.bufnr
+                  winid = new_state.winid
+                  jobid = new_state.jobid
+
+                  -- Focus and enter insert mode
+                  vim.api.nvim_set_current_win(current_winid)
+                  vim.cmd("startinsert")
+
+                  -- Re-attach tabbar
+                  local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+                  if ok then
+                    tabbar.attach(current_winid, new_state.bufnr)
+                  end
+
+                  logger.debug("terminal", "Switched to session " .. new_active_id .. " after exit")
+
+                  -- Delete the old buffer
+                  if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
+                    vim.api.nvim_buf_delete(current_bufnr, { force = true })
+                  end
+                  return
+                else
+                  -- No valid window to reuse, show the other session in a new window
+                  logger.debug("terminal", "No valid window, showing session " .. new_active_id .. " in new window")
+                  show_hidden_session_terminal(new_active_id, effective_config, true)
+
+                  -- Delete the old buffer
+                  if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
+                    vim.api.nvim_buf_delete(current_bufnr, { force = true })
+                  end
+                  return
+                end
+              end
+            end
+          end
+
+          -- No other sessions or couldn't switch, close the window
           if current_winid and vim.api.nvim_win_is_valid(current_winid) then
             if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
               if vim.api.nvim_win_get_buf(current_winid) == current_bufnr then
@@ -708,6 +938,9 @@ local function show_hidden_session_terminal_impl(session_id, effective_config, f
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
 
+  -- Prevent terminal window from being resized by Neovim's equalalways
+  vim.wo[new_winid].winfixwidth = true
+
   -- Set the existing buffer in the new window
   vim.api.nvim_win_set_buf(new_winid, state.bufnr)
   state.winid = new_winid
@@ -747,12 +980,88 @@ function M.close_session(session_id)
     vim.api.nvim_win_close(state.winid, true)
   end
 
+  -- Clean up the buffer if it exists
+  if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+    osc_handler.cleanup_buffer_handler(state.bufnr)
+    vim.api.nvim_buf_delete(state.bufnr, { force = true })
+  end
+
   terminals[session_id] = nil
 
   -- If this was the legacy terminal, clear it too
   if bufnr == state.bufnr then
     cleanup_state()
   end
+end
+
+---Close a session's terminal but keep window open and switch to another session
+---@param old_session_id string The session ID to close
+---@param new_session_id string The session ID to switch to
+---@param effective_config ClaudeCodeTerminalConfig Terminal configuration
+function M.close_session_keep_window(old_session_id, new_session_id, effective_config)
+  local old_state = terminals[old_session_id]
+  local new_state = terminals[new_session_id]
+
+  if not old_state then
+    return
+  end
+
+  -- Get the window from the old session (if visible)
+  local target_winid = old_state.winid
+  if not target_winid or not vim.api.nvim_win_is_valid(target_winid) then
+    -- Old session's window is not visible, just clean up and show new session
+    if old_state.bufnr and vim.api.nvim_buf_is_valid(old_state.bufnr) then
+      osc_handler.cleanup_buffer_handler(old_state.bufnr)
+      vim.api.nvim_buf_delete(old_state.bufnr, { force = true })
+    end
+    terminals[old_session_id] = nil
+    if bufnr == old_state.bufnr then
+      cleanup_state()
+    end
+
+    -- Show the new session
+    show_hidden_session_terminal(new_session_id, effective_config, true)
+    return
+  end
+
+  -- Switch the window to show the new session's buffer
+  if new_state and new_state.bufnr and vim.api.nvim_buf_is_valid(new_state.bufnr) then
+    -- Set the new buffer in the existing window
+    vim.api.nvim_win_set_buf(target_winid, new_state.bufnr)
+    new_state.winid = target_winid
+
+    -- Notify terminal of window dimensions to fix cursor position
+    local chan = vim.bo[new_state.bufnr].channel
+    if chan and chan > 0 then
+      local width = vim.api.nvim_win_get_width(target_winid)
+      local height = vim.api.nvim_win_get_height(target_winid)
+      pcall(vim.fn.jobresize, chan, width, height)
+    end
+
+    -- Focus and enter insert mode
+    vim.api.nvim_set_current_win(target_winid)
+    vim.cmd("startinsert")
+  else
+    -- New session doesn't have a valid terminal, show it
+    show_hidden_session_terminal(new_session_id, effective_config, true)
+  end
+
+  -- Now clean up the old session's buffer
+  if old_state.bufnr and vim.api.nvim_buf_is_valid(old_state.bufnr) then
+    osc_handler.cleanup_buffer_handler(old_state.bufnr)
+    vim.api.nvim_buf_delete(old_state.bufnr, { force = true })
+  end
+
+  terminals[old_session_id] = nil
+
+  -- Update legacy state to point to new session
+  if bufnr == old_state.bufnr and new_state then
+    bufnr = new_state.bufnr
+    winid = new_state.winid
+    jobid = new_state.jobid
+  end
+
+  logger.debug("terminal", "Closed session " .. old_session_id .. " and switched to " .. new_session_id)
 end
 
 ---Focus a terminal for a specific session

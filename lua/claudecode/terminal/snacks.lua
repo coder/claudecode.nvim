@@ -41,14 +41,181 @@ local function setup_terminal_events(term_instance, config, session_id)
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
-      -- Clean up
+      -- Check if there are other sessions before destroying
+      local session_count = session_manager.get_session_count()
+      local current_bufnr = term_instance.buf
+
+      -- Find the window currently displaying this terminal buffer
+      -- (more reliable than stored win which might be stale)
+      local current_winid = nil
+      if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
+        local windows = vim.api.nvim_list_wins()
+        for _, win in ipairs(windows) do
+          if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == current_bufnr then
+            current_winid = win
+            break
+          end
+        end
+      end
+      -- Fallback to stored win if buffer not visible
+      if not current_winid then
+        current_winid = term_instance.win
+      end
+
+      -- Track the exited session ID for cleanup
+      local exited_session_id = session_id
+
+      -- Clean up terminal state
       if session_id then
         terminals[session_id] = nil
         closing_sessions[session_id] = nil
+        -- Destroy the session in session manager (only if it still exists)
+        if session_manager.get_session(session_id) then
+          session_manager.destroy_session(session_id)
+        end
       else
-        terminal = nil
+        -- For legacy terminal, find and destroy associated session
+        if term_instance.buf then
+          local session = session_manager.find_session_by_bufnr(term_instance.buf)
+          if session then
+            exited_session_id = session.id
+            logger.debug("terminal", "Destroying session for exited terminal: " .. session.id)
+            -- Only destroy if session still exists (may have been destroyed by another handler)
+            if session_manager.get_session(session.id) then
+              session_manager.destroy_session(session.id)
+            end
+          end
+        end
+        -- Don't set terminal = nil yet, we might need it for fallback
       end
+
       vim.schedule(function()
+        -- If there are other sessions, switch to the new active session instead of closing
+        if session_count > 1 then
+          local new_active_id = session_manager.get_active_session_id()
+          if new_active_id then
+            local new_term = terminals[new_active_id]
+
+            -- Fallback 1: check if any other terminal in our table is valid
+            if not new_term or not new_term:buf_valid() then
+              for sid, term in pairs(terminals) do
+                if sid ~= exited_session_id and term and term:buf_valid() then
+                  new_term = term
+                  terminals[new_active_id] = new_term
+                  logger.debug("terminal", "Recovered terminal from table for session: " .. new_active_id)
+                  break
+                end
+              end
+            end
+
+            -- Fallback 2: check the global terminal variable
+            if not new_term or not new_term:buf_valid() then
+              if terminal and terminal:buf_valid() and terminal ~= term_instance then
+                new_term = terminal
+                terminals[new_active_id] = new_term
+                logger.debug("terminal", "Recovered global terminal for session: " .. new_active_id)
+              end
+            end
+
+            -- Fallback 3: check session manager for terminal buffer and find matching terminal
+            if not new_term or not new_term:buf_valid() then
+              local session_data = session_manager.get_session(new_active_id)
+              if
+                session_data
+                and session_data.terminal_bufnr
+                and vim.api.nvim_buf_is_valid(session_data.terminal_bufnr)
+              then
+                -- Search all terminals for one with this buffer
+                for _, term in pairs(terminals) do
+                  if term and term:buf_valid() and term.buf == session_data.terminal_bufnr then
+                    new_term = term
+                    terminals[new_active_id] = new_term
+                    logger.debug("terminal", "Recovered terminal by buffer for session: " .. new_active_id)
+                    break
+                  end
+                end
+                -- Also check global terminal
+                if
+                  (not new_term or not new_term:buf_valid())
+                  and terminal
+                  and terminal:buf_valid()
+                  and terminal.buf == session_data.terminal_bufnr
+                then
+                  new_term = terminal
+                  terminals[new_active_id] = new_term
+                  logger.debug("terminal", "Recovered global terminal by buffer for session: " .. new_active_id)
+                end
+              end
+            end
+
+            if new_term and new_term:buf_valid() and new_term.buf then
+              -- Keep the window open and switch to the other session's buffer
+              if current_winid and vim.api.nvim_win_is_valid(current_winid) then
+                -- Disconnect old terminal instance from this window
+                -- (so it doesn't interfere when we delete its buffer)
+                term_instance.win = nil
+
+                -- Switch the window to show the new session's buffer
+                vim.api.nvim_win_set_buf(current_winid, new_term.buf)
+                new_term.win = current_winid
+
+                -- Notify terminal of window dimensions
+                local chan = vim.bo[new_term.buf].channel
+                if chan and chan > 0 then
+                  local width = vim.api.nvim_win_get_width(current_winid)
+                  local height = vim.api.nvim_win_get_height(current_winid)
+                  pcall(vim.fn.jobresize, chan, width, height)
+                end
+
+                -- Update legacy terminal reference
+                terminal = new_term
+
+                -- Focus and enter insert mode
+                vim.api.nvim_set_current_win(current_winid)
+                if vim.api.nvim_buf_get_option(new_term.buf, "buftype") == "terminal" then
+                  vim.cmd("startinsert")
+                end
+
+                -- Re-attach tabbar
+                local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+                if ok then
+                  tabbar.attach(current_winid, new_term.buf, new_term)
+                end
+
+                logger.debug("terminal", "Switched to session " .. new_active_id .. " in same window")
+
+                -- Delete the old buffer after switching (buffer is no longer displayed)
+                if current_bufnr and vim.api.nvim_buf_is_valid(current_bufnr) then
+                  vim.api.nvim_buf_delete(current_bufnr, { force = true })
+                end
+
+                vim.cmd.checktime()
+                return
+              else
+                -- No valid window, show the other session using snacks toggle
+                logger.debug("terminal", "No valid window, showing session " .. new_active_id)
+                terminal = new_term
+                new_term:toggle()
+                if new_term.win and vim.api.nvim_win_is_valid(new_term.win) then
+                  new_term:focus()
+                  if new_term.buf and vim.api.nvim_buf_get_option(new_term.buf, "buftype") == "terminal" then
+                    vim.api.nvim_win_call(new_term.win, function()
+                      vim.cmd("startinsert")
+                    end)
+                  end
+                end
+                vim.cmd.checktime()
+                return
+              end
+            end
+          end
+        end
+
+        -- No other sessions or couldn't switch, close normally
+        -- Clear terminal reference if this was the legacy terminal
+        if terminal == term_instance then
+          terminal = nil
+        end
         term_instance:close({ buf = true })
         vim.cmd.checktime()
       end)
@@ -66,7 +233,22 @@ local function setup_terminal_events(term_instance, config, session_id)
 
     if session_id then
       terminals[session_id] = nil
+      -- Destroy the session in session manager to prevent zombie sessions (only if it still exists)
+      if session_manager.get_session(session_id) then
+        session_manager.destroy_session(session_id)
+      end
     else
+      -- For legacy terminal, find and destroy associated session
+      if term_instance.buf then
+        local session = session_manager.find_session_by_bufnr(term_instance.buf)
+        if session then
+          logger.debug("terminal", "Destroying session for wiped terminal: " .. session.id)
+          -- Only destroy if session still exists (may have been destroyed by TermClose)
+          if session_manager.get_session(session.id) then
+            session_manager.destroy_session(session.id)
+          end
+        end
+      end
       terminal = nil
     end
   end, { buf = true })
@@ -538,6 +720,89 @@ function M.close_session(session_id)
       terminal = nil
     end
   end
+end
+
+---Close a session's terminal but keep window open and switch to another session
+---@param old_session_id string The session ID to close
+---@param new_session_id string The session ID to switch to
+---@param effective_config ClaudeCodeTerminalConfig Terminal configuration
+function M.close_session_keep_window(old_session_id, new_session_id, effective_config)
+  if not is_available() then
+    return
+  end
+
+  local logger = require("claudecode.logger")
+  local old_term = terminals[old_session_id]
+  local new_term = terminals[new_session_id]
+
+  if not old_term then
+    return
+  end
+
+  -- Mark as intentional close
+  closing_sessions[old_session_id] = true
+
+  -- Get the window from the old terminal
+  local target_winid = old_term.win
+  local had_visible_window = target_winid and vim.api.nvim_win_is_valid(target_winid)
+
+  -- If new terminal exists, switch to it in the same window
+  if new_term and new_term:buf_valid() then
+    if had_visible_window and new_term.buf then
+      -- Set the new buffer in the existing window
+      vim.api.nvim_win_set_buf(target_winid, new_term.buf)
+      new_term.win = target_winid
+
+      -- Notify terminal of window dimensions
+      local chan = vim.bo[new_term.buf].channel
+      if chan and chan > 0 then
+        local width = vim.api.nvim_win_get_width(target_winid)
+        local height = vim.api.nvim_win_get_height(target_winid)
+        pcall(vim.fn.jobresize, chan, width, height)
+      end
+
+      -- Focus and enter insert mode
+      vim.api.nvim_set_current_win(target_winid)
+      if vim.api.nvim_buf_get_option(new_term.buf, "buftype") == "terminal" then
+        vim.cmd("startinsert")
+      end
+
+      -- Update tabbar
+      local ok, tabbar = pcall(require, "claudecode.terminal.tabbar")
+      if ok then
+        tabbar.attach(target_winid, new_term.buf, new_term)
+      end
+    elseif not had_visible_window then
+      -- Old window not visible, show new terminal
+      new_term:toggle()
+      if new_term.win and vim.api.nvim_win_is_valid(new_term.win) then
+        new_term:focus()
+        if new_term.buf and vim.api.nvim_buf_get_option(new_term.buf, "buftype") == "terminal" then
+          vim.api.nvim_win_call(new_term.win, function()
+            vim.cmd("startinsert")
+          end)
+        end
+      end
+    end
+
+    -- Update legacy terminal reference
+    terminal = new_term
+  end
+
+  -- Now close the old terminal's buffer (but window is already reused)
+  if old_term:buf_valid() then
+    -- Cleanup OSC handler
+    if old_term.buf then
+      osc_handler.cleanup_buffer_handler(old_term.buf)
+    end
+    -- Close just the buffer, not the window
+    vim.api.nvim_buf_delete(old_term.buf, { force = true })
+  end
+
+  terminals[old_session_id] = nil
+  closing_sessions[old_session_id] = nil
+
+  logger.debug("terminal", "Closed session " .. old_session_id .. " and switched to " .. new_session_id)
 end
 
 ---Focus a terminal for a specific session
