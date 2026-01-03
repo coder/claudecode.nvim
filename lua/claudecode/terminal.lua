@@ -569,4 +569,21 @@ function M._get_managed_terminal_for_test()
   return nil
 end
 
+---Creates a new Claude Code terminal instance.
+---This always creates a new terminal, regardless of existing ones.
+---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
+---@param cmd_args string? Arguments to append to the claude command.
+function M.create_new_instance(opts_override, cmd_args)
+  local effective_config = build_config(opts_override)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+
+  local provider = get_provider()
+  if provider.create_new_instance then
+    provider.create_new_instance(cmd_string, claude_env_table, effective_config)
+  else
+    -- Fallback: just call open, which may reuse existing terminal
+    provider.open(cmd_string, claude_env_table, effective_config)
+  end
+end
+
 return M

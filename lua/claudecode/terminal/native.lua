@@ -435,5 +435,33 @@ function M.is_available()
   return true -- Native provider is always available
 end
 
+---Creates a new terminal instance, ignoring any existing terminals
+---@param cmd_string string
+---@param env_table table
+---@param effective_config table
+function M.create_new_instance(cmd_string, env_table, effective_config)
+  -- Temporarily save the current state
+  local old_bufnr = bufnr
+  local old_winid = winid
+  local old_jobid = jobid
+
+  -- Clear state to force creation of new terminal
+  bufnr = nil
+  winid = nil
+  jobid = nil
+
+  -- Create new terminal
+  local success = open_terminal(cmd_string, env_table, effective_config, true)
+
+  -- If creation failed, restore old state
+  if not success then
+    bufnr = old_bufnr
+    winid = old_winid
+    jobid = old_jobid
+  end
+
+  return success
+end
+
 --- @type ClaudeCodeTerminalProvider
 return M
