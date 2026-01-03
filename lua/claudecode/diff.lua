@@ -307,6 +307,29 @@ local function is_buffer_dirty(file_path)
   return is_dirty, nil
 end
 
+---Discard unsaved changes in a buffer by reloading from disk.
+---@param file_path string The file path whose buffer changes should be discarded
+---@return boolean success True if changes were discarded successfully
+---@return string? error Error message if discard failed
+local function discard_buffer_changes(file_path)
+  local bufnr = vim.fn.bufnr(file_path)
+  if bufnr == -1 then
+    return false, "Buffer for " .. file_path .. " is not available"
+  end
+
+  local discard_success, discard_error = pcall(function()
+    vim.api.nvim_buf_call(bufnr, function()
+      vim.cmd("edit!") -- Force reload from disk, discarding changes
+    end)
+  end)
+
+  if not discard_success then
+    return false, "Discard error: " .. tostring(discard_error)
+  end
+
+  return true, nil
+end
+
 ---Setup the diff module
 ---@param user_config ClaudeCodeConfig The configuration passed from init.lua
 function M.setup(user_config)
@@ -1094,11 +1117,27 @@ function M._setup_blocking_diff(params, resolution_callback)
     if old_file_exists then
       local is_dirty = is_buffer_dirty(params.old_file_path)
       if is_dirty then
-        error({
-          code = -32000,
-          message = "Cannot create diff: file has unsaved changes",
-          data = "Please save (:w) or discard (:e!) changes to " .. params.old_file_path .. " before creating diff",
-        })
+        local behavior = config and config.diff_opts and config.diff_opts.on_unsaved_changes or "error"
+
+        if behavior == "error" then
+          error({
+            code = -32000,
+            message = "Cannot create diff: file has unsaved changes",
+            data = "Please save (:w) or discard (:e!) changes to " .. params.old_file_path .. " before creating diff",
+          })
+        elseif behavior == "discard" then
+          -- Discard unsaved changes using the extracted function
+          local discard_success, discard_err = discard_buffer_changes(params.old_file_path)
+          if not discard_success then
+            error({
+              code = -32000,
+              message = "Failed to discard unsaved changes before creating diff",
+              data = discard_err,
+            })
+          else
+            logger.warn("diff", "Discarded unsaved changes in " .. params.old_file_path)
+          end
+        end
       end
     end
 

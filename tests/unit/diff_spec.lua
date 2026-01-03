@@ -376,56 +376,6 @@ describe("Diff Module", function()
       rawset(io, "open", old_io_open)
     end)
 
-    it("should detect dirty buffer and throw error", function()
-      -- Mock vim.fn.bufnr to return a valid buffer number
-      local old_bufnr = _G.vim.fn.bufnr
-      _G.vim.fn.bufnr = function(path)
-        if path == "/path/to/dirty.lua" then
-          return 2
-        end
-        return -1
-      end
-
-      -- Mock vim.api.nvim_buf_get_option to return modified
-      local old_get_option = _G.vim.api.nvim_buf_get_option
-      _G.vim.api.nvim_buf_get_option = function(bufnr, option)
-        if bufnr == 2 and option == "modified" then
-          return true -- Buffer is dirty
-        end
-        return nil
-      end
-
-      local dirty_params = {
-        tab_name = "test_dirty",
-        old_file_path = "/path/to/dirty.lua",
-        new_file_path = "/path/to/dirty.lua",
-        content = "test content",
-      }
-
-      -- Mock file operations
-      _G.vim.fn.filereadable = function()
-        return 1
-      end
-
-      -- This should throw an error for dirty buffer
-      local success, err = pcall(function()
-        diff._setup_blocking_diff(dirty_params, function() end)
-      end)
-
-      expect(success).to_be_false()
-      expect(err).to_be_table()
-      expect(err.code).to_be(-32000)
-      expect(err.message).to_be("Diff setup failed")
-      expect(err.data).to_be_string()
-      -- For now, let's just verify the basic error structure
-      -- The important thing is that it fails when buffer is dirty, not the exact message
-      expect(#err.data > 0).to_be_true()
-
-      -- Restore mocks
-      _G.vim.fn.bufnr = old_bufnr
-      _G.vim.api.nvim_buf_get_option = old_get_option
-    end)
-
     it("should handle non-existent buffer", function()
       -- Mock vim.fn.bufnr to return -1 (buffer not found)
       local old_bufnr = _G.vim.fn.bufnr
@@ -534,6 +484,120 @@ describe("Diff Module", function()
       end
 
       rawset(io, "open", old_io_open)
+    end)
+
+    it("should detect dirty buffer and discard changes when on_unsaved_changes is 'discard'", function()
+      diff.setup({
+        diff_opts = {
+          on_unsaved_changes = "discard",
+        },
+      })
+
+      local old_bufnr = _G.vim.fn.bufnr
+      _G.vim.fn.bufnr = function(path)
+        if path == "/path/to/discard.lua" then
+          return 2
+        end
+        return -1
+      end
+
+      -- Mock vim.api.nvim_buf_get_option to return modified
+      local old_get_option = _G.vim.api.nvim_buf_get_option
+      _G.vim.api.nvim_buf_get_option = function(bufnr, option)
+        if bufnr == 2 and option == "modified" then
+          return true -- Buffer is dirty
+        end
+        return nil
+      end
+
+      -- Test the is_buffer_dirty function indirectly through _setup_blocking_diff
+      local discard_params = {
+        tab_name = "test_clean",
+        old_file_path = "/path/to/discard.lua",
+        new_file_path = "/path/to/discard.lua",
+        new_file_contents = "test content",
+      }
+
+      -- Mock file operations
+      _G.vim.fn.filereadable = function()
+        return 1
+      end
+      _G.vim.api.nvim_list_wins = function()
+        return { 1 }
+      end
+      _G.vim.api.nvim_buf_call = function(bufnr, callback)
+        callback() -- Execute the callback so vim.cmd gets called
+      end
+
+      spy.on(_G.vim, "cmd")
+
+      -- This should not throw an error for dirty buffer since we discard changes
+      local success, err = pcall(function()
+        diff._setup_blocking_diff(discard_params, function() end)
+      end)
+
+      expect(err).to_be_nil()
+      expect(success).to_be_true()
+
+      local edit_called = false
+      local cmd_calls = _G.vim.cmd.calls or {}
+
+      for _, call in ipairs(cmd_calls) do
+        if call.vals[1]:find("edit!", 1, true) then
+          edit_called = true
+          break
+        end
+      end
+      expect(edit_called).to_be_true()
+
+      -- Restore mocks
+      _G.vim.fn.bufnr = old_bufnr
+      _G.vim.api.nvim_buf_get_option = old_get_option
+    end)
+
+    it("should detect dirty buffer and throw error when on_unsaved_changes is 'error'", function()
+      diff.setup({
+        diff_opts = {
+          on_unsaved_changes = "error",
+        },
+      })
+
+      local old_bufnr = _G.vim.fn.bufnr
+      _G.vim.fn.bufnr = function(path)
+        if path == "/path/to/dirty.lua" then
+          return 2
+        end
+        return -1
+      end
+
+      local old_get_option = _G.vim.api.nvim_buf_get_option
+      _G.vim.api.nvim_buf_get_option = function(bufnr, option)
+        if bufnr == 2 and option == "modified" then
+          return true
+        end
+        return nil
+      end
+
+      -- this should throw an error for dirty buffer
+      local success, err = pcall(function()
+        diff._setup_blocking_diff({
+          tab_name = "test_error",
+          old_file_path = "/path/to/dirty.lua",
+          new_file_path = "/path/to/dirty.lua",
+          content = "test content",
+        }, function() end)
+      end)
+
+      expect(success).to_be_false()
+      expect(err.code).to_be(-32000)
+      expect(err.message).to_be("Diff setup failed")
+      expect(err.data).to_be_string()
+      -- For now, let's just verify the basic error structure
+      -- The important thing is that it fails when buffer is dirty, not the exact message
+      expect(#err.data > 0).to_be_true()
+
+      _G.vim.fn.bufnr = old_bufnr
+      _G.vim.api.nvim_buf_get_option = old_get_option
     end)
   end)
 
