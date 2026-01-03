@@ -105,7 +105,10 @@ local function find_claudecode_terminal_window()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_get_buf(win) == terminal_bufnr then
       local win_config = vim.api.nvim_win_get_config(win)
-      if not (win_config.relative and win_config.relative ~= "") then
+      local terminal_floating = (config.terminal.snacks_win_opts
+        and config.terminal.snacks_win_opts.position
+        and config.terminal.snacks_win_opts.position ~= "")
+      if terminal_floating or (not (win_config.relative and win_config.relative ~= "")) then
         return win
       end
     end
