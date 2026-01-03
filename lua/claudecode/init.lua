@@ -1020,6 +1020,68 @@ function M._create_commands()
     end, {
       desc = "Close the Claude Code terminal window",
     })
+
+    -- Multi-session commands
+    vim.api.nvim_create_user_command("ClaudeCodeNew", function(opts)
+      local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
+      local session_id = terminal.open_new_session({}, cmd_args)
+      logger.info("command", "Created new Claude Code session: " .. session_id)
+    end, {
+      nargs = "*",
+      desc = "Create a new Claude Code terminal session",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeSessions", function()
+      M.show_session_picker()
+    end, {
+      desc = "Show Claude Code session picker",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeSwitch", function(opts)
+      local session_index = opts.args and tonumber(opts.args)
+      if not session_index then
+        logger.error("command", "ClaudeCodeSwitch requires a session number")
+        return
+      end
+
+      local sessions = terminal.list_sessions()
+      if session_index < 1 or session_index > #sessions then
+        logger.error("command", "Invalid session number: " .. session_index .. " (have " .. #sessions .. " sessions)")
+        return
+      end
+
+      terminal.switch_to_session(sessions[session_index].id)
+      logger.info("command", "Switched to session " .. session_index)
+    end, {
+      nargs = 1,
+      desc = "Switch to Claude Code session by number",
+    })
+
+    vim.api.nvim_create_user_command("ClaudeCodeCloseSession", function(opts)
+      local session_index = opts.args and opts.args ~= "" and tonumber(opts.args)
+
+      if session_index then
+        local sessions = terminal.list_sessions()
+        if session_index < 1 or session_index > #sessions then
+          logger.error("command", "Invalid session number: " .. session_index .. " (have " .. #sessions .. " sessions)")
+          return
+        end
+        terminal.close_session(sessions[session_index].id)
+        logger.info("command", "Closed session " .. session_index)
+      else
+        -- Close active session
+        local active_id = terminal.get_active_session_id()
+        if active_id then
+          terminal.close_session(active_id)
+          logger.info("command", "Closed active session")
+        else
+          logger.warn("command", "No active session to close")
+        end
+      end
+    end, {
+      nargs = "?",
+      desc = "Close a Claude Code session by number (or active session if no number)",
+    })
   else
     logger.error(
       "init",
@@ -1078,6 +1140,195 @@ M.open_with_model = function(additional_args)
     local final_args = additional_args and (model_arg .. " " .. additional_args) or model_arg
     vim.cmd("ClaudeCode " .. final_args)
   end)
+end
+
+---Show session picker UI for selecting between active sessions
+function M.show_session_picker()
+  local terminal = require("claudecode.terminal")
+  local sessions = terminal.list_sessions()
+
+  if #sessions == 0 then
+    logger.warn("command", "No active Claude Code sessions")
+    return
+  end
+
+  local active_session_id = terminal.get_active_session_id()
+
+  -- Format session items for display
+  local items = {}
+  for i, session in ipairs(sessions) do
+    local age = math.floor((vim.loop.now() - session.created_at) / 1000 / 60)
+    local age_str
+    if age < 1 then
+      age_str = "just now"
+    elseif age == 1 then
+      age_str = "1 min ago"
+    else
+      age_str = age .. " mins ago"
+    end
+
+    local active_marker = session.id == active_session_id and " (active)" or ""
+    table.insert(items, {
+      index = i,
+      session = session,
+      display = string.format("[%d] %s - %s%s", i, session.name, age_str, active_marker),
+    })
+  end
+
+  -- Try to use available picker (Snacks, fzf-lua, or vim.ui.select)
+  local pick_ok = M._try_picker(items, function(item)
+    if item and item.session then
+      terminal.switch_to_session(item.session.id)
+    end
+  end)
+
+  if not pick_ok then
+    -- Fallback to vim.ui.select
+    vim.ui.select(items, {
+      prompt = "Select Claude Code session:",
+      format_item = function(item)
+        return item.display
+      end,
+    }, function(choice)
+      if choice and choice.session then
+        terminal.switch_to_session(choice.session.id)
+      end
+    end)
+  end
+end
+
+---Try to use an enhanced picker (Snacks or fzf-lua)
+---@param items table[] Items to pick from
+---@param on_select function Callback when item is selected
+---@return boolean success Whether an enhanced picker was used
+function M._try_picker(items, on_select)
+  -- Try Snacks picker first
+  local snacks_ok, Snacks = pcall(require, "snacks")
+  if snacks_ok and Snacks and Snacks.picker then
+    -- Use a finder function for dynamic refresh support
+    local function session_finder()
+      local terminal_mod = require("claudecode.terminal")
+      local sessions = terminal_mod.list_sessions()
+      local active_session_id = terminal_mod.get_active_session_id()
+      local picker_items = {}
+      for i, session in ipairs(sessions) do
+        local age = math.floor((vim.loop.now() - session.created_at) / 1000 / 60)
+        local age_str
+        if age < 1 then
+          age_str = "just now"
+        elseif age == 1 then
+          age_str = "1 min ago"
+        else
+          age_str = age .. " mins ago"
+        end
+        local active_marker = session.id == active_session_id and " (active)" or ""
+        local display = string.format("[%d] %s - %s%s", i, session.name, age_str, active_marker)
+        table.insert(picker_items, {
+          text = display,
+          item = { index = i, session = session, display = display },
+        })
+      end
+      return picker_items
+    end
+
+    Snacks.picker.pick({
+      source = "claude_sessions",
+      finder = session_finder,
+      format = function(item)
+        return { { item.text } }
+      end,
+      layout = {
+        preview = false,
+      },
+      confirm = function(picker, item)
+        picker:close()
+        if item and item.item then
+          on_select(item.item)
+        end
+      end,
+      actions = {
+        close_session = function(picker, item)
+          if item and item.item and item.item.session then
+            local terminal_mod = require("claudecode.terminal")
+            terminal_mod.close_session(item.item.session.id)
+            vim.notify("Closed session: " .. item.item.session.name, vim.log.levels.INFO)
+            -- Refresh the picker to show updated session list
+            local sessions = terminal_mod.list_sessions()
+            if #sessions == 0 then
+              picker:close()
+            else
+              picker:refresh()
+            end
+          end
+        end,
+      },
+      win = {
+        input = {
+          keys = {
+            ["<C-x>"] = { "close_session", mode = { "i", "n" }, desc = "Close session" },
+          },
+        },
+        list = {
+          keys = {
+            ["<C-x>"] = { "close_session", mode = { "n" }, desc = "Close session" },
+          },
+        },
+      },
+      title = "Claude Sessions (Ctrl-X: close)",
+    })
+    return true
+  end
+
+  -- Try fzf-lua
+  local fzf_ok, fzf = pcall(require, "fzf-lua")
+  if fzf_ok and fzf then
+    local display_items = {}
+    local item_map = {}
+    for _, item in ipairs(items) do
+      table.insert(display_items, item.display)
+      item_map[item.display] = item
+    end
+
+    fzf.fzf_exec(display_items, {
+      prompt = "Claude Sessions> ",
+      actions = {
+        ["default"] = function(selected)
+          if selected and selected[1] then
+            local item = item_map[selected[1]]
+            if item then
+              on_select(item)
+            end
+          end
+        end,
+        ["ctrl-x"] = {
+          fn = function(selected)
+            if selected and selected[1] then
+              local item = item_map[selected[1]]
+              if item and item.session then
+                local terminal_mod = require("claudecode.terminal")
+                terminal_mod.close_session(item.session.id)
+                vim.notify("Closed session: " .. item.session.name, vim.log.levels.INFO)
+                -- Reopen picker with updated sessions if any remain
+                local sessions = terminal_mod.list_sessions()
+                if #sessions > 0 then
+                  vim.schedule(function()
+                    M.show_session_picker()
+                  end)
+                end
+              end
+            end
+          end,
+          exec_silent = true,
+        },
+      },
+      fzf_opts = {
+        ["--header"] = "Enter: switch | Ctrl-X: close session",
+      },
+    })
+    return true
+  end
+
+  return false
 end
 
 ---Get version information
