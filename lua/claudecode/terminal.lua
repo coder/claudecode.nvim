@@ -777,6 +777,13 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
     end
   end
 
+  -- Setup window manager with config
+  local window_manager = require("claudecode.terminal.window_manager")
+  window_manager.setup({
+    split_side = defaults.split_side,
+    split_width_percentage = defaults.split_width_percentage,
+  })
+
   -- Setup providers with config
   get_provider().setup(defaults)
 
@@ -831,6 +838,7 @@ end
 ---Closes the managed Claude terminal if it's open and valid.
 function M.close()
   detach_tabbar()
+  -- Call provider's close for backwards compatibility
   get_provider().close()
 end
 
@@ -998,14 +1006,17 @@ function M.open_new_session(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
+  -- Make the new session active immediately
+  session_manager.set_active_session(session_id)
+
   local provider = get_provider()
 
   -- For multi-session, we need to pass session_id to providers
   if provider.open_session then
-    provider.open_session(session_id, cmd_string, claude_env_table, effective_config)
+    provider.open_session(session_id, cmd_string, claude_env_table, effective_config, true) -- true = focus
   else
     -- Fallback: use regular open (single terminal mode)
-    provider.open(cmd_string, claude_env_table, effective_config)
+    provider.open(cmd_string, claude_env_table, effective_config, true) -- true = focus
   end
 
   return session_id
@@ -1020,41 +1031,94 @@ function M.close_session(session_id)
   end
 
   local provider = get_provider()
+  local effective_config = build_config(nil)
 
-  -- Detach tabbar before closing the terminal window
-  detach_tabbar()
+  -- Check if there are other sessions to switch to
+  local session_count = session_manager.get_session_count()
 
-  if provider.close_session then
-    provider.close_session(session_id)
-  else
-    -- Fallback: use regular close
-    provider.close()
-  end
+  if session_count > 1 then
+    -- There are other sessions - keep the window and switch to another session
+    -- Figure out which session to switch to: prefer previous tab, fallback to next
+    local sessions = session_manager.list_sessions()
+    local new_active_id = nil
+    local current_index = nil
 
-  session_manager.destroy_session(session_id)
+    -- Find the index of the session being closed
+    for i, s in ipairs(sessions) do
+      if s.id == session_id then
+        current_index = i
+        break
+      end
+    end
 
-  -- If there are remaining sessions, switch to the new active session
-  local new_active_id = session_manager.get_active_session_id()
-  if new_active_id then
-    local effective_config = build_config(nil)
-    if provider.focus_session then
-      provider.focus_session(new_active_id, effective_config)
+    if current_index then
+      -- Prefer previous tab (index - 1), fallback to next tab (index + 1)
+      if current_index > 1 then
+        new_active_id = sessions[current_index - 1].id
+      elseif current_index < #sessions then
+        new_active_id = sessions[current_index + 1].id
+      end
+    end
+
+    -- Fallback: just pick any other session
+    if not new_active_id then
+      for _, s in ipairs(sessions) do
+        if s.id ~= session_id then
+          new_active_id = s.id
+          break
+        end
+      end
+    end
+
+    if new_active_id and provider.close_session_keep_window then
+      -- Use close_session_keep_window to keep window open and switch buffer
+      -- This function handles cleanup of the old session internally
+      provider.close_session_keep_window(session_id, new_active_id, effective_config)
+      session_manager.destroy_session(session_id)
+      session_manager.set_active_session(new_active_id)
+    else
+      -- Fallback: close and reopen
+      session_manager.destroy_session(session_id)
+      new_active_id = session_manager.get_active_session_id()
+
+      if provider.close_session then
+        provider.close_session(session_id)
+      else
+        provider.close()
+      end
+
+      if new_active_id and provider.focus_session then
+        provider.focus_session(new_active_id, effective_config)
+      end
     end
 
     -- Re-attach tabbar to the new session's terminal
-    local new_bufnr
-    if provider.get_session_bufnr then
-      new_bufnr = provider.get_session_bufnr(new_active_id)
-    else
-      new_bufnr = provider.get_active_bufnr()
-    end
+    if new_active_id then
+      local new_bufnr
+      if provider.get_session_bufnr then
+        new_bufnr = provider.get_session_bufnr(new_active_id)
+      else
+        new_bufnr = provider.get_active_bufnr()
+      end
 
-    if new_bufnr and vim.fn.getbufinfo then
-      local ok, bufinfo = pcall(vim.fn.getbufinfo, new_bufnr)
-      if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
-        attach_tabbar(bufinfo[1].windows[1], new_bufnr)
+      if new_bufnr and vim.fn.getbufinfo then
+        local ok, bufinfo = pcall(vim.fn.getbufinfo, new_bufnr)
+        if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+          attach_tabbar(bufinfo[1].windows[1], new_bufnr)
+        end
       end
     end
+  else
+    -- This is the last session - close everything
+    detach_tabbar()
+
+    if provider.close_session then
+      provider.close_session(session_id)
+    else
+      provider.close()
+    end
+
+    session_manager.destroy_session(session_id)
   end
 end
 
