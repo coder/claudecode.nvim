@@ -88,6 +88,10 @@ end
 ---Handles cursor movement events.
 ---Triggers a debounced update of the selection.
 function M.on_cursor_moved()
+  local current_mode = vim.fn.mode()
+  if current_mode == "t" then
+    return
+  end
   M.debounce_update()
 end
 
