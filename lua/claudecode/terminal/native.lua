@@ -132,6 +132,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   winid = new_winid
   bufnr = vim.api.nvim_get_current_buf()
   vim.bo[bufnr].bufhidden = "hide"
+  vim.bo[bufnr].buflisted = false
   -- buftype=terminal is set by termopen
 
   if focus then
