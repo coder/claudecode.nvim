@@ -1,8 +1,10 @@
 ---Manages selection tracking and communication with the Claude server.
+---Supports session-aware selection tracking for multi-session environments.
 ---@module 'claudecode.selection'
 local M = {}
 
 local logger = require("claudecode.logger")
+local session_manager = require("claudecode.session")
 local terminal = require("claudecode.terminal")
 
 M.state = {
@@ -14,6 +16,8 @@ M.state = {
   last_active_visual_selection = nil,
   demotion_timer = nil,
   visual_demotion_delay_ms = 50,
+
+  mouse_handler_set = false,
 }
 
 ---Enables selection tracking.
@@ -29,6 +33,7 @@ function M.enable(server, visual_demotion_delay_ms)
   M.state.visual_demotion_delay_ms = visual_demotion_delay_ms
 
   M._create_autocommands()
+  M._setup_mouse_handler()
 end
 
 ---Disables selection tracking.
@@ -77,6 +82,47 @@ function M._create_autocommands()
       M.on_text_changed()
     end,
   })
+end
+
+---Sets up mouse event handler for capturing mouse-based selections.
+---Uses vim.on_key to intercept mouse release events which indicate
+---the end of a mouse selection drag.
+---@local
+function M._setup_mouse_handler()
+  if M.state.mouse_handler_set then
+    return
+  end
+
+  -- Check if required APIs are available (they may not be in test environments)
+  if not vim.on_key or not vim.api.nvim_replace_termcodes then
+    return
+  end
+
+  M.state.mouse_handler_set = true
+
+  -- Cache the termcodes for mouse events
+  local left_release = vim.api.nvim_replace_termcodes("<LeftRelease>", true, false, true)
+  local left_drag = vim.api.nvim_replace_termcodes("<LeftDrag>", true, false, true)
+
+  vim.on_key(function(key)
+    -- Only process if tracking is enabled
+    if not M.state.tracking_enabled then
+      return
+    end
+
+    -- LeftRelease indicates end of mouse selection or click
+    -- LeftDrag indicates ongoing mouse selection
+    if key == left_release or key == left_drag then
+      vim.schedule(function()
+        -- Small delay to let Neovim update cursor/selection state
+        vim.defer_fn(function()
+          if M.state.tracking_enabled then
+            M.update_selection()
+          end
+        end, 10)
+      end)
+    end
+  end)
 end
 
 ---Clears the autocommands related to selection tracking.
@@ -236,6 +282,13 @@ function M.update_selection()
 
   if changed then
     M.state.latest_selection = current_selection
+
+    -- Also update the active session's selection state
+    local active_session_id = session_manager.get_active_session_id()
+    if active_session_id then
+      session_manager.update_selection(active_session_id, current_selection)
+    end
+
     if M.server then
       M.send_selection_update(current_selection)
     end
@@ -538,14 +591,46 @@ function M.has_selection_changed(new_selection)
 end
 
 ---Sends the selection update to the Claude server.
+---Uses session-aware sending if available, otherwise broadcasts to all.
 ---@param selection table The selection object to send.
 function M.send_selection_update(selection)
+  -- Try to send to active session first
+  if M.server.send_to_active_session then
+    local sent = M.server.send_to_active_session("selection_changed", selection)
+    if sent then
+      return
+    end
+  end
+
+  -- Fallback to broadcast
   M.server.broadcast("selection_changed", selection)
 end
 
 ---Gets the latest recorded selection.
 ---@return table|nil The latest selection object, or nil if none recorded.
 function M.get_latest_selection()
+  return M.state.latest_selection
+end
+
+---Gets the selection for a specific session.
+---@param session_id string The session ID
+---@return table|nil The selection object for the session, or nil if none recorded.
+function M.get_session_selection(session_id)
+  return session_manager.get_selection(session_id)
+end
+
+---Gets the selection for the active session.
+---Falls back to global latest_selection if no session-specific selection.
+---@return table|nil The selection object, or nil if none recorded.
+function M.get_active_session_selection()
+  local active_session_id = session_manager.get_active_session_id()
+  if active_session_id then
+    local session_selection = session_manager.get_selection(active_session_id)
+    if session_selection then
+      return session_selection
+    end
+  end
+  -- Fallback to global selection
   return M.state.latest_selection
 end
 
