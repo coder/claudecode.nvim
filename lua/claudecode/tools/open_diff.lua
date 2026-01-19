@@ -34,6 +34,17 @@ local schema = {
 ---@param params table The input parameters for the tool
 ---@return table response MCP-compliant response with content array
 local function handler(params)
+  -- Check if diff feature is disabled
+  local claudecode_ok, claudecode = pcall(require, "claudecode")
+  if claudecode_ok and claudecode.state and claudecode.state.config
+     and claudecode.state.config.diff_opts and claudecode.state.config.diff_opts.enabled == false then
+    return {
+      content = {
+        { type = "text", text = "Diff feature is disabled via diff_opts.enabled = false. Changes will be applied directly without diff view." },
+      },
+    }
+  end
+
   -- Validate required parameters
   local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
   for _, param_name in ipairs(required_params) do

@@ -21,6 +21,7 @@ M.defaults = {
   connection_timeout = 10000, -- Maximum time to wait for Claude Code to connect (milliseconds)
   queue_timeout = 5000, -- Maximum time to keep @ mentions in queue (milliseconds)
   diff_opts = {
+    enabled = true, -- Enable/disable diff feature entirely
     layout = "vertical",
     open_in_new_tab = false, -- Open diff in a new tab (false = use current tab)
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
@@ -113,6 +114,10 @@ function M.validate(config)
   assert(type(config.queue_timeout) == "number" and config.queue_timeout > 0, "queue_timeout must be a positive number")
 
   assert(type(config.diff_opts) == "table", "diff_opts must be a table")
+  -- Validate diff_opts.enabled
+  if config.diff_opts.enabled ~= nil then
+    assert(type(config.diff_opts.enabled) == "boolean", "diff_opts.enabled must be a boolean")
+  end
   -- New diff options (optional validation to allow backward compatibility)
   if config.diff_opts.layout ~= nil then
     assert(
