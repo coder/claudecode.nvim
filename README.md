@@ -277,6 +277,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
     -- Diff Integration
     diff_opts = {
+      enabled = true, -- Enable/disable diff feature entirely (default: true)
       auto_close_on_accept = true,
       vertical_split = true,
       open_in_current_tab = true,
