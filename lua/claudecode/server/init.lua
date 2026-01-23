@@ -12,7 +12,7 @@ local M = {}
 ---@field server table|nil The TCP server instance
 ---@field port number|nil The port server is running on
 ---@field auth_token string|nil The authentication token for validating connections
----@field clients table<string, WebSocketClient> A list of connected clients
+---@field clients table<string, WebSocketClient> Mirrored view of connected clients (updated via tcp callbacks)
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
 M.state = {
