@@ -280,7 +280,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       auto_close_on_accept = true,
       vertical_split = true,
       open_in_current_tab = true,
-      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (including floating terminals)
     },
   },
   keys = {
