@@ -4,6 +4,9 @@
 
 ### Features
 
+- Multi-session terminal support with `:ClaudeCodeNew`, `:ClaudeCodeSessions`, `:ClaudeCodeSwitch`, `:ClaudeCodeCloseSession` commands
+- Tab bar UI with mouse support for session management (`terminal.tabs.*` configuration)
+- Smart ESC handling - double-tap ESC to exit terminal mode (`esc_timeout`, `keymaps.exit_terminal`)
 - External terminal provider to run Claude in a separate terminal ([#102](https://github.com/coder/claudecode.nvim/pull/102))
 - Terminal provider APIs: implement `ensure_visible` for reliability ([#103](https://github.com/coder/claudecode.nvim/pull/103))
 - Working directory control for Claude terminal ([#117](https://github.com/coder/claudecode.nvim/pull/117))
@@ -32,6 +35,10 @@
 
 ### Bug Fixes
 
+- Preserve terminal window size across session operations
+- Keep terminal window open when session exits with other sessions available
+- Fix cursor position when switching terminal sessions
+- Send selection updates on BufEnter event
 - Wrap ERROR/WARN logging in `vim.schedule` to avoid fast-event context errors ([#54](https://github.com/coder/claudecode.nvim/pull/54))
 - Native terminal: do not wipe Claude buffer on window close ([#60](https://github.com/coder/claudecode.nvim/pull/60))
 - Native terminal: respect `auto_close` behavior ([#63](https://github.com/coder/claudecode.nvim/pull/63))

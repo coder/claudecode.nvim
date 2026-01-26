@@ -137,11 +137,24 @@ function M.open(cmd_string, env_table)
     cleanup_state()
     return
   end
+
+  -- Track PID for cleanup on Neovim exit
+  local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+  if terminal_ok and terminal_module.track_terminal_pid then
+    terminal_module.track_terminal_pid(jobid)
+    logger.debug("terminal", "Tracked external terminal PID for job_id: " .. tostring(jobid))
+  end
 end
 
 function M.close()
   if is_valid() then
-    -- Try to stop the job gracefully
+    -- Kill child processes first (Fix 2: same pattern as native/snacks)
+    -- Shell wrappers like fish don't forward SIGTERM to child processes
+    local pid_ok, pid = pcall(vim.fn.jobpid, jobid)
+    if pid_ok and pid and pid > 0 then
+      pcall(vim.fn.system, "pkill -TERM -P " .. pid .. " 2>/dev/null")
+    end
+    -- Then stop the job gracefully
     vim.fn.jobstop(jobid)
     cleanup_state()
   end

@@ -129,21 +129,35 @@ vim.api.nvim_create_autocmd("CursorMoved", {
 -- Preserves selection context when switching to terminal
 ```
 
-### 6. Terminal Integration (`terminal.lua`)
+### 6. Terminal Integration (`terminal/`)
 
-Flexible terminal management with provider pattern:
+Flexible terminal management with provider pattern and centralized window management:
 
 ```lua
--- Snacks.nvim provider (preferred)
-if has_snacks then
-  Snacks.terminal.open(cmd, {
-    win = { position = "right", width = 0.3 }
-  })
-else
-  -- Native fallback
-  vim.cmd("vsplit | terminal " .. cmd)
-end
+-- Window manager singleton owns THE terminal window
+-- Providers only create buffers, window_manager displays them
+local window_manager = require("claudecode.terminal.window_manager")
+
+-- Display a buffer in the managed window (preserves user resizing)
+window_manager.display_buffer(bufnr, focus)
+
+-- Snacks.nvim provider creates buffer, delegates window to manager
+local term = Snacks.terminal.open(cmd, opts)
+vim.api.nvim_win_close(term.win, false)  -- Close snacks' window
+window_manager.display_buffer(term.buf, true)  -- Use our window
+
+-- Native provider creates buffer without window
+local bufnr = vim.api.nvim_create_buf(false, true)
+vim.fn.termopen(cmd, { env = env })
+window_manager.display_buffer(bufnr, true)
 ```
+
+Key features:
+
+- **Single window**: All sessions share one terminal window
+- **Buffer switching**: `nvim_win_set_buf()` preserves window size
+- **Session management**: Multiple Claude sessions with tab-like switching
+- **Window preservation**: User resizing persists across session switches
 
 ## Key Implementation Patterns
 
@@ -199,7 +213,15 @@ lua/claudecode/
 ├── tools/init.lua        # MCP tool registry
 ├── diff.lua              # Native diff support
 ├── selection.lua         # Selection tracking
-├── terminal.lua          # Terminal management
+├── session.lua           # Multi-session state management
+├── terminal.lua          # Terminal orchestration
+├── terminal/             # Terminal providers
+│   ├── window_manager.lua # Singleton window management
+│   ├── snacks.lua        # Snacks.nvim provider
+│   ├── native.lua        # Native Neovim terminal
+│   ├── external.lua      # External terminal apps
+│   ├── tabbar.lua        # Session tab bar UI
+│   └── osc_handler.lua   # Terminal title detection
 └── lockfile.lua          # Discovery files
 ```
 
