@@ -91,8 +91,10 @@ describe("WebSocket Server", function()
     expect(success).to_be_true()
     expect(server.state.server).to_be_nil()
     expect(server.state.port).to_be_nil()
-    expect(server.state.clients).to_be_table()
-    expect(#server.state.clients).to_be(0)
+
+    local status = server.get_status()
+    expect(status.running).to_be_false()
+    expect(status.client_count).to_be(0)
   end)
 
   it("should not stop server if not running", function()

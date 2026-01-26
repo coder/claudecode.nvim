@@ -12,14 +12,12 @@ local M = {}
 ---@field server table|nil The TCP server instance
 ---@field port number|nil The port server is running on
 ---@field auth_token string|nil The authentication token for validating connections
----@field clients table<string, WebSocketClient> Mirrored view of connected clients (updated via tcp callbacks)
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
 M.state = {
   server = nil,
   port = nil,
   auth_token = nil,
-  clients = {},
   handlers = {},
   ping_timer = nil,
 }
@@ -53,8 +51,6 @@ function M.start(config, auth_token)
       M._handle_message(client, message)
     end,
     on_connect = function(client)
-      M.state.clients[client.id] = client
-
       -- Log connection with auth status
       if M.state.auth_token then
         logger.debug("server", "Authenticated WebSocket client connected:", client.id)
@@ -71,7 +67,6 @@ function M.start(config, auth_token)
       end
     end,
     on_disconnect = function(client, code, reason)
-      M.state.clients[client.id] = nil
       logger.debug(
         "server",
         "WebSocket client disconnected:",
@@ -124,8 +119,6 @@ function M.stop()
   M.state.server = nil
   M.state.port = nil
   M.state.auth_token = nil
-  M.state.clients = {}
-
   return true
 end
 
