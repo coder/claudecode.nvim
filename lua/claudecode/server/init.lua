@@ -206,8 +206,6 @@ end
 local module_instance_id = math.random(10000, 99999)
 logger.debug("server", "Server module loaded with instance ID:", module_instance_id)
 
--- Note: debug_deferred_table function removed as deferred_responses table is no longer used
-
 function M._setup_deferred_response(deferred_info)
   local co = deferred_info.coroutine
 

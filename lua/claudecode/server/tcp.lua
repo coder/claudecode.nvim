@@ -8,7 +8,7 @@ local M = {}
 ---@field server table The vim.loop TCP server handle
 ---@field port number The port the server is listening on
 ---@field auth_token string|nil The authentication token for validating connections
----@field clients table<string, WebSocketClient> Transport-level registry of connected clients (canonical)
+---@field clients table<string, WebSocketClient> Table of connected clients
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
 ---@field on_disconnect function Callback for client disconnections
@@ -153,8 +153,7 @@ end
 
 ---Disconnect a client and remove it from the server.
 ---This ensures `server.on_disconnect` is invoked for every disconnect path
----(EOF, read errors, protocol errors, timeouts), keeping higher-level client
----state in sync.
+---(EOF, read errors, protocol errors, timeouts), and only once per client.
 ---@param server TCPServer The server object
 ---@param client WebSocketClient The client to disconnect
 ---@param code number|nil WebSocket close code
