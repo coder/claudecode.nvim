@@ -101,17 +101,24 @@ local function find_claudecode_terminal_window()
     return nil
   end
 
-  -- Find the window containing this buffer
+  -- Find the window containing this buffer.
+  -- Prefer a normal split window, but fall back to a floating terminal window (e.g. Snacks position="float").
+  local floating_fallback = nil
+
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     if vim.api.nvim_win_get_buf(win) == terminal_bufnr then
       local win_config = vim.api.nvim_win_get_config(win)
-      if not (win_config.relative and win_config.relative ~= "") then
+      local is_floating = win_config.relative and win_config.relative ~= ""
+
+      if is_floating then
+        floating_fallback = floating_fallback or win
+      else
         return win
       end
     end
   end
 
-  return nil
+  return floating_fallback
 end
 
 ---Create a split based on configured layout
@@ -619,11 +626,17 @@ local function setup_new_buffer(
         term_tab = vim.api.nvim_win_get_tabpage(terminal_win)
       end)
       if term_tab == current_tab then
-        local terminal_config = config.terminal or {}
-        local split_width = terminal_config.split_width_percentage or 0.30
-        local total_width = vim.o.columns
-        local terminal_width = math.floor(total_width * split_width)
-        pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+        local win_config = vim.api.nvim_win_get_config(terminal_win)
+        local is_floating = win_config.relative and win_config.relative ~= ""
+
+        -- Only resize split terminals. Floating terminals control their own sizing.
+        if not is_floating then
+          local terminal_config = config.terminal or {}
+          local split_width = terminal_config.split_width_percentage or 0.30
+          local total_width = vim.o.columns
+          local terminal_width = math.floor(total_width * split_width)
+          pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+        end
       end
     end
   end
@@ -1015,14 +1028,20 @@ function M._cleanup_diff_state(tab_name, reason)
     local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
     if terminal_ok and diff_data.had_terminal_in_original then
       pcall(terminal_module.ensure_visible)
-      -- And restore its configured width if it is visible
+      -- And restore its configured width if it is visible.
+      -- (We intentionally do not resize floating terminals.)
       local terminal_win = find_claudecode_terminal_window()
       if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-        local terminal_config = config.terminal or {}
-        local split_width = terminal_config.split_width_percentage or 0.30
-        local total_width = vim.o.columns
-        local terminal_width = math.floor(total_width * split_width)
-        pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+        local win_config = vim.api.nvim_win_get_config(terminal_win)
+        local is_floating = win_config.relative and win_config.relative ~= ""
+
+        if not is_floating then
+          local terminal_config = config.terminal or {}
+          local split_width = terminal_config.split_width_percentage or 0.30
+          local total_width = vim.o.columns
+          local terminal_width = math.floor(total_width * split_width)
+          pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+        end
       end
     end
   else
@@ -1038,14 +1057,20 @@ function M._cleanup_diff_state(tab_name, reason)
       end)
     end
 
-    -- After closing the diff in the same tab, restore terminal width if visible
+    -- After closing the diff in the same tab, restore terminal width if visible.
+    -- (We intentionally do not resize floating terminals.)
     local terminal_win = find_claudecode_terminal_window()
     if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-      local terminal_config = config.terminal or {}
-      local split_width = terminal_config.split_width_percentage or 0.30
-      local total_width = vim.o.columns
-      local terminal_width = math.floor(total_width * split_width)
-      pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+      local win_config = vim.api.nvim_win_get_config(terminal_win)
+      local is_floating = win_config.relative and win_config.relative ~= ""
+
+      if not is_floating then
+        local terminal_config = config.terminal or {}
+        local split_width = terminal_config.split_width_percentage or 0.30
+        local total_width = vim.o.columns
+        local terminal_width = math.floor(total_width * split_width)
+        pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
+      end
     end
   end
 
