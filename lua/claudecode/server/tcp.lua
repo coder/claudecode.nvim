@@ -124,7 +124,12 @@ function M._handle_new_connection(server)
   -- Set up data handler
   client_tcp:read_start(function(err, data)
     if err then
-      server.on_error("Client read error: " .. err)
+      -- ECONNRESET, EOF, EPIPE are expected when terminal closes - don't treat as errors
+      if err:match("ECONNRESET") or err:match("EOF") or err:match("EPIPE") then
+        server.on_disconnect_cleanup(client, err)
+      else
+        server.on_error("Client read error: " .. err)
+      end
       M._remove_client(server, client)
       return
     end

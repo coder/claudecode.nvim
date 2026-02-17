@@ -77,7 +77,8 @@ end
 function M.destroy_session(session_id)
   local session = M.sessions[session_id]
   if not session then
-    logger.warn("session", "Cannot destroy non-existent session: " .. session_id)
+    -- Session already destroyed - expected during cleanup, not an error
+    logger.debug("session", "Session already destroyed (idempotent): " .. session_id)
     return false
   end
 

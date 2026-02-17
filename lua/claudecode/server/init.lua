@@ -99,6 +99,10 @@ function M.start(config, auth_token)
     on_error = function(error_msg)
       logger.error("server", "WebSocket server error:", error_msg)
     end,
+    on_disconnect_cleanup = function(client, reason)
+      -- Expected disconnection during cleanup (e.g., terminal closed) - not an error
+      logger.debug("server", "Client disconnected during cleanup:", client.id, "reason:", reason)
+    end,
   }
 
   local server, error_msg = tcp_server.create_server(config, callbacks, M.state.auth_token)
