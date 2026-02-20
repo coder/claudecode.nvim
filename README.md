@@ -371,7 +371,11 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
     -- Diff Integration
     diff_opts = {
-      layout = "vertical", -- "vertical" or "horizontal"
+      layout = "vertical", -- "vertical" (default), "horizontal", or "inline"
+      -- "inline": VS Code-style unified diff in a single buffer with deleted
+      --   (red/strikethrough) and added (green) lines interleaved. Requires
+      --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
+      --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
       open_in_new_tab = false,
       keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
       hide_terminal_in_new_tab = false,
