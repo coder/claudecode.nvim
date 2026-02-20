@@ -116,8 +116,10 @@ function M.validate(config)
   -- New diff options (optional validation to allow backward compatibility)
   if config.diff_opts.layout ~= nil then
     assert(
-      config.diff_opts.layout == "vertical" or config.diff_opts.layout == "horizontal",
-      "diff_opts.layout must be 'vertical' or 'horizontal'"
+      config.diff_opts.layout == "vertical"
+        or config.diff_opts.layout == "horizontal"
+        or config.diff_opts.layout == "inline",
+      "diff_opts.layout must be 'vertical', 'horizontal', or 'inline'"
     )
   end
   if config.diff_opts.open_in_new_tab ~= nil then

@@ -13,7 +13,24 @@ local schema = {
 ---Closes all diff tabs/windows in the editor.
 ---@return table response MCP-compliant response with content array indicating number of closed tabs.
 local function handler(params)
+  -- Resolve all pending diffs as rejected so coroutines are properly resumed
+  -- (cleanup_all_active_diffs would delete state without invoking callbacks,
+  -- leaving open_diff_blocking coroutines hanging on yield)
   local closed_count = 0
+
+  local diff_ok, diff_module = pcall(require, "claudecode.diff")
+  if diff_ok then
+    local active = diff_module._get_active_diffs()
+    local tab_names = {}
+    for tab_name, _ in pairs(active) do
+      table.insert(tab_names, tab_name)
+    end
+    for _, tab_name in ipairs(tab_names) do
+      pcall(diff_module._resolve_diff_as_rejected, tab_name)
+      pcall(diff_module._cleanup_diff_state, tab_name, "closeAllDiffTabs")
+      closed_count = closed_count + 1
+    end
+  end
 
   -- Get all windows
   local windows = vim.api.nvim_list_wins()
@@ -27,6 +44,12 @@ local function handler(params)
 
     -- Check if this is a diff window
     if diff_mode then
+      should_close = true
+    end
+
+    -- Check for inline diff buffers
+    local is_inline = vim.b[buf].claudecode_inline_diff
+    if is_inline then
       should_close = true
     end
 

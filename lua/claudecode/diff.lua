@@ -731,6 +731,13 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return
   end
 
+  -- Dispatch to inline diff handler
+  if diff_data.layout == "inline" then
+    local inline = require("claudecode.diff_inline")
+    inline.resolve_inline_as_saved(tab_name, diff_data)
+    return
+  end
+
   logger.debug("diff", "Accepting diff for", tab_name)
 
   -- Get content from buffer
@@ -815,6 +822,13 @@ end
 function M._resolve_diff_as_rejected(tab_name)
   local diff_data = active_diffs[tab_name]
   if not diff_data or diff_data.status ~= "pending" then
+    return
+  end
+
+  -- Dispatch to inline diff handler
+  if diff_data.layout == "inline" then
+    local inline = require("claudecode.diff_inline")
+    inline.resolve_inline_as_rejected(tab_name, diff_data)
     return
   end
 
@@ -995,6 +1009,14 @@ function M._cleanup_diff_state(tab_name, reason)
     return
   end
 
+  -- Dispatch to inline diff handler
+  if diff_data.layout == "inline" then
+    local inline = require("claudecode.diff_inline")
+    inline.cleanup_inline_diff(tab_name, diff_data)
+    active_diffs[tab_name] = nil
+    return
+  end
+
   -- Clean up autocmds
   for _, autocmd_id in ipairs(diff_data.autocmd_ids or {}) do
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
@@ -1125,6 +1147,13 @@ function M._setup_blocking_diff(params, resolution_callback)
           data = "Please save (:w) or discard (:e!) changes to " .. params.old_file_path .. " before creating diff",
         })
       end
+    end
+
+    -- Dispatch to inline diff if configured
+    if config and config.diff_opts and config.diff_opts.layout == "inline" then
+      local inline = require("claudecode.diff_inline")
+      inline.setup_inline_diff(params, resolution_callback, config)
+      return
     end
 
     local original_tab_number = vim.api.nvim_get_current_tabpage()
@@ -1429,6 +1458,18 @@ end
 ---This function reads the diff context from buffer variables
 function M.accept_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
+
+  -- Check for inline diff buffer first
+  if vim.b[current_buffer].claudecode_inline_diff then
+    local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
+    if tab_name then
+      M._resolve_diff_as_saved(tab_name, current_buffer)
+    else
+      vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    end
+    return
+  end
+
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
 
   if not tab_name then
@@ -1443,6 +1484,18 @@ end
 ---This function reads the diff context from buffer variables
 function M.deny_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
+
+  -- Check for inline diff buffer first
+  if vim.b[current_buffer].claudecode_inline_diff then
+    local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
+    if tab_name then
+      M._resolve_diff_as_rejected(tab_name)
+    else
+      vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    end
+    return
+  end
+
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
 
   if not tab_name then
@@ -1453,6 +1506,14 @@ function M.deny_current_diff()
   -- Do not close windows/tabs here; just mark as rejected.
   M._resolve_diff_as_rejected(tab_name)
 end
+
+-- Expose internal utilities for use by diff_inline.lua
+M._find_main_editor_window = find_main_editor_window
+M._find_claudecode_terminal_window = find_claudecode_terminal_window
+M._is_buffer_dirty = is_buffer_dirty
+M._detect_filetype = detect_filetype
+M._get_autocmd_group = get_autocmd_group
+M._display_terminal_in_new_tab = display_terminal_in_new_tab
 
 return M
 ---@alias NvimWin integer

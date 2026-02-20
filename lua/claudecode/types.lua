@@ -30,7 +30,7 @@
 ---@alias ClaudeCodeLogLevel "trace"|"debug"|"info"|"warn"|"error"
 
 -- Diff layout type alias
----@alias ClaudeCodeDiffLayout "vertical"|"horizontal"
+---@alias ClaudeCodeDiffLayout "vertical"|"horizontal"|"inline"
 
 -- Behavior when rejecting new-file diffs
 ---@alias ClaudeCodeNewFileRejectBehavior "keep_empty"|"close_window"

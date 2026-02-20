@@ -411,6 +411,14 @@ local vim = {
       return vim._tabs[tab] == true
     end,
 
+    nvim_tabpage_list_wins = function(tab)
+      local t = tab
+      if t == 0 then
+        t = vim._current_tabpage
+      end
+      return vim._tab_windows[t] or {}
+    end,
+
     nvim_tabpage_get_number = function(tab)
       return tab
     end,
@@ -429,6 +437,61 @@ local vim = {
         return 0
       end
       return #b.lines
+    end,
+
+    nvim_create_namespace = function(name)
+      vim._namespaces = vim._namespaces or {}
+      if vim._namespaces[name] then
+        return vim._namespaces[name]
+      end
+      local id = (vim._next_ns_id or 1)
+      vim._next_ns_id = id + 1
+      vim._namespaces[name] = id
+      return id
+    end,
+
+    nvim_buf_set_extmark = function(buf, ns_id, line, col, opts)
+      if not vim._buffers[buf] then
+        return 0
+      end
+      vim._buffers[buf].extmarks = vim._buffers[buf].extmarks or {}
+      local mark = { ns_id = ns_id, line = line, col = col, opts = opts }
+      table.insert(vim._buffers[buf].extmarks, mark)
+      return #vim._buffers[buf].extmarks
+    end,
+
+    nvim_set_hl = function(ns_id, name, opts)
+      vim._highlights = vim._highlights or {}
+      vim._highlights[name] = { ns_id = ns_id, opts = opts }
+    end,
+
+    nvim_get_option_value = function(name, opts)
+      if opts and opts.win and vim._windows[opts.win] then
+        local win_opts = vim._windows[opts.win].options or {}
+        if win_opts[name] ~= nil then
+          return win_opts[name]
+        end
+      end
+      if opts and opts.buf and vim._buffers[opts.buf] then
+        local buf_opts = vim._buffers[opts.buf].options or {}
+        if buf_opts[name] ~= nil then
+          return buf_opts[name]
+        end
+      end
+      return vim._options[name]
+    end,
+
+    nvim_win_get_option = function(winid, name)
+      if vim._windows[winid] and vim._windows[winid].options then
+        return vim._windows[winid].options[name]
+      end
+      return nil
+    end,
+
+    nvim_win_set_cursor = function(winid, pos)
+      if vim._windows[winid] then
+        vim._windows[winid].cursor = pos
+      end
     end,
   },
 
@@ -735,11 +798,26 @@ local vim = {
     end,
   },
 
-  split = function(str, sep)
+  split = function(str, sep, opts)
+    local plain = opts and opts.plain
     local result = {}
-    local pattern = "([^" .. sep .. "]+)"
-    for match in str:gmatch(pattern) do
-      table.insert(result, match)
+    if plain then
+      -- Plain split by literal separator
+      local start_pos = 1
+      while true do
+        local found_start, found_end = str:find(sep, start_pos, true)
+        if not found_start then
+          table.insert(result, str:sub(start_pos))
+          break
+        end
+        table.insert(result, str:sub(start_pos, found_start - 1))
+        start_pos = found_end + 1
+      end
+    else
+      local pattern = "([^" .. sep .. "]+)"
+      for m in str:gmatch(pattern) do
+        table.insert(result, m)
+      end
     end
     return result
   end,
@@ -803,6 +881,112 @@ local vim = {
     end
 
     return copy
+  end,
+
+  --- Mock implementation of vim.diff using a simple LCS-based diff algorithm.
+  --- Supports result_type = "indices" which returns a list of hunks.
+  --- Each hunk is {start_a, count_a, start_b, count_b}.
+  diff = function(old_text, new_text, opts)
+    opts = opts or {}
+
+    local function split_lines_diff(text)
+      if text == "" then
+        return {}
+      end
+      local lines = {}
+      local start_pos = 1
+      while true do
+        local found = text:find("\n", start_pos, true)
+        if not found then
+          table.insert(lines, text:sub(start_pos))
+          break
+        end
+        table.insert(lines, text:sub(start_pos, found - 1))
+        start_pos = found + 1
+      end
+      -- Remove trailing empty line from final newline
+      if #lines > 0 and lines[#lines] == "" then
+        table.remove(lines)
+      end
+      return lines
+    end
+
+    if opts.result_type == "indices" then
+      local old_lines = split_lines_diff(old_text or "")
+      local new_lines = split_lines_diff(new_text or "")
+
+      -- Simple LCS to compute hunks
+      local m, n = #old_lines, #new_lines
+      local dp = {}
+      for i = 0, m do
+        dp[i] = {}
+        for j = 0, n do
+          if i == 0 then
+            dp[i][j] = 0
+          elseif j == 0 then
+            dp[i][j] = 0
+          elseif old_lines[i] == new_lines[j] then
+            dp[i][j] = dp[i - 1][j - 1] + 1
+          else
+            dp[i][j] = math.max(dp[i - 1][j], dp[i][j - 1])
+          end
+        end
+      end
+
+      -- Backtrack to find matching lines
+      local match_old = {} -- match_old[i] = j means old line i matches new line j
+      local i, j = m, n
+      while i > 0 and j > 0 do
+        if old_lines[i] == new_lines[j] then
+          match_old[i] = j
+          i = i - 1
+          j = j - 1
+        elseif dp[i - 1][j] >= dp[i][j - 1] then
+          i = i - 1
+        else
+          j = j - 1
+        end
+      end
+
+      -- Build hunks from the match information
+      local hunks = {}
+      local oi, ni = 1, 1
+      while oi <= m or ni <= n do
+        if oi <= m and match_old[oi] and match_old[oi] == ni then
+          -- Lines match, advance both
+          oi = oi + 1
+          ni = ni + 1
+        else
+          -- Start of a hunk: collect consecutive non-matching lines
+          local start_a = oi
+          local start_b = ni
+          while oi <= m and not match_old[oi] do
+            oi = oi + 1
+          end
+          -- Advance new side to the match target (or end)
+          local target_ni = (oi <= m and match_old[oi]) or (n + 1)
+          while ni < target_ni and ni <= n do
+            ni = ni + 1
+          end
+          local count_a = oi - start_a
+          local count_b = ni - start_b
+          if count_a > 0 or count_b > 0 then
+            -- For pure insertions (count_a == 0), start_a should be the line
+            -- *before* the insertion point (0 if inserting at the beginning).
+            local hunk_start_a = start_a
+            if count_a == 0 then
+              hunk_start_a = start_a - 1
+            end
+            table.insert(hunks, { hunk_start_a, count_a, start_b, count_b })
+          end
+        end
+      end
+
+      return hunks
+    end
+
+    -- Default: return unified diff string (simplified)
+    return ""
   end,
 
   tbl_deep_extend = function(behavior, ...)
@@ -1004,6 +1188,9 @@ vim._mock = {
     vim._last_command = nil
     vim._last_echo = nil
     vim._last_error = nil
+    vim._namespaces = {}
+    vim._next_ns_id = 1
+    vim._highlights = {}
   end,
 }
 

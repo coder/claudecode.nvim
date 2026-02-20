@@ -281,6 +281,12 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       vertical_split = true,
       open_in_current_tab = true,
       keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (including floating terminals)
+      -- layout = "inline", -- "vertical" (default), "horizontal", or "inline"
+      -- "inline": VS Code-style unified diff in a single read-only buffer
+      --   with deleted (red/strikethrough) and added (green) lines interleaved.
+      --   Requires Neovim >= 0.9.0. Highlight groups are customizable:
+      --   ClaudeCodeInlineDiffAdd, ClaudeCodeInlineDiffDelete,
+      --   ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign
     },
   },
   keys = {
