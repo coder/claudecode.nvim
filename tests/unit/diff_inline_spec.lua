@@ -278,6 +278,54 @@ describe("Inline diff module", function()
     end)
   end)
 
+  describe("new-tab inline placement", function()
+    it("should pick editor window from current tab, not global search", function()
+      -- Set up two tabs: tab 1 (original) and tab 2 (new tab for diff)
+      local old_tab = 1
+      local new_tab = 2
+      vim._tabs[new_tab] = true
+
+      -- Tab 1: one editor window
+      local old_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[old_win] = { buf = vim.api.nvim_create_buf(false, true), width = 120 }
+      vim._win_tab[old_win] = old_tab
+      vim._tab_windows[old_tab] = { old_win }
+
+      -- Tab 2: terminal window + editor window
+      local term_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[term_win] = { buf = vim.api.nvim_create_buf(false, true), width = 40 }
+      vim._win_tab[term_win] = new_tab
+
+      local new_tab_editor_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[new_tab_editor_win] = { buf = vim.api.nvim_create_buf(false, true), width = 80 }
+      vim._win_tab[new_tab_editor_win] = new_tab
+
+      vim._tab_windows[new_tab] = { term_win, new_tab_editor_win }
+      vim._current_tabpage = new_tab
+
+      -- nvim_tabpage_list_wins(0) should return windows from new_tab
+      local tab_wins = vim.api.nvim_tabpage_list_wins(0)
+      assert.are.equal(2, #tab_wins)
+
+      -- Simulate the inline diff's window selection logic (from diff_inline.lua:233-245)
+      local terminal_win_in_new_tab = term_win
+      local editor_win = nil
+      for _, w in ipairs(tab_wins) do
+        if w ~= terminal_win_in_new_tab then
+          editor_win = w
+          break
+        end
+      end
+
+      -- Should pick the editor window from tab 2, NOT tab 1's window
+      assert.are.equal(new_tab_editor_win, editor_win)
+      assert.are_not.equal(old_win, editor_win)
+    end)
+  end)
+
   describe("config validation", function()
     it("should accept layout = 'inline'", function()
       package.loaded["claudecode.config"] = nil
@@ -349,6 +397,58 @@ describe("Inline diff module", function()
 
       assert.are.equal(3, #deleted_ids)
       vim.api.nvim_del_autocmd = original_del
+    end)
+
+    it("should close diff window in new-tab mode", function()
+      -- Simulate a new tab (tab 2) with a terminal window and an editor window
+      local term_buf = vim.api.nvim_create_buf(false, true)
+      local editor_buf = vim.api.nvim_create_buf(false, true)
+      local diff_buf = vim.api.nvim_create_buf(false, true)
+
+      -- Create tab 2 with two windows: terminal and editor
+      local new_tab = 2
+      vim._tabs[new_tab] = true
+      vim._current_tabpage = new_tab
+
+      local term_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[term_win] = { buf = term_buf, width = 40 }
+      vim._win_tab[term_win] = new_tab
+
+      local editor_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[editor_win] = { buf = editor_buf, width = 80 }
+      vim._win_tab[editor_win] = new_tab
+
+      local diff_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[diff_win] = { buf = diff_buf, width = 80 }
+      vim._win_tab[diff_win] = new_tab
+
+      vim._tab_windows[new_tab] = { term_win, editor_win, diff_win }
+
+      -- Also have a window in tab 1 (original tab) to catch wrong-tab bugs
+      local old_tab = 1
+      local old_win = vim._next_winid
+      vim._next_winid = vim._next_winid + 1
+      vim._windows[old_win] = { buf = vim.api.nvim_create_buf(false, true), width = 120 }
+      vim._win_tab[old_win] = old_tab
+      vim._tab_windows[old_tab] = { old_win }
+
+      local diff_data = {
+        autocmd_ids = {},
+        created_new_tab = true,
+        new_tab_number = new_tab,
+        original_tab_number = old_tab,
+        new_window = diff_win,
+        new_buffer = diff_buf,
+      }
+
+      diff_inline.cleanup_inline_diff("test_tab", diff_data)
+
+      -- Diff window should be closed, original tab window should remain
+      assert.is_nil(vim._windows[diff_win])
+      assert.is_not_nil(vim._windows[old_win])
     end)
 
     it("should close diff window when not in new tab", function()

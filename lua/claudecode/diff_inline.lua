@@ -228,7 +228,24 @@ function M.setup_inline_diff(params, resolution_callback, config)
   end
 
   -- Open a vsplit for the inline diff buffer
-  local editor_win = diff._find_main_editor_window()
+  -- When in a new tab, use a window from the current tab rather than the global
+  -- search which could return a window from the original tab
+  local editor_win
+  if created_new_tab then
+    local tab_wins = vim.api.nvim_tabpage_list_wins(0)
+    for _, w in ipairs(tab_wins) do
+      if w ~= terminal_win_in_new_tab then
+        editor_win = w
+        break
+      end
+    end
+    -- Fallback to first window in the new tab
+    if not editor_win and #tab_wins > 0 then
+      editor_win = tab_wins[1]
+    end
+  else
+    editor_win = diff._find_main_editor_window()
+  end
   if editor_win then
     vim.api.nvim_set_current_win(editor_win)
   end

@@ -442,6 +442,14 @@ local vim = {
       return vim._tabs[tab] == true
     end,
 
+    nvim_tabpage_list_wins = function(tab)
+      local t = tab
+      if t == 0 then
+        t = vim._current_tabpage
+      end
+      return vim._tab_windows[t] or {}
+    end,
+
     nvim_tabpage_get_number = function(tab)
       return tab
     end,
