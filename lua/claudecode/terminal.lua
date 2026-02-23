@@ -514,8 +514,9 @@ end
 function M.simple_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  local force_new = cmd_args ~= nil and cmd_args ~= ""
 
-  get_provider().simple_toggle(cmd_string, claude_env_table, effective_config)
+  get_provider().simple_toggle(cmd_string, claude_env_table, effective_config, force_new)
 end
 
 ---Smart focus toggle: switches to terminal if not focused, hides if currently focused.
@@ -524,8 +525,9 @@ end
 function M.focus_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  local force_new = cmd_args ~= nil and cmd_args ~= ""
 
-  get_provider().focus_toggle(cmd_string, claude_env_table, effective_config)
+  get_provider().focus_toggle(cmd_string, claude_env_table, effective_config, force_new)
 end
 
 ---Toggle open terminal without focus if not already visible, otherwise do nothing.
