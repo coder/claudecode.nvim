@@ -1,0 +1,89 @@
+#!/bin/bash
+
+set -euo pipefail
+
+# repro - Launch Neovim with the minimal "repro" fixture + a temp workspace.
+#
+# This is intended to provide a low-noise environment for reproducing issues in claudecode.nvim.
+
+FIXTURES_DIR="$(cd "$(dirname "$(dirname "${BASH_SOURCE[0]}")")" && pwd)"
+
+# Source common functions
+source "$FIXTURES_DIR/bin/common.sh"
+
+config="repro"
+if ! validate_config "$FIXTURES_DIR" "$config"; then
+  exit 1
+fi
+
+keep_workspace=false
+
+# Parse repro-specific flags.
+# Everything else is passed to nvim.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --keep|--no-reset)
+      keep_workspace=true
+      shift
+      ;;
+    --help|-h)
+      cat <<'EOF'
+repro - Launch Neovim with the minimal "repro" fixture + a temp workspace.
+
+Usage:
+  repro [--keep] [nvim args...]
+
+Options:
+  --keep, --no-reset  Reuse the existing repro workspace instead of resetting it
+
+Examples:
+  repro
+  repro --keep
+  repro --headless "+qall!"
+EOF
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+nvim_args=("$@")
+
+template_dir="$FIXTURES_DIR/$config/example"
+if [[ ! -d "$template_dir" ]]; then
+  echo "Error: repro template directory not found: $template_dir" >&2
+  exit 1
+fi
+
+workspace_dir="${TMPDIR:-/tmp}/claudecode.nvim-repro"
+
+# Safety check before deleting
+if [[ -z "$workspace_dir" || "$workspace_dir" == "/" ]]; then
+  echo "Error: unsafe workspace_dir: '$workspace_dir'" >&2
+  exit 1
+fi
+
+if [[ "$keep_workspace" == "true" && -d "$workspace_dir" ]]; then
+  echo "Repro workspace (kept): $workspace_dir"
+else
+  rm -rf "$workspace_dir"
+  mkdir -p "$workspace_dir"
+  cp -R "$template_dir/." "$workspace_dir/"
+  echo "Repro workspace (reset): $workspace_dir"
+fi
+
+echo "Repro config: $FIXTURES_DIR/$config"
+echo "Tip: :e README.md in the repro workspace for steps."
+
+# If no args are provided, open the default file to keep the window non-empty.
+if [[ ${#nvim_args[@]} -eq 0 ]]; then
+  nvim_args=("a.txt")
+fi
+
+(cd "$workspace_dir" && NVIM_APPNAME="$config" XDG_CONFIG_HOME="$FIXTURES_DIR" nvim "${nvim_args[@]}")
