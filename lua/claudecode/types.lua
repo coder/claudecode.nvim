@@ -108,6 +108,7 @@
 ---@field env table<string, string>
 ---@field log_level ClaudeCodeLogLevel
 ---@field track_selection boolean
+---@field terminal_filter_pattern string
 ---@field focus_after_send boolean
 ---@field visual_demotion_delay_ms number
 ---@field connection_wait_delay number

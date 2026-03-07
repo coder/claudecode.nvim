@@ -14,12 +14,13 @@ M.state = {
   last_active_visual_selection = nil,
   demotion_timer = nil,
   visual_demotion_delay_ms = 50,
+  terminal_filter_pattern = nil,
 }
 
 ---Enables selection tracking.
 ---@param server table The server object to use for communication.
 ---@param visual_demotion_delay_ms number The delay for visual selection demotion.
-function M.enable(server, visual_demotion_delay_ms)
+function M.enable(server, visual_demotion_delay_ms, terminal_filter_pattern)
   if M.state.tracking_enabled then
     return
   end
@@ -27,6 +28,7 @@ function M.enable(server, visual_demotion_delay_ms)
   M.state.tracking_enabled = true
   M.server = server
   M.state.visual_demotion_delay_ms = visual_demotion_delay_ms
+  M.state.terminal_filter_pattern = terminal_filter_pattern
 
   M._create_autocommands()
 end
@@ -129,7 +131,7 @@ function M.update_selection()
   local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
   -- If the buffer name starts with "term://" and contains "claude", do not update selection
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+  if M.state.terminal_filter_pattern and buf_name and buf_name:lower():match(M.state.terminal_filter_pattern) then
     -- Optionally, cancel demotion timer like for the terminal
     if M.state.demotion_timer then
       M.state.demotion_timer:stop()
