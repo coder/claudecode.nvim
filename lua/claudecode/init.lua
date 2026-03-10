@@ -900,6 +900,46 @@ function M._create_commands()
     desc = "Add selected file(s) from tree explorer to Claude Code context (supports visual selection)",
   })
 
+  --- Parse a command-line string respecting backslash-escaped spaces.
+  --- Treats `\ ` as a literal space within a token and unescaped whitespace as delimiters.
+  --- @param input string
+  --- @return string[]
+  local function parse_escaped_args(input)
+    local args = {}
+    local current = {}
+    local i = 1
+    local len = #input
+    while i <= len do
+      local ch = input:sub(i, i)
+      if ch == "\\" and i < len then
+        local next_ch = input:sub(i + 1, i + 1)
+        if next_ch == " " then
+          current[#current + 1] = " "
+          i = i + 2
+        elseif next_ch == "\\" then
+          current[#current + 1] = "\\"
+          i = i + 2
+        else
+          current[#current + 1] = ch
+          i = i + 1
+        end
+      elseif ch:match("%s") then
+        if #current > 0 then
+          args[#args + 1] = table.concat(current)
+          current = {}
+        end
+        i = i + 1
+      else
+        current[#current + 1] = ch
+        i = i + 1
+      end
+    end
+    if #current > 0 then
+      args[#args + 1] = table.concat(current)
+    end
+    return args
+  end
+
   vim.api.nvim_create_user_command("ClaudeCodeAdd", function(opts)
     if not M.state.server then
       logger.error("command", "ClaudeCodeAdd: Claude Code integration is not running.")
@@ -911,7 +951,7 @@ function M._create_commands()
       return
     end
 
-    local args = vim.split(opts.args, "%s+")
+    local args = parse_escaped_args(opts.args)
     local file_path = args[1]
     local start_line = args[2] and tonumber(args[2]) or nil
     local end_line = args[3] and tonumber(args[3]) or nil
