@@ -106,6 +106,7 @@
 ---@field auto_start boolean
 ---@field terminal_cmd string|nil
 ---@field env table<string, string>
+---@field bind_address string
 ---@field log_level ClaudeCodeLogLevel
 ---@field track_selection boolean
 ---@field focus_after_send boolean

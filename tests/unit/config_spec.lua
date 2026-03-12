@@ -299,5 +299,28 @@ describe("Configuration", function()
     expect(tostring(err)).to_match("must be a string or function")
   end)
 
+  it("should default bind_address to 127.0.0.1 for security", function()
+    -- Critical security requirement: must default to localhost-only to prevent
+    -- external connections to the WebSocket server
+    expect(config.defaults.bind_address).to_be("127.0.0.1")
+  end)
+
+  it("should preserve 127.0.0.1 bind_address when no user config is provided", function()
+    local final_config = config.apply(nil)
+    expect(final_config.bind_address).to_be("127.0.0.1")
+  end)
+
+  it("should preserve 127.0.0.1 bind_address when user config does not specify it", function()
+    local user_config = { log_level = "debug" }
+    local final_config = config.apply(user_config)
+    expect(final_config.bind_address).to_be("127.0.0.1")
+  end)
+
+  it("should allow custom bind_address to be configured", function()
+    local user_config = { bind_address = "0.0.0.0" }
+    local final_config = config.apply(user_config)
+    expect(final_config.bind_address).to_be("0.0.0.0")
+  end)
+
   teardown()
 end)
