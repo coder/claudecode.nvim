@@ -1442,14 +1442,36 @@ function M.reload_file_buffers_manual(file_path, original_cursor_pos)
   return reload_file_buffers(file_path, original_cursor_pos)
 end
 
+---Find a diff buffer in the current tabpage by searching all windows.
+---@return integer? buf The buffer number with an active diff, or nil if not found
+local function find_diff_buf_in_current_tab()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    if vim.b[buf].claudecode_diff_tab_name then
+      return buf
+    end
+  end
+  return nil
+end
+
 ---Accept the current diff (user command version)
----This function reads the diff context from buffer variables
+---This function reads the diff context from buffer variables.
+---If the current buffer is not a diff buffer, falls back to searching
+---all windows in the current tab for an active diff.
 function M.accept_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
 
   if not tab_name then
-    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    local diff_buf = find_diff_buf_in_current_tab()
+    if diff_buf then
+      tab_name = vim.b[diff_buf].claudecode_diff_tab_name
+      current_buffer = diff_buf
+    end
+  end
+
+  if not tab_name then
+    vim.notify("No active diff found in current tab", vim.log.levels.WARN)
     return
   end
 
@@ -1457,13 +1479,22 @@ function M.accept_current_diff()
 end
 
 ---Deny/reject the current diff (user command version)
----This function reads the diff context from buffer variables
+---This function reads the diff context from buffer variables.
+---If the current buffer is not a diff buffer, falls back to searching
+---all windows in the current tab for an active diff.
 function M.deny_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
 
   if not tab_name then
-    vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
+    local diff_buf = find_diff_buf_in_current_tab()
+    if diff_buf then
+      tab_name = vim.b[diff_buf].claudecode_diff_tab_name
+    end
+  end
+
+  if not tab_name then
+    vim.notify("No active diff found in current tab", vim.log.levels.WARN)
     return
   end
 
