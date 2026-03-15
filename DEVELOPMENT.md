@@ -153,6 +153,9 @@ vv netrw      # Start Neovim with built-in netrw configuration
 
 # List available configurations
 list-configs
+
+# Minimal repro environment (copies fixtures/repro/example into /tmp)
+repro
 ```
 
 **Example fixture structure** (`fixtures/my-integration/`):

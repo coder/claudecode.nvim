@@ -917,6 +917,7 @@ function M._create_diff_view_from_window(
   existing_buffer
 )
   local original_buffer_created_by_plugin = false
+  local target_window_created_by_plugin = false
 
   -- If no target window provided, create a new window in suitable location
   if not target_window then
@@ -950,6 +951,7 @@ function M._create_diff_view_from_window(
     vim.api.nvim_set_current_win(target_window)
     create_split()
     original_window = vim.api.nvim_get_current_win()
+    target_window_created_by_plugin = true
   else
     original_window = choice.original_win
   end
@@ -981,6 +983,7 @@ function M._create_diff_view_from_window(
   return {
     new_window = new_win,
     target_window = original_window,
+    target_window_created_by_plugin = target_window_created_by_plugin,
     original_buffer = original_buffer,
     original_buffer_created_by_plugin = original_buffer_created_by_plugin,
   }
@@ -1050,11 +1053,19 @@ function M._cleanup_diff_state(tab_name, reason)
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
     end
 
-    -- Turn off diff mode in target window if it still exists
+    -- If we created an extra window/split for the diff, close it. Otherwise just disable diff mode.
     if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-      vim.api.nvim_win_call(diff_data.target_window, function()
-        vim.cmd("diffoff")
-      end)
+      if diff_data.target_window_created_by_plugin then
+        -- Try a non-forced close first to avoid dropping any user edits in that window.
+        pcall(vim.api.nvim_win_close, diff_data.target_window, false)
+      end
+
+      -- If the target window is still around, ensure diff mode is off.
+      if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+        vim.api.nvim_win_call(diff_data.target_window, function()
+          vim.cmd("diffoff")
+        end)
+      end
     end
 
     -- After closing the diff in the same tab, restore terminal width if visible.
@@ -1231,6 +1242,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       new_buffer = new_buffer,
       new_window = diff_info.new_window,
       target_window = diff_info.target_window,
+      target_window_created_by_plugin = diff_info.target_window_created_by_plugin,
       original_buffer = diff_info.original_buffer,
       original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,
@@ -1285,8 +1297,13 @@ end
 function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name)
   -- Check for existing diff with same tab_name
   if active_diffs[tab_name] then
-    -- Resolve the existing diff as rejected before replacing
-    M._resolve_diff_as_rejected(tab_name)
+    local existing_diff = active_diffs[tab_name]
+    -- Resolve the existing diff as rejected before replacing, but only if it was still pending.
+    if existing_diff.status == "pending" then
+      M._resolve_diff_as_rejected(tab_name)
+    end
+    -- Always clean up any leftover UI/state so we don't leak windows when reusing tab_names.
+    M._cleanup_diff_state(tab_name, "replaced by new diff")
   end
 
   -- Set up blocking diff operation
@@ -1463,7 +1480,9 @@ return M
 ---@class DiffLayoutInfo
 ---@field new_window NvimWin
 ---@field target_window NvimWin
+---@field target_window_created_by_plugin boolean
 ---@field original_buffer NvimBuf
+---@field original_buffer_created_by_plugin boolean
 
 ---@class DiffWindowChoice
 ---@field decision DiffWindowDecision
