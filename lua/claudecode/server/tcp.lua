@@ -75,6 +75,7 @@ function M.create_server(config, callbacks, auth_token)
     on_connect = callbacks.on_connect or function() end,
     on_disconnect = callbacks.on_disconnect or function() end,
     on_error = callbacks.on_error or function() end,
+    on_disconnect_cleanup = callbacks.on_disconnect_cleanup or function() end,
   }
 
   local bind_success, bind_err = tcp_server:bind("127.0.0.1", port)
