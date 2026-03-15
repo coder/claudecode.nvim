@@ -12,7 +12,6 @@ local tools = require("claudecode.tools.init")
 M.state = {
   server = nil,
   port = nil,
-  clients = {},
   handlers = {},
   messages = {}, -- Store messages for testing
 }
@@ -74,7 +73,6 @@ function M.stop()
   -- Reset state
   M.state.server = nil
   M.state.port = nil
-  M.state.clients = {}
   M.state.messages = {}
 
   return true
@@ -101,9 +99,11 @@ end
 ---@param client_id string A unique client identifier
 ---@return table client The client object
 function M.add_client(client_id)
+  assert(type(client_id) == "string", "Expected client_id to be a string")
   if not M.state.server then
     error("Server not running")
   end
+  assert(type(M.state.server.clients) == "table", "Expected mock server.clients to be a table")
 
   local client = {
     id = client_id,
@@ -111,7 +111,7 @@ function M.add_client(client_id)
     messages = {},
   }
 
-  M.state.clients[client_id] = client
+  M.state.server.clients[client_id] = client
   return client
 end
 
@@ -119,11 +119,16 @@ end
 ---@param client_id string The client identifier
 ---@return boolean success Whether removal was successful
 function M.remove_client(client_id)
-  if not M.state.server or not M.state.clients[client_id] then
+  assert(type(client_id) == "string", "Expected client_id to be a string")
+  if not M.state.server or type(M.state.server.clients) ~= "table" then
     return false
   end
 
-  M.state.clients[client_id] = nil
+  if not M.state.server.clients[client_id] then
+    return false
+  end
+
+  M.state.server.clients[client_id] = nil
   return true
 end
 
@@ -136,7 +141,10 @@ function M.send(client, method, params)
   local client_obj
 
   if type(client) == "string" then
-    client_obj = M.state.clients[client]
+    if not M.state.server or type(M.state.server.clients) ~= "table" then
+      return false
+    end
+    client_obj = M.state.server.clients[client]
   else
     client_obj = client
   end
@@ -172,7 +180,10 @@ function M.send_response(client, id, result, error)
   local client_obj
 
   if type(client) == "string" then
-    client_obj = M.state.clients[client]
+    if not M.state.server or type(M.state.server.clients) ~= "table" then
+      return false
+    end
+    client_obj = M.state.server.clients[client]
   else
     client_obj = client
   end
@@ -208,9 +219,13 @@ end
 ---@param params table The parameters to send
 ---@return boolean success Whether broadcasting was successful
 function M.broadcast(method, params)
+  if not M.state.server or type(M.state.server.clients) ~= "table" then
+    return false
+  end
+
   local success = true
 
-  for client_id, _ in pairs(M.state.clients) do
+  for client_id, _ in pairs(M.state.server.clients) do
     local send_success = M.send(client_id, method, params)
     success = success and send_success
   end
@@ -223,7 +238,12 @@ end
 ---@param message table The message to process
 ---@return table|nil response The response if any
 function M.simulate_message(client_id, message)
-  local client = M.state.clients[client_id]
+  assert(type(client_id) == "string", "Expected client_id to be a string")
+  if not M.state.server or type(M.state.server.clients) ~= "table" then
+    return nil
+  end
+
+  local client = M.state.server.clients[client_id]
 
   if not client then
     return nil
@@ -255,7 +275,11 @@ end
 function M.clear_messages()
   M.state.messages = {}
 
-  for _, client in pairs(M.state.clients) do
+  if not M.state.server or type(M.state.server.clients) ~= "table" then
+    return
+  end
+
+  for _, client in pairs(M.state.server.clients) do
     client.messages = {}
   end
 end

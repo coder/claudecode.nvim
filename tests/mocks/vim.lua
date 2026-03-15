@@ -881,6 +881,7 @@ local vim = {
           return true
         end,
         read_start = function(self, callback)
+          self._read_cb = callback
           return true
         end,
         write = function(self, data, callback)

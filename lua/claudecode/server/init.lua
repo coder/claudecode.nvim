@@ -13,14 +13,12 @@ local M = {}
 ---@field server table|nil The TCP server instance
 ---@field port number|nil The port server is running on
 ---@field auth_token string|nil The authentication token for validating connections
----@field clients table<string, WebSocketClient> A list of connected clients
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
 M.state = {
   server = nil,
   port = nil,
   auth_token = nil,
-  clients = {},
   handlers = {},
   ping_timer = nil,
 }
@@ -54,8 +52,6 @@ function M.start(config, auth_token)
       M._handle_message(client, message)
     end,
     on_connect = function(client)
-      M.state.clients[client.id] = client
-
       -- Log connection with auth status
       if M.state.auth_token then
         logger.debug("server", "Authenticated WebSocket client connected:", client.id)
@@ -84,8 +80,6 @@ function M.start(config, auth_token)
     on_disconnect = function(client, code, reason)
       -- Unbind client from session before removing
       session_manager.unbind_client(client.id)
-
-      M.state.clients[client.id] = nil
       logger.debug(
         "server",
         "WebSocket client disconnected:",
@@ -142,8 +136,6 @@ function M.stop()
   M.state.server = nil
   M.state.port = nil
   M.state.auth_token = nil
-  M.state.clients = {}
-
   return true
 end
 
@@ -230,8 +222,6 @@ end
 -- Add a unique module ID to detect reloading
 local module_instance_id = math.random(10000, 99999)
 logger.debug("server", "Server module loaded with instance ID:", module_instance_id)
-
--- Note: debug_deferred_table function removed as deferred_responses table is no longer used
 
 function M._setup_deferred_response(deferred_info)
   local co = deferred_info.coroutine
@@ -436,7 +426,7 @@ function M.send_to_session(session_id, method, params)
     return false
   end
 
-  local client = M.state.clients[session.client_id]
+  local client = M.state.server and M.state.server.clients[session.client_id]
   if not client then
     logger.debug("server", "Cannot send to session", session_id, "- client not found")
     return false

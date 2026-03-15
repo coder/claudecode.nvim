@@ -127,17 +127,19 @@ function M._handle_new_connection(server)
     if err then
       -- ECONNRESET, EOF, EPIPE are expected when terminal closes - don't treat as errors
       if err:match("ECONNRESET") or err:match("EOF") or err:match("EPIPE") then
-        server.on_disconnect_cleanup(client, err)
+        if server.on_disconnect_cleanup then
+          server.on_disconnect_cleanup(client, err)
+        end
       else
         server.on_error("Client read error: " .. err)
       end
-      M._remove_client(server, client)
+      M._disconnect_client(server, client, 1006, "Client read error: " .. err)
       return
     end
 
     if not data then
       -- EOF - client disconnected
-      M._remove_client(server, client)
+      M._disconnect_client(server, client, 1006, "EOF")
       return
     end
 
@@ -145,16 +147,50 @@ function M._handle_new_connection(server)
     client_manager.process_data(client, data, function(cl, message)
       server.on_message(cl, message)
     end, function(cl, code, reason)
-      server.on_disconnect(cl, code, reason)
-      M._remove_client(server, cl)
+      M._disconnect_client(server, cl, code, reason)
     end, function(cl, error_msg)
       server.on_error("Client " .. cl.id .. " error: " .. error_msg)
-      M._remove_client(server, cl)
+      M._disconnect_client(server, cl, 1006, "Client error: " .. error_msg)
     end, server.auth_token)
   end)
 
   -- Notify about new connection
   server.on_connect(client)
+end
+
+---Disconnect a client and remove it from the server.
+---This ensures `server.on_disconnect` is invoked for every disconnect path
+---(EOF, read errors, protocol errors, timeouts), and only once per client.
+---@param server TCPServer The server object
+---@param client WebSocketClient The client to disconnect
+---@param code number|nil WebSocket close code
+---@param reason string|nil WebSocket close reason
+function M._disconnect_client(server, client, code, reason)
+  assert(type(server) == "table", "Expected server to be a table")
+  local on_disconnect_type = type(server.on_disconnect)
+  local on_disconnect_mt = on_disconnect_type == "table" and getmetatable(server.on_disconnect) or nil
+  assert(
+    on_disconnect_type == "function" or (on_disconnect_mt ~= nil and type(on_disconnect_mt.__call) == "function"),
+    "Expected server.on_disconnect to be callable"
+  )
+  assert(type(server.clients) == "table", "Expected server.clients to be a table")
+  assert(type(client) == "table", "Expected client to be a table")
+  assert(type(client.id) == "string", "Expected client.id to be a string")
+  if code ~= nil then
+    assert(type(code) == "number", "Expected code to be a number")
+  end
+  if reason ~= nil then
+    assert(type(reason) == "string", "Expected reason to be a string")
+  end
+
+  -- Idempotency: a client can hit multiple disconnect paths (e.g. CLOSE frame
+  -- followed by a TCP EOF). Only notify/remove once.
+  if not server.clients[client.id] then
+    return
+  end
+
+  server.on_disconnect(client, code, reason)
+  M._remove_client(server, client)
 end
 
 ---Remove a client from the server
@@ -299,7 +335,7 @@ function M.start_ping_timer(server, interval)
             string.format("Client %s keepalive timeout (%ds idle), closing connection", client.id, time_since_pong)
           )
           client_manager.close_client(client, 1006, "Connection timeout")
-          M._remove_client(server, client)
+          M._disconnect_client(server, client, 1006, "Connection timeout")
         end
       end
     end
