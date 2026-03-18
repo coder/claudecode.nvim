@@ -154,7 +154,8 @@ local esc_state = {}
 ---Creates a smart ESC handler for a terminal buffer.
 ---Counts ESC presses: 1x or 2x ESC (with timeout) forwards ESC bytes to the terminal,
 ---allowing Claude Code to handle cancel (1x) and rewind (2x). Triple ESC exits terminal mode.
----State shape: { count = 0|1|2, timer = uv_timer_or_nil }
+---State shape (when non-nil): { count = 1|2, timer = uv_timer_or_nil }
+---Idle state is represented by esc_state[bufnr] == nil (no entry stored).
 ---@param bufnr number The terminal buffer number
 ---@param timeout_ms number Timeout in milliseconds to wait for next ESC
 ---@return function handler The ESC key handler function
@@ -174,9 +175,6 @@ function M.create_smart_esc_handler(bufnr, timeout_ms)
     elseif count == 1 then
       -- Second ESC within timeout - advance to count=2, restart timer with fresh timeout
       state.count = 2
-      if not state.timer then
-        state.timer = vim.uv.new_timer()
-      end
       if state.timer then
         state.timer:stop()
         state.timer:start(
@@ -232,7 +230,7 @@ end
 
 ---Sets up smart ESC handling for a terminal buffer.
 ---If smart ESC is enabled (esc_timeout > 0), maps single ESC to smart handler.
----Otherwise falls back to simple double-ESC mapping.
+---Otherwise falls back to a direct keymap binding for the configured exit key.
 ---@param bufnr number The terminal buffer number
 ---@param config table The terminal configuration (with keymaps and esc_timeout)
 function M.setup_terminal_keymaps(bufnr, config)
