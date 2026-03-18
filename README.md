@@ -399,12 +399,12 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
 
-      -- Smart ESC handling: double-tap ESC to exit terminal mode
+      -- Smart ESC handling: triple-tap ESC to exit terminal mode (1x/2x forwarded to Claude)
       esc_timeout = 200, -- Timeout in ms (0 or nil to disable smart ESC)
 
       -- Terminal keymaps
       keymaps = {
-        exit_terminal = "<Esc><Esc>", -- Key to exit terminal mode (set to false to disable)
+        exit_terminal = "<Esc><Esc>", -- Key to exit terminal mode when smart ESC disabled (set to false to disable)
       },
 
       -- Tab bar for multi-session management
