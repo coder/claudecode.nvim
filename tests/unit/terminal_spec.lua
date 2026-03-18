@@ -1299,7 +1299,9 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("double ESC then timeout sends 2x ESC atomically", function()
       local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
       handler() -- 1st ESC
-      handler() -- 2nd ESC
+      handler() -- 2nd ESC — must restart timer (stop then start)
+      -- Timer must have been stopped before restart (libuv safety requirement)
+      assert.is_true(mock_timer._stopped, "timer must be stopped before restart on 2nd ESC")
       assert.is_not_nil(timer_callback)
       timer_callback() -- fire timeout
       assert.stub(vim.fn.chansend).was_called_with(42, "\027\027")
@@ -1338,7 +1340,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("stale timer callback is a no-op after 3rd ESC advances state", function()
       local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
       handler() -- count = 1
-      local stale_callback = timer_callback
+      local stale_callback = timer_callback -- captures count=1 closure before 2nd press overwrites it
       handler() -- count = 2, restarts timer
       handler() -- count = 3, exits
       -- Now fire the stale count=1 callback — should do nothing extra
@@ -1383,6 +1385,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       })
       vim.keymap.set:revert()
       assert.equals(1, #set_calls)
+      assert.equals("t", set_calls[1].mode)
       assert.equals("<Esc><Esc>", set_calls[1].lhs)
       assert.equals("<C-\\><C-n>", set_calls[1].rhs)
     end)
