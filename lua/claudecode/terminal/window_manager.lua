@@ -17,6 +17,8 @@ local state = {
   winid = nil,
   current_bufnr = nil,
   config = nil,
+  last_width = nil,
+  last_height = nil,
 }
 
 ---Find any existing terminal window in current tabpage
@@ -65,9 +67,6 @@ local function create_split_window(config)
   local total_width = vim.o.columns
   local width = math.floor(total_width * split_width_percentage)
 
-  -- Save current window to restore later if needed
-  local current_win = vim.api.nvim_get_current_win()
-
   -- Create the split
   if split_side == "left" then
     vim.cmd("topleft vertical new")
@@ -92,8 +91,11 @@ local function create_split_window(config)
 end
 
 ---Notify the terminal of its current dimensions (sends SIGWINCH)
----Call this when window size may have changed
-function M.notify_resize()
+---Call this when window size may have changed.
+---Skips the resize if dimensions haven't changed to avoid unnecessary
+---SIGWINCH signals that cause TUI applications to redraw and reset scroll.
+---@param force? boolean Force resize even if dimensions haven't changed
+function M.notify_resize(force)
   if not state.winid or not vim.api.nvim_win_is_valid(state.winid) then
     return
   end
@@ -103,6 +105,12 @@ function M.notify_resize()
   if chan and chan > 0 then
     local width = vim.api.nvim_win_get_width(state.winid)
     local height = vim.api.nvim_win_get_height(state.winid)
+    if not force and width == state.last_width and height == state.last_height then
+      logger.debug("window_manager", string.format("Resize skipped (unchanged): %dx%d", width, height))
+      return
+    end
+    state.last_width = width
+    state.last_height = height
     pcall(vim.fn.jobresize, chan, width, height)
     logger.debug("window_manager", string.format("Resize notification: %dx%d", width, height))
   end
@@ -117,7 +125,7 @@ local function setup_resize_autocommands()
     group = group,
     callback = function()
       restore_configured_width()
-      M.notify_resize()
+      M.notify_resize(true)
     end,
   })
 
@@ -305,6 +313,8 @@ function M.reset()
     winid = nil,
     current_bufnr = nil,
     config = nil,
+    last_width = nil,
+    last_height = nil,
   }
   logger.debug("window_manager", "Reset window manager state")
 end

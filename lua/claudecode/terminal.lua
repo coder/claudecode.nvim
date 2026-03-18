@@ -152,50 +152,52 @@ M.defaults = defaults
 local esc_state = {}
 
 ---Creates a smart ESC handler for a terminal buffer.
----This handler intercepts ESC presses and waits for a second ESC within the timeout.
----If a second ESC arrives, it exits terminal mode. Otherwise, sends ESC to the terminal.
+---Counts ESC presses: 1x or 2x ESC (with timeout) forwards ESC bytes to the terminal,
+---allowing Claude Code to handle cancel (1x) and rewind (2x). Triple ESC exits terminal mode.
+---State shape: { count = 1|2, timer = uv_timer_or_nil }
 ---@param bufnr number The terminal buffer number
----@param timeout_ms number Timeout in milliseconds to wait for second ESC
+---@param timeout_ms number Timeout in milliseconds to wait for next ESC
 ---@return function handler The ESC key handler function
 function M.create_smart_esc_handler(bufnr, timeout_ms)
   return function()
     local state = esc_state[bufnr]
+    local count = state and state.count or 0
 
-    if state and state.waiting then
-      -- Second ESC within timeout - exit terminal mode
-      state.waiting = false
+    if count == 2 then
+      -- Third ESC within timeout - exit terminal mode
       if state.timer then
         state.timer:stop()
         state.timer:close()
-        state.timer = nil
       end
-      -- Exit terminal mode
+      esc_state[bufnr] = nil
       vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-\\><C-n>", true, false, true), "n", false)
+    elseif count == 1 then
+      -- Second ESC within timeout - advance to count=2, stop timer (callback reads count at fire time)
+      state.count = 2
+      if state.timer then
+        state.timer:stop()
+      end
     else
-      -- First ESC - start waiting for second ESC
-      esc_state[bufnr] = { waiting = true, timer = nil }
-      state = esc_state[bufnr]
-
-      state.timer = vim.uv.new_timer()
-      state.timer:start(
+      -- First ESC - start timer with a callback that reads current count at fire time
+      local timer = vim.uv.new_timer()
+      esc_state[bufnr] = { count = 1, timer = timer }
+      timer:start(
         timeout_ms,
         0,
         vim.schedule_wrap(function()
-          -- Timeout expired - send ESC to the terminal
-          if esc_state[bufnr] and esc_state[bufnr].waiting then
-            esc_state[bufnr].waiting = false
-            if esc_state[bufnr].timer then
-              esc_state[bufnr].timer:stop()
-              esc_state[bufnr].timer:close()
-              esc_state[bufnr].timer = nil
+          -- Read count at fire time: handles both 1x ESC (count=1) and 2x ESC (count=2)
+          local cur_count = esc_state[bufnr] and esc_state[bufnr].count or 0
+          if cur_count > 0 then
+            local s = esc_state[bufnr]
+            esc_state[bufnr] = nil
+            if s.timer then
+              s.timer:stop()
+              s.timer:close()
             end
-            -- Send ESC directly to the terminal channel, bypassing keymaps
-            -- Get the terminal channel from the buffer
             if vim.api.nvim_buf_is_valid(bufnr) then
               local channel = vim.bo[bufnr].channel
               if channel and channel > 0 then
-                -- Send raw ESC byte (0x1b = 27) directly to terminal
-                vim.fn.chansend(channel, "\027")
+                vim.fn.chansend(channel, string.rep("\027", cur_count))
               end
             end
           end
@@ -228,7 +230,7 @@ function M.setup_terminal_keymaps(bufnr, config)
     local handler = M.create_smart_esc_handler(bufnr, timeout)
     vim.keymap.set("t", "<Esc>", handler, {
       buffer = bufnr,
-      desc = "Smart ESC: double-tap to exit terminal mode, single to send ESC",
+      desc = "Smart ESC: triple-tap to exit terminal mode, single/double sends ESC to Claude",
     })
   elseif exit_key then
     -- Fallback: simple keymap (legacy behavior)
