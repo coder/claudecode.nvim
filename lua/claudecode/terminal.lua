@@ -174,6 +174,9 @@ function M.create_smart_esc_handler(bufnr, timeout_ms)
     elseif count == 1 then
       -- Second ESC within timeout - advance to count=2, restart timer with fresh timeout
       state.count = 2
+      if not state.timer then
+        state.timer = vim.uv.new_timer()
+      end
       if state.timer then
         state.timer:stop()
         state.timer:start(
