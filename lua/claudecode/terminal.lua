@@ -154,7 +154,7 @@ local esc_state = {}
 ---Creates a smart ESC handler for a terminal buffer.
 ---Counts ESC presses: 1x or 2x ESC (with timeout) forwards ESC bytes to the terminal,
 ---allowing Claude Code to handle cancel (1x) and rewind (2x). Triple ESC exits terminal mode.
----State shape: { count = 1|2, timer = uv_timer_or_nil }
+---State shape: { count = 0|1|2, timer = uv_timer_or_nil }
 ---@param bufnr number The terminal buffer number
 ---@param timeout_ms number Timeout in milliseconds to wait for next ESC
 ---@return function handler The ESC key handler function
@@ -172,22 +172,42 @@ function M.create_smart_esc_handler(bufnr, timeout_ms)
       esc_state[bufnr] = nil
       vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-\\><C-n>", true, false, true), "n", false)
     elseif count == 1 then
-      -- Second ESC within timeout - advance to count=2, stop timer (callback reads count at fire time)
+      -- Second ESC within timeout - advance to count=2, restart timer with fresh timeout
       state.count = 2
       if state.timer then
         state.timer:stop()
+        state.timer:start(
+          timeout_ms,
+          0,
+          vim.schedule_wrap(function()
+            -- Guard: only act if state hasn't advanced past count=2
+            if esc_state[bufnr] and esc_state[bufnr].count == 2 then
+              local s = esc_state[bufnr]
+              esc_state[bufnr] = nil
+              if s.timer then
+                s.timer:stop()
+                s.timer:close()
+              end
+              if vim.api.nvim_buf_is_valid(bufnr) then
+                local channel = vim.bo[bufnr].channel
+                if channel and channel > 0 then
+                  vim.fn.chansend(channel, "\027\027")
+                end
+              end
+            end
+          end)
+        )
       end
     else
-      -- First ESC - start timer with a callback that reads current count at fire time
+      -- First ESC - start timer
       local timer = vim.uv.new_timer()
       esc_state[bufnr] = { count = 1, timer = timer }
       timer:start(
         timeout_ms,
         0,
         vim.schedule_wrap(function()
-          -- Read count at fire time: handles both 1x ESC (count=1) and 2x ESC (count=2)
-          local cur_count = esc_state[bufnr] and esc_state[bufnr].count or 0
-          if cur_count > 0 then
+          -- Guard: only act if state is still at count=1
+          if esc_state[bufnr] and esc_state[bufnr].count == 1 then
             local s = esc_state[bufnr]
             esc_state[bufnr] = nil
             if s.timer then
@@ -197,7 +217,7 @@ function M.create_smart_esc_handler(bufnr, timeout_ms)
             if vim.api.nvim_buf_is_valid(bufnr) then
               local channel = vim.bo[bufnr].channel
               if channel and channel > 0 then
-                vim.fn.chansend(channel, string.rep("\027", cur_count))
+                vim.fn.chansend(channel, "\027")
               end
             end
           end

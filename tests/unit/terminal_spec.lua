@@ -1243,6 +1243,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       timer_callback = nil
       mock_timer = {
         _stopped = false,
+        _stop_calls = 0,
         _close_calls = 0,
         start = function(self, timeout, repeat_ms, cb)
           self._stopped = false
@@ -1250,6 +1251,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         end,
         stop = function(self)
           self._stopped = true
+          self._stop_calls = self._stop_calls + 1
         end,
         close = function(self)
           mock_timer._close_calls = mock_timer._close_calls + 1
@@ -1301,7 +1303,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       handler() -- 1st ESC
       handler() -- 2nd ESC — must restart timer (stop then start)
       -- Timer must have been stopped before restart (libuv safety requirement)
-      assert.is_true(mock_timer._stopped, "timer must be stopped before restart on 2nd ESC")
+      assert.is_true(mock_timer._stop_calls > 0, "timer must be stopped before restart on 2nd ESC")
       assert.is_not_nil(timer_callback)
       timer_callback() -- fire timeout
       assert.stub(vim.fn.chansend).was_called_with(42, "\027\027")
