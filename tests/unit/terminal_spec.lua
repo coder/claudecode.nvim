@@ -1309,22 +1309,30 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
     it("triple ESC within timeout exits terminal mode and closes timer", function()
       local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
       handler() -- 1st ESC
-      handler() -- 2nd ESC
-      handler() -- 3rd ESC — should exit immediately
-      assert.stub(vim.api.nvim_feedkeys).was_called()
-      -- Timer must be closed (not just stopped) to release libuv handle
-      assert.is_true(mock_timer._close_calls > 0, "Expected timer:close() to be called at least once")
-      assert.stub(vim.fn.chansend).was_not_called()
+      handler() -- 2nd ESC — must NOT exit yet (3-state invariant)
+      assert.equals(
+        0,
+        vim.api.nvim_feedkeys.calls and #vim.api.nvim_feedkeys.calls or 0,
+        "2nd ESC must not exit terminal mode in 3-state machine"
+      )
+      handler() -- 3rd ESC — should exit now
+      assert.is_true(mock_timer._close_calls > 0, "timer must be closed on 3rd ESC")
+      assert.is_true(#vim.api.nvim_feedkeys.calls > 0, "feedkeys must be called on 3rd ESC")
+      assert.equals(0, #vim.fn.chansend.calls, "chansend must not be called")
     end)
 
     it("rapid triple ESC exits even if timer callback has not fired", function()
       local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
-      handler()
-      handler()
-      handler()
-      -- No timer_callback() call — exits synchronously on 3rd press
-      assert.stub(vim.api.nvim_feedkeys).was_called()
-      assert.stub(vim.fn.chansend).was_not_called()
+      handler() -- 1st ESC
+      handler() -- 2nd ESC — must NOT exit yet
+      assert.equals(
+        0,
+        vim.api.nvim_feedkeys.calls and #vim.api.nvim_feedkeys.calls or 0,
+        "2nd ESC must not exit terminal mode in 3-state machine"
+      )
+      handler() -- 3rd ESC — exits
+      assert.is_true(#vim.api.nvim_feedkeys.calls > 0, "feedkeys must be called on 3rd ESC")
+      assert.equals(0, #vim.fn.chansend.calls, "chansend must not be called")
     end)
 
     it("stale timer callback is a no-op after 3rd ESC advances state", function()
