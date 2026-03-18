@@ -453,6 +453,21 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 }
 ```
 
+> **Note:** As of Claude Code's triple-ESC feature, the default terminal ESC behavior has changed:
+>
+> - **1× ESC** → forwarded to Claude Code (cancel current request)
+> - **2× ESC** → forwarded to Claude Code (rewind conversation)
+> - **3× ESC** → exits Neovim terminal mode
+>
+> To restore the previous double-ESC exit behavior, disable smart ESC:
+>
+> ```lua
+> terminal = {
+>   esc_timeout = 0,
+>   keymaps = { exit_terminal = "<Esc><Esc>" },
+> }
+> ```
+
 ### Working Directory Control
 
 You can fix the Claude terminal's working directory regardless of `autochdir` and buffer-local cwd changes. Options (precedence order):
