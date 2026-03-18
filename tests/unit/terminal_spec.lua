@@ -1221,4 +1221,162 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       assert.is_true(found_error, "Expected error about missing close function")
     end)
   end)
+
+  describe("create_smart_esc_handler (3-state machine)", function()
+    local terminal_module
+    local mock_timer
+    local timer_callback
+    local BUFNR = 99
+    local TIMEOUT = 200
+
+    before_each(function()
+      -- Reset module to clear esc_state between tests
+      package.loaded["claudecode.terminal"] = nil
+      -- Ensure vim.uv exists before the module loads (mock may only have vim.loop)
+      vim.uv = vim.uv or {}
+      -- Ensure vim.schedule_wrap exists (module wraps timer callbacks with it)
+      vim.schedule_wrap = vim.schedule_wrap or function(f)
+        return f
+      end
+      terminal_module = require("claudecode.terminal")
+
+      timer_callback = nil
+      mock_timer = {
+        _stopped = false,
+        _close_calls = 0,
+        start = function(self, timeout, repeat_ms, cb)
+          self._stopped = false
+          timer_callback = cb
+        end,
+        stop = function(self)
+          self._stopped = true
+        end,
+        close = function(self)
+          mock_timer._close_calls = mock_timer._close_calls + 1
+        end,
+      }
+      stub(vim.uv, "new_timer", function()
+        return mock_timer
+      end)
+      stub(vim.fn, "chansend")
+      stub(vim.api, "nvim_feedkeys")
+      stub(vim.api, "nvim_buf_is_valid", function()
+        return true
+      end)
+      -- nvim_replace_termcodes: return the input string unchanged (sufficient for tests)
+      stub(vim.api, "nvim_replace_termcodes", function(s)
+        return s
+      end)
+      -- Provide a fake channel
+      vim.bo = setmetatable({}, {
+        __index = function(_, key)
+          return setmetatable({}, {
+            __index = function()
+              return 42
+            end,
+          })
+        end,
+      })
+    end)
+
+    after_each(function()
+      vim.uv.new_timer:revert()
+      vim.fn.chansend:revert()
+      vim.api.nvim_feedkeys:revert()
+      vim.api.nvim_buf_is_valid:revert()
+      vim.api.nvim_replace_termcodes:revert()
+    end)
+
+    it("single ESC then timeout sends 1x ESC to channel", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler() -- 1st ESC
+      assert.is_not_nil(timer_callback)
+      timer_callback() -- fire timeout
+      assert.stub(vim.fn.chansend).was_called_with(42, "\027")
+      assert.stub(vim.api.nvim_feedkeys).was_not_called()
+    end)
+
+    it("double ESC then timeout sends 2x ESC atomically", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler() -- 1st ESC
+      handler() -- 2nd ESC
+      assert.is_not_nil(timer_callback)
+      timer_callback() -- fire timeout
+      assert.stub(vim.fn.chansend).was_called_with(42, "\027\027")
+      assert.stub(vim.api.nvim_feedkeys).was_not_called()
+    end)
+
+    it("triple ESC within timeout exits terminal mode and closes timer", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler() -- 1st ESC
+      handler() -- 2nd ESC
+      handler() -- 3rd ESC — should exit immediately
+      assert.stub(vim.api.nvim_feedkeys).was_called()
+      -- Timer must be closed (not just stopped) to release libuv handle
+      assert.is_true(mock_timer._close_calls > 0, "Expected timer:close() to be called at least once")
+      assert.stub(vim.fn.chansend).was_not_called()
+    end)
+
+    it("rapid triple ESC exits even if timer callback has not fired", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler()
+      handler()
+      handler()
+      -- No timer_callback() call — exits synchronously on 3rd press
+      assert.stub(vim.api.nvim_feedkeys).was_called()
+      assert.stub(vim.fn.chansend).was_not_called()
+    end)
+
+    it("stale timer callback is a no-op after 3rd ESC advances state", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler() -- count = 1
+      local stale_callback = timer_callback
+      handler() -- count = 2, restarts timer
+      handler() -- count = 3, exits
+      -- Now fire the stale count=1 callback — should do nothing extra
+      stale_callback()
+      -- feedkeys called once (from 3rd press), chansend not called
+      assert.stub(vim.fn.chansend).was_not_called()
+      assert.stub(vim.api.nvim_feedkeys).was_called(1)
+    end)
+
+    it("ESC then non-ESC key: timeout still fires and sends 1x ESC", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler() -- 1st ESC
+      -- Non-ESC key does NOT call handler — state stays at count=1
+      timer_callback() -- timeout fires
+      assert.stub(vim.fn.chansend).was_called_with(42, "\027")
+    end)
+
+    it("cleanup_esc_state nils state and stops timer mid-sequence", function()
+      local handler = terminal_module.create_smart_esc_handler(BUFNR, TIMEOUT)
+      handler() -- count = 1
+      terminal_module.cleanup_esc_state(BUFNR)
+      -- Timer should be stopped (and closed)
+      assert.is_true(mock_timer._close_calls > 0, "Expected timer:close() to be called at least once")
+      -- Firing the stale callback after cleanup should not crash or send ESC
+      if timer_callback then
+        assert.has_no.errors(function()
+          timer_callback()
+        end)
+      end
+      assert.stub(vim.fn.chansend).was_not_called()
+    end)
+
+    it("Path 2 (esc_timeout=0) double-ESC keymap is unchanged", function()
+      -- setup_terminal_keymaps with esc_timeout=0 should bind exit_terminal directly
+      local set_calls = {}
+      stub(vim.keymap, "set", function(mode, lhs, rhs, opts)
+        table.insert(set_calls, { mode = mode, lhs = lhs, rhs = rhs })
+      end)
+      terminal_module.setup_terminal_keymaps(BUFNR, {
+        esc_timeout = 0,
+        keymaps = { exit_terminal = "<Esc><Esc>" },
+      })
+      vim.keymap.set:revert()
+      assert.equals(1, #set_calls)
+      assert.equals("<Esc><Esc>", set_calls[1].lhs)
+      assert.equals("<C-\\><C-n>", set_calls[1].rhs)
+    end)
+  end)
 end)
