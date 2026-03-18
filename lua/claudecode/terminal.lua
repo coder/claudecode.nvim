@@ -113,9 +113,9 @@ local defaults = {
   cwd_provider = nil, -- function(ctx) -> cwd string
   -- Terminal keymaps
   keymaps = {
-    exit_terminal = "<Esc><Esc>", -- Double-ESC to exit terminal mode (set to false to disable)
+    exit_terminal = "<Esc><Esc>", -- Triple-ESC to exit terminal mode (set to false to disable)
   },
-  -- Smart ESC handling: timeout in ms to wait for second ESC before sending ESC to terminal
+  -- Smart ESC handling: timeout in ms to count up to three ESC presses before sending ESC to terminal
   -- Set to nil or 0 to disable smart ESC handling (use simple keymap instead)
   esc_timeout = 200,
   -- Process cleanup strategy when Neovim exits
