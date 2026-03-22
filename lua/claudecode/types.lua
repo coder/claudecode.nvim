@@ -68,6 +68,7 @@
 ---@field toggle fun(cmd_string: string, env_table: table, effective_config: ClaudeCodeTerminalConfig)
 ---@field simple_toggle fun(cmd_string: string, env_table: table, effective_config: ClaudeCodeTerminalConfig)
 ---@field focus_toggle fun(cmd_string: string, env_table: table, effective_config: ClaudeCodeTerminalConfig)
+---@field send_input? fun(text: string): (boolean, string|nil)
 ---@field get_active_bufnr fun(): number?
 ---@field is_available fun(): boolean
 ---@field ensure_visible? function

@@ -10,7 +10,7 @@ local M = {}
 M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
-  terminal_cmd = nil,
+  terminal_cmd = "opencode",
   env = {}, -- Custom environment variables for Claude terminal
   log_level = "info",
   track_selection = true,

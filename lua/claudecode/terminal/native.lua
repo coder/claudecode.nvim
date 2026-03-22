@@ -247,21 +247,52 @@ local function show_hidden_terminal(effective_config, focus)
   return true
 end
 
-local function find_existing_claude_terminal()
+local function get_command_hints()
+  local hints = {}
+  local configured_cmd = (config and config.terminal_cmd) or "opencode"
+
+  for token in configured_cmd:gmatch("%S+") do
+    local normalized = token:gsub('^["\']', "")
+    normalized = normalized:gsub('["\']$', "")
+    normalized = normalized:match("[^/\\]+$") or normalized
+    normalized = normalized:lower()
+
+    if normalized ~= "" then
+      hints[normalized] = true
+      if normalized:find("opencode", 1, true) then
+        hints["opencode"] = true
+      end
+      if normalized:find("claude", 1, true) then
+        hints["claude"] = true
+      end
+    end
+  end
+
+  if next(hints) == nil then
+    hints["opencode"] = true
+  end
+
+  return hints
+end
+
+local function find_existing_managed_terminal()
+  local hints = get_command_hints()
   local buffers = vim.api.nvim_list_bufs()
   for _, buf in ipairs(buffers) do
     if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "terminal" then
-      -- Check if this is a Claude Code terminal by examining the buffer name or terminal job
       local buf_name = vim.api.nvim_buf_get_name(buf)
-      -- Terminal buffers often have names like "term://..." that include the command
-      if buf_name:match("claude") then
-        -- Additional check: see if there's a window displaying this buffer
-        local windows = vim.api.nvim_list_wins()
-        for _, win in ipairs(windows) do
-          if vim.api.nvim_win_get_buf(win) == buf then
-            logger.debug("terminal", "Found existing Claude terminal in buffer", buf, "window", win)
-            return buf, win
+      local lower_name = buf_name:lower()
+
+      for hint in pairs(hints) do
+        if lower_name:find(hint, 1, true) then
+          local windows = vim.api.nvim_list_wins()
+          for _, win in ipairs(windows) do
+            if vim.api.nvim_win_get_buf(win) == buf then
+              logger.debug("terminal", "Found existing managed terminal in buffer", buf, "window", win)
+              return buf, win
+            end
           end
+          break
         end
       end
     end
@@ -294,14 +325,14 @@ function M.open(cmd_string, env_table, effective_config, focus)
       end
     end
   else
-    -- Check if there's an existing Claude terminal we lost track of
-    local existing_buf, existing_win = find_existing_claude_terminal()
+    -- Check if there's an existing terminal we lost track of
+    local existing_buf, existing_win = find_existing_managed_terminal()
     if existing_buf and existing_win then
       -- Recover the existing terminal
       bufnr = existing_buf
       winid = existing_win
       -- Note: We can't recover the job ID easily, but it's less critical
-      logger.debug("terminal", "Recovered existing Claude terminal")
+      logger.debug("terminal", "Recovered existing terminal")
       if focus then
         focus_terminal() -- Focus recovered terminal
       end
@@ -341,12 +372,12 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- No terminal process exists, check if there's an existing one we lost track of
-      local existing_buf, existing_win = find_existing_claude_terminal()
+      local existing_buf, existing_win = find_existing_managed_terminal()
       if existing_buf and existing_win then
         -- Recover the existing terminal
         bufnr = existing_buf
         winid = existing_win
-        logger.debug("terminal", "Recovered existing Claude terminal")
+        logger.debug("terminal", "Recovered existing terminal")
         focus_terminal()
       else
         -- No existing terminal found, create a new one
@@ -389,12 +420,12 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
     end
   else
     -- No terminal process exists, check if there's an existing one we lost track of
-    local existing_buf, existing_win = find_existing_claude_terminal()
+    local existing_buf, existing_win = find_existing_managed_terminal()
     if existing_buf and existing_win then
       -- Recover the existing terminal
       bufnr = existing_buf
       winid = existing_win
-      logger.debug("terminal", "Recovered existing Claude terminal")
+      logger.debug("terminal", "Recovered existing terminal")
 
       -- Check if we're currently in this recovered terminal
       local current_win_id = vim.api.nvim_get_current_win()
@@ -420,6 +451,41 @@ end
 --- @param effective_config ClaudeCodeTerminalConfig
 function M.toggle(cmd_string, env_table, effective_config)
   M.simple_toggle(cmd_string, env_table, effective_config)
+end
+
+---Send text to the running terminal job.
+---@param text string
+---@return boolean success
+---@return string? error
+function M.send_input(text)
+  if type(text) ~= "string" or text == "" then
+    return false, "send_input requires a non-empty string"
+  end
+
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return false, "No active terminal buffer"
+  end
+
+  local channel_id = jobid
+  if not channel_id or channel_id <= 0 then
+    local ok, terminal_job_id = pcall(function()
+      return vim.b[bufnr].terminal_job_id
+    end)
+    if ok then
+      channel_id = terminal_job_id
+    end
+  end
+
+  if not channel_id or channel_id <= 0 then
+    return false, "No active terminal job"
+  end
+
+  local ok, err = pcall(vim.api.nvim_chan_send, channel_id, text)
+  if not ok then
+    return false, tostring(err)
+  end
+
+  return true, nil
 end
 
 --- @return number|nil

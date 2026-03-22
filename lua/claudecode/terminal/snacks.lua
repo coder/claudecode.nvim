@@ -249,6 +249,35 @@ function M.toggle(cmd_string, env_table, config)
   M.simple_toggle(cmd_string, env_table, config)
 end
 
+---Send text to the running Snacks terminal job.
+---@param text string
+---@return boolean success
+---@return string? error
+function M.send_input(text)
+  if type(text) ~= "string" or text == "" then
+    return false, "send_input requires a non-empty string"
+  end
+
+  if not terminal or not terminal:buf_valid() or not terminal.buf then
+    return false, "No active Snacks terminal buffer"
+  end
+
+  local ok, terminal_job_id = pcall(function()
+    return vim.b[terminal.buf].terminal_job_id
+  end)
+
+  if not ok or not terminal_job_id or terminal_job_id <= 0 then
+    return false, "No active terminal job"
+  end
+
+  local send_ok, send_err = pcall(vim.api.nvim_chan_send, terminal_job_id, text)
+  if not send_ok then
+    return false, tostring(send_err)
+  end
+
+  return true, nil
+end
+
 ---Get the active terminal buffer number
 ---@return number?
 function M.get_active_bufnr()

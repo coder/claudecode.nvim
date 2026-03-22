@@ -54,7 +54,8 @@ That's it! The plugin will auto-configure everything else.
 ## Requirements
 
 - Neovim >= 0.8.0
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed
+- [OpenCode CLI](https://opencode.ai/docs/) installed (default)
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (optional, when `terminal_cmd` is set to `claude`)
 - [folke/snacks.nvim](https://github.com/folke/snacks.nvim) for enhanced terminal support
 
 ## Local Installation Configuration
@@ -245,7 +246,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     port_range = { min = 10000, max = 65535 },
     auto_start = true,
     log_level = "info", -- "trace", "debug", "info", "warn", "error"
-    terminal_cmd = nil, -- Custom terminal command (default: "claude")
+    terminal_cmd = nil, -- Custom terminal command (default: "opencode")
                         -- For local installations: "~/.claude/local/claude"
                         -- For native binary: use output from 'which claude'
 

@@ -628,14 +628,20 @@ end
 ---@param line1 number|nil Optional start line for range-based selection
 ---@param line2 number|nil Optional end line for range-based selection
 function M.send_at_mention_for_visual_selection(line1, line2)
-  if not M.state.tracking_enabled then
+  local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+  local using_opencode = terminal_ok
+    and type(terminal_module.get_integration_target) == "function"
+    and terminal_module.get_integration_target() == "opencode"
+
+  if not M.state.tracking_enabled and not using_opencode then
     logger.error("selection", "Selection tracking is not enabled.")
     return false
   end
 
   -- Check if Claude Code integration is running (server may or may not have clients)
   local claudecode_main = require("claudecode")
-  if not claudecode_main.state.server then
+
+  if not using_opencode and not claudecode_main.state.server then
     logger.error("selection", "Claude Code integration is not running.")
     return false
   end

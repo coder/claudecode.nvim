@@ -50,6 +50,14 @@ function M.toggle(cmd_string, env_table, effective_config)
   -- intentionally no-op
 end
 
+---Send input (no-op)
+---@param _ string
+---@return boolean success
+---@return string error
+function M.send_input(_)
+  return false, "send_input is not supported by none terminal provider"
+end
+
 ---Ensure visible (no-op)
 function M.ensure_visible() end
 

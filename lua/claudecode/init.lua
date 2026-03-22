@@ -273,6 +273,106 @@ function M._ensure_terminal_visible_if_connected()
   return true
 end
 
+---@return boolean
+local function is_opencode_integration()
+  local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+  if not terminal_ok or type(terminal_module.get_integration_target) ~= "function" then
+    return false
+  end
+  return terminal_module.get_integration_target() == "opencode"
+end
+
+---@param file_path string
+---@param start_line number|nil
+---@param end_line number|nil
+---@return string|nil mention
+---@return boolean|nil should_select_as_part
+---@return string|nil error
+local function build_opencode_at_mention(file_path, start_line, end_line)
+  local format_ok, formatted_path, is_directory = pcall(M._format_path_for_at_mention, file_path)
+  if not format_ok then
+    return nil, nil, formatted_path
+  end
+
+  local mention = "@" .. formatted_path
+
+  if not is_directory then
+    local opencode_start = type(start_line) == "number" and (start_line + 1) or nil
+    local opencode_end = type(end_line) == "number" and (end_line + 1) or nil
+
+    if opencode_start and opencode_end then
+      mention = mention .. string.format("#%d-%d", opencode_start, opencode_end)
+    elseif opencode_start then
+      mention = mention .. string.format("#%d", opencode_start)
+    elseif opencode_end then
+      mention = mention .. string.format("#1-%d", opencode_end)
+    end
+  end
+
+  local relative_like_path = formatted_path ~= "./"
+    and not formatted_path:match("^/")
+    and not formatted_path:match("^[A-Za-z]:[\\/]")
+  local no_spaces = not mention:match("%s")
+
+  local should_select_as_part = relative_like_path and no_spaces
+
+  return mention, should_select_as_part, nil
+end
+
+---@param file_path string
+---@param start_line number|nil
+---@param end_line number|nil
+---@param context string
+---@return boolean
+---@return string|nil
+local function send_at_mention_to_opencode(file_path, start_line, end_line, context)
+  local OPENCODE_AUTOCOMPLETE_SELECT_DELAY_MS = 300
+
+  local terminal = require("claudecode.terminal")
+  if type(terminal.send_input) ~= "function" then
+    logger.error(context, "OpenCode integration requires terminal.send_input support")
+    return false, "Current terminal provider does not support send_input"
+  end
+
+  local mention, should_select_as_part, mention_error = build_opencode_at_mention(file_path, start_line, end_line)
+  if not mention then
+    logger.error(context, "Failed to build OpenCode @ mention: " .. (mention_error or "unknown error"))
+    return false, mention_error or "Failed to build OpenCode @ mention"
+  end
+
+  terminal.open()
+
+  local input_text
+  if should_select_as_part then
+    -- Insert reference first; autocomplete selection is confirmed in a delayed follow-up send.
+    input_text = " " .. mention
+  else
+    -- Fallback to plain insertion for paths that autocomplete cannot reliably resolve.
+    input_text = " " .. mention .. " "
+  end
+
+  local success, send_error = terminal.send_input(input_text)
+  if not success then
+    logger.error(context, "Failed to send OpenCode @ mention: " .. (send_error or "unknown error"))
+    return false, send_error or "Failed to send OpenCode @ mention"
+  end
+
+  if should_select_as_part then
+    vim.defer_fn(function()
+      local select_success, select_error = terminal.send_input("\r")
+      if not select_success then
+        logger.error(
+          context,
+          "Failed to confirm OpenCode autocomplete selection: " .. (select_error or "unknown error")
+        )
+      end
+    end, OPENCODE_AUTOCOMPLETE_SELECT_DELAY_MS)
+  end
+
+  logger.debug(context, "Added @ mention to OpenCode prompt: " .. mention)
+  return true, nil
+end
+
 ---Send @ mention to Claude Code, handling connection state automatically
 ---@param file_path string The file path to send
 ---@param start_line number|nil Start line (0-indexed for Claude)
@@ -282,6 +382,10 @@ end
 ---@return string|nil error Error message if failed
 function M.send_at_mention(file_path, start_line, end_line, context)
   context = context or "command"
+
+  if is_opencode_integration() then
+    return send_at_mention_to_opencode(file_path, start_line, end_line, context)
+  end
 
   if not M.state.server then
     logger.error(context, "Claude Code integration is not running")
@@ -799,7 +903,7 @@ function M._create_commands()
   })
 
   local function handle_tree_add_normal()
-    if not M.state.server then
+    if not M.state.server and not is_opencode_integration() then
       logger.error("command", "ClaudeCodeTreeAdd: Claude Code integration is not running.")
       return
     end
@@ -846,7 +950,7 @@ function M._create_commands()
   end
 
   local function handle_tree_add_visual(visual_data)
-    if not M.state.server then
+    if not M.state.server and not is_opencode_integration() then
       logger.error("command", "ClaudeCodeTreeAdd_visual: Claude Code integration is not running.")
       return
     end
@@ -901,7 +1005,7 @@ function M._create_commands()
   })
 
   vim.api.nvim_create_user_command("ClaudeCodeAdd", function(opts)
-    if not M.state.server then
+    if not M.state.server and not is_opencode_integration() then
       logger.error("command", "ClaudeCodeAdd: Claude Code integration is not running.")
       return
     end

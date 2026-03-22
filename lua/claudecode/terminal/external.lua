@@ -179,6 +179,14 @@ function M.toggle(cmd_string, env_table, effective_config)
   M.simple_toggle(cmd_string, env_table, effective_config)
 end
 
+---Send input is not supported for external terminals.
+---@param _ string
+---@return boolean success
+---@return string error
+function M.send_input(_)
+  return false, "send_input is not supported by external terminal provider"
+end
+
 ---@return number?
 function M.get_active_bufnr()
   -- External terminals don't have associated Neovim buffers

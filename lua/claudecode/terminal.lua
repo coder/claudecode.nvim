@@ -1,4 +1,4 @@
---- Module to manage a dedicated vertical split terminal for Claude Code.
+--- Module to manage a dedicated terminal for AI CLI tools.
 --- Supports Snacks.nvim or a native Neovim terminal fallback.
 --- @module 'claudecode.terminal'
 
@@ -12,7 +12,7 @@ local defaults = {
   split_width_percentage = 0.30,
   provider = "auto",
   show_native_term_exit_tip = true,
-  terminal_cmd = nil,
+  terminal_cmd = "opencode",
   provider_opts = {
     external_terminal_cmd = nil,
   },
@@ -94,6 +94,13 @@ local function validate_and_enhance_provider(provider)
   if not enhanced_provider._get_terminal_for_test then
     enhanced_provider._get_terminal_for_test = function()
       return nil
+    end
+  end
+
+  -- Add default send_input implementation when provider does not support stdin injection
+  if not enhanced_provider.send_input then
+    enhanced_provider.send_input = function(_)
+      return false, "send_input is not supported by this terminal provider"
     end
   end
 
@@ -285,19 +292,77 @@ local function is_terminal_visible(bufnr)
   return bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0
 end
 
----Gets the claude command string and necessary environment variables
+---Normalize a command token for comparison
+---@param token string
+---@return string
+local function normalize_command_token(token)
+  token = token:gsub('^["\']', "")
+  token = token:gsub('["\']$', "")
+  token = token:match("[^/\\]+$") or token
+  return token:lower()
+end
+
+---Split command string into comparable tokens
+---@param command string
+---@return string[]
+local function split_command_tokens(command)
+  local tokens = {}
+  if type(command) ~= "string" then
+    return tokens
+  end
+
+  for token in command:gmatch("%S+") do
+    local normalized = normalize_command_token(token)
+    if normalized ~= "" then
+      table.insert(tokens, normalized)
+    end
+  end
+
+  return tokens
+end
+
+---Get the configured terminal command with default fallback
+---@return string
+local function get_base_terminal_command()
+  local cmd_from_config = defaults.terminal_cmd
+  if not cmd_from_config or cmd_from_config == "" then
+    return "opencode"
+  end
+  return cmd_from_config
+end
+
+---Check whether command tokens contain a specific tool name
+---@param command string
+---@param tool_name string
+---@return boolean
+local function command_looks_like(command, tool_name)
+  for _, token in ipairs(split_command_tokens(command)) do
+    if token == tool_name or token:find(tool_name, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
+---Get the active integration target inferred from terminal_cmd
+---@return "claude"|"opencode"
+function M.get_integration_target()
+  local base_cmd = get_base_terminal_command()
+  if command_looks_like(base_cmd, "opencode") then
+    return "opencode"
+  end
+  if command_looks_like(base_cmd, "claude") then
+    return "claude"
+  end
+  return "claude"
+end
+
+---Gets the terminal command string and necessary environment variables
 ---@param cmd_args string? Optional arguments to append to the command
 ---@return string cmd_string The command string
----@return table env_table The environment variables table
-local function get_claude_command_and_env(cmd_args)
-  -- Inline get_claude_command logic
-  local cmd_from_config = defaults.terminal_cmd
-  local base_cmd
-  if not cmd_from_config or cmd_from_config == "" then
-    base_cmd = "claude" -- Default if not configured
-  else
-    base_cmd = cmd_from_config
-  end
+---@return table|nil env_table The environment variables table (nil when empty)
+local function get_terminal_command_and_env(cmd_args)
+  local base_cmd = get_base_terminal_command()
 
   local cmd_string
   if cmd_args and cmd_args ~= "" then
@@ -306,19 +371,30 @@ local function get_claude_command_and_env(cmd_args)
     cmd_string = base_cmd
   end
 
-  local sse_port_value = claudecode_server_module.state.port
-  local env_table = {
-    ENABLE_IDE_INTEGRATION = "true",
-    FORCE_CODE_TERMINAL = "true",
-  }
+  local env_table = nil
 
-  if sse_port_value then
-    env_table["CLAUDE_CODE_SSE_PORT"] = tostring(sse_port_value)
+  if M.get_integration_target() == "claude" then
+    local sse_port_value = claudecode_server_module.state.port
+    env_table = {
+      ENABLE_IDE_INTEGRATION = "true",
+      FORCE_CODE_TERMINAL = "true",
+    }
+
+    if sse_port_value then
+      env_table["CLAUDE_CODE_SSE_PORT"] = tostring(sse_port_value)
+    end
   end
 
   -- Merge custom environment variables from config
-  for key, value in pairs(defaults.env) do
+  for key, value in pairs(defaults.env or {}) do
+    if env_table == nil then
+      env_table = {}
+    end
     env_table[key] = value
+  end
+
+  if type(env_table) == "table" and next(env_table) == nil then
+    env_table = nil
   end
 
   return cmd_string, env_table
@@ -346,9 +422,9 @@ local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
 
   -- Terminal is not visible, open it without focus
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  local cmd_string, env_table = get_terminal_command_and_env(cmd_args)
 
-  provider.open(cmd_string, claude_env_table, effective_config, false) -- false = don't focus
+  provider.open(cmd_string, env_table, effective_config, false) -- false = don't focus
   return true
 end
 
@@ -493,64 +569,112 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
   get_provider().setup(defaults)
 end
 
----Opens or focuses the Claude terminal.
+---Opens or focuses the managed AI terminal.
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
----@param cmd_args string? Arguments to append to the claude command.
+---@param cmd_args string? Arguments to append to the terminal command.
 function M.open(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  local cmd_string, env_table = get_terminal_command_and_env(cmd_args)
 
-  get_provider().open(cmd_string, claude_env_table, effective_config)
+  get_provider().open(cmd_string, env_table, effective_config)
 end
 
----Closes the managed Claude terminal if it's open and valid.
+---Closes the managed AI terminal if it's open and valid.
 function M.close()
   get_provider().close()
 end
 
----Simple toggle: always show/hide the Claude terminal regardless of focus.
+---Simple toggle: always show/hide the managed terminal regardless of focus.
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
----@param cmd_args string? Arguments to append to the claude command.
+---@param cmd_args string? Arguments to append to the terminal command.
 function M.simple_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  local cmd_string, env_table = get_terminal_command_and_env(cmd_args)
 
-  get_provider().simple_toggle(cmd_string, claude_env_table, effective_config)
+  get_provider().simple_toggle(cmd_string, env_table, effective_config)
 end
 
 ---Smart focus toggle: switches to terminal if not focused, hides if currently focused.
 ---@param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
----@param cmd_args string|nil (optional) Arguments to append to the claude command.
+---@param cmd_args string|nil (optional) Arguments to append to the terminal command.
 function M.focus_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  local cmd_string, env_table = get_terminal_command_and_env(cmd_args)
 
-  get_provider().focus_toggle(cmd_string, claude_env_table, effective_config)
+  get_provider().focus_toggle(cmd_string, env_table, effective_config)
+end
+
+---Send text to the active terminal input.
+---Opens the terminal first (without focus) when needed.
+---@param text string Text to send to terminal stdin
+---@param opts_override table? Optional terminal layout overrides
+---@param cmd_args string? Optional command arguments for terminal launch
+---@return boolean success
+---@return string? error
+function M.send_input(text, opts_override, cmd_args)
+  if type(text) ~= "string" or text == "" then
+    return false, "send_input requires a non-empty string"
+  end
+
+  local provider = get_provider()
+
+  if type(provider.send_input) ~= "function" then
+    return false, "Current terminal provider does not support send_input"
+  end
+
+  local initial_ok, initial_success, initial_err = pcall(provider.send_input, text)
+  if not initial_ok then
+    return false, tostring(initial_success)
+  end
+
+  if initial_success ~= false then
+    return true, nil
+  end
+
+  if type(initial_err) == "string" and initial_err:find("not supported", 1, true) then
+    return false, initial_err
+  end
+
+  local effective_config = build_config(opts_override)
+  local cmd_string, env_table = get_terminal_command_and_env(cmd_args)
+
+  provider.open(cmd_string, env_table, effective_config, false)
+
+  local ok, success, err = pcall(provider.send_input, text)
+  if not ok then
+    return false, tostring(success)
+  end
+
+  if success == false then
+    return false, err or "Failed to send text to terminal"
+  end
+
+  return true, nil
 end
 
 ---Toggle open terminal without focus if not already visible, otherwise do nothing.
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
----@param cmd_args string? Arguments to append to the claude command.
+---@param cmd_args string? Arguments to append to the terminal command.
 function M.toggle_open_no_focus(opts_override, cmd_args)
   ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
 ---Ensures terminal is visible without changing focus. Creates if necessary, shows if hidden.
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
----@param cmd_args string? Arguments to append to the claude command.
+---@param cmd_args string? Arguments to append to the terminal command.
 function M.ensure_visible(opts_override, cmd_args)
   ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
----Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).
+---Toggles the managed terminal open or closed (legacy function - use simple_toggle or focus_toggle).
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
----@param cmd_args string? Arguments to append to the claude command.
+---@param cmd_args string? Arguments to append to the terminal command.
 function M.toggle(opts_override, cmd_args)
   -- Default to simple toggle for backward compatibility
   M.simple_toggle(opts_override, cmd_args)
 end
 
----Gets the buffer number of the currently active Claude Code terminal.
+---Gets the buffer number of the currently active managed terminal.
 ---This checks both Snacks and native fallback terminals.
 ---@return number|nil The buffer number if an active terminal is found, otherwise nil.
 function M.get_active_terminal_bufnr()
