@@ -152,6 +152,20 @@ end
 
 local function close_terminal()
   if is_valid() then
+    -- Kill the job process and any children before closing
+    if jobid and jobid > 0 then
+      -- Try to kill the process group (negative PID on Unix)
+      -- This ensures child processes spawned by opencode are also terminated
+      pcall(function()
+        vim.fn.jobstop(jobid)
+      end)
+      
+      -- On Unix systems, also try to kill the process group
+      if vim.fn.has("unix") == 1 then
+        vim.fn.system("pkill -9 -P " .. tostring(jobid) .. " 2>/dev/null || true")
+      end
+    end
+    
     -- Closing the window should trigger on_exit of the job if the process is still running,
     -- which then calls cleanup_state.
     -- If the job already exited, on_exit would have cleaned up.
@@ -304,6 +318,25 @@ end
 ---@param term_config ClaudeCodeTerminalConfig
 function M.setup(term_config)
   config = term_config
+  
+  -- Create autocmd to clean up terminal processes when Neovim exits
+  vim.api.nvim_create_autocmd("VimLeave", {
+    group = vim.api.nvim_create_augroup("ClaudeCodeTerminalCleanup", { clear = true }),
+    callback = function()
+      if jobid and jobid > 0 then
+        logger.debug("terminal", "VimLeave: Cleaning up terminal process")
+        -- Kill the job and any children
+        pcall(function()
+          vim.fn.jobstop(jobid)
+        end)
+        
+        -- On Unix, kill process group
+        if vim.fn.has("unix") == 1 then
+          vim.fn.system("pkill -9 -P " .. tostring(jobid) .. " 2>/dev/null || true")
+        end
+      end
+    end,
+  })
 end
 
 --- @param cmd_string string
@@ -480,11 +513,15 @@ function M.send_input(text)
     return false, "No active terminal job"
   end
 
+  logger.debug("terminal.native", "Sending to terminal (length " .. tostring(#text) .. "): '" .. text .. "'")
+
   local ok, err = pcall(vim.api.nvim_chan_send, channel_id, text)
   if not ok then
+    logger.error("terminal.native", "Failed to send: " .. tostring(err))
     return false, tostring(err)
   end
 
+  logger.debug("terminal.native", "Successfully sent text to terminal")
   return true, nil
 end
 

@@ -77,7 +77,31 @@ local function build_opts(config, env_table, focus)
 end
 
 function M.setup()
-  -- No specific setup needed for Snacks provider
+  -- Create autocmd to clean up terminal processes when Neovim exits
+  vim.api.nvim_create_autocmd("VimLeave", {
+    group = vim.api.nvim_create_augroup("ClaudeCodeSnacksCleanup", { clear = true }),
+    callback = function()
+      if terminal and terminal:buf_valid() and terminal.buf then
+        local logger = require("claudecode.logger")
+        logger.debug("terminal", "VimLeave: Cleaning up Snacks terminal process")
+        
+        local ok, terminal_job_id = pcall(function()
+          return vim.b[terminal.buf].terminal_job_id
+        end)
+        
+        if ok and terminal_job_id and terminal_job_id > 0 then
+          pcall(function()
+            vim.fn.jobstop(terminal_job_id)
+          end)
+          
+          -- On Unix, kill process group
+          if vim.fn.has("unix") == 1 then
+            vim.fn.system("pkill -9 -P " .. tostring(terminal_job_id) .. " 2>/dev/null || true")
+          end
+        end
+      end
+    end,
+  })
 end
 
 ---Open a terminal using Snacks.nvim
@@ -270,11 +294,16 @@ function M.send_input(text)
     return false, "No active terminal job"
   end
 
+  local logger = require("claudecode.logger")
+  logger.debug("terminal.snacks", "Sending to terminal (length " .. tostring(#text) .. "): '" .. text .. "'")
+
   local send_ok, send_err = pcall(vim.api.nvim_chan_send, terminal_job_id, text)
   if not send_ok then
+    logger.error("terminal.snacks", "Failed to send: " .. tostring(send_err))
     return false, tostring(send_err)
   end
 
+  logger.debug("terminal.snacks", "Successfully sent text to terminal")
   return true, nil
 end
 

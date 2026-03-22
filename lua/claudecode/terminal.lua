@@ -5,6 +5,59 @@
 local M = {}
 
 local claudecode_server_module = require("claudecode.server.init")
+local logger = require("claudecode.logger")
+
+---State for OpenCode HTTP API integration
+---@type number|nil
+local opencode_port = nil
+---@type boolean
+local opencode_api_enabled = false
+
+---Gets the stored OpenCode HTTP API port
+---Uses vim.g to persist across plugin reloads
+---@return number|nil port The port number if OpenCode is running with API enabled
+function M.get_opencode_port()
+  -- First check module-level variable
+  if opencode_port then
+    logger.debug("terminal", "get_opencode_port returning module variable: " .. tostring(opencode_port))
+    return opencode_port
+  end
+  -- Fall back to vim.g which persists across reloads
+  local persisted_port = vim.g.claudecode_opencode_port
+  if persisted_port then
+    logger.debug("terminal", "get_opencode_port returning vim.g variable: " .. tostring(persisted_port))
+    return persisted_port
+  end
+  logger.debug("terminal", "get_opencode_port returning nil")
+  return nil
+end
+
+---Checks if OpenCode HTTP API is enabled
+---Uses vim.g to persist across plugin reloads
+---@return boolean enabled
+function M.is_opencode_api_enabled()
+  -- First check module-level variable
+  if opencode_api_enabled then
+    logger.debug("terminal", "is_opencode_api_enabled returning module variable: true")
+    return true
+  end
+  -- Fall back to vim.g which persists across reloads
+  local persisted = vim.g.claudecode_opencode_api_enabled
+  if persisted then
+    logger.debug("terminal", "is_opencode_api_enabled returning vim.g variable: true")
+    return true
+  end
+  logger.debug("terminal", "is_opencode_api_enabled returning false")
+  return false
+end
+
+---Finds an available port for OpenCode HTTP server
+---@return number port A random available port between 10000-65535
+local function find_available_port()
+  -- Generate random port between 10000-65535
+  math.randomseed(os.time())
+  return math.random(10000, 65535)
+end
 
 ---@type ClaudeCodeTerminalConfig
 local defaults = {
@@ -363,12 +416,33 @@ end
 ---@return table|nil env_table The environment variables table (nil when empty)
 local function get_terminal_command_and_env(cmd_args)
   local base_cmd = get_base_terminal_command()
+  local is_opencode = M.get_integration_target() == "opencode"
+  
+  logger.debug("terminal", "get_terminal_command_and_env called, is_opencode: " .. tostring(is_opencode) .. ", existing port: " .. tostring(opencode_port))
 
   local cmd_string
   if cmd_args and cmd_args ~= "" then
     cmd_string = base_cmd .. " " .. cmd_args
   else
     cmd_string = base_cmd
+  end
+
+  -- Add --port flag for OpenCode to enable HTTP API
+  if is_opencode then
+    -- Only generate new port if not already set (check both module var and vim.g)
+    local existing_port = opencode_port or vim.g.claudecode_opencode_port
+    if not existing_port then
+      opencode_port = find_available_port()
+      vim.g.claudecode_opencode_port = opencode_port
+      vim.g.claudecode_opencode_api_enabled = true
+      logger.debug("terminal", "Generated new OpenCode port: " .. tostring(opencode_port))
+    else
+      opencode_port = existing_port
+      logger.debug("terminal", "Reusing existing OpenCode port: " .. tostring(opencode_port))
+    end
+    opencode_api_enabled = true
+    cmd_string = cmd_string .. " --port " .. tostring(opencode_port)
+    logger.debug("terminal", "Command with port: " .. cmd_string)
   end
 
   local env_table = nil
@@ -573,10 +647,16 @@ end
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
 ---@param cmd_args string? Arguments to append to the terminal command.
 function M.open(opts_override, cmd_args)
+  logger.debug("terminal", "M.open() called, cmd_args: " .. tostring(cmd_args))
   local effective_config = build_config(opts_override)
   local cmd_string, env_table = get_terminal_command_and_env(cmd_args)
+  
+  logger.debug("terminal", "After get_terminal_command_and_env, port is: " .. tostring(opencode_port))
+  logger.debug("terminal", "Command string: " .. tostring(cmd_string))
 
   get_provider().open(cmd_string, env_table, effective_config)
+  
+  logger.debug("terminal", "After provider.open(), port is: " .. tostring(opencode_port))
 end
 
 ---Closes the managed AI terminal if it's open and valid.

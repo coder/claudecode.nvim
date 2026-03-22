@@ -691,6 +691,8 @@ function M.send_at_mention_for_visual_selection(line1, line2)
   local start_line = sel_to_send.selection.start.line -- Already 0-indexed from selection module
   local end_line = sel_to_send.selection["end"].line -- Already 0-indexed
 
+  logger.debug("selection", string.format("Sending visual selection: file=%s, start_line=%s, end_line=%s", file_path, tostring(start_line), tostring(end_line)))
+
   local success, error_msg = claudecode_main.send_at_mention(file_path, start_line, end_line, "ClaudeCodeSend")
 
   if success then

@@ -283,40 +283,36 @@ local function is_opencode_integration()
 end
 
 ---@param file_path string
+---@param file_path string
 ---@param start_line number|nil
 ---@param end_line number|nil
 ---@return string|nil mention
 ---@return boolean|nil should_select_as_part
 ---@return string|nil error
-local function build_opencode_at_mention(file_path, start_line, end_line)
-  local format_ok, formatted_path, is_directory = pcall(M._format_path_for_at_mention, file_path)
-  if not format_ok then
-    return nil, nil, formatted_path
+local function build_opencode_file_reference(file_path, start_line, end_line)
+  -- Get absolute path like opencode.nvim does
+  local absolute_path = vim.fn.fnamemodify(file_path, ":p:~")
+  if not absolute_path or absolute_path == "" then
+    return nil, nil, "Could not resolve absolute path for: " .. tostring(file_path)
   end
 
-  local mention = "@" .. formatted_path
+  local mention = absolute_path
 
-  if not is_directory then
-    local opencode_start = type(start_line) == "number" and (start_line + 1) or nil
-    local opencode_end = type(end_line) == "number" and (end_line + 1) or nil
+  -- Add line range in OpenCode format: :L12 or :L12-L34
+  if start_line and type(start_line) == "number" then
+    local opencode_start = start_line + 1  -- Convert 0-indexed to 1-indexed
+    local opencode_end = end_line and (end_line + 1) or nil
 
-    if opencode_start and opencode_end then
-      mention = mention .. string.format("#%d-%d", opencode_start, opencode_end)
-    elseif opencode_start then
-      mention = mention .. string.format("#%d", opencode_start)
-    elseif opencode_end then
-      mention = mention .. string.format("#1-%d", opencode_end)
+    mention = mention .. string.format(":L%d", opencode_start)
+    if opencode_end and opencode_end > opencode_start then
+      mention = mention .. string.format("-L%d", opencode_end)
     end
   end
 
-  local relative_like_path = formatted_path ~= "./"
-    and not formatted_path:match("^/")
-    and not formatted_path:match("^[A-Za-z]:[\\/]")
-  local no_spaces = not mention:match("%s")
+  -- Check if it looks like a valid file reference
+  local is_valid = not mention:match("%s")  -- No spaces
 
-  local should_select_as_part = relative_like_path and no_spaces
-
-  return mention, should_select_as_part, nil
+  return mention, is_valid, nil
 end
 
 ---@param file_path string
@@ -326,50 +322,113 @@ end
 ---@return boolean
 ---@return string|nil
 local function send_at_mention_to_opencode(file_path, start_line, end_line, context)
-  local OPENCODE_AUTOCOMPLETE_SELECT_DELAY_MS = 300
-
   local terminal = require("claudecode.terminal")
-  if type(terminal.send_input) ~= "function" then
-    logger.error(context, "OpenCode integration requires terminal.send_input support")
-    return false, "Current terminal provider does not support send_input"
+
+  logger.debug(context, "send_at_mention_to_opencode called with file: " .. tostring(file_path) .. ", lines: " .. tostring(start_line) .. "-" .. tostring(end_line))
+
+  -- Get the formatted path (relative for better autocomplete matching)
+  local format_ok, formatted_path, is_directory = pcall(M._format_path_for_at_mention, file_path)
+  if not format_ok then
+    logger.error(context, "Failed to format path: " .. tostring(formatted_path))
+    return false, "Failed to format path"
   end
 
-  local mention, should_select_as_part, mention_error = build_opencode_at_mention(file_path, start_line, end_line)
-  if not mention then
-    logger.error(context, "Failed to build OpenCode @ mention: " .. (mention_error or "unknown error"))
-    return false, mention_error or "Failed to build OpenCode @ mention"
+  -- Build path with line numbers for OpenCode format: path#L12-34 or path#L12
+  local path_with_lines = formatted_path
+  local line_range_suffix = ""
+  logger.debug(context, string.format("Building path with lines: formatted_path=%s, start_line=%s (type=%s), end_line=%s (type=%s), is_directory=%s", 
+    formatted_path, tostring(start_line), type(start_line), tostring(end_line), type(end_line), tostring(is_directory)))
+  
+  if start_line and type(start_line) == "number" and not is_directory then
+    local line_start = start_line + 1  -- Convert 0-indexed to 1-indexed
+    local line_end = end_line and (end_line + 1) or nil
+    
+    if line_end and line_end > line_start then
+      line_range_suffix = "#L" .. line_start .. "-" .. line_end
+    else
+      line_range_suffix = "#L" .. line_start
+    end
+    path_with_lines = formatted_path .. line_range_suffix
   end
+  
+  logger.debug(context, "Path for autocomplete: " .. formatted_path)
+  logger.debug(context, "Line range suffix: '" .. line_range_suffix .. "'")
+  logger.debug(context, "Full path with lines: " .. path_with_lines)
 
+  -- Open and focus terminal
   terminal.open()
+  
+  -- Check if send_input is available
+  if type(terminal.send_input) ~= "function" then
+    logger.error(context, "terminal.send_input not available")
+    return false, "terminal.send_input not available"
+  end
 
-  local input_text
-  if should_select_as_part then
-    -- Insert reference first; autocomplete selection is confirmed in a delayed follow-up send.
-    input_text = " " .. mention
+  -- Step 1: Type "@" to trigger autocomplete
+  logger.debug(context, "Step 1: Typing @ to trigger autocomplete")
+  local ok = terminal.send_input("@")
+  if not ok then
+    logger.error(context, "Failed to send @")
+    return false, "Failed to trigger autocomplete"
+  end
+
+  -- Step 2: Type just the file path (without line numbers) for autocomplete
+  logger.debug(context, "Step 2: Typing file path for autocomplete: '" .. formatted_path .. "'")
+  vim.wait(15)  -- Small delay for autocomplete to be ready
+  local ok = terminal.send_input(formatted_path)
+  if not ok then
+    logger.error(context, "Failed to send file path")
+    return false, "Failed to send file path"
+  end
+  logger.debug(context, "Step 2: Successfully typed file path")
+
+  -- Step 3: Wait for file results to populate (this is critical!)
+  -- OpenCode needs time to search and show file results
+  -- Too short = selects "@general" agent instead of file
+  logger.debug(context, "Step 3: Waiting for file results to populate...")
+  vim.wait(200)  -- Longer delay for file search results
+  
+  -- Step 4: Press Enter to select the file from autocomplete
+  logger.debug(context, "Step 3: Pressing Enter to select file")
+  ok = terminal.send_input("\r")
+  if not ok then
+    logger.error(context, "Failed to send Enter")
+    return false, "Failed to confirm selection"
+  end
+
+  -- Step 5: If we have a line range, position cursor and add it
+  if line_range_suffix ~= "" then
+    logger.debug(context, "Step 4: Moving cursor back to remove space, then adding line range: '" .. line_range_suffix .. "'")
+    vim.wait(15)  -- Small delay after selection
+    
+    -- Move cursor left to remove the space that OpenCode adds after file selection
+    local left_arrow = "\027[D"
+    ok = terminal.send_input(left_arrow)
+    if not ok then
+      logger.error(context, "Failed to move cursor left")
+    end
+    
+    -- Now type the line range (it will replace the space)
+    ok = terminal.send_input(line_range_suffix)
+    if not ok then
+      logger.error(context, "Failed to send line range")
+      return false, "Failed to send line range"
+    end
+  end
+  
+  -- Always add trailing space so user can immediately start typing
+  ok = terminal.send_input(" ")
+  if not ok then
+    logger.error(context, "Failed to send trailing space")
+  end
+  
+  if line_range_suffix ~= "" then
+    logger.debug(context, "Step 4: Successfully added line range with trailing space")
   else
-    -- Fallback to plain insertion for paths that autocomplete cannot reliably resolve.
-    input_text = " " .. mention .. " "
+    logger.debug(context, "Step 4: Added trailing space for tree selection")
   end
 
-  local success, send_error = terminal.send_input(input_text)
-  if not success then
-    logger.error(context, "Failed to send OpenCode @ mention: " .. (send_error or "unknown error"))
-    return false, send_error or "Failed to send OpenCode @ mention"
-  end
-
-  if should_select_as_part then
-    vim.defer_fn(function()
-      local select_success, select_error = terminal.send_input("\r")
-      if not select_success then
-        logger.error(
-          context,
-          "Failed to confirm OpenCode autocomplete selection: " .. (select_error or "unknown error")
-        )
-      end
-    end, OPENCODE_AUTOCOMPLETE_SELECT_DELAY_MS)
-  end
-
-  logger.debug(context, "Added @ mention to OpenCode prompt: " .. mention)
+  logger.debug(context, "Successfully sent file reference via terminal input: @" .. path_with_lines)
   return true, nil
 end
 
