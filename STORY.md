@@ -2,7 +2,7 @@
 
 ## The Reddit Post That Started Everything
 
-While browsing Reddit at DevOpsCon in London, I stumbled upon a post that caught my eye: someone mentioned finding .vsix files in Anthropic's npm package for their Claude Code VS Code extension.
+While browsing Reddit at DevOpsCon in London, I stumbled upon a post that caught my eye: someone mentioned finding .vsix files in Anthropic's npm package for their OpenCode VS Code extension.
 
 Link to the Reddit post: <https://www.reddit.com/r/ClaudeAI/comments/1klpzvl/hidden_jetbrains_vs_code_plugin_in_todays_release/>
 
@@ -38,7 +38,7 @@ What I discovered was fascinating:
 
 1. **It's all MCP** — The extensions use Model Context Protocol, but with a twist
 2. **WebSocket Transport** — Unlike standard MCP (which uses stdio/HTTP), these use WebSockets
-3. **Claude-Specific** — Claude Code is the only MCP client that supports WebSocket transport
+3. **Claude-Specific** — OpenCode is the only MCP client that supports WebSocket transport
 4. **Simple Protocol** — The IDE creates a server, Claude connects to it
 
 ## Building for Neovim
@@ -86,4 +86,4 @@ The genie is out of the bottle, and it speaks WebSocket.
 
 ---
 
-_If you found this story interesting, check out the [protocol documentation](./PROTOCOL.md) for implementation details, or dive into the [code](https://github.com/coder/claudecode.nvim) to see how it all works._
+_If you found this story interesting, check out the [protocol documentation](./PROTOCOL.md) for implementation details, or dive into the [code](https://github.com/coder/opencode.nvim) to see how it all works._

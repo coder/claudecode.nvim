@@ -1,0 +1,82 @@
+--- No-op terminal provider for OpenCode.
+--- Performs zero UI actions and never manages terminals inside Neovim.
+---@module 'opencode.terminal.none'
+
+---@type OpenCodeTerminalProvider
+local M = {}
+
+---Stored config (not used, but kept for parity with other providers)
+---Setup the no-op provider
+---@param term_config OpenCodeTerminalConfig
+function M.setup(term_config)
+  -- intentionally no-op
+end
+
+---Open terminal (no-op)
+---@param cmd_string string
+---@param env_table table
+---@param effective_config OpenCodeTerminalConfig
+---@param focus boolean|nil
+function M.open(cmd_string, env_table, effective_config, focus)
+  -- intentionally no-op
+end
+
+---Close terminal (no-op)
+function M.close()
+  -- intentionally no-op
+end
+
+---Simple toggle (no-op)
+---@param cmd_string string
+---@param env_table table
+---@param effective_config OpenCodeTerminalConfig
+function M.simple_toggle(cmd_string, env_table, effective_config)
+  -- intentionally no-op
+end
+
+---Focus toggle (no-op)
+---@param cmd_string string
+---@param env_table table
+---@param effective_config OpenCodeTerminalConfig
+function M.focus_toggle(cmd_string, env_table, effective_config)
+  -- intentionally no-op
+end
+
+---Legacy toggle (no-op)
+---@param cmd_string string
+---@param env_table table
+---@param effective_config OpenCodeTerminalConfig
+function M.toggle(cmd_string, env_table, effective_config)
+  -- intentionally no-op
+end
+
+---Send input (no-op)
+---@param _ string
+---@return boolean success
+---@return string error
+function M.send_input(_)
+  return false, "send_input is not supported by none terminal provider"
+end
+
+---Ensure visible (no-op)
+function M.ensure_visible() end
+
+---Return active buffer number (always nil)
+---@return number|nil
+function M.get_active_bufnr()
+  return nil
+end
+
+---Provider availability (always true; explicit opt-in required)
+---@return boolean
+function M.is_available()
+  return true
+end
+
+---Testing hook (no state to return)
+---@return table|nil
+function M._get_terminal_for_test()
+  return nil
+end
+
+return M

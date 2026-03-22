@@ -1,6 +1,6 @@
 # Architecture
 
-This document provides technical details about the claudecode.nvim implementation for developers and contributors.
+This document provides technical details about the opencode.nvim implementation for developers and contributors.
 
 ## Overview
 

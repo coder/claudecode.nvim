@@ -1,50 +1,49 @@
-# claudecode.nvim
+# opencode.nvim
 
-[![Tests](https://github.com/coder/claudecode.nvim/actions/workflows/test.yml/badge.svg)](https://github.com/coder/claudecode.nvim/actions/workflows/test.yml)
+[![Tests](https://github.com/lanjoni/opencode.nvim/actions/workflows/test.yml/badge.svg)](https://github.com/lanjoni/opencode.nvim/actions/workflows/test.yml)
 ![Neovim version](https://img.shields.io/badge/Neovim-0.8%2B-green)
 ![Status](https://img.shields.io/badge/Status-beta-blue)
 
-**The first Neovim IDE integration for Claude Code** — bringing Anthropic's AI coding assistant to your favorite editor with a pure Lua implementation.
+**The first Neovim IDE integration for OpenCode** — bringing Anthropic's AI coding assistant to your favorite editor with a pure Lua implementation.
 
-> 🎯 **TL;DR:** When Anthropic released Claude Code with VS Code and JetBrains support, I reverse-engineered their extension and built this Neovim plugin. This plugin implements the same WebSocket-based MCP protocol, giving Neovim users the same AI-powered coding experience.
+> 🎯 **TL;DR:** When Anthropic released OpenCode with VS Code and JetBrains support, I reverse-engineered their extension and built this Neovim plugin. This plugin implements the same WebSocket-based MCP protocol, giving Neovim users the same AI-powered coding experience.
 
 <https://github.com/user-attachments/assets/9c310fb5-5a23-482b-bedc-e21ae457a82d>
 
 ## What Makes This Special
 
-When Anthropic released Claude Code, they only supported VS Code and JetBrains. As a Neovim user, I wanted the same experience — so I reverse-engineered their extension and built this.
+When Anthropic released OpenCode, they only supported VS Code and JetBrains. As a Neovim user, I wanted the same experience — so I reverse-engineered their extension and built this.
 
 - 🚀 **Pure Lua, Zero Dependencies** — Built entirely with `vim.loop` and Neovim built-ins
 - 🔌 **100% Protocol Compatible** — Same WebSocket MCP implementation as official extensions
 - 🎓 **Fully Documented Protocol** — Learn how to build your own integrations ([see PROTOCOL.md](./PROTOCOL.md))
 - ⚡ **First to Market** — Beat Anthropic to releasing Neovim support
-- 🛠️ **Built with AI** — Used Claude to reverse-engineer Claude's own protocol
+- 🛠️ **Built with AI** — Used OpenCode to reverse-engineer OpenCode's own protocol
 
 ## Installation
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   dependencies = { "folke/snacks.nvim" },
   config = true,
   keys = {
-    { "<leader>a", nil, desc = "AI/Claude Code" },
-    { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
-    { "<leader>af", "<cmd>ClaudeCodeFocus<cr>", desc = "Focus Claude" },
-    { "<leader>ar", "<cmd>ClaudeCode --resume<cr>", desc = "Resume Claude" },
-    { "<leader>aC", "<cmd>ClaudeCode --continue<cr>", desc = "Continue Claude" },
-    { "<leader>am", "<cmd>ClaudeCodeSelectModel<cr>", desc = "Select Claude model" },
-    { "<leader>ab", "<cmd>ClaudeCodeAdd %<cr>", desc = "Add current buffer" },
-    { "<leader>as", "<cmd>ClaudeCodeSend<cr>", mode = "v", desc = "Send to Claude" },
+    { "<leader>a", nil, desc = "AI/OpenCode" },
+    { "<leader>ac", "<cmd>OpenCode<cr>", desc = "Toggle OpenCode" },
+    { "<leader>af", "<cmd>OpenCodeFocus<cr>", desc = "Focus OpenCode" },
+    { "<leader>ar", "<cmd>OpenCode --resume<cr>", desc = "Resume OpenCode" },
+    { "<leader>aC", "<cmd>OpenCode --continue<cr>", desc = "Continue OpenCode" },
+    { "<leader>ab", "<cmd>OpenCodeAdd %<cr>", desc = "Add current buffer" },
+    { "<leader>as", "<cmd>OpenCodeSend<cr>", mode = "v", desc = "Send to OpenCode" },
     {
       "<leader>as",
-      "<cmd>ClaudeCodeTreeAdd<cr>",
+      "<cmd>OpenCodeTreeAdd<cr>",
       desc = "Add file",
       ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw" },
     },
     -- Diff management
-    { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
-    { "<leader>ad", "<cmd>ClaudeCodeDiffDeny<cr>", desc = "Deny diff" },
+    { "<leader>aa", "<cmd>OpenCodeDiffAccept<cr>", desc = "Accept diff" },
+    { "<leader>ad", "<cmd>OpenCodeDiffDeny<cr>", desc = "Deny diff" },
   },
 }
 ```
@@ -55,18 +54,18 @@ That's it! The plugin will auto-configure everything else.
 
 - Neovim >= 0.8.0
 - [OpenCode CLI](https://opencode.ai/docs/) installed (default)
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (optional, when `terminal_cmd` is set to `claude`)
+- [OpenCode CLI](https://docs.anthropic.com/en/docs/claude-code) (optional, when `terminal_cmd` is set to `claude`)
 - [folke/snacks.nvim](https://github.com/folke/snacks.nvim) for enhanced terminal support
 
 ## Local Installation Configuration
 
-If you've used Claude Code's `migrate-installer` command to move to a local installation, you'll need to configure the plugin to use the local path.
+If you've used OpenCode's `migrate-installer` command to move to a local installation, you'll need to configure the plugin to use the local path.
 
 ### What is a Local Installation?
 
-Claude Code offers a `claude migrate-installer` command that:
+OpenCode offers a `opencode install` command that:
 
-- Moves Claude Code from a global npm installation to `~/.claude/local/`
+- Moves OpenCode from a global npm installation to `~/.opencode/local/`
 - Avoids permission issues with system directories
 - Creates shell aliases but these may not be available to Neovim
 
@@ -75,14 +74,14 @@ Claude Code offers a `claude migrate-installer` command that:
 Check your installation type:
 
 ```bash
-# Check where claude command points
-which claude
+# Check where opencode command points
+which opencode
 
-# Global installation shows: /usr/local/bin/claude (or similar)
-# Local installation shows: alias to ~/.claude/local/claude
+# Global installation shows: /usr/local/bin/opencode (or similar)
+# Local installation shows: alias to ~/.opencode/local/claude
 
 # Verify installation health
-claude doctor
+opencode doctor
 ```
 
 ### Configuring for Local Installation
@@ -91,10 +90,10 @@ If you have a local installation, configure the plugin with the direct path:
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   dependencies = { "folke/snacks.nvim" },
   opts = {
-    terminal_cmd = "~/.claude/local/claude", -- Point to local installation
+    terminal_cmd = "~/.opencode/local/opencode", -- Point to local installation
   },
   config = true,
   keys = {
@@ -106,7 +105,7 @@ If you have a local installation, configure the plugin with the direct path:
 <details>
 <summary>Native Binary Installation (Alpha)</summary>
 
-Claude Code also offers an experimental native binary installation method currently in alpha testing. This provides a single executable with no Node.js dependencies.
+OpenCode also offers an experimental native binary installation method currently in alpha testing. This provides a single executable with no Node.js dependencies.
 
 #### Installation Methods
 
@@ -114,10 +113,10 @@ Install the native binary using one of these methods:
 
 ```bash
 # Fresh install (recommended)
-curl -fsSL claude.ai/install.sh | bash
+curl -fsSL opencode.ai/install | bash
 
-# From existing Claude Code installation
-claude install
+# From existing OpenCode installation
+opencode install
 ```
 
 #### Platform Support
@@ -137,21 +136,21 @@ claude install
 The exact binary path depends on your shell integration. To find your installation:
 
 ```bash
-# Check where claude command points
-which claude
+# Check where opencode command points
+which opencode
 
 # Verify installation type and health
-claude doctor
+opencode doctor
 ```
 
 Configure the plugin with the detected path:
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   dependencies = { "folke/snacks.nvim" },
   opts = {
-    terminal_cmd = "/path/to/your/claude", -- Use output from 'which claude'
+    terminal_cmd = "/path/to/your/opencode", -- Use output from 'which opencode'
   },
   config = true,
   keys = {
@@ -162,29 +161,29 @@ Configure the plugin with the detected path:
 
 </details>
 
-> **Note**: If Claude Code was installed globally via npm, you can use the default configuration without specifying `terminal_cmd`.
+> **Note**: If OpenCode was installed globally via npm, you can use the default configuration without specifying `terminal_cmd`.
 
 ## Quick Demo
 
 ```vim
-" Launch Claude Code in a split
-:ClaudeCode
+" Launch OpenCode in a split
+:OpenCode
 
-" Claude now sees your current file and selections in real-time!
+" OpenCode now sees your current file and selections in real-time!
 
 " Send visual selection as context
-:'<,'>ClaudeCodeSend
+:'<,'>OpenCodeSend
 
-" Claude can open files, show diffs, and more
+" OpenCode can open files, show diffs, and more
 ```
 
 ## Usage
 
-1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
+1. **Launch OpenCode**: Run `:OpenCode` to open OpenCode in a split terminal
 2. **Send context**:
-   - Select text in visual mode and use `<leader>as` to send it to Claude
-   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, press `<leader>as` on a file to add it to Claude's context
-3. **Let Claude work**: Claude can now:
+   - Select text in visual mode and use `<leader>as` to send it to OpenCode
+   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, press `<leader>as` on a file to add it to OpenCode's context
+3. **Let OpenCode work**: OpenCode can now:
    - See your current file and selections in real-time
    - Open files in your editor
    - Show diffs with proposed changes
@@ -192,33 +191,42 @@ Configure the plugin with the detected path:
 
 ## Key Commands
 
-- `:ClaudeCode` - Toggle the Claude Code terminal window
-- `:ClaudeCodeFocus` - Smart focus/toggle Claude terminal
-- `:ClaudeCodeSelectModel` - Select Claude model and open terminal with optional arguments
-- `:ClaudeCodeSend` - Send current visual selection to Claude
-- `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
-- `:ClaudeCodeDiffAccept` - Accept diff changes
-- `:ClaudeCodeDiffDeny` - Reject diff changes
+- `:OpenCode` - Toggle the OpenCode terminal window
+- `:OpenCodeFocus` - Smart focus/toggle OpenCode terminal
+- `:OpenCodeSend` - Send current visual selection to OpenCode
+- `:OpenCodeAdd <file-path> [start-line] [end-line]` - Add specific file to OpenCode context with optional line range
+- `:OpenCodeDiffAccept` - Accept diff changes
+- `:OpenCodeDiffDeny` - Reject diff changes
 
 ## Working with Diffs
 
-When Claude proposes changes, the plugin opens a native Neovim diff view:
+When OpenCode proposes changes, the plugin opens a native Neovim diff view:
 
 - **Accept**: `:w` (save) or `<leader>aa`
 - **Reject**: `:q` or `<leader>ad`
 
-You can edit Claude's suggestions before accepting them.
+You can edit OpenCode's suggestions before accepting them.
 
 ## How It Works
 
-This plugin creates a WebSocket server that Claude Code CLI connects to, implementing the same protocol as the official VS Code extension. When you launch Claude, it automatically detects Neovim and gains full access to your editor.
+This plugin integrates with OpenCode using terminal-based communication. When you launch OpenCode, the plugin opens it in a dedicated terminal and communicates via stdin injection.
 
-The protocol uses a WebSocket-based variant of MCP (Model Context Protocol) that:
+### Current Implementation (Terminal-Based)
 
-1. Creates a WebSocket server on a random port
-2. Writes a lock file to `~/.claude/ide/[port].lock` (or `$CLAUDE_CONFIG_DIR/ide/[port].lock` if `CLAUDE_CONFIG_DIR` is set) with connection info
-3. Sets environment variables that tell Claude where to connect
-4. Implements MCP tools that Claude can call
+1. **Terminal Launch**: Opens OpenCode in a split terminal with `--port` flag for HTTP API access
+2. **Autocomplete Simulation**: Sends `@filename` via terminal input to trigger OpenCode's autocomplete
+3. **File References**: Selects files from autocomplete to create styled file parts
+4. **Context Sharing**: Sends visual selections and file references directly to the prompt
+
+### WIP: Future WebSocket/SSE Support
+
+When OpenCode implements proper IDE integration API:
+- WebSocket or SSE for bidirectional communication
+- Structured message support (FilePart, AgentPart, etc.)
+- Lock file system at `~/.opencode/ide/[port].lock`
+- MCP tool implementation
+
+The current terminal-based approach provides immediate functionality while we await official API support from OpenCode.
 
 📖 **[Read the full reverse-engineering story →](./STORY.md)**
 🔧 **[Complete protocol documentation →](./PROTOCOL.md)**
@@ -227,11 +235,12 @@ The protocol uses a WebSocket-based variant of MCP (Model Context Protocol) that
 
 Built with pure Lua and zero external dependencies:
 
-- **WebSocket Server** - RFC 6455 compliant implementation using `vim.loop`
-- **MCP Protocol** - Full JSON-RPC 2.0 message handling
-- **Lock File System** - Enables Claude CLI discovery
+- **Terminal Integration** - Direct terminal control with `jobstart()` and stdin injection
+- **Autocomplete Simulation** - Triggers OpenCode's TUI autocomplete via keystrokes
+- **Port Management** - HTTP API port tracking for future enhancements
 - **Selection Tracking** - Real-time context updates
 - **Native Diff Support** - Seamless file comparison
+- **WIP: WebSocket Server** - RFC 6455 compliant implementation (for future OpenCode API)
 
 For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -239,7 +248,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   dependencies = { "folke/snacks.nvim" },
   opts = {
     -- Server Configuration
@@ -247,11 +256,11 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     auto_start = true,
     log_level = "info", -- "trace", "debug", "info", "warn", "error"
     terminal_cmd = nil, -- Custom terminal command (default: "opencode")
-                        -- For local installations: "~/.claude/local/claude"
-                        -- For native binary: use output from 'which claude'
+                        -- For local installations: "~/.opencode/local/opencode"
+                        -- For native binary: use output from 'which opencode'
 
     -- Send/Focus Behavior
-    -- When true, successful sends will focus the Claude terminal if already connected
+    -- When true, successful sends will focus the OpenCode terminal if already connected
     focus_after_send = false,
 
     -- Selection Tracking
@@ -297,7 +306,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Working Directory Control
 
-You can fix the Claude terminal's working directory regardless of `autochdir` and buffer-local cwd changes. Options (precedence order):
+You can fix the OpenCode terminal's working directory regardless of `autochdir` and buffer-local cwd changes. Options (precedence order):
 
 - `cwd_provider(ctx)`: function that returns a directory string. Receives `{ file, file_dir, cwd }`.
 - `cwd`: static path to use as working directory.
@@ -330,7 +339,7 @@ require("claudecode").setup({
 
 ## Floating Window Configuration
 
-The `snacks_win_opts` configuration allows you to create floating Claude Code terminals with custom positioning, sizing, and key bindings. Here are several practical examples:
+The `snacks_win_opts` configuration allows you to create floating OpenCode terminals with custom positioning, sizing, and key bindings. Here are several practical examples:
 
 ### Basic Floating Window with Ctrl+, Toggle
 
@@ -338,10 +347,10 @@ The `snacks_win_opts` configuration allows you to create floating Claude Code te
 local toggle_key = "<C-,>"
 return {
   {
-    "coder/claudecode.nvim",
+    "lanjoni/opencode.nvim",
     dependencies = { "folke/snacks.nvim" },
     keys = {
-      { toggle_key, "<cmd>ClaudeCodeFocus<cr>", desc = "Claude Code", mode = { "n", "x" } },
+      { toggle_key, "<cmd>OpenCodeFocus<cr>", desc = "OpenCode", mode = { "n", "x" } },
     },
     opts = {
       terminal = {
@@ -375,10 +384,10 @@ return {
 local toggle_key = "<M-,>"  -- Alt/Meta + comma
 return {
   {
-    "coder/claudecode.nvim",
+    "lanjoni/opencode.nvim",
     dependencies = { "folke/snacks.nvim" },
     keys = {
-      { toggle_key, "<cmd>ClaudeCodeFocus<cr>", desc = "Claude Code", mode = { "n", "x" } },
+      { toggle_key, "<cmd>OpenCodeFocus<cr>", desc = "OpenCode", mode = { "n", "x" } },
     },
     opts = {
       terminal = {
@@ -427,12 +436,12 @@ require("claudecode").setup({
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   dependencies = { "folke/snacks.nvim" },
   keys = {
-    { "<C-,>", "<cmd>ClaudeCodeFocus<cr>", desc = "Claude Code (Ctrl+,)", mode = { "n", "x" } },
-    { "<M-,>", "<cmd>ClaudeCodeFocus<cr>", desc = "Claude Code (Alt+,)", mode = { "n", "x" } },
-    { "<leader>tc", "<cmd>ClaudeCodeFocus<cr>", desc = "Toggle Claude", mode = { "n", "x" } },
+    { "<C-,>", "<cmd>OpenCodeFocus<cr>", desc = "OpenCode (Ctrl+,)", mode = { "n", "x" } },
+    { "<M-,>", "<cmd>OpenCodeFocus<cr>", desc = "OpenCode (Alt+,)", mode = { "n", "x" } },
+    { "<leader>tc", "<cmd>OpenCodeFocus<cr>", desc = "Toggle OpenCode", mode = { "n", "x" } },
   },
   opts = {
     terminal = {
@@ -496,13 +505,13 @@ For complete configuration options, see:
 
 ### None (No-Op) Provider
 
-Run Claude Code without any terminal management inside Neovim. This is useful for advanced setups where you manage the CLI externally (tmux, kitty, separate terminal windows) while still using the WebSocket server and tools.
+Run OpenCode without any terminal management inside Neovim. This is useful for advanced setups where you manage the CLI externally (tmux, kitty, separate terminal windows) while still using the WebSocket server and tools.
 
-You have to take care of launching CC and connecting it to the IDE yourself. (e.g. `claude --ide` or launching claude and then selecting the IDE using the `/ide` command)
+You have to take care of launching CC and connecting it to the IDE yourself. (e.g. `opencode --ide` or launching opencode and then selecting the IDE using the `/ide` command)
 
 ```lua
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   opts = {
     terminal = {
       provider = "none", -- no UI actions; server + tools remain available
@@ -513,22 +522,22 @@ You have to take care of launching CC and connecting it to the IDE yourself. (e.
 
 Notes:
 
-- No windows/buffers are created. `:ClaudeCode` and related commands will not open anything.
-- The WebSocket server still starts and broadcasts work as usual. Launch the Claude CLI externally when desired.
+- No windows/buffers are created. `:OpenCode` and related commands will not open anything.
+- The WebSocket server still starts and broadcasts work as usual. Launch the OpenCode CLI externally when desired.
 
 ### External Terminal Provider
 
-Run Claude Code in a separate terminal application outside of Neovim:
+Run OpenCode in a separate terminal application outside of Neovim:
 
 ```lua
 -- Using a string template (simple)
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   opts = {
     terminal = {
       provider = "external",
       provider_opts = {
-        external_terminal_cmd = "alacritty -e %s", -- %s is replaced with claude command
+        external_terminal_cmd = "alacritty -e %s", -- %s is replaced with opencode command
         -- Or with working directory: "alacritty --working-directory %s -e %s" (first %s = cwd, second %s = command)
       },
     },
@@ -537,7 +546,7 @@ Run Claude Code in a separate terminal application outside of Neovim:
 
 -- Using a function for dynamic command generation (advanced)
 {
-  "coder/claudecode.nvim",
+  "lanjoni/opencode.nvim",
   opts = {
     terminal = {
       provider = "external",
@@ -670,7 +679,7 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
-Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
+Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "opencode", "--help" }`) to avoid shell-quoting issues.
 
 ## Community Extensions
 
@@ -681,19 +690,19 @@ The following are third-party community extensions that complement claudecode.nv
 Integrates fzf-lua's file selection with claudecode.nvim's context management:
 
 - Batch file selection with fzf-lua multi-select
-- Smart search integration with grep → Claude
+- Smart search integration with grep → OpenCode
 - Tree-sitter based context extraction
 - Support for files, buffers, git files
 
 ### 📚 [claude-fzf-history.nvim](https://github.com/pittcat/claude-fzf-history.nvim)
 
-Provides convenient Claude interaction history management and access for enhanced workflow continuity.
+Provides convenient OpenCode interaction history management and access for enhanced workflow continuity.
 
 > **Disclaimer**: These community extensions are developed and maintained by independent contributors. The authors and their extensions are not affiliated with Coder. Use at your own discretion and refer to their respective repositories for installation instructions, documentation, and support.
 
 ## Auto-Save Plugin Issues
 
-Using auto-save plugins can cause diff windows opened by Claude to immediately accept without waiting for input. You can avoid this using a custom condition:
+Using auto-save plugins can cause diff windows opened by OpenCode to immediately accept without waiting for input. You can avoid this using a custom condition:
 
 <details>
 <summary>Pocco81/auto-save.nvim</summary>
@@ -774,11 +783,11 @@ opts = {
 
 ## Troubleshooting
 
-- **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
+- **OpenCode not connecting?** Check `:OpenCodeStatus` and verify lock file exists in `~/.opencode/ide/` (or `$OPENCODE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
-- **Local installation not working?** If you used `claude migrate-installer`, set `terminal_cmd = "~/.claude/local/claude"` in your config. Check `which claude` vs `ls ~/.claude/local/claude` to verify your installation type.
-- **Native binary installation not working?** If you used the alpha native binary installer, run `claude doctor` to verify installation health and use `which claude` to find the binary path. Set `terminal_cmd = "/path/to/claude"` with the detected path in your config.
+- **Local installation not working?** If you used `opencode install`, set `terminal_cmd = "~/.opencode/local/opencode"` in your config. Check `which opencode` vs `ls ~/.opencode/local/claude` to verify your installation type.
+- **Native binary installation not working?** If you used the alpha native binary installer, run `opencode doctor` to verify installation health and use `which opencode` to find the binary path. Set `terminal_cmd = "/path/to/opencode"` with the detected path in your config.
 
 ## Contributing
 
@@ -790,6 +799,6 @@ See [DEVELOPMENT.md](./DEVELOPMENT.md) for build instructions and development gu
 
 ## Acknowledgements
 
-- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
+- [OpenCode CLI](https://docs.anthropic.com/en/docs/claude-code) by Anthropic
 - Inspired by analyzing the official VS Code extension
 - Built with assistance from AI (how meta!)

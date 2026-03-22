@@ -1,14 +1,14 @@
-# How Claude Code IDE Extensions Actually Work
+# How OpenCode IDE Extensions Actually Work
 
-This document explains the protocol and architecture behind Claude Code's IDE integrations, based on reverse-engineering the VS Code extension. Use this guide to build your own integrations or understand how the official ones work.
+This document explains the protocol and architecture behind OpenCode's IDE integrations, based on reverse-engineering the VS Code extension. Use this guide to build your own integrations or understand how the official ones work.
 
 ## TL;DR
 
-Claude Code extensions create WebSocket servers in your IDE that Claude connects to. They use a WebSocket variant of MCP (Model Context Protocol) that only Claude supports. The IDE writes a lock file with connection info, sets some environment variables, and Claude automatically connects when launched.
+OpenCode extensions create WebSocket servers in your IDE that Claude connects to. They use a WebSocket variant of MCP (Model Context Protocol) that only Claude supports. The IDE writes a lock file with connection info, sets some environment variables, and Claude automatically connects when launched.
 
 ## How Discovery Works
 
-When you launch Claude Code from your IDE, here's what happens:
+When you launch OpenCode from your IDE, here's what happens:
 
 ### 1. IDE Creates a WebSocket Server
 
@@ -530,7 +530,7 @@ write_json(lock_path, lock_data)
 ```bash
 export CLAUDE_CODE_SSE_PORT=12345
 export ENABLE_IDE_INTEGRATION=true
-claude  # Claude will now connect!
+opencode  # Claude will now connect!
 ```
 
 ### 4. Handle Messages
@@ -574,5 +574,5 @@ The WebSocket MCP variant is currently Claude-specific, but the concepts could b
 ## Resources
 
 - [MCP Specification](https://spec.modelcontextprotocol.io)
-- [Claude Code Neovim Implementation](https://github.com/coder/claudecode.nvim)
+- [OpenCode Neovim Implementation](https://github.com/coder/opencode.nvim)
 - [Official VS Code Extension](https://github.com/anthropic-labs/vscode-mcp) (minified source)
