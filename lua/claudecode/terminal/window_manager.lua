@@ -19,6 +19,7 @@ local state = {
   config = nil,
   last_width = nil,
   last_height = nil,
+  resize_pending = false,
 }
 
 ---Find any existing terminal window in current tabpage
@@ -129,19 +130,39 @@ local function setup_resize_autocommands()
     end,
   })
 
-  -- Handle window enter - resize terminal if one exists in current tab
-  -- This catches keyboard navigation between windows
+  -- Handle window enter - track terminal window but defer jobresize until the
+  -- user actually enters the terminal.  This prevents sidebar toggles (file
+  -- explorer, etc.) from sending SIGWINCH which causes the TUI to redraw and
+  -- reset its scroll position.
   vim.api.nvim_create_autocmd("WinEnter", {
     group = group,
     callback = function()
-      -- Find terminal in current tab (may differ from state.winid after tab switch)
       local terminal_win = find_terminal_window()
-      if terminal_win then
-        state.winid = terminal_win
-        state.current_bufnr = vim.api.nvim_win_get_buf(terminal_win)
-        vim.defer_fn(function()
+      if not terminal_win then
+        return
+      end
+
+      state.winid = terminal_win
+      state.current_bufnr = vim.api.nvim_win_get_buf(terminal_win)
+
+      -- Check if the terminal dimensions changed
+      local width = vim.api.nvim_win_get_width(terminal_win)
+      local height = vim.api.nvim_win_get_height(terminal_win)
+      if width ~= state.last_width or height ~= state.last_height then
+        -- Dimensions changed – only send jobresize immediately if the user
+        -- is entering the terminal window itself (i.e. the entered window IS
+        -- the terminal window).  Otherwise mark pending so TermEnter can
+        -- flush the resize when the user actually switches to the terminal.
+        local entered_win = vim.api.nvim_get_current_win()
+        if entered_win == terminal_win then
           M.notify_resize()
-        end, 50)
+        else
+          state.resize_pending = true
+          -- Still update stored dimensions so we don't re-flag on every WinEnter
+          state.last_width = width
+          state.last_height = height
+          logger.debug("window_manager", string.format("Resize deferred (not in terminal): %dx%d", width, height))
+        end
       end
     end,
   })
@@ -164,7 +185,9 @@ local function setup_resize_autocommands()
     end,
   })
 
-  -- Handle entering terminal mode (pressing i in terminal)
+  -- Handle entering terminal mode (pressing i in terminal).
+  -- Also flushes any deferred resize so the TUI gets correct dimensions
+  -- only when the user is actively interacting with it.
   vim.api.nvim_create_autocmd("TermEnter", {
     group = group,
     callback = function()
@@ -172,7 +195,12 @@ local function setup_resize_autocommands()
       if terminal_win then
         state.winid = terminal_win
         state.current_bufnr = vim.api.nvim_win_get_buf(terminal_win)
-        M.notify_resize()
+        if state.resize_pending then
+          state.resize_pending = false
+          M.notify_resize(true) -- force: stored dims already updated
+        else
+          M.notify_resize()
+        end
       end
     end,
   })
