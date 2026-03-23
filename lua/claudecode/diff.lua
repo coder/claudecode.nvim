@@ -199,6 +199,21 @@ local function get_default_terminal_options()
   }
 end
 
+---Mark the current buffer (just created by tabnew) as ephemeral so it auto-wipes when hidden.
+local function mark_tabnew_buffer_ephemeral()
+  local buf = vim.api.nvim_get_current_buf()
+  local ok_name, name = pcall(vim.api.nvim_buf_get_name, buf)
+  local ok_mod, modified = pcall(vim.api.nvim_buf_get_option, buf, "modified")
+  local ok_lc, linecount = pcall(function()
+    return vim.api.nvim_buf_line_count(buf)
+  end)
+  if ok_name and ok_mod and ok_lc then
+    if (name == nil or name == "") and modified == false and linecount <= 1 then
+      pcall(vim.api.nvim_buf_set_option, buf, "bufhidden", "wipe")
+    end
+  end
+end
+
 ---Display existing Claude Code terminal in new tab
 ---@return number original_tab The original tab number
 ---@return number? terminal_win Terminal window in new tab
@@ -211,6 +226,7 @@ local function display_terminal_in_new_tab()
   local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
   if not terminal_ok then
     vim.cmd("tabnew")
+    mark_tabnew_buffer_ephemeral()
     local new_tab = vim.api.nvim_get_current_tabpage()
     return original_tab, nil, false, new_tab
   end
@@ -218,6 +234,7 @@ local function display_terminal_in_new_tab()
   local terminal_bufnr = terminal_module.get_active_terminal_bufnr()
   if not terminal_bufnr or not vim.api.nvim_buf_is_valid(terminal_bufnr) then
     vim.cmd("tabnew")
+    mark_tabnew_buffer_ephemeral()
     local new_tab = vim.api.nvim_get_current_tabpage()
     return original_tab, nil, false, new_tab
   end
@@ -232,21 +249,8 @@ local function display_terminal_in_new_tab()
   end
 
   vim.cmd("tabnew")
+  mark_tabnew_buffer_ephemeral()
   local new_tab = vim.api.nvim_get_current_tabpage()
-
-  -- Mark the initial, unnamed buffer in the new tab as ephemeral to avoid leaks
-  -- When this buffer gets hidden (replaced or tab closed), wipe it automatically.
-  local initial_buf = vim.api.nvim_get_current_buf()
-  local name_ok, initial_name = pcall(vim.api.nvim_buf_get_name, initial_buf)
-  local mod_ok, initial_modified = pcall(vim.api.nvim_buf_get_option, initial_buf, "modified")
-  local linecount_ok, initial_linecount = pcall(function()
-    return vim.api.nvim_buf_line_count(initial_buf)
-  end)
-  if name_ok and mod_ok and linecount_ok then
-    if (initial_name == nil or initial_name == "") and initial_modified == false and initial_linecount <= 1 then
-      pcall(vim.api.nvim_buf_set_option, initial_buf, "bufhidden", "wipe")
-    end
-  end
 
   local terminal_config = config.terminal or {}
   local split_side = terminal_config.split_side or "right"
