@@ -557,6 +557,17 @@ function M.get_active_terminal_bufnr()
   return get_provider().get_active_bufnr()
 end
 
+---Reposition the terminal window with new opts, keeping the process alive.
+---@param opts_override table? Overrides (e.g. snacks_win_opts with new position)
+function M.reposition(opts_override)
+  local effective_config = build_config(opts_override)
+  local cmd_string, claude_env_table = get_claude_command_and_env()
+  local provider = get_provider()
+  if type(provider.reposition) == "function" then
+    provider.reposition(cmd_string, claude_env_table, effective_config)
+  end
+end
+
 ---Gets the managed terminal instance for testing purposes.
 -- NOTE: This function is intended for use in tests to inspect internal state.
 -- The underscore prefix indicates it's not part of the public API for regular use.

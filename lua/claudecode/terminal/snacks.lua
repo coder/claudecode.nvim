@@ -266,6 +266,25 @@ function M.is_available()
   return is_available()
 end
 
+---Reposition the terminal window using new config, keeping the terminal process alive.
+---Closes the current window (not the buffer), then reopens with new position/opts.
+---@param cmd_string string
+---@param env_table table
+---@param config table
+function M.reposition(cmd_string, env_table, config)
+  if not is_available() or not terminal or not terminal:buf_valid() then
+    return
+  end
+  local buf = terminal.buf
+  terminal:close({ buf = false })
+  local opts = build_opts(config, env_table, true)
+  opts.win.buf = buf
+  local new_term = Snacks.win(opts.win)
+  if new_term and new_term:buf_valid() then
+    terminal = new_term
+  end
+end
+
 ---For testing purposes
 ---@return table? terminal The terminal instance, or nil
 function M._get_terminal_for_test()
