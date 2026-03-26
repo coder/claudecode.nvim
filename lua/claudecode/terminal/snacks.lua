@@ -98,6 +98,7 @@ function M.open(cmd_string, env_table, config, focus)
     if not terminal.win or not vim.api.nvim_win_is_valid(terminal.win) then
       -- Terminal is hidden, show it using snacks toggle
       terminal:toggle()
+      vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalOpened", modeline = false })
       if focus then
         terminal:focus()
         local term_buf_id = terminal.buf
@@ -132,6 +133,7 @@ function M.open(cmd_string, env_table, config, focus)
   if term_instance and term_instance:buf_valid() then
     setup_terminal_events(term_instance, config)
     terminal = term_instance
+    vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalOpened", modeline = false })
   else
     terminal = nil
     local logger = require("claudecode.logger")
@@ -186,10 +188,12 @@ function M.simple_toggle(cmd_string, env_table, config)
     -- Terminal is visible, hide it
     logger.debug("terminal", "Simple toggle: hiding visible terminal")
     terminal:toggle()
+    vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalHidden", modeline = false })
   elseif terminal and terminal:buf_valid() and not terminal:win_valid() then
     -- Terminal exists but not visible, show it
     logger.debug("terminal", "Simple toggle: showing hidden terminal")
     terminal:toggle()
+    vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalOpened", modeline = false })
   else
     -- No terminal exists, create new one
     logger.debug("terminal", "Simple toggle: creating new terminal")
@@ -213,6 +217,7 @@ function M.focus_toggle(cmd_string, env_table, config)
   if terminal and terminal:buf_valid() and not terminal:win_valid() then
     logger.debug("terminal", "Focus toggle: showing hidden terminal")
     terminal:toggle()
+    vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalOpened", modeline = false })
   -- Terminal exists, is valid, and is visible
   elseif terminal and terminal:buf_valid() and terminal:win_valid() then
     local claude_term_neovim_win_id = terminal.win
@@ -222,6 +227,7 @@ function M.focus_toggle(cmd_string, env_table, config)
     if claude_term_neovim_win_id == current_neovim_win_id then
       logger.debug("terminal", "Focus toggle: hiding terminal (currently focused)")
       terminal:toggle()
+      vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalHidden", modeline = false })
     -- you're NOT in it
     else
       logger.debug("terminal", "Focus toggle: focusing terminal")

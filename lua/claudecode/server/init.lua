@@ -65,6 +65,9 @@ function M.start(config, auth_token)
           main_module.process_mention_queue(true)
         end)
       end
+      vim.schedule(function()
+        vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeConnected", modeline = false })
+      end)
     end,
     on_disconnect = function(client, code, reason)
       logger.debug(
@@ -76,6 +79,9 @@ function M.start(config, auth_token)
         ", reason:",
         (reason or "N/A") .. ")"
       )
+      vim.schedule(function()
+        vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeDisconnected", modeline = false })
+      end)
     end,
     on_error = function(error_msg)
       logger.error("server", "WebSocket server error:", error_msg)
