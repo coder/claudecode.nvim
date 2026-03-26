@@ -858,6 +858,11 @@ local function register_diff_autocmds(tab_name, new_buffer)
     buffer = new_buffer,
     callback = function()
       M._resolve_diff_as_saved(tab_name, new_buffer)
+      -- Explicitly turn off diff mode before Neovim does its post-write redraw.
+      -- This prevents a crash (exit code 139) when render-markdown.nvim is installed
+      -- and the diff involves a new file. Without this, the post-callback redraw
+      -- triggers render-markdown on a buffer still in diff mode, causing a segfault.
+      pcall(vim.cmd, "diffoff")
       -- Prevent actual file write since we're handling it through MCP
       return true
     end,
