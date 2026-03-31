@@ -278,17 +278,20 @@ local function display_terminal_in_new_tab()
   apply_window_options(terminal_win, terminal_options)
 
   -- Set up autocmd to enter terminal mode when focusing this terminal window
-  vim.api.nvim_create_autocmd("BufEnter", {
-    buffer = terminal_bufnr,
-    group = get_autocmd_group(),
-    callback = function()
-      -- Only enter insert mode if we're in a terminal buffer and in normal mode
-      if vim.bo.buftype == "terminal" and vim.fn.mode() == "n" then
-        vim.cmd("startinsert")
-      end
-    end,
-    desc = "Auto-enter terminal mode when focusing Claude Code terminal",
-  })
+  local terminal_auto_insert = not config or not config.terminal or config.terminal.auto_insert ~= false
+  if terminal_auto_insert then
+    vim.api.nvim_create_autocmd("BufEnter", {
+      buffer = terminal_bufnr,
+      group = get_autocmd_group(),
+      callback = function()
+        -- Only enter insert mode if we're in a terminal buffer and in normal mode
+        if vim.bo.buftype == "terminal" and vim.fn.mode() == "n" then
+          vim.cmd("startinsert")
+        end
+      end,
+      desc = "Auto-enter terminal mode when focusing Claude Code terminal",
+    })
+  end
 
   local total_width = vim.o.columns
   local terminal_width = math.floor(total_width * split_width)
@@ -596,17 +599,22 @@ local function setup_new_buffer(
   vim.b[new_buf].claudecode_diff_target_win = target_win_for_meta
 
   if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+    local auto_insert = not config.terminal or config.terminal.auto_insert ~= false
     vim.schedule(function()
       if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
         vim.api.nvim_set_current_win(terminal_win_in_new_tab)
-        vim.cmd("startinsert")
+        if auto_insert then
+          vim.cmd("startinsert")
+        end
         return
       end
 
       local terminal_win = find_claudecode_terminal_window()
       if terminal_win then
         vim.api.nvim_set_current_win(terminal_win)
-        vim.cmd("startinsert")
+        if auto_insert then
+          vim.cmd("startinsert")
+        end
       end
     end)
   end

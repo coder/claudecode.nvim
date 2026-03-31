@@ -420,6 +420,28 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       )
     end)
 
+    it("should store valid auto_insert setting", function()
+      terminal_wrapper.setup({ auto_insert = false })
+      terminal_wrapper.open()
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal(false, config_arg.auto_insert)
+    end)
+
+    it("should default auto_insert to true", function()
+      terminal_wrapper.setup({})
+      terminal_wrapper.open()
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal(true, config_arg.auto_insert)
+    end)
+
+    it("should ignore invalid auto_insert and use default", function()
+      terminal_wrapper.setup({ auto_insert = "invalid" })
+      terminal_wrapper.open()
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal(true, config_arg.auto_insert)
+      vim.notify:was_called_with(spy.matching.string.match("Invalid value for auto_insert"), vim.log.levels.WARN)
+    end)
+
     it("should use defaults if user_term_config is not a table and notify", function()
       terminal_wrapper.setup("not_a_table")
       terminal_wrapper.open()

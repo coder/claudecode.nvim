@@ -48,11 +48,12 @@ end
 ---@return snacks.terminal.Opts opts Snacks terminal options with start_insert/auto_insert controlled by focus parameter
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
+  local should_insert = focus and config.auto_insert ~= false
   return {
     env = env_table,
     cwd = config.cwd,
-    start_insert = focus,
-    auto_insert = focus,
+    start_insert = should_insert,
+    auto_insert = should_insert,
     auto_close = false,
     win = vim.tbl_deep_extend("force", {
       position = config.split_side,
@@ -100,12 +101,14 @@ function M.open(cmd_string, env_table, config, focus)
       terminal:toggle()
       if focus then
         terminal:focus()
-        local term_buf_id = terminal.buf
-        if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
-          if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
-            vim.api.nvim_win_call(terminal.win, function()
-              vim.cmd("startinsert")
-            end)
+        if config.auto_insert ~= false then
+          local term_buf_id = terminal.buf
+          if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
+            if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+              vim.api.nvim_win_call(terminal.win, function()
+                vim.cmd("startinsert")
+              end)
+            end
           end
         end
       end
@@ -113,13 +116,15 @@ function M.open(cmd_string, env_table, config, focus)
       -- Terminal is already visible
       if focus then
         terminal:focus()
-        local term_buf_id = terminal.buf
-        if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
-          -- Check if window is valid before calling nvim_win_call
-          if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
-            vim.api.nvim_win_call(terminal.win, function()
-              vim.cmd("startinsert")
-            end)
+        if config.auto_insert ~= false then
+          local term_buf_id = terminal.buf
+          if term_buf_id and vim.api.nvim_buf_get_option(term_buf_id, "buftype") == "terminal" then
+            -- Check if window is valid before calling nvim_win_call
+            if terminal.win and vim.api.nvim_win_is_valid(terminal.win) then
+              vim.api.nvim_win_call(terminal.win, function()
+                vim.cmd("startinsert")
+              end)
+            end
           end
         end
       end
@@ -226,11 +231,13 @@ function M.focus_toggle(cmd_string, env_table, config)
     else
       logger.debug("terminal", "Focus toggle: focusing terminal")
       vim.api.nvim_set_current_win(claude_term_neovim_win_id)
-      if terminal.buf and vim.api.nvim_buf_is_valid(terminal.buf) then
-        if vim.api.nvim_buf_get_option(terminal.buf, "buftype") == "terminal" then
-          vim.api.nvim_win_call(claude_term_neovim_win_id, function()
-            vim.cmd("startinsert")
-          end)
+      if config.auto_insert ~= false then
+        if terminal.buf and vim.api.nvim_buf_is_valid(terminal.buf) then
+          if vim.api.nvim_buf_get_option(terminal.buf, "buftype") == "terminal" then
+            vim.api.nvim_win_call(claude_term_neovim_win_id, function()
+              vim.cmd("startinsert")
+            end)
+          end
         end
       end
     end
