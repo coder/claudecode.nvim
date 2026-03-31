@@ -48,11 +48,12 @@ end
 ---@return snacks.terminal.Opts opts Snacks terminal options with start_insert/auto_insert controlled by focus parameter
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
+  local should_insert = focus and config.auto_insert ~= false
   return {
     env = env_table,
     cwd = config.cwd,
-    start_insert = focus,
-    auto_insert = focus,
+    start_insert = should_insert,
+    auto_insert = should_insert,
     auto_close = false,
     win = vim.tbl_deep_extend("force", {
       position = config.split_side,
@@ -144,6 +145,15 @@ local function start_insert_if_terminal(term)
     vim.api.nvim_win_call(term.win, function()
       vim.cmd("startinsert")
     end)
+  end
+end
+
+-- Enter insert mode unless the user opted out via terminal.auto_insert = false
+-- (issue #232). When disabled, re-focusing the terminal window keeps Normal mode
+-- and preserves the scroll position instead of jumping to the prompt.
+local function maybe_start_insert(term, config)
+  if not config or config.auto_insert ~= false then
+    start_insert_if_terminal(term)
   end
 end
 
@@ -248,7 +258,7 @@ local function cc_show(term, focus, config)
     set_backdrop_hidden(term, false)
     if focus then
       vim.api.nvim_set_current_win(win)
-      start_insert_if_terminal(term)
+      maybe_start_insert(term, config)
     end
     return true
   end
@@ -257,7 +267,7 @@ local function cc_show(term, focus, config)
   if cc_is_visible(term) then
     if focus then
       vim.api.nvim_set_current_win(term.win)
-      start_insert_if_terminal(term)
+      maybe_start_insert(term, config)
     end
     return true
   end
@@ -276,7 +286,7 @@ local function cc_show(term, focus, config)
     term._cc.orig_show(term)
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
-      start_insert_if_terminal(term)
+      maybe_start_insert(term, config)
     end
     return true
   end
@@ -306,7 +316,7 @@ local function cc_show(term, focus, config)
   term.closed = false
   reapply_snacks_window_state(term, new_win)
   if focus then
-    start_insert_if_terminal(term)
+    maybe_start_insert(term, config)
   elseif vim.api.nvim_win_is_valid(original_win) then
     vim.api.nvim_set_current_win(original_win)
   end
@@ -369,7 +379,7 @@ function M.open(cmd_string, env_table, config, focus)
   if terminal and terminal:buf_valid() then
     -- Reuse the existing terminal. Route through cc_show so a hidden terminal is
     -- restored without Snacks destroying+recreating the window (which would climb
-    -- Claude's cursor -- #240/#183).
+    -- Claude's cursor -- #240/#183). cc_show honors config.auto_insert (#232).
     cc_show(terminal, focus, config)
     return
   end
@@ -473,7 +483,7 @@ function M.focus_toggle(cmd_string, env_table, config)
       -- Visible but not focused -> focus it.
       logger.debug("terminal", "Focus toggle: focusing terminal")
       vim.api.nvim_set_current_win(terminal.win)
-      start_insert_if_terminal(terminal)
+      maybe_start_insert(terminal, config)
     end
   else
     logger.debug("terminal", "Focus toggle: creating new terminal")

@@ -54,7 +54,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     if focus then
       -- Focus existing terminal: switch to terminal window and enter insert mode
       vim.api.nvim_set_current_win(winid)
-      vim.cmd("startinsert")
+      if effective_config.auto_insert ~= false then
+        vim.cmd("startinsert")
+      end
     end
     -- If focus=false, preserve user context by staying in current window
     return true
@@ -135,7 +137,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if effective_config.auto_insert ~= false then
+      vim.cmd("startinsert")
+    end
   else
     -- Preserve user context: return to the window they were in before terminal creation
     vim.api.nvim_set_current_win(original_win)
@@ -162,7 +166,9 @@ end
 local function focus_terminal()
   if is_valid() then
     vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if config.auto_insert ~= false then
+      vim.cmd("startinsert")
+    end
   end
 end
 
@@ -235,7 +241,9 @@ local function show_hidden_terminal(effective_config, focus)
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if effective_config.auto_insert ~= false then
+      vim.cmd("startinsert")
+    end
   else
     -- Preserve user context: return to the window they were in before showing terminal
     vim.api.nvim_set_current_win(original_win)
