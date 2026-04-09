@@ -69,10 +69,11 @@ end
 ---Create the lock file for a specified WebSocket port
 ---@param port number The port number for the WebSocket server
 ---@param auth_token? string Optional pre-generated auth token (generates new one if not provided)
+---@param opts? {ide_name_show_cwd?: boolean} Optional settings
 ---@return boolean success Whether the operation was successful
 ---@return string result_or_error The lock file path if successful, or error message if failed
 ---@return string? auth_token The authentication token if successful
-function M.create(port, auth_token)
+function M.create(port, auth_token, opts)
   if not port or type(port) ~= "number" then
     return false, "Invalid port number"
   end
@@ -115,7 +116,9 @@ function M.create(port, auth_token)
   local lock_content = {
     pid = vim.fn.getpid(),
     workspaceFolders = workspace_folders,
-    ideName = "Neovim",
+    ideName = (opts and opts.ide_name_show_cwd)
+      and ("Neovim (" .. vim.fn.fnamemodify(vim.fn.getcwd(), ":t") .. ")")
+      or "Neovim",
     transport = "ws",
     authToken = auth_token,
   }
@@ -178,10 +181,11 @@ end
 
 ---Update the lock file for the given port
 ---@param port number The port number of the WebSocket server
+---@param opts? {ide_name_show_cwd?: boolean} Optional settings
 ---@return boolean success Whether the operation was successful
 ---@return string result_or_error The lock file path if successful, or error message if failed
 ---@return string? auth_token The authentication token if successful
-function M.update(port)
+function M.update(port, opts)
   if not port or type(port) ~= "number" then
     return false, "Invalid port number"
   end
@@ -194,7 +198,7 @@ function M.update(port)
     end
   end
 
-  return M.create(port)
+  return M.create(port, nil, opts)
 end
 
 ---Read the authentication token from a lock file

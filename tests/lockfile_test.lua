@@ -397,4 +397,66 @@ describe("Lockfile Module", function()
       assert(error:find("Lock file does not exist"))
     end)
   end)
+
+  describe("ide_name_show_cwd option", function()
+    it("should use plain 'Neovim' by default", function()
+      local port = 12350
+      local success, lock_path = lockfile.create(port)
+      assert(success == true)
+
+      local file = io.open(lock_path, "r")
+      local content = file:read("*all")
+      file:close()
+      assert(content:find('"Neovim"'))
+      assert(not content:find("Neovim %("))
+
+      lockfile.remove(port)
+    end)
+
+    it("should use plain 'Neovim' when ide_name_show_cwd is false", function()
+      local port = 12351
+      local success, lock_path = lockfile.create(port, nil, { ide_name_show_cwd = false })
+      assert(success == true)
+
+      local file = io.open(lock_path, "r")
+      local content = file:read("*all")
+      file:close()
+      assert(content:find('"Neovim"'))
+      assert(not content:find("Neovim %("))
+
+      lockfile.remove(port)
+    end)
+
+    it("should append cwd basename when ide_name_show_cwd is true", function()
+      vim.fn.getcwd = function()
+        return "/home/user/my-project"
+      end
+      -- Mock fnamemodify to return the tail component
+      vim.fn.fnamemodify = function(_, modifier)
+        if modifier == ":t" then
+          return "my-project"
+        end
+        return _
+      end
+
+      local port = 12352
+      local success, lock_path = lockfile.create(port, nil, { ide_name_show_cwd = true })
+      assert(success == true)
+
+      local file = io.open(lock_path, "r")
+      local content = file:read("*all")
+      file:close()
+      assert(content:find("Neovim %(my%-project%)"))
+
+      lockfile.remove(port)
+
+      -- Restore mocks
+      vim.fn.getcwd = function()
+        return "/mock/cwd"
+      end
+      vim.fn.fnamemodify = function(fname, _)
+        return fname
+      end
+    end)
+  end)
 end)
