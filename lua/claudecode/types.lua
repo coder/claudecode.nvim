@@ -87,6 +87,7 @@
 ---@field cwd string|nil                 -- static working directory for Claude terminal
 ---@field git_repo_cwd boolean|nil      -- use git root of current file/cwd as working directory
 ---@field cwd_provider? ClaudeCodeCwdProvider -- custom function to compute working directory
+---@field split_navigation boolean? -- enable Ctrl+h/j/k/l to navigate splits from terminal mode
 
 -- Port range configuration
 ---@class ClaudeCodePortRange

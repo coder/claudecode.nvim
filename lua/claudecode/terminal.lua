@@ -111,6 +111,8 @@ local defaults = {
   cwd = nil, -- static cwd override
   git_repo_cwd = false, -- resolve to git root when spawning
   cwd_provider = nil, -- function(ctx) -> cwd string
+  -- Split navigation: Ctrl+h/j/k/l to move between splits from terminal mode
+  split_navigation = true,
   -- Terminal keymaps
   keymaps = {
     exit_terminal = "<Esc><Esc>", -- Triple-ESC to exit terminal mode (set to false to disable)
@@ -258,6 +260,42 @@ function M.setup_terminal_keymaps(bufnr, config)
     vim.keymap.set("t", exit_key, "<C-\\><C-n>", {
       buffer = bufnr,
       desc = "Exit terminal mode",
+    })
+  end
+
+  -- Split navigation: Ctrl+h/j/k/l to move between splits from terminal mode
+  if config.split_navigation ~= false then
+    local saved_mode = {} -- per-buffer saved mode
+
+    local directions = { h = "left", j = "below", k = "above", l = "right" }
+    for key, desc in pairs(directions) do
+      vim.keymap.set("t", "<C-" .. key .. ">", function()
+        saved_mode[bufnr] = "t"
+        vim.cmd("stopinsert")
+        vim.cmd("wincmd " .. key)
+      end, {
+        buffer = bufnr,
+        desc = "Move to " .. desc .. " split",
+      })
+      vim.keymap.set("n", "<C-" .. key .. ">", function()
+        saved_mode[bufnr] = "n"
+        vim.cmd("wincmd " .. key)
+      end, {
+        buffer = bufnr,
+        desc = "Move to " .. desc .. " split",
+      })
+    end
+
+    -- Restore mode when re-entering the Claude terminal buffer
+    vim.api.nvim_create_autocmd("BufEnter", {
+      buffer = bufnr,
+      callback = function()
+        local mode = saved_mode[bufnr]
+        if mode == "t" then
+          vim.cmd("startinsert")
+        end
+        -- "n" needs no action, it's the default
+      end,
     })
   end
 end
@@ -893,6 +931,15 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify(
           "claudecode.terminal.setup: Invalid value for tabs: " .. tostring(v) .. ". Must be a table.",
+          vim.log.levels.WARN
+        )
+      end
+    elseif k == "split_navigation" then
+      if type(v) == "boolean" then
+        defaults.split_navigation = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for split_navigation: " .. tostring(v) .. ". Must be a boolean.",
           vim.log.levels.WARN
         )
       end
