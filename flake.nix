@@ -3,11 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Separate nixpkgs pin used only to build reviewfixer. The main pin is
+    # held back to avoid CI/formatter churn, but reviewfixer requires
+    # Go >= 1.26.2. Remove `nixpkgs-reviewfixer` (and `pkgsReviewfixer`
+    # below) once the main pin includes Go >= 1.26.2
+    # (check: `nix eval nixpkgs#go.version`).
+    #
+    # Note: `nix flake update` (no `--select`) bumps both inputs to the
+    # same rev, silently collapsing this version gap. Use
+    # `nix flake update nixpkgs-reviewfixer` to update this input alone.
+    nixpkgs-reviewfixer.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
-  outputs = { self, nixpkgs, flake-utils, treefmt-nix, ... }:
+  outputs = { self, nixpkgs, nixpkgs-reviewfixer, flake-utils, treefmt-nix, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -16,6 +26,33 @@
           config.allowUnfreePredicate = pkg: builtins.elem (pkgs.lib.getName pkg) [
             "claude-code"
           ];
+        };
+
+        pkgsReviewfixer = import nixpkgs-reviewfixer { inherit system; };
+
+        reviewfixer = pkgsReviewfixer.buildGoModule rec {
+          pname = "reviewfixer";
+          version = "0.1.0-beta.0";
+
+          src = pkgsReviewfixer.fetchFromGitHub {
+            owner = "ThomasK33";
+            repo = "reviewfixer";
+            rev = "v${version}";
+            hash = "sha256-hrnSm7ttpyUAtkre9micI2n9smKgzX5AmUcj3bJQjbU=";
+          };
+
+          vendorHash = "sha256-yIWbmHFxmOeXBm5TMRsupy33DC6VAUYvZNSz5wa1yxA=";
+
+          # Upstream tests shell out to `git`, which isn't available in the
+          # Nix build sandbox. Skip the test phase here.
+          doCheck = false;
+
+          meta = with pkgsReviewfixer.lib; {
+            description = "Local harness for working through review feedback on Graphite-managed stacked PRs";
+            homepage = "https://github.com/ThomasK33/reviewfixer";
+            license = licenses.mit;
+            mainProgram = "reviewfixer";
+          };
         };
 
         treefmt = treefmt-nix.lib.evalModule pkgs {
@@ -56,6 +93,7 @@
           websocat
           jq
           fzf
+          reviewfixer
           # claude-code
         ];
       in
