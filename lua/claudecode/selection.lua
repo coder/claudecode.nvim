@@ -5,6 +5,8 @@ local M = {}
 local logger = require("claudecode.logger")
 local terminal = require("claudecode.terminal")
 
+local uv = vim.uv or vim.loop
+
 M.state = {
   latest_selection = nil,
   tracking_enabled = false,
@@ -32,7 +34,8 @@ function M.enable(server, visual_demotion_delay_ms)
 end
 
 ---Disables selection tracking.
----Clears autocommands, resets internal state, and stops any active debounce timers.
+---Clears autocommands, resets internal state, and stops any active debounce or
+---demotion timers.
 function M.disable()
   if not M.state.tracking_enabled then
     return
@@ -43,12 +46,41 @@ function M.disable()
   M._clear_autocommands()
 
   M.state.latest_selection = nil
+  M.state.last_active_visual_selection = nil
   M.server = nil
 
-  if M.state.debounce_timer then
-    vim.loop.timer_stop(M.state.debounce_timer)
-    M.state.debounce_timer = nil
+  M._cancel_debounce_timer()
+  M._cancel_demotion_timer()
+end
+
+---Cancels and closes the current debounce timer, if any.
+---@local
+function M._cancel_debounce_timer()
+  local timer = M.state.debounce_timer
+  if not timer then
+    return
   end
+
+  -- Clear state before stopping/closing so any already-scheduled callback is a no-op.
+  M.state.debounce_timer = nil
+
+  timer:stop()
+  timer:close()
+end
+
+---Cancels and closes the current demotion timer, if any.
+---@local
+function M._cancel_demotion_timer()
+  local timer = M.state.demotion_timer
+  if not timer then
+    return
+  end
+
+  -- Clear state before stopping/closing so any already-scheduled callback is a no-op.
+  M.state.demotion_timer = nil
+
+  timer:stop()
+  timer:close()
 end
 
 ---Creates autocommands for tracking selections.
@@ -107,14 +139,36 @@ end
 ---Ensures that `update_selection` is not called too frequently by deferring
 ---its execution.
 function M.debounce_update()
-  if M.state.debounce_timer then
-    vim.loop.timer_stop(M.state.debounce_timer)
-  end
+  M._cancel_debounce_timer()
 
-  M.state.debounce_timer = vim.defer_fn(function()
-    M.update_selection()
-    M.state.debounce_timer = nil
-  end, M.state.debounce_ms)
+  assert(type(M.state.debounce_ms) == "number", "Expected debounce_ms to be a number")
+
+  local timer = uv.new_timer()
+  assert(timer, "Expected uv.new_timer() to return a timer handle")
+  assert(timer.start, "Expected debounce timer to have :start()")
+  assert(timer.stop, "Expected debounce timer to have :stop()")
+  assert(timer.close, "Expected debounce timer to have :close()")
+
+  M.state.debounce_timer = timer
+
+  timer:start(
+    M.state.debounce_ms,
+    0, -- 0 repeat = one-shot
+    vim.schedule_wrap(function()
+      -- Ignore stale timers (e.g., cancelled and replaced before callback runs)
+      if M.state.debounce_timer ~= timer then
+        return
+      end
+
+      -- Clear state so _cancel_debounce_timer() is a no-op if called after firing.
+      M.state.debounce_timer = nil
+
+      timer:stop()
+      timer:close()
+
+      M.update_selection()
+    end)
+  )
 end
 
 ---Updates the current selection state.
@@ -131,11 +185,7 @@ function M.update_selection()
   -- If the buffer name starts with "term://" and contains "claude", do not update selection
   if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
     -- Optionally, cancel demotion timer like for the terminal
-    if M.state.demotion_timer then
-      M.state.demotion_timer:stop()
-      M.state.demotion_timer:close()
-      M.state.demotion_timer = nil
-    end
+    M._cancel_demotion_timer()
     return
   end
 
@@ -144,11 +194,7 @@ function M.update_selection()
     local claude_term_bufnr = terminal.get_active_terminal_bufnr()
     if claude_term_bufnr and current_buf == claude_term_bufnr then
       -- Cancel any pending demotion if we switch to the Claude terminal
-      if M.state.demotion_timer then
-        M.state.demotion_timer:stop()
-        M.state.demotion_timer:close()
-        M.state.demotion_timer = nil
-      end
+      M._cancel_demotion_timer()
       return
     end
   end
@@ -159,11 +205,7 @@ function M.update_selection()
 
   if current_mode == "v" or current_mode == "V" or current_mode == "\022" then
     -- If a new visual selection is made, cancel any pending demotion
-    if M.state.demotion_timer then
-      M.state.demotion_timer:stop()
-      M.state.demotion_timer:close()
-      M.state.demotion_timer = nil
-    end
+    M._cancel_demotion_timer()
 
     current_selection = M.get_visual_selection()
 
@@ -199,21 +241,25 @@ function M.update_selection()
       -- The 'current_selection' for comparison should also be this visual one.
       current_selection = M.state.latest_selection
 
-      if M.state.demotion_timer then -- Should not happen due to elseif, but as safeguard
-        M.state.demotion_timer:stop()
-        M.state.demotion_timer:close()
-      end
+      local timer = uv.new_timer()
+      assert(timer, "Expected uv.new_timer() to return a timer handle")
 
-      M.state.demotion_timer = vim.loop.new_timer()
-      M.state.demotion_timer:start(
+      M.state.demotion_timer = timer
+      timer:start(
         M.state.visual_demotion_delay_ms,
         0, -- 0 repeat = one-shot
         vim.schedule_wrap(function()
-          if M.state.demotion_timer then -- Check if it wasn't cancelled right before firing
-            M.state.demotion_timer:stop()
-            M.state.demotion_timer:close()
-            M.state.demotion_timer = nil
+          -- Ignore stale timers (e.g., cancelled and replaced before callback runs)
+          if M.state.demotion_timer ~= timer then
+            return
           end
+
+          -- Clear state so _cancel_demotion_timer() is a no-op if called after firing.
+          M.state.demotion_timer = nil
+
+          timer:stop()
+          timer:close()
+
           M.handle_selection_demotion(current_buf) -- Pass buffer at time of scheduling
         end)
       )
@@ -248,6 +294,10 @@ end
 function M.handle_selection_demotion(original_bufnr_when_scheduled)
   -- Timer object is already stopped and cleared by its own callback wrapper or cancellation points.
   -- M.state.demotion_timer should be nil here if it fired normally or was cancelled.
+
+  if not M.state.tracking_enabled then
+    return
+  end
 
   local current_buf = vim.api.nvim_get_current_buf()
   local claude_term_bufnr = terminal.get_active_terminal_bufnr()

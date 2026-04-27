@@ -1,4 +1,6 @@
 if not _G.vim then
+  local next_timer_id = 0
+
   _G.vim = { ---@type vim_global_api
     schedule_wrap = function(fn)
       return fn
@@ -192,8 +194,44 @@ if not _G.vim then
     end,
 
     loop = {
-      timer_stop = function(_timer) -- Prefix unused param with underscore
-        return true
+      now = function()
+        return 0
+      end,
+      new_timer = function()
+        next_timer_id = next_timer_id + 1
+
+        local timer = {
+          _id = next_timer_id,
+          _start_calls = 0,
+          _stop_calls = 0,
+          _close_calls = 0,
+          _callback = nil,
+        }
+
+        function timer:start(timeout, repeat_interval, callback)
+          self._start_calls = self._start_calls + 1
+          self._timeout = timeout
+          self._repeat_interval = repeat_interval
+          self._callback = callback
+          return true
+        end
+
+        function timer:stop()
+          self._stop_calls = self._stop_calls + 1
+          return true
+        end
+
+        function timer:close()
+          self._close_calls = self._close_calls + 1
+          return true
+        end
+
+        function timer:fire()
+          assert(self._callback, "Timer has no callback; did you call :start()?")
+          return self._callback()
+        end
+
+        return timer
       end,
     },
 
@@ -360,6 +398,192 @@ describe("Selection module", function()
     assert(selection.state.tracking_enabled == false)
     assert(selection.server == nil)
     assert(selection.state.latest_selection == nil)
+  end)
+
+  describe("debounce_update", function()
+    it("should cancel and close previous debounce timer when re-debouncing", function()
+      local update_calls = 0
+      local old_update_selection = selection.update_selection
+
+      selection.update_selection = function()
+        update_calls = update_calls + 1
+      end
+
+      selection.debounce_update()
+      local timer1 = selection.state.debounce_timer
+      assert(timer1 ~= nil)
+
+      selection.debounce_update()
+      local timer2 = selection.state.debounce_timer
+      assert(timer2 ~= nil)
+      assert.are_not.equal(timer1, timer2)
+
+      assert.are.equal(1, timer1._stop_calls)
+      assert.are.equal(1, timer1._close_calls)
+
+      -- Clean up the active timer
+      timer2:fire()
+      assert.are.equal(1, update_calls)
+
+      selection.update_selection = old_update_selection
+    end)
+
+    it("should ignore stale debounce timer callbacks", function()
+      local update_calls = 0
+      local old_update_selection = selection.update_selection
+
+      selection.update_selection = function()
+        update_calls = update_calls + 1
+      end
+
+      selection.debounce_update()
+      local timer1 = selection.state.debounce_timer
+      assert(timer1 ~= nil)
+
+      selection.debounce_update()
+      local timer2 = selection.state.debounce_timer
+      assert(timer2 ~= nil)
+
+      -- A callback from a cancelled timer should be ignored.
+      timer1:fire()
+      assert.are.equal(0, update_calls)
+      -- Stale callback must not double-stop or double-close the already-cancelled timer.
+      assert.are.equal(1, timer1._stop_calls)
+      assert.are.equal(1, timer1._close_calls)
+
+      timer2:fire()
+      assert.are.equal(1, update_calls)
+      assert(selection.state.debounce_timer == nil)
+      assert.are.equal(1, timer2._stop_calls)
+      assert.are.equal(1, timer2._close_calls)
+
+      selection.update_selection = old_update_selection
+    end)
+
+    it("disable() should cancel an active debounce timer", function()
+      selection.enable(mock_server)
+      selection.debounce_update()
+      local timer = selection.state.debounce_timer
+      assert(timer ~= nil)
+
+      selection.disable()
+      assert(selection.state.debounce_timer == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+    end)
+  end)
+
+  describe("demotion_timer", function()
+    local function install_terminal_stub()
+      local terminal_module = package.loaded["claudecode.terminal"]
+      local original_get = terminal_module and terminal_module.get_active_terminal_bufnr or nil
+      if not terminal_module then
+        terminal_module = {}
+        package.loaded["claudecode.terminal"] = terminal_module
+      end
+      terminal_module.get_active_terminal_bufnr = function()
+        return nil
+      end
+      return original_get, terminal_module
+    end
+
+    it("disable() should cancel an active demotion timer and ignore stale callbacks", function()
+      local original_get, terminal_module = install_terminal_stub()
+
+      selection.enable(mock_server)
+
+      -- Seed a non-empty visual selection so the demotion path triggers on normal-mode entry.
+      selection.state.last_active_visual_selection = {
+        bufnr = 1,
+        selection_data = {
+          text = "x",
+          filePath = "/path/to/test.lua",
+          fileUrl = "file:///path/to/test.lua",
+          selection = {
+            start = { line = 0, character = 0 },
+            ["end"] = { line = 0, character = 1 },
+            isEmpty = false,
+          },
+        },
+        timestamp = 0,
+      }
+      selection.state.latest_selection = selection.state.last_active_visual_selection.selection_data
+
+      _G.vim.test.set_mode("n")
+      selection.update_selection()
+
+      local timer = selection.state.demotion_timer
+      assert(timer ~= nil)
+
+      selection.disable()
+
+      assert(selection.state.demotion_timer == nil)
+      assert(selection.state.latest_selection == nil)
+      assert(selection.state.last_active_visual_selection == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+
+      -- A late-firing callback from the cancelled timer must not mutate state after teardown.
+      timer:fire()
+      assert(selection.state.latest_selection == nil)
+      assert(selection.state.demotion_timer == nil)
+      assert(selection.state.last_active_visual_selection == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+
+      terminal_module.get_active_terminal_bufnr = original_get
+    end)
+
+    it("should demote to cursor position when timer fires normally", function()
+      local original_get, terminal_module = install_terminal_stub()
+
+      selection.enable(mock_server)
+
+      local visual_selection = {
+        text = "x",
+        filePath = "/path/to/test.lua",
+        fileUrl = "file:///path/to/test.lua",
+        selection = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 0, character = 1 },
+          isEmpty = false,
+        },
+      }
+      selection.state.last_active_visual_selection = {
+        bufnr = 1,
+        selection_data = visual_selection,
+        timestamp = 0,
+      }
+      selection.state.latest_selection = visual_selection
+
+      _G.vim.test.set_mode("n")
+      _G.vim.test.set_cursor(0, 2, 3)
+      mock_server.last_broadcast = nil
+
+      selection.update_selection()
+
+      local timer = selection.state.demotion_timer
+      assert(timer ~= nil)
+
+      timer:fire()
+
+      assert(selection.state.demotion_timer == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+
+      local demoted = selection.state.latest_selection
+      assert(demoted ~= nil)
+      assert.are.equal("", demoted.text)
+      assert.are.equal(true, demoted.selection.isEmpty)
+      assert.are.equal(1, demoted.selection.start.line)
+      assert.are.equal(3, demoted.selection.start.character)
+      assert(selection.state.last_active_visual_selection == nil)
+      assert(mock_server.last_broadcast ~= nil)
+      assert.are.equal("selection_changed", mock_server.last_broadcast.event)
+
+      selection.disable()
+      terminal_module.get_active_terminal_bufnr = original_get
+    end)
   end)
 
   it("should get cursor position in normal mode", function()
