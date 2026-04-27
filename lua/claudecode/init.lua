@@ -471,7 +471,7 @@ function M.start(show_startup_notification)
 
   if M.state.config.track_selection then
     local selection = require("claudecode.selection")
-    selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms)
+    selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms, M.state.config.terminal_filter_pattern)
   end
 
   if show_startup_notification then
