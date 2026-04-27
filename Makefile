@@ -1,11 +1,11 @@
-.PHONY: check format test clean
+.PHONY: check format test test-cov clean help
 
 # Default target
 all: format check test
 
-# Detect if we are already inside a Nix shell
-ifeq (,$(IN_NIX_SHELL))
-NIX_PREFIX := nix develop .#ci -c
+# Detect if the required dev tools are already available; otherwise run via Nix.
+ifeq (,$(shell command -v busted >/dev/null 2>&1 && command -v luacheck >/dev/null 2>&1 && echo ok))
+NIX_PREFIX := nix develop .\#ci -c
 else
 NIX_PREFIX :=
 endif
@@ -21,15 +21,24 @@ check:
 format:
 	nix fmt
 
-# Run tests
+# Run tests (fast, no coverage)
 test:
-	@echo "Running all tests..."
-	@export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$$LUA_PATH"; \
-	TEST_FILES=$$(find tests -type f -name "*_test.lua" -o -name "*_spec.lua" | sort); \
-	echo "Found test files:"; \
-	echo "$$TEST_FILES"; \
+	@echo "Running all tests (no coverage)..."
+	@TEST_FILES=$$(find tests -type f \( -name "*_test.lua" -o -name "*_spec.lua" \) | sort); \
 	if [ -n "$$TEST_FILES" ]; then \
-		$(NIX_PREFIX) busted --coverage -v $$TEST_FILES; \
+		$(NIX_PREFIX) sh -c 'export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$$LUA_PATH"; busted -v "$$@"' -- $$TEST_FILES; \
+	else \
+		echo "No test files found"; \
+	fi
+
+# Run tests with coverage
+# (Generates luacov.stats.out and luacov.report.out)
+test-cov:
+	@echo "Running all tests with coverage..."
+	@TEST_FILES=$$(find tests -type f \( -name "*_test.lua" -o -name "*_spec.lua" \) | sort); \
+	if [ -n "$$TEST_FILES" ]; then \
+		$(NIX_PREFIX) sh -c 'export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$$LUA_PATH"; busted --coverage -v "$$@"' -- $$TEST_FILES; \
+		$(NIX_PREFIX) luacov; \
 	else \
 		echo "No test files found"; \
 	fi
@@ -38,13 +47,14 @@ test:
 clean:
 	@echo "Cleaning generated files..."
 	@rm -f luacov.report.out luacov.stats.out
-	@rm -f tests/lcov.info
+	@rm -f lcov.info tests/lcov.info
 
 # Print available commands
 help:
 	@echo "Available commands:"
-	@echo "  make check  - Check for syntax errors"
-	@echo "  make format - Format all files (uses nix fmt or stylua)"
-	@echo "  make test   - Run tests"
-	@echo "  make clean  - Clean generated files"
-	@echo "  make help   - Print this help message"
+	@echo "  make check     - Check for syntax errors"
+	@echo "  make format    - Format all files (uses nix fmt or stylua)"
+	@echo "  make test      - Run tests (fast, no coverage)"
+	@echo "  make test-cov  - Run tests with coverage (luacov)"
+	@echo "  make clean     - Clean generated files"
+	@echo "  make help      - Print this help message"

@@ -1,6 +1,5 @@
 ---@brief TCP server implementation using vim.loop
 local client_manager = require("claudecode.server.client")
-local utils = require("claudecode.server.utils")
 
 local M = {}
 
@@ -19,20 +18,38 @@ local M = {}
 ---@param max_port number Maximum port to try
 ---@return number|nil port Available port number, or nil if none found
 function M.find_available_port(min_port, max_port)
+  assert(type(min_port) == "number", "Expected min_port to be a number")
+  assert(type(max_port) == "number", "Expected max_port to be a number")
+
+  min_port = math.floor(min_port)
+  max_port = math.floor(max_port)
+
   if min_port > max_port then
-    return nil -- Or handle error appropriately
+    return nil
   end
 
-  local ports = {}
-  for i = min_port, max_port do
-    table.insert(ports, i)
+  local range_size = max_port - min_port + 1
+  assert(range_size >= 1, "Expected port range to be non-empty")
+
+  local start_offset = 0
+  if range_size > 1 then
+    -- Avoid `math.randomseed` here: it mutates global RNG state and is expensive
+    -- under coverage. We only need a pseudo-random starting point to avoid always
+    -- trying min_port first.
+    local uv = vim.loop
+    if uv and type(uv.hrtime) == "function" then
+      start_offset = tonumber(uv.hrtime() % range_size)
+    elseif uv and type(uv.now) == "function" then
+      start_offset = uv.now() % range_size
+    else
+      start_offset = os.time() % range_size
+    end
   end
 
-  -- Shuffle the ports
-  utils.shuffle_array(ports)
+  -- Try every port in the range exactly once, starting from a pseudo-random point.
+  for i = 0, range_size - 1 do
+    local port = min_port + ((start_offset + i) % range_size)
 
-  -- Try to bind to a port from the shuffled list
-  for _, port in ipairs(ports) do
     local test_server = vim.loop.new_tcp()
     if test_server then
       local success = test_server:bind("127.0.0.1", port)
@@ -42,7 +59,6 @@ function M.find_available_port(min_port, max_port)
         return port
       end
     end
-    -- Continue to next port if test_server creation failed or bind failed
   end
 
   return nil

@@ -3,6 +3,12 @@
 # Script to run integration tests individually to avoid plenary test_directory hanging
 # Each test file is run separately with test_file
 
+
+# Re-run the script inside the Nix dev shell once, to avoid per-file nix overhead.
+if [[ -z "${IN_NIX_SHELL:-}" ]]; then
+  echo "Entering nix develop .#ci environment..."
+  exec nix develop .#ci -c "$0" "$@"
+fi
 set -e
 
 echo "=== Running Integration Tests Individually ==="
@@ -27,7 +33,7 @@ run_test_file() {
   temp_output=$(mktemp)
 
   # Run the test with timeout
-  if timeout 30s nix develop .#ci -c nvim --headless -u tests/minimal_init.lua \
+  if timeout 30s nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
     2>&1 | tee "$temp_output"; then
     EXIT_CODE=0

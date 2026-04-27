@@ -710,17 +710,26 @@ local vim = {
 
   -- Additional missing vim functions
   wait = function(timeout, condition, interval, fast_only)
-    -- Optimized mock implementation for faster test execution
-    local start_time = os.clock()
-    interval = interval or 10 -- Reduced from 200ms to 10ms for faster polling
-    timeout = timeout or 1000
+    assert(timeout == nil or type(timeout) == "number", "Expected timeout to be a number")
+    if condition ~= nil then
+      assert(type(condition) == "function", "Expected condition to be a function")
+    end
 
-    while (os.clock() - start_time) * 1000 < timeout do
+    timeout = timeout or 1000
+    interval = interval or 10
+
+    -- In this unit test environment, `vim.schedule`/`vim.defer_fn` execute
+    -- synchronously. Avoid spawning a shell via `os.execute("sleep ...")` here;
+    -- it is extremely slow and also breaks `os.clock()`-based timing.
+    if condition and condition() then
+      return true
+    end
+
+    local max_polls = math.max(1, math.floor(timeout / math.max(interval, 1)))
+    for _ = 1, max_polls do
       if condition and condition() then
         return true
       end
-      -- Add a small sleep to prevent busy-waiting and reduce CPU usage
-      os.execute("sleep 0.001") -- 1ms sleep
     end
 
     return false

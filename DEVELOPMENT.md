@@ -81,8 +81,11 @@ claudecode.nvim/
 Run tests using:
 
 ```bash
-# Run all tests
+# Run all tests (fast, no coverage)
 make test
+
+# Run all tests with coverage (writes luacov.report.out)
+make test-cov
 
 # Run specific test file
 nvim --headless -u tests/minimal_init.lua -c "lua require('tests.unit.config_spec')"

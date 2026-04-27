@@ -52,7 +52,7 @@ jobs:
         run: nix develop .#ci -c make check
 
       - name: Run tests
-        run: nix develop .#ci -c make test
+        run: nix develop .#ci -c make test-cov
 
       - name: Check formatting
         run: nix flake check
@@ -60,7 +60,10 @@ jobs:
       - name: Generate coverage report
         run: |
           if [ -f "luacov.stats.out" ]; then
-            nix develop .#ci -c luacov
+            # `make test-cov` runs `luacov` already, but keep this as a fallback.
+            if [ ! -f "luacov.report.out" ]; then
+              nix develop .#ci -c luacov
+            fi
 
             echo "Creating lcov.info from luacov.report.out"
             {

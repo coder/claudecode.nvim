@@ -364,57 +364,37 @@ function M.bytes_to_uint64(bytes)
   return num
 end
 
----XOR lookup table for faster operations
-local xor_table = {}
-for i = 0, 255 do
-  xor_table[i] = {}
-  for j = 0, 255 do
-    local result = 0
-    local a, b = i, j
-    local bit_val = 1
-
-    while a > 0 or b > 0 do
-      local a_bit = a % 2
-      local b_bit = b % 2
-
-      if a_bit ~= b_bit then
-        result = result + bit_val
-      end
-
-      a = math.floor(a / 2)
-      b = math.floor(b / 2)
-      bit_val = bit_val * 2
-    end
-
-    xor_table[i][j] = result
-  end
-end
-
 ---Apply XOR mask to payload data
 ---@param data string The data to mask/unmask
 ---@param mask string The 4-byte mask
 ---@return string masked The masked/unmasked data
-function M.apply_mask(data, mask)
-  local result = {}
-  local mask_bytes = { mask:byte(1, 4) }
+local bit_bxor = nil
 
+do
+  local ok, bit = pcall(require, "bit")
+  if ok and type(bit.bxor) == "function" then
+    bit_bxor = bit.bxor
+  end
+end
+
+function M.apply_mask(data, mask)
+  assert(type(data) == "string", "Expected data to be a string")
+  assert(type(mask) == "string", "Expected mask to be a string")
+  assert(#mask == 4, "Expected mask to be 4 bytes")
+
+  local result = {}
+  local m1, m2, m3, m4 = mask:byte(1, 4)
+  assert(type(m1) == "number" and type(m2) == "number" and type(m3) == "number" and type(m4) == "number", "Invalid mask")
+  local mask_bytes = { m1, m2, m3, m4 }
+
+  local do_bxor = bit_bxor or bxor
   for i = 1, #data do
     local mask_idx = ((i - 1) % 4) + 1
     local data_byte = data:byte(i)
-    result[i] = string.char(xor_table[data_byte][mask_bytes[mask_idx]])
+    result[i] = string.char(do_bxor(data_byte, mask_bytes[mask_idx]))
   end
 
   return table.concat(result)
-end
-
----Shuffle an array in place using Fisher-Yates algorithm
----@param tbl table The array to shuffle
-function M.shuffle_array(tbl)
-  math.randomseed(os.time())
-  for i = #tbl, 2, -1 do
-    local j = math.random(i)
-    tbl[i], tbl[j] = tbl[j], tbl[i]
-  end
 end
 
 return M

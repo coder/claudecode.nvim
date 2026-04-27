@@ -1,0 +1,15 @@
+return {
+  statsfile = "luacov.stats.out",
+  reportfile = "luacov.report.out",
+
+  -- Only collect coverage for the plugin itself; excluding the test suite and
+  -- mocks makes `--coverage` runs significantly faster.
+  include = {
+    "lua/claudecode/",
+    "plugin/",
+  },
+  exclude = {
+    "tests/",
+    "fixtures/",
+  },
+}

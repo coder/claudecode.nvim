@@ -10,9 +10,10 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 
 ### Testing
 
-- `make test` - Run all tests using busted with coverage
+- `make test` - Run all tests (fast, no coverage)
+- `make test-cov` - Run all tests with coverage (luacov)
 - `busted tests/unit/specific_spec.lua` - Run specific test file
-- `busted --coverage -v` - Run tests with coverage
+- `busted --coverage -v` - Run tests with coverage (prefer `make test-cov`)
 
 ### Code Quality
 
@@ -22,12 +23,12 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 
 ### Build Commands
 
-- `make` - **RECOMMENDED**: Run formatting, linting, and testing (complete validation)
-- `make all` - Run check and format (default target)
-- `make test` - Run all tests using busted with coverage
+- `make` / `make all` - **RECOMMENDED**: Run formatting, linting, and tests (fast, no coverage)
+- `make test` - Run all tests (fast, no coverage)
+- `make test-cov` - Run all tests with coverage (luacov)
 - `make check` - Check Lua syntax and run luacheck
 - `make format` - Format code with stylua (or nix fmt if available)
-- `make clean` - Remove generated test files
+- `make clean` - Remove coverage artifacts
 - `make help` - Show available commands
 
 **Best Practice**: Always use `make` at the end of editing sessions for complete validation.
@@ -156,7 +157,7 @@ claudecode.nvim implements **100% feature parity** with Anthropic's official VS 
 
 ### Protocol Validation
 
-Run `make test` to verify MCP compliance:
+Run `make test` (or `make test-cov` for coverage) to verify MCP compliance:
 
 - **Tool Format Validation**: All tools return proper MCP structure
 - **Schema Compliance**: JSON schemas validated against VS Code specs
@@ -189,12 +190,13 @@ export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
 busted tests/unit/tools/specific_tool_spec.lua --verbose
 
 # Or use make for full validation
-make test  # Recommended for complete validation
+make test      # Fast (no coverage)
+make test-cov  # Coverage (slower)
 ```
 
 **Coverage Metrics**:
 
-- **320+ tests** covering all MCP tools and core functionality
+- **430+ tests** covering all MCP tools and core functionality
 - **Unit Tests**: Individual tool behavior and error cases
 - **Integration Tests**: End-to-end MCP protocol flow
 - **Format Tests**: MCP compliance and VS Code compatibility
@@ -468,7 +470,7 @@ error({
 
 ### Code Quality Standards
 
-- **Test Coverage**: Maintain comprehensive test coverage (currently **320+ tests**, 100% success rate)
+- **Test Coverage**: Maintain comprehensive test coverage (currently **430+ tests**, 100% success rate)
 - **Zero Warnings**: All code must pass luacheck with 0 warnings/errors
 - **MCP Compliance**: All tools must return proper MCP format with JSON-stringified content
 - **VS Code Compatibility**: New tools must match VS Code extension behavior exactly
@@ -478,7 +480,7 @@ error({
 ### Development Quality Gates
 
 1. **`make check`** - Syntax and linting (0 warnings required)
-2. **`make test`** - All tests passing (320/320 success rate required)
+2. **`make test`** - All tests passing (optionally `make test-cov` for coverage)
 3. **`make format`** - Consistent code formatting
 4. **MCP Validation** - Tools return proper format structure
 5. **Integration Test** - End-to-end protocol flow verification

@@ -12,10 +12,12 @@
 
 - `make check`: Syntax checks + `luacheck` on `lua/` and `tests/`.
 - `make format`: Format with StyLua (via Nix `nix fmt` in this repo).
-- `make test`: Run Busted tests with coverage (outputs `luacov.stats.out`).
+- `make test`: Run Busted tests (fast, no coverage).
+- `make test-cov`: Run Busted tests with coverage (generates `luacov.stats.out` + `luacov.report.out`).
 - `make clean`: Remove coverage artifacts.
   Examples:
 - Run all tests: `make test`
+- Run all tests with coverage: `make test-cov`
 - Run one file: `busted -v tests/unit/terminal_spec.lua`
 
 ## Coding Style & Naming Conventions
@@ -32,13 +34,13 @@
 - File naming: `*_spec.lua` or `*_test.lua` under `tests/unit` or `tests/integration`.
 - Mocks/helpers: place in `tests/mocks` and `tests/helpers`; prefer pure‑Lua mocks.
 - Coverage: keep high signal; exercise server, tools, diff, and terminal paths.
-- Quick tip: prefer `make test` (it sets `LUA_PATH` and coverage flags).
+- Quick tip: prefer `make test` (fast) or `make test-cov` (coverage) since they set `LUA_PATH` consistently.
 
 ## Commit & Pull Request Guidelines
 
 - Commits: Use Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `test:`, `chore:`). Keep messages imperative and scoped.
 - PRs: include a clear description, linked issues, repro steps, and tests. Update docs (`README.md`, `ARCHITECTURE.md`, or `DEVELOPMENT.md`) when behavior changes.
-- Pre-flight: run `make format`, `make check`, and `make test`. Attach screenshots or terminal recordings for UX-visible changes (diff flows, terminal behavior).
+- Pre-flight: run `make format`, `make check`, and `make test` (optionally `make test-cov` for CI-like coverage). Attach screenshots or terminal recordings for UX-visible changes (diff flows, terminal behavior).
 
 ## Security & Configuration Tips
 
