@@ -1442,8 +1442,22 @@ function M.reload_file_buffers_manual(file_path, original_cursor_pos)
   return reload_file_buffers(file_path, original_cursor_pos)
 end
 
+-- Restore focus to the Claude terminal after a user-initiated resolve, when configured.
+local function restore_terminal_focus_after_user_resolve()
+  if not (config and config.diff_opts and config.diff_opts.keep_terminal_focus) then
+    return
+  end
+  local terminal_win = find_claudecode_terminal_window()
+  if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+    pcall(vim.api.nvim_set_current_win, terminal_win)
+    pcall(vim.cmd, "startinsert")
+  end
+end
+
 ---Accept the current diff (user command version)
----This function reads the diff context from buffer variables
+---This function reads the diff context from buffer variables.
+---Unlike Claude-initiated resolve (which waits for the close_tab MCP tool call),
+---user commands clean up the diff UI immediately since close_tab is internal-only.
 function M.accept_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
@@ -1454,10 +1468,14 @@ function M.accept_current_diff()
   end
 
   M._resolve_diff_as_saved(tab_name, current_buffer)
+  M._cleanup_diff_state(tab_name, "accepted via :ClaudeCodeDiffAccept")
+  restore_terminal_focus_after_user_resolve()
 end
 
 ---Deny/reject the current diff (user command version)
----This function reads the diff context from buffer variables
+---This function reads the diff context from buffer variables.
+---Unlike Claude-initiated resolve (which waits for the close_tab MCP tool call),
+---user commands clean up the diff UI immediately since close_tab is internal-only.
 function M.deny_current_diff()
   local current_buffer = vim.api.nvim_get_current_buf()
   local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
@@ -1467,8 +1485,9 @@ function M.deny_current_diff()
     return
   end
 
-  -- Do not close windows/tabs here; just mark as rejected.
   M._resolve_diff_as_rejected(tab_name)
+  M._cleanup_diff_state(tab_name, "rejected via :ClaudeCodeDiffDeny")
+  restore_terminal_focus_after_user_resolve()
 end
 
 return M
