@@ -531,6 +531,57 @@ describe("Selection module", function()
 
       terminal_module.get_active_terminal_bufnr = original_get
     end)
+
+    it("should demote to cursor position when timer fires normally", function()
+      local original_get, terminal_module = install_terminal_stub()
+
+      selection.enable(mock_server)
+
+      local visual_selection = {
+        text = "x",
+        filePath = "/path/to/test.lua",
+        fileUrl = "file:///path/to/test.lua",
+        selection = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 0, character = 1 },
+          isEmpty = false,
+        },
+      }
+      selection.state.last_active_visual_selection = {
+        bufnr = 1,
+        selection_data = visual_selection,
+        timestamp = 0,
+      }
+      selection.state.latest_selection = visual_selection
+
+      _G.vim.test.set_mode("n")
+      _G.vim.test.set_cursor(0, 2, 3)
+      mock_server.last_broadcast = nil
+
+      selection.update_selection()
+
+      local timer = selection.state.demotion_timer
+      assert(timer ~= nil)
+
+      timer:fire()
+
+      assert(selection.state.demotion_timer == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+
+      local demoted = selection.state.latest_selection
+      assert(demoted ~= nil)
+      assert.are.equal("", demoted.text)
+      assert.are.equal(true, demoted.selection.isEmpty)
+      assert.are.equal(1, demoted.selection.start.line)
+      assert.are.equal(3, demoted.selection.start.character)
+      assert(selection.state.last_active_visual_selection == nil)
+      assert(mock_server.last_broadcast ~= nil)
+      assert.are.equal("selection_changed", mock_server.last_broadcast.event)
+
+      selection.disable()
+      terminal_module.get_active_terminal_bufnr = original_get
+    end)
   end)
 
   it("should get cursor position in normal mode", function()

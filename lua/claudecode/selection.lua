@@ -46,6 +46,7 @@ function M.disable()
   M._clear_autocommands()
 
   M.state.latest_selection = nil
+  M.state.last_active_visual_selection = nil
   M.server = nil
 
   M._cancel_debounce_timer()
