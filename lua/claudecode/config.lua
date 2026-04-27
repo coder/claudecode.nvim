@@ -26,6 +26,7 @@ M.defaults = {
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (including floating terminals)
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
     on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
+    minimize_empty_diff_pane = false, -- If true, minimize the empty left pane width for new files (keeps diff highlighting)
   },
   models = {
     { name = "Claude Opus 4.1 (Latest)", value = "opus" },
@@ -139,6 +140,12 @@ function M.validate(config)
           config.diff_opts.on_new_file_reject == "keep_empty" or config.diff_opts.on_new_file_reject == "close_window"
         ),
       "diff_opts.on_new_file_reject must be 'keep_empty' or 'close_window'"
+    )
+  end
+  if config.diff_opts.minimize_empty_diff_pane ~= nil then
+    assert(
+      type(config.diff_opts.minimize_empty_diff_pane) == "boolean",
+      "diff_opts.minimize_empty_diff_pane must be a boolean"
     )
   end
 

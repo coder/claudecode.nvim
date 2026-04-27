@@ -1228,6 +1228,14 @@ function M._setup_blocking_diff(params, resolution_callback)
       existing_buffer
     )
 
+    -- Minimize left pane width for new files if option enabled
+    if is_new_file and config and config.diff_opts and config.diff_opts.minimize_empty_diff_pane then
+      if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
+        local min_width = 8 -- Minimal width to show line numbers and diff signs
+        vim.api.nvim_win_set_width(diff_info.target_window, min_width)
+      end
+    end
+
     local autocmd_ids = register_diff_autocmds(tab_name, new_buffer)
 
     local original_cursor_pos = nil
