@@ -1,4 +1,6 @@
 if not _G.vim then
+  local next_timer_id = 0
+
   _G.vim = { ---@type vim_global_api
     schedule_wrap = function(fn)
       return fn
@@ -192,7 +194,49 @@ if not _G.vim then
     end,
 
     loop = {
-      timer_stop = function(_timer) -- Prefix unused param with underscore
+      now = function()
+        return 0
+      end,
+      new_timer = function()
+        next_timer_id = next_timer_id + 1
+
+        local timer = {
+          _id = next_timer_id,
+          _start_calls = 0,
+          _stop_calls = 0,
+          _close_calls = 0,
+          _callback = nil,
+        }
+
+        function timer:start(timeout, repeat_interval, callback)
+          self._start_calls = self._start_calls + 1
+          self._timeout = timeout
+          self._repeat_interval = repeat_interval
+          self._callback = callback
+          return true
+        end
+
+        function timer:stop()
+          self._stop_calls = self._stop_calls + 1
+          return true
+        end
+
+        function timer:close()
+          self._close_calls = self._close_calls + 1
+          return true
+        end
+
+        function timer:fire()
+          assert(self._callback, "Timer has no callback; did you call :start()?")
+          return self._callback()
+        end
+
+        return timer
+      end,
+      timer_stop = function(timer)
+        if timer and timer.stop then
+          timer:stop()
+        end
         return true
       end,
     },
@@ -360,6 +404,76 @@ describe("Selection module", function()
     assert(selection.state.tracking_enabled == false)
     assert(selection.server == nil)
     assert(selection.state.latest_selection == nil)
+  end)
+
+  describe("debounce_update", function()
+    it("should cancel and close previous debounce timer when re-debouncing", function()
+      local update_calls = 0
+      local old_update_selection = selection.update_selection
+
+      selection.update_selection = function()
+        update_calls = update_calls + 1
+      end
+
+      selection.debounce_update()
+      local timer1 = selection.state.debounce_timer
+      assert(timer1 ~= nil)
+
+      selection.debounce_update()
+      local timer2 = selection.state.debounce_timer
+      assert(timer2 ~= nil)
+      assert.are_not.equal(timer1, timer2)
+
+      assert.are.equal(1, timer1._stop_calls)
+      assert.are.equal(1, timer1._close_calls)
+
+      -- Clean up the active timer
+      timer2:fire()
+      assert.are.equal(1, update_calls)
+
+      selection.update_selection = old_update_selection
+    end)
+
+    it("should ignore stale debounce timer callbacks", function()
+      local update_calls = 0
+      local old_update_selection = selection.update_selection
+
+      selection.update_selection = function()
+        update_calls = update_calls + 1
+      end
+
+      selection.debounce_update()
+      local timer1 = selection.state.debounce_timer
+      assert(timer1 ~= nil)
+
+      selection.debounce_update()
+      local timer2 = selection.state.debounce_timer
+      assert(timer2 ~= nil)
+
+      -- A callback from a cancelled timer should be ignored.
+      timer1:fire()
+      assert.are.equal(0, update_calls)
+
+      timer2:fire()
+      assert.are.equal(1, update_calls)
+      assert(selection.state.debounce_timer == nil)
+      assert.are.equal(1, timer2._stop_calls)
+      assert.are.equal(1, timer2._close_calls)
+
+      selection.update_selection = old_update_selection
+    end)
+
+    it("disable() should cancel an active debounce timer", function()
+      selection.enable(mock_server)
+      selection.debounce_update()
+      local timer = selection.state.debounce_timer
+      assert(timer ~= nil)
+
+      selection.disable()
+      assert(selection.state.debounce_timer == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+    end)
   end)
 
   it("should get cursor position in normal mode", function()

@@ -5,6 +5,8 @@ local M = {}
 local logger = require("claudecode.logger")
 local terminal = require("claudecode.terminal")
 
+local uv = vim.uv or vim.loop
+
 M.state = {
   latest_selection = nil,
   tracking_enabled = false,
@@ -45,10 +47,33 @@ function M.disable()
   M.state.latest_selection = nil
   M.server = nil
 
-  if M.state.debounce_timer then
-    vim.loop.timer_stop(M.state.debounce_timer)
-    M.state.debounce_timer = nil
+  M._cancel_debounce_timer()
+
+  if M.state.demotion_timer then
+    local demotion_timer = M.state.demotion_timer
+    M.state.demotion_timer = nil
+
+    demotion_timer:stop()
+    demotion_timer:close()
   end
+end
+
+---Cancels and closes the current debounce timer, if any.
+---@local
+function M._cancel_debounce_timer()
+  local timer = M.state.debounce_timer
+  if not timer then
+    return
+  end
+
+  -- Clear state before stopping/closing so any already-scheduled callback is a no-op.
+  M.state.debounce_timer = nil
+
+  assert(timer.stop, "Expected debounce timer to have :stop()")
+  assert(timer.close, "Expected debounce timer to have :close()")
+
+  timer:stop()
+  timer:close()
 end
 
 ---Creates autocommands for tracking selections.
@@ -107,14 +132,36 @@ end
 ---Ensures that `update_selection` is not called too frequently by deferring
 ---its execution.
 function M.debounce_update()
-  if M.state.debounce_timer then
-    vim.loop.timer_stop(M.state.debounce_timer)
-  end
+  M._cancel_debounce_timer()
 
-  M.state.debounce_timer = vim.defer_fn(function()
-    M.update_selection()
-    M.state.debounce_timer = nil
-  end, M.state.debounce_ms)
+  assert(type(M.state.debounce_ms) == "number", "Expected debounce_ms to be a number")
+
+  local timer = uv.new_timer()
+  assert(timer, "Expected uv.new_timer() to return a timer handle")
+  assert(timer.start, "Expected debounce timer to have :start()")
+  assert(timer.stop, "Expected debounce timer to have :stop()")
+  assert(timer.close, "Expected debounce timer to have :close()")
+
+  M.state.debounce_timer = timer
+
+  timer:start(
+    M.state.debounce_ms,
+    0, -- 0 repeat = one-shot
+    vim.schedule_wrap(function()
+      -- Ignore stale timers (e.g., cancelled and replaced before callback runs)
+      if M.state.debounce_timer ~= timer then
+        return
+      end
+
+      -- Clear state before stopping/closing so cancellation is idempotent.
+      M.state.debounce_timer = nil
+
+      timer:stop()
+      timer:close()
+
+      M.update_selection()
+    end)
+  )
 end
 
 ---Updates the current selection state.
