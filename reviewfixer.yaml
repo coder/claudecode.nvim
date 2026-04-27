@@ -1,8 +1,11 @@
 # yaml-language-server: $schema=https://raw.githubusercontent.com/ThomasK33/reviewfixer/refs/heads/main/reviewfixer.schema.json
 # Config for running reviewfixer against the Claude ACP adapter.
+# reviewfixer automatically addresses PR review findings using an AI agent.
 #
 # Prerequisites:
-# - `node` and `npm`/`npx` available on PATH
+# - `reviewfixer` CLI installed (`go install github.com/ThomasK33/reviewfixer@latest`,
+#   or download a binary from https://github.com/ThomasK33/reviewfixer/releases)
+# - `node` and `npm`/`npx` available on PATH (for the ACP adapter below)
 # - `ANTHROPIC_API_KEY` exported in the shell that launches reviewfixer
 #
 # Usage:
@@ -12,7 +15,7 @@
 #
 # If you install the adapter globally instead of using `npx`, you can replace:
 #   command: npx
-#   args: ["-y", "@agentclientprotocol/claude-agent-acp"]
+#   args: ["-y", "@agentclientprotocol/claude-agent-acp@0.31.1"]
 # with:
 #   command: claude-agent-acp
 
@@ -23,9 +26,13 @@ runtime:
     command: npx
     args:
       - -y
-      - "@agentclientprotocol/claude-agent-acp"
+      # Pinned to avoid pulling an unverified `latest` at invocation time;
+      # bump deliberately after reviewing release notes.
+      - "@agentclientprotocol/claude-agent-acp@0.31.1"
 
 review:
   request:
+    # `/coder-agents-review` is consumed by the external coder-agents-review
+    # bot (not by any workflow in this repository).
     - mode: comment
       comment: "/coder-agents-review"
