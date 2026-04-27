@@ -151,6 +151,9 @@ describe("claudecode.terminal.native toggle behavior", function()
           return jobid
         end,
       },
+      keymap = {
+        set = function() end,
+      },
       schedule = function(callback)
         callback() -- Execute immediately in tests
       end,
