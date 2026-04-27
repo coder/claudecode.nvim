@@ -519,6 +519,7 @@ describe("Selection module", function()
 
       assert(selection.state.demotion_timer == nil)
       assert(selection.state.latest_selection == nil)
+      assert(selection.state.last_active_visual_selection == nil)
       assert.are.equal(1, timer._stop_calls)
       assert.are.equal(1, timer._close_calls)
 
@@ -526,6 +527,7 @@ describe("Selection module", function()
       timer:fire()
       assert(selection.state.latest_selection == nil)
       assert(selection.state.demotion_timer == nil)
+      assert(selection.state.last_active_visual_selection == nil)
       assert.are.equal(1, timer._stop_calls)
       assert.are.equal(1, timer._close_calls)
 
