@@ -411,6 +411,23 @@ local vim = {
       return vim._tabs[tab] == true
     end,
 
+    nvim_tabpage_list_wins = function(tabpage)
+      if tabpage == 0 then
+        tabpage = vim._current_tabpage
+      end
+      local wins = {}
+      local list = vim._tab_windows[tabpage] or {}
+      for _, winid in ipairs(list) do
+        if vim._windows[winid] then
+          table.insert(wins, winid)
+        end
+      end
+      if #wins == 0 then
+        table.insert(wins, vim._current_window)
+      end
+      return wins
+    end,
+
     nvim_tabpage_get_number = function(tab)
       return tab
     end,
