@@ -305,6 +305,12 @@ function M.register_handlers()
         return result_or_error_table
       end
 
+      -- Refresh file buffers after tool execution to pick up external changes (e.g., Claude's Edit tool)
+      -- This handles the case where Claude writes to files outside of tools
+      vim.defer_fn(function()
+        vim.cmd.checktime()
+      end, 50)
+
       -- Log the response for debugging
       logger.debug("server", "Response - tools/call", params and params.name .. ":", vim.inspect(result_or_error_table))
 
