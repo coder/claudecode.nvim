@@ -77,7 +77,7 @@ function M.create_server(config, callbacks, auth_token)
     on_error = callbacks.on_error or function() end,
   }
 
-  local bind_success, bind_err = tcp_server:bind("127.0.0.1", port)
+  local bind_success, bind_err = tcp_server:bind(config.bind_address, port)
   if not bind_success then
     tcp_server:close()
     return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")

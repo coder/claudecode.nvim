@@ -10,6 +10,7 @@ local M = {}
 M.defaults = {
   port_range = { min = 10000, max = 65535 },
   auto_start = true,
+  bind_address = "127.0.0.1",
   terminal_cmd = nil,
   env = {}, -- Custom environment variables for Claude terminal
   log_level = "info",
