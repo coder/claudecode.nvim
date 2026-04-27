@@ -173,13 +173,22 @@ end
 ---@param cmd_string string
 ---@param env_table table
 ---@param config table
-function M.simple_toggle(cmd_string, env_table, config)
+---@param force_new boolean? If true, close any existing terminal and open a new one with cmd_string
+function M.simple_toggle(cmd_string, env_table, config, force_new)
   if not is_available() then
     vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
     return
   end
 
   local logger = require("claudecode.logger")
+
+  -- If args like --resume or --continue were passed, force a new session
+  if force_new and terminal and terminal:buf_valid() then
+    logger.debug("terminal", "Simple toggle: force_new=true, closing existing terminal to start new session")
+    M.close()
+    M.open(cmd_string, env_table, config)
+    return
+  end
 
   -- Check if terminal exists and is visible
   if terminal and terminal:buf_valid() and terminal:win_valid() then
@@ -201,13 +210,22 @@ end
 ---@param cmd_string string
 ---@param env_table table
 ---@param config table
-function M.focus_toggle(cmd_string, env_table, config)
+---@param force_new boolean? If true, close any existing terminal and open a new one with cmd_string
+function M.focus_toggle(cmd_string, env_table, config, force_new)
   if not is_available() then
     vim.notify("Snacks.nvim terminal provider selected but Snacks.terminal not available.", vim.log.levels.ERROR)
     return
   end
 
   local logger = require("claudecode.logger")
+
+  -- If args like --resume or --continue were passed, force a new session
+  if force_new and terminal and terminal:buf_valid() then
+    logger.debug("terminal", "Focus toggle: force_new=true, closing existing terminal to start new session")
+    M.close()
+    M.open(cmd_string, env_table, config)
+    return
+  end
 
   -- Terminal exists, is valid, but not visible
   if terminal and terminal:buf_valid() and not terminal:win_valid() then

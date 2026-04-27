@@ -322,10 +322,21 @@ end
 ---@param cmd_string string
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
-function M.simple_toggle(cmd_string, env_table, effective_config)
+---@param force_new boolean? If true, close any existing terminal and open a new one with cmd_string
+function M.simple_toggle(cmd_string, env_table, effective_config, force_new)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
   local is_visible = has_buffer and is_terminal_visible()
+
+  -- If args like --resume or --continue were passed, force a new session
+  if force_new and has_buffer then
+    logger.debug("terminal", "simple_toggle: force_new=true, closing existing terminal to start new session")
+    M.close()
+    if not open_terminal(cmd_string, env_table, effective_config) then
+      vim.notify("Failed to open Claude terminal using native fallback (simple_toggle force_new).", vim.log.levels.ERROR)
+    end
+    return
+  end
 
   if is_visible then
     -- Terminal is visible, hide it (but keep process running)
@@ -362,10 +373,21 @@ end
 ---@param cmd_string string
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
-function M.focus_toggle(cmd_string, env_table, effective_config)
+---@param force_new boolean? If true, close any existing terminal and open a new one with cmd_string
+function M.focus_toggle(cmd_string, env_table, effective_config, force_new)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
   local is_visible = has_buffer and is_terminal_visible()
+
+  -- If args like --resume or --continue were passed, force a new session
+  if force_new and has_buffer then
+    logger.debug("terminal", "focus_toggle: force_new=true, closing existing terminal to start new session")
+    M.close()
+    if not open_terminal(cmd_string, env_table, effective_config) then
+      vim.notify("Failed to open Claude terminal using native fallback (focus_toggle force_new).", vim.log.levels.ERROR)
+    end
+    return
+  end
 
   if has_buffer then
     -- Terminal process exists
