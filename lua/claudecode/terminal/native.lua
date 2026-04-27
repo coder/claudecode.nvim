@@ -20,6 +20,87 @@ local function cleanup_state()
   jobid = nil
 end
 
+-- Sidebar filetypes that should keep their width
+local sidebar_filetypes = {
+  ["netrw"] = true,
+  ["NvimTree"] = true,
+  ["neo-tree"] = true,
+  ["neo-tree-popup"] = true,
+  ["oil"] = true,
+  ["minifiles"] = true,
+  ["aerial"] = true,
+  ["tagbar"] = true,
+  ["undotree"] = true,
+}
+
+---Collect window info before creating a terminal split
+---@return table editor_windows List of {win, width}
+---@return number total_editor_width Total width of editor windows
+---@return table sidebar_windows Map of sidebar window -> width
+local function collect_window_info()
+  local editor_windows = {}
+  local total_editor_width = 0
+  local sidebar_windows = {}
+
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local win_config = vim.api.nvim_win_get_config(win)
+    if not win_config.relative or win_config.relative == "" then
+      local buf = vim.api.nvim_win_get_buf(win)
+      local ft = vim.api.nvim_buf_get_option(buf, "filetype")
+      local win_width = vim.api.nvim_win_get_width(win)
+
+      if sidebar_filetypes[ft] then
+        sidebar_windows[win] = win_width
+      else
+        table.insert(editor_windows, { win = win, width = win_width })
+        total_editor_width = total_editor_width + win_width
+      end
+    end
+  end
+
+  return editor_windows, total_editor_width, sidebar_windows
+end
+
+---Redistribute window widths after creating terminal split
+---@param terminal_winid number The terminal window ID
+---@param terminal_width number The desired terminal width
+---@param editor_windows table List of {win, width} before split
+---@param total_editor_width number Total width of editor windows before split
+---@param sidebar_windows table Map of sidebar window -> width
+local function redistribute_widths(terminal_winid, terminal_width, editor_windows, total_editor_width, sidebar_windows)
+  -- Calculate sidebar total
+  local sidebar_total = 0
+  for _, w in pairs(sidebar_windows) do
+    sidebar_total = sidebar_total + w
+  end
+
+  -- Calculate available width for editor windows
+  -- Account for separators: one between each pair of windows
+  local num_separators = #editor_windows  -- separators between editors and between last editor and terminal
+  local available_for_editors = vim.o.columns - terminal_width - sidebar_total - num_separators
+
+  if #editor_windows > 0 and total_editor_width > 0 and available_for_editors > 0 then
+    -- Distribute proportionally based on original widths
+    for _, info in ipairs(editor_windows) do
+      if vim.api.nvim_win_is_valid(info.win) then
+        local ratio = info.width / total_editor_width
+        local new_width = math.max(1, math.floor(available_for_editors * ratio))
+        pcall(vim.api.nvim_win_set_width, info.win, new_width)
+      end
+    end
+  end
+
+  -- Restore sidebar widths
+  for win, saved_width in pairs(sidebar_windows) do
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_set_width, win, saved_width)
+    end
+  end
+
+  -- Ensure terminal has correct width
+  pcall(vim.api.nvim_win_set_width, terminal_winid, terminal_width)
+end
+
 local function is_valid()
   -- First check if we have a valid buffer
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -61,7 +142,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   local original_win = vim.api.nvim_get_current_win()
-  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
+  local terminal_width = math.floor(vim.o.columns * effective_config.split_width_percentage)
   local full_height = vim.o.lines
   local placement_modifier
 
@@ -71,9 +152,15 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     placement_modifier = "botright "
   end
 
-  vim.cmd(placement_modifier .. width .. "vsplit")
+  -- Collect window info before split
+  local editor_windows, total_editor_width, sidebar_windows = collect_window_info()
+
+  vim.cmd(placement_modifier .. terminal_width .. "vsplit")
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
+
+  -- Redistribute widths proportionally
+  redistribute_widths(new_winid, terminal_width, editor_windows, total_editor_width, sidebar_windows)
 
   vim.api.nvim_win_call(new_winid, function()
     vim.cmd("enew")
@@ -216,7 +303,7 @@ local function show_hidden_terminal(effective_config, focus)
   local original_win = vim.api.nvim_get_current_win()
 
   -- Create a new window for the existing buffer
-  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
+  local terminal_width = math.floor(vim.o.columns * effective_config.split_width_percentage)
   local full_height = vim.o.lines
   local placement_modifier
 
@@ -226,9 +313,15 @@ local function show_hidden_terminal(effective_config, focus)
     placement_modifier = "botright "
   end
 
-  vim.cmd(placement_modifier .. width .. "vsplit")
+  -- Collect window info before split
+  local editor_windows, total_editor_width, sidebar_windows = collect_window_info()
+
+  vim.cmd(placement_modifier .. terminal_width .. "vsplit")
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
+
+  -- Redistribute widths proportionally
+  redistribute_widths(new_winid, terminal_width, editor_windows, total_editor_width, sidebar_windows)
 
   -- Set the existing buffer in the new window
   vim.api.nvim_win_set_buf(new_winid, bufnr)
