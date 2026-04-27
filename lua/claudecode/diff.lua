@@ -704,6 +704,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     once = true,
   })
 
+  vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeDiffOpened", modeline = false })
   return {
     provider = "native",
     tab_name = tab_name,
@@ -753,6 +754,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   diff_data.status = "saved"
   diff_data.result_content = result
+  vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeDiffClosed", modeline = false })
 
   -- Resume the coroutine with the result (for deferred response system)
   if diff_data.resolution_callback then
@@ -828,6 +830,7 @@ function M._resolve_diff_as_rejected(tab_name)
 
   diff_data.status = "rejected"
   diff_data.result_content = result
+  vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeDiffClosed", modeline = false })
 
   -- Resume the coroutine with the result (for deferred response system)
   if diff_data.resolution_callback then
