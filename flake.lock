@@ -34,7 +34,7 @@
         "type": "github"
       }
     },
-    "nixpkgs-go": {
+    "nixpkgs-reviewfixer": {
       "locked": {
         "lastModified": 1776877367,
         "narHash": "sha256-EHq1/OX139R1RvBzOJ0aMRT3xnWyqtHBRUBuO1gFzjI=",
@@ -70,7 +70,7 @@
       "inputs": {
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
-        "nixpkgs-go": "nixpkgs-go",
+        "nixpkgs-reviewfixer": "nixpkgs-reviewfixer",
         "treefmt-nix": "treefmt-nix"
       }
     },

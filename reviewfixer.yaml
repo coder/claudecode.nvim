@@ -1,9 +1,11 @@
-# yaml-language-server: $schema=https://raw.githubusercontent.com/ThomasK33/reviewfixer/refs/heads/main/reviewfixer.schema.json
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ThomasK33/reviewfixer/v0.1.0-beta.0/reviewfixer.schema.json
 # Config for running reviewfixer against the Claude ACP adapter.
 # reviewfixer automatically addresses PR review findings using an AI agent.
 #
 # Prerequisites:
-# - `reviewfixer` CLI installed (`go install github.com/ThomasK33/reviewfixer@latest`,
+# - Use the project's Nix devShell (`nix develop` or `direnv allow`) which
+#   already includes `reviewfixer`; this is the primary dev path here, or
+# - `reviewfixer` CLI installed (`go install github.com/ThomasK33/reviewfixer@v0.1.0-beta.0`,
 #   or download a binary from https://github.com/ThomasK33/reviewfixer/releases)
 # - `node` and `npm`/`npx` available on PATH (for the ACP adapter below)
 # - `ANTHROPIC_API_KEY` exported in the shell that launches reviewfixer

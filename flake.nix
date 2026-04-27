@@ -3,14 +3,21 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # Separate, fresh nixpkgs pin used only to build reviewfixer, which
-    # requires Go >= 1.26.2 (newer than the main pin currently provides).
-    nixpkgs-go.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Separate nixpkgs pin used only to build reviewfixer. The main pin is
+    # held back to avoid CI/formatter churn, but reviewfixer requires
+    # Go >= 1.26.2. Remove `nixpkgs-reviewfixer` (and `pkgsReviewfixer`
+    # below) once the main pin includes Go >= 1.26.2
+    # (check: `nix eval nixpkgs#go.version`).
+    #
+    # Note: `nix flake update` (no `--select`) bumps both inputs to the
+    # same rev, silently collapsing this version gap. Use
+    # `nix flake update nixpkgs-reviewfixer` to update this input alone.
+    nixpkgs-reviewfixer.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
     treefmt-nix.url = "github:numtide/treefmt-nix";
   };
 
-  outputs = { self, nixpkgs, nixpkgs-go, flake-utils, treefmt-nix, ... }:
+  outputs = { self, nixpkgs, nixpkgs-reviewfixer, flake-utils, treefmt-nix, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -21,13 +28,13 @@
           ];
         };
 
-        pkgsGo = import nixpkgs-go { inherit system; };
+        pkgsReviewfixer = import nixpkgs-reviewfixer { inherit system; };
 
-        reviewfixer = pkgsGo.buildGoModule rec {
+        reviewfixer = pkgsReviewfixer.buildGoModule rec {
           pname = "reviewfixer";
           version = "0.1.0-beta.0";
 
-          src = pkgsGo.fetchFromGitHub {
+          src = pkgsReviewfixer.fetchFromGitHub {
             owner = "ThomasK33";
             repo = "reviewfixer";
             rev = "v${version}";
@@ -40,7 +47,7 @@
           # Nix build sandbox. Skip the test phase here.
           doCheck = false;
 
-          meta = with pkgsGo.lib; {
+          meta = with pkgsReviewfixer.lib; {
             description = "Local harness for working through review feedback on Graphite-managed stacked PRs";
             homepage = "https://github.com/ThomasK33/reviewfixer";
             license = licenses.mit;
