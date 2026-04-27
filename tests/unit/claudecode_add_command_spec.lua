@@ -187,6 +187,86 @@ describe("ClaudeCodeAdd command", function()
       end)
     end)
 
+    describe("escaped path handling", function()
+      it("should parse backslash-escaped spaces in file paths", function()
+        vim.fn.filereadable = spy.new(function(path)
+          return path == "file name.lua" and 1 or 0
+        end)
+        vim.fn.expand = spy.new(function(path)
+          return path
+        end)
+
+        command_handler({ args = "file\\ name.lua" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "file name.lua",
+          lineStart = nil,
+          lineEnd = nil,
+        })
+      end)
+
+      it("should not treat 'file\\ 1' as path with line number", function()
+        vim.fn.filereadable = spy.new(function(path)
+          return path == "file 1" and 1 or 0
+        end)
+        vim.fn.expand = spy.new(function(path)
+          return path
+        end)
+
+        command_handler({ args = "file\\ 1" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "file 1",
+          lineStart = nil,
+          lineEnd = nil,
+        })
+      end)
+
+      it("should parse escaped path with line range", function()
+        vim.fn.filereadable = spy.new(function(path)
+          return path == "my test file.lua" and 1 or 0
+        end)
+        vim.fn.expand = spy.new(function(path)
+          return path
+        end)
+
+        command_handler({ args = "my\\ test\\ file.lua 10 20" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "my test file.lua",
+          lineStart = 9,
+          lineEnd = 19,
+        })
+      end)
+
+      it("should parse escaped path with start line only", function()
+        vim.fn.filereadable = spy.new(function(path)
+          return path == "file name.lua" and 1 or 0
+        end)
+        vim.fn.expand = spy.new(function(path)
+          return path
+        end)
+
+        command_handler({ args = "file\\ name.lua 5" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "file name.lua",
+          lineStart = 4,
+          lineEnd = nil,
+        })
+      end)
+
+      it("should still handle paths without spaces", function()
+        command_handler({ args = "/existing/file.lua 10" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "/existing/file.lua",
+          lineStart = 9,
+          lineEnd = nil,
+        })
+      end)
+    end)
+
     describe("path handling", function()
       it("should expand tilde paths", function()
         command_handler({ args = "~/test.lua" })
