@@ -233,12 +233,6 @@ if not _G.vim then
 
         return timer
       end,
-      timer_stop = function(timer)
-        if timer and timer.stop then
-          timer:stop()
-        end
-        return true
-      end,
     },
 
     test = { ---@type vim_test_utils
@@ -453,6 +447,9 @@ describe("Selection module", function()
       -- A callback from a cancelled timer should be ignored.
       timer1:fire()
       assert.are.equal(0, update_calls)
+      -- Stale callback must not double-stop or double-close the already-cancelled timer.
+      assert.are.equal(1, timer1._stop_calls)
+      assert.are.equal(1, timer1._close_calls)
 
       timer2:fire()
       assert.are.equal(1, update_calls)
@@ -473,6 +470,66 @@ describe("Selection module", function()
       assert(selection.state.debounce_timer == nil)
       assert.are.equal(1, timer._stop_calls)
       assert.are.equal(1, timer._close_calls)
+    end)
+  end)
+
+  describe("demotion_timer", function()
+    local function install_terminal_stub()
+      local terminal_module = package.loaded["claudecode.terminal"]
+      local original_get = terminal_module and terminal_module.get_active_terminal_bufnr or nil
+      if not terminal_module then
+        terminal_module = {}
+        package.loaded["claudecode.terminal"] = terminal_module
+      end
+      terminal_module.get_active_terminal_bufnr = function()
+        return nil
+      end
+      return original_get, terminal_module
+    end
+
+    it("disable() should cancel an active demotion timer and ignore stale callbacks", function()
+      local original_get, terminal_module = install_terminal_stub()
+
+      selection.enable(mock_server)
+
+      -- Seed a non-empty visual selection so the demotion path triggers on normal-mode entry.
+      selection.state.last_active_visual_selection = {
+        bufnr = 1,
+        selection_data = {
+          text = "x",
+          filePath = "/path/to/test.lua",
+          fileUrl = "file:///path/to/test.lua",
+          selection = {
+            start = { line = 0, character = 0 },
+            ["end"] = { line = 0, character = 1 },
+            isEmpty = false,
+          },
+        },
+        timestamp = 0,
+      }
+      selection.state.latest_selection = selection.state.last_active_visual_selection.selection_data
+
+      _G.vim.test.set_mode("n")
+      selection.update_selection()
+
+      local timer = selection.state.demotion_timer
+      assert(timer ~= nil)
+
+      selection.disable()
+
+      assert(selection.state.demotion_timer == nil)
+      assert(selection.state.latest_selection == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+
+      -- A late-firing callback from the cancelled timer must not mutate state after teardown.
+      timer:fire()
+      assert(selection.state.latest_selection == nil)
+      assert(selection.state.demotion_timer == nil)
+      assert.are.equal(1, timer._stop_calls)
+      assert.are.equal(1, timer._close_calls)
+
+      terminal_module.get_active_terminal_bufnr = original_get
     end)
   end)
 
