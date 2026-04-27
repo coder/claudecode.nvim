@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ThomasK33/reviewfixer/refs/heads/main/reviewfixer.schema.json
+# Config for running reviewfixer against the Claude ACP adapter.
+#
+# Prerequisites:
+# - `node` and `npm`/`npx` available on PATH
+# - `ANTHROPIC_API_KEY` exported in the shell that launches reviewfixer
+#
+# Usage:
+#   reviewfixer validate --config ./reviewfixer.yaml
+#   reviewfixer --config ./reviewfixer.yaml
+#   reviewfixer run --config ./reviewfixer.yaml
+#
+# If you install the adapter globally instead of using `npx`, you can replace:
+#   command: npx
+#   args: ["-y", "@agentclientprotocol/claude-agent-acp"]
+# with:
+#   command: claude-agent-acp
+
+runtime:
+  kind: acp
+  compact_on_resume: true
+  acp:
+    command: npx
+    args:
+      - -y
+      - "@agentclientprotocol/claude-agent-acp"
+
+review:
+  request:
+    - mode: comment
+      comment: "/coder-agents-review"
