@@ -111,6 +111,12 @@ local defaults = {
   cwd = nil, -- static cwd override
   git_repo_cwd = false, -- resolve to git root when spawning
   cwd_provider = nil, -- function(ctx) -> cwd string
+  -- Scroll behaviour in terminal mode.
+  -- false (default): no scroll keymaps — Neovim forwards wheel events to the Claude Code
+  --   TUI when it has mouse tracking enabled, matching regular-terminal behaviour.
+  -- true: <ScrollWheelUp> exits terminal mode so you can view Neovim's scrollback buffer.
+  --   <ScrollWheelDown> in normal mode auto-returns to terminal mode at the last line.
+  scroll_up_enabled = false,
   -- Split navigation: Ctrl+h/j/k/l to move between splits from terminal mode
   split_navigation = true,
   -- Terminal keymaps
@@ -298,6 +304,235 @@ function M.setup_terminal_keymaps(bufnr, config)
       end,
     })
   end
+end
+
+---Setup scroll keymaps for a terminal buffer.
+---When scroll_up_enabled is true (default), <ScrollWheelUp> exits terminal mode so the user
+---can scroll the scrollback buffer. <ScrollWheelDown> in normal mode auto-returns to terminal
+---mode when the cursor reaches the last line. Set scroll_up_enabled = false to block mouse
+---scroll entirely (legacy behaviour).
+---@param bufnr number The terminal buffer number
+---@param config ClaudeCodeTerminalConfig Terminal configuration
+function M.setup_scroll_keymaps(bufnr, config)
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    return
+  end
+
+  -- Shared over-scroll guard for keyboard k/<Up> and mouse <ScrollWheelUp>.
+  -- Detection is purely visual: when Claude Code's TUI is at the top of its conversation,
+  -- further scroll-up events push content off the top and leave the bottom of the window
+  -- visually empty. We read the rendered screen content to detect that and stop forwarding.
+  local OVERSCROLL_EMPTY_ROWS = 5
+
+  ---True if a single screen row has only whitespace inside the given column range.
+  ---Iterates `vim.fn.screenchar` per cell — there is no whole-row screen API in Neovim.
+  ---@param row integer 1-indexed screen row
+  ---@param start_col integer 1-indexed inclusive
+  ---@param end_col integer 1-indexed inclusive
+  local function screen_row_is_empty(row, start_col, end_col)
+    for c = start_col, end_col do
+      local ch = vim.fn.screenchar(row, c)
+      -- screenchar returns -1 for invalid positions, 0 for unfilled cells; 32 is space.
+      if ch > 0 and ch ~= 32 then
+        return false
+      end
+    end
+    return true
+  end
+
+  ---True if the terminal window has at least OVERSCROLL_EMPTY_ROWS visually-empty rows
+  ---at its bottom edge (i.e. Claude Code's TUI has been scrolled past the conversation top).
+  ---Uses `win_screenpos` because it returns the CONTENT top-left for floating windows
+  ---(skipping any border row). `nvim_win_get_position` returns the border top-left, which
+  ---would put us off-by-one and inspect the bottom border row (border glyphs read as
+  ---"non-empty" and defeat the detection).
+  ---@param winid integer
+  local function tui_overscrolled(winid)
+    if not vim.api.nvim_win_is_valid(winid) then
+      return false
+    end
+    local screenpos = vim.fn.win_screenpos(winid)
+    if not screenpos or #screenpos < 2 or screenpos[1] == 0 then
+      return false
+    end
+    local content_top = screenpos[1]
+    local content_left = screenpos[2]
+    local width = vim.api.nvim_win_get_width(winid)
+    local height = vim.api.nvim_win_get_height(winid)
+    local start_col = content_left
+    local end_col = content_left + width - 1
+    local bottom_row = content_top + height - 1
+    for offset = 0, OVERSCROLL_EMPTY_ROWS - 1 do
+      local r = bottom_row - offset
+      if r < content_top then
+        break
+      end
+      if not screen_row_is_empty(r, start_col, end_col) then
+        return false
+      end
+    end
+    return true
+  end
+
+  local function tui_can_scroll_up()
+    local winid = vim.fn.bufwinid(bufnr)
+    if winid == -1 then
+      return false
+    end
+    return not tui_overscrolled(winid)
+  end
+
+  local function reset_scroll_up_state() end
+
+  -- Always: j/<Down> in normal mode moves cursor down through the terminal scrollback;
+  -- once at the last line, sends SGR scroll-down to the TUI (symmetric with k/<Up>).
+  -- Stays in normal mode — user presses i/a to return to terminal mode explicitly.
+  local function down_or_tui_scroll()
+    local last_line = vim.api.nvim_buf_line_count(bufnr)
+    local cur_line = vim.api.nvim_win_get_cursor(0)[1]
+    reset_scroll_up_state()
+    if cur_line < last_line then
+      vim.cmd("normal! j")
+      return
+    end
+    local ok, chan_id = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
+    if not ok or not chan_id then
+      return
+    end
+    local winid = vim.fn.bufwinid(bufnr)
+    if winid == -1 then
+      return
+    end
+    local row = math.max(1, math.floor(vim.api.nvim_win_get_height(winid) / 2))
+    local col = math.max(1, math.floor(vim.api.nvim_win_get_width(winid) / 2))
+    -- SGR mouse scroll-down (button 65) at the window centre.
+    vim.fn.chansend(chan_id, string.format("\x1b[<65;%d;%dM", col, row))
+  end
+  vim.keymap.set("n", "j", down_or_tui_scroll, { buffer = bufnr, silent = true, desc = "Scroll down or TUI scroll" })
+  vim.keymap.set(
+    "n",
+    "<Down>",
+    down_or_tui_scroll,
+    { buffer = bufnr, silent = true, desc = "Scroll down or TUI scroll" }
+  )
+
+  -- Always: suppress <LeftDrag> in terminal mode.
+  -- Mouse-drag events forwarded to Claude Code's stdin appear as raw SGR escape sequences
+  -- in the input field when the TUI is waiting for user input. Single clicks
+  -- (<LeftMouse>/<LeftRelease>) are still forwarded for TUI interaction.
+  -- For text selection use Shift+drag, which Neovim intercepts natively without forwarding.
+  vim.keymap.set("t", "<LeftDrag>", "<Nop>", { buffer = bufnr, silent = true })
+
+  if not config.scroll_up_enabled then
+    -- Helper: forward an SGR scroll-up event to the TUI at given (row, col).
+    local function send_scroll_up(row, col)
+      local ok, chan_id = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
+      if not ok or not chan_id then
+        return
+      end
+      vim.fn.chansend(chan_id, string.format("\x1b[<64;%d;%dM", col, row))
+    end
+
+    -- k/<Up> in normal mode: move cursor up normally; once cursor reaches line 1 (top of
+    -- the terminal scrollback), send SGR scroll-up to the TUI so Claude Code scrolls back.
+    local function up_or_tui_scroll()
+      local cur_line = vim.api.nvim_win_get_cursor(0)[1]
+      if cur_line > 1 then
+        vim.cmd("normal! k")
+        reset_scroll_up_state()
+        return
+      end
+      if not tui_can_scroll_up() then
+        return
+      end
+      local winid = vim.fn.bufwinid(bufnr)
+      if winid == -1 then
+        return
+      end
+      local row = math.max(1, math.floor(vim.api.nvim_win_get_height(winid) / 2))
+      local col = math.max(1, math.floor(vim.api.nvim_win_get_width(winid) / 2))
+      send_scroll_up(row, col)
+    end
+    vim.keymap.set("n", "k", up_or_tui_scroll, { buffer = bufnr, silent = true, desc = "Scroll up or TUI scroll" })
+    vim.keymap.set("n", "<Up>", up_or_tui_scroll, { buffer = bufnr, silent = true, desc = "Scroll up or TUI scroll" })
+
+    -- Mouse <ScrollWheelUp>: route through the same guarded path as keyboard k for both
+    -- normal and terminal modes. Without the normal-mode mapping Neovim's default wheel
+    -- handling forwards directly to Claude Code with no guard, causing over-scroll.
+    -- One chansend per wheel tick keeps the scroll ratio identical to native forwarding.
+    local function mouse_scroll_up()
+      if not tui_can_scroll_up() then
+        return
+      end
+      local mp = vim.fn.getmousepos()
+      local row = math.max(1, mp.winrow or 1)
+      local col = math.max(1, mp.wincol or 1)
+      send_scroll_up(row, col)
+    end
+    vim.keymap.set(
+      { "n", "t" },
+      "<ScrollWheelUp>",
+      mouse_scroll_up,
+      { buffer = bufnr, silent = true, desc = "Scroll Claude Code TUI up (over-scroll guarded)" }
+    )
+
+    -- Mouse <ScrollWheelDown>: forward via chansend in both modes and reset the over-scroll
+    -- guard so subsequent scroll-ups work again.
+    local function mouse_scroll_down()
+      reset_scroll_up_state()
+      local ok, chan_id = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
+      if not ok or not chan_id then
+        return
+      end
+      local mp = vim.fn.getmousepos()
+      local row = math.max(1, mp.winrow or 1)
+      local col = math.max(1, mp.wincol or 1)
+      vim.fn.chansend(chan_id, string.format("\x1b[<65;%d;%dM", col, row))
+    end
+    vim.keymap.set(
+      { "n", "t" },
+      "<ScrollWheelDown>",
+      mouse_scroll_down,
+      { buffer = bufnr, silent = true, desc = "Scroll Claude Code TUI down" }
+    )
+
+    return
+  end
+
+  -- scroll_up_enabled = true: intercept wheel events so the user can browse Neovim's
+  -- scrollback buffer.  Defer to run after any async keymap setup (e.g. snacks).
+  vim.schedule(function()
+    if not vim.api.nvim_buf_is_valid(bufnr) then
+      return
+    end
+
+    -- Exit terminal mode then move cursor up 3 lines (which scrolls the viewport).
+    -- feedkeys + vim.schedule sequences the mode switch before the cursor movement.
+    vim.keymap.set("t", "<ScrollWheelUp>", function()
+      local winid = vim.fn.win_getid()
+      vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<C-\\><C-n>", true, false, true), "n", false)
+      vim.schedule(function()
+        if vim.api.nvim_win_is_valid(winid) then
+          vim.api.nvim_win_call(winid, function()
+            vim.cmd("normal! 3k")
+          end)
+        end
+      end)
+    end, { buffer = bufnr, silent = true, desc = "Scroll up in terminal scrollback" })
+
+    -- Scroll down in normal mode; return to terminal mode when cursor reaches last line.
+    vim.keymap.set("n", "<ScrollWheelDown>", function()
+      local last_line = vim.api.nvim_buf_line_count(bufnr)
+      local cur_line = vim.api.nvim_win_get_cursor(0)[1]
+      local win_h = vim.api.nvim_win_get_height(0)
+      if cur_line + win_h >= last_line then
+        vim.cmd("normal! G")
+        vim.cmd("startinsert")
+      else
+        vim.cmd("normal! 3j")
+      end
+    end, { buffer = bufnr, silent = true, desc = "Scroll down; return to terminal at bottom" })
+  end)
 end
 
 ---Cleanup ESC state for a buffer (call when buffer is deleted)

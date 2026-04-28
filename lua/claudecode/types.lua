@@ -88,6 +88,7 @@
 ---@field git_repo_cwd boolean|nil      -- use git root of current file/cwd as working directory
 ---@field cwd_provider? ClaudeCodeCwdProvider -- custom function to compute working directory
 ---@field split_navigation boolean? -- enable Ctrl+h/j/k/l to navigate splits from terminal mode
+---@field scroll_up_enabled boolean? -- true: exit terminal mode on scroll to browse Neovim scrollback; false (default): no scroll keymaps, wheel events forwarded to Claude Code TUI
 
 -- Port range configuration
 ---@class ClaudeCodePortRange

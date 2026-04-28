@@ -57,9 +57,9 @@ local function create_terminal_buffer(cmd_string, env_table, effective_config, s
 
   vim.bo[new_bufnr].bufhidden = "hide"
 
-  -- Prevent mouse scroll from escaping to terminal scrollback
-  vim.keymap.set("t", "<ScrollWheelUp>", "<Nop>", { buffer = new_bufnr, silent = true })
-  vim.keymap.set("t", "<ScrollWheelDown>", "<Nop>", { buffer = new_bufnr, silent = true })
+  -- Set up scroll keymaps (scroll up to view scrollback by default)
+  local terminal_module = require("claudecode.terminal")
+  terminal_module.setup_scroll_keymaps(new_bufnr, effective_config)
 
   -- Set up BufUnload autocmd to ensure job is stopped when buffer is deleted
   -- This catches :bd!, Neovim exit, and any other buffer deletion path

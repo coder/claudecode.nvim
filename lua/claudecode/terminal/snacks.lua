@@ -436,10 +436,9 @@ function M.open(cmd_string, env_table, config, focus)
       terminal_module.setup_terminal_keymaps(term_instance.buf, config)
     end
 
-    -- Prevent mouse scroll from escaping to terminal scrollback
+    -- Set up scroll keymaps (scroll up to view scrollback by default)
     if term_instance.buf then
-      vim.keymap.set("t", "<ScrollWheelUp>", "<Nop>", { buffer = term_instance.buf, silent = true })
-      vim.keymap.set("t", "<ScrollWheelDown>", "<Nop>", { buffer = term_instance.buf, silent = true })
+      terminal_module.setup_scroll_keymaps(term_instance.buf, config)
     end
 
     -- Update session info
@@ -643,10 +642,9 @@ function M.open_session(session_id, cmd_string, env_table, config, focus)
       terminal_module.setup_terminal_keymaps(term_instance.buf, config)
     end
 
-    -- Prevent mouse scroll from escaping to terminal scrollback
+    -- Set up scroll keymaps (scroll up to view scrollback by default)
     if term_instance.buf then
-      vim.keymap.set("t", "<ScrollWheelUp>", "<Nop>", { buffer = term_instance.buf, silent = true })
-      vim.keymap.set("t", "<ScrollWheelDown>", "<Nop>", { buffer = term_instance.buf, silent = true })
+      terminal_module.setup_scroll_keymaps(term_instance.buf, config)
     end
 
     -- Setup OSC title handler
