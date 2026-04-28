@@ -496,6 +496,58 @@ function M.setup_scroll_keymaps(bufnr, config)
       { buffer = bufnr, silent = true, desc = "Scroll Claude Code TUI down" }
     )
 
+    -- <PageUp>/<PageDown>: send a window-sized burst of SGR scroll events to Claude Code
+    -- instead of letting Neovim scroll the buffer view (which over-scrolls past the end).
+    -- Page size mirrors Vim's <C-f>/<C-b> convention of window_height - 2.
+    local function page_size(winid)
+      return math.max(1, vim.api.nvim_win_get_height(winid) - 2)
+    end
+
+    local function page_up()
+      local winid = vim.fn.bufwinid(bufnr)
+      if winid == -1 then
+        return
+      end
+      local row = math.max(1, math.floor(vim.api.nvim_win_get_height(winid) / 2))
+      local col = math.max(1, math.floor(vim.api.nvim_win_get_width(winid) / 2))
+      for _ = 1, page_size(winid) do
+        if not tui_can_scroll_up() then
+          break
+        end
+        send_scroll_up(row, col)
+      end
+    end
+    vim.keymap.set(
+      { "n", "t" },
+      "<PageUp>",
+      page_up,
+      { buffer = bufnr, silent = true, desc = "Page up Claude Code TUI" }
+    )
+
+    local function page_down()
+      reset_scroll_up_state()
+      local ok, chan_id = pcall(vim.api.nvim_buf_get_var, bufnr, "terminal_job_id")
+      if not ok or not chan_id then
+        return
+      end
+      local winid = vim.fn.bufwinid(bufnr)
+      if winid == -1 then
+        return
+      end
+      local row = math.max(1, math.floor(vim.api.nvim_win_get_height(winid) / 2))
+      local col = math.max(1, math.floor(vim.api.nvim_win_get_width(winid) / 2))
+      local seq = string.format("\x1b[<65;%d;%dM", col, row)
+      for _ = 1, page_size(winid) do
+        vim.fn.chansend(chan_id, seq)
+      end
+    end
+    vim.keymap.set(
+      { "n", "t" },
+      "<PageDown>",
+      page_down,
+      { buffer = bufnr, silent = true, desc = "Page down Claude Code TUI" }
+    )
+
     return
   end
 
