@@ -63,6 +63,56 @@ terminal = {
 }
 ```
 
+### Triple-ESC in Terminal Mode
+
+Three-state ESC handler for the Claude terminal:
+
+- **1× ESC** — forwarded to Claude (cancel current input/operation)
+- **2× ESC** — forwarded as `<ESC><ESC>` (Claude rewind to previous prompt)
+- **3× ESC** — exit Neovim terminal-mode
+
+> **Migration note:** Upstream uses double-ESC to exit terminal-mode. In this fork, double-ESC is reserved for Claude's rewind. Use triple-ESC to exit.
+
+### TUI Scroll-Back
+
+Scroll the Claude TUI buffer without leaving terminal-mode:
+
+- Mouse wheel and `PageUp` / `PageDown` route to Claude's internal scroll
+- Over-scroll guard keeps you inside terminal-mode at the buffer edges
+
+### Split Navigation with Mode Restore
+
+`<C-w>h/j/k/l` from a Claude terminal jumps to neighbor splits and restores the prior mode (terminal vs normal) when you return. Selection tracking follows window focus so file references stay accurate.
+
+### Robust Process Cleanup
+
+- Orphan Claude processes are killed when Neovim exits
+- Terminal split width is preserved across tab switches and session operations
+- Floating-terminal focus is retained when diffs open
+
+### Server Hooks
+
+- `on_disconnect_cleanup` callback on the TCP server for custom teardown
+- Quieter logs for expected disconnect errors
+- IDE diagnostics tolerate documents without a URI scheme
+
+### Tab Bar Configuration Keys
+
+```lua
+terminal = {
+  tabs = {
+    enabled = false,           -- visual tab bar
+    height = 1,                -- tab bar rows
+    mouse_enabled = false,     -- click to switch/close/new
+    show_close_button = true,  -- ✕ on each tab
+    show_new_button = true,    -- + tab to spawn session
+    separator = " | ",
+    active_indicator = "*",
+    keymaps = {},              -- override Alt+Tab cycle bindings
+  },
+}
+```
+
 ## Installation
 
 ```lua
