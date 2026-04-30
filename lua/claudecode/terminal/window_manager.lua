@@ -214,19 +214,36 @@ function M.setup(config)
   logger.debug("window_manager", "Window manager initialized")
 end
 
+---Check winid lives in current tabpage
+---@param winid number
+---@return boolean
+local function win_in_current_tab(winid)
+  if not winid or not vim.api.nvim_win_is_valid(winid) then
+    return false
+  end
+  local ok, tabpage = pcall(vim.api.nvim_win_get_tabpage, winid)
+  if not ok then
+    return false
+  end
+  return tabpage == vim.api.nvim_get_current_tabpage()
+end
+
 ---Get or create the terminal window
 ---@return number|nil winid
 function M.ensure_window()
-  -- Return existing window if valid
-  if state.winid and vim.api.nvim_win_is_valid(state.winid) then
+  -- Return existing window only if valid AND in current tabpage.
+  -- A cached winid from another tab would cause display_buffer to jump tabs.
+  if state.winid and win_in_current_tab(state.winid) then
     return state.winid
   end
 
-  -- Search for any existing terminal window (recovery after external close)
-  state.winid = find_terminal_window()
-  if state.winid then
-    logger.debug("window_manager", "Recovered existing terminal window: " .. state.winid)
-    return state.winid
+  -- Search current tabpage for an existing terminal window (recovery after
+  -- external close, or first open in a new tab).
+  local found = find_terminal_window()
+  if found then
+    state.winid = found
+    logger.debug("window_manager", "Recovered existing terminal window: " .. found)
+    return found
   end
 
   -- Create new window (only happens once per visibility cycle)
@@ -309,10 +326,10 @@ function M.close_window()
   state.current_bufnr = nil
 end
 
----Check if terminal window is visible
+---Check if terminal window is visible in the current tabpage
 ---@return boolean
 function M.is_visible()
-  return state.winid ~= nil and vim.api.nvim_win_is_valid(state.winid)
+  return state.winid ~= nil and win_in_current_tab(state.winid)
 end
 
 ---Get window dimensions
