@@ -416,12 +416,33 @@ function M.setup_scroll_keymaps(bufnr, config)
     { buffer = bufnr, silent = true, desc = "Scroll down or TUI scroll" }
   )
 
-  -- Always: suppress <LeftDrag> in terminal mode.
-  -- Mouse-drag events forwarded to Claude Code's stdin appear as raw SGR escape sequences
-  -- in the input field when the TUI is waiting for user input. Single clicks
-  -- (<LeftMouse>/<LeftRelease>) are still forwarded for TUI interaction.
-  -- For text selection use Shift+drag, which Neovim intercepts natively without forwarding.
-  vim.keymap.set("t", "<LeftDrag>", "<Nop>", { buffer = bufnr, silent = true })
+  -- Mouse click in terminal mode: exit to normal mode and position cursor under mouse.
+  -- Subsequent <LeftDrag> events then fire in normal mode where Neovim's native mouse=a
+  -- handling starts character-wise visual selection. Trade-off: clicks no longer forward
+  -- to the Claude Code TUI; re-enter terminal mode (e.g. `i`) to interact with the TUI.
+  local function exit_to_normal_at_mouse()
+    local mp = vim.fn.getmousepos()
+    vim.cmd("stopinsert")
+    if mp.winid and mp.winid ~= 0 then
+      pcall(vim.api.nvim_set_current_win, mp.winid)
+    end
+    if mp.line and mp.line > 0 then
+      local col = math.max(0, (mp.column or 1) - 1)
+      pcall(vim.api.nvim_win_set_cursor, 0, { mp.line, col })
+    end
+  end
+  vim.keymap.set(
+    "t",
+    "<LeftMouse>",
+    exit_to_normal_at_mouse,
+    { buffer = bufnr, silent = true, desc = "Exit terminal mode at mouse position" }
+  )
+  -- Fallback: if the click was missed and a drag arrives while still in terminal mode,
+  -- exit and start visual selection here so the user is not stuck.
+  vim.keymap.set("t", "<LeftDrag>", function()
+    exit_to_normal_at_mouse()
+    vim.api.nvim_feedkeys("v", "n", false)
+  end, { buffer = bufnr, silent = true, desc = "Mouse drag: exit terminal and start visual selection" })
 
   if not config.scroll_up_enabled then
     -- Helper: forward an SGR scroll-up event to the TUI at given (row, col).
@@ -470,7 +491,7 @@ function M.setup_scroll_keymaps(bufnr, config)
       send_scroll_up(row, col)
     end
     vim.keymap.set(
-      { "n", "t" },
+      { "n", "t", "x" },
       "<ScrollWheelUp>",
       mouse_scroll_up,
       { buffer = bufnr, silent = true, desc = "Scroll Claude Code TUI up (over-scroll guarded)" }
@@ -490,7 +511,7 @@ function M.setup_scroll_keymaps(bufnr, config)
       vim.fn.chansend(chan_id, string.format("\x1b[<65;%d;%dM", col, row))
     end
     vim.keymap.set(
-      { "n", "t" },
+      { "n", "t", "x" },
       "<ScrollWheelDown>",
       mouse_scroll_down,
       { buffer = bufnr, silent = true, desc = "Scroll Claude Code TUI down" }
@@ -518,7 +539,7 @@ function M.setup_scroll_keymaps(bufnr, config)
       end
     end
     vim.keymap.set(
-      { "n", "t" },
+      { "n", "t", "x" },
       "<PageUp>",
       page_up,
       { buffer = bufnr, silent = true, desc = "Page up Claude Code TUI" }
@@ -542,7 +563,7 @@ function M.setup_scroll_keymaps(bufnr, config)
       end
     end
     vim.keymap.set(
-      { "n", "t" },
+      { "n", "t", "x" },
       "<PageDown>",
       page_down,
       { buffer = bufnr, silent = true, desc = "Page down Claude Code TUI" }
