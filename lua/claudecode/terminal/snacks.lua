@@ -233,7 +233,18 @@ end
 ---@return string title The title string
 local function build_initial_title(session_id)
   local sm = require("claudecode.session")
-  local sessions = sm.list_sessions()
+  local reg = require("claudecode.tab_registry")
+  -- Title in tab N's terminal should reflect tab N's sessions only — strictly
+  -- tab-scoped, no fallthrough for unbound sessions.
+  local ok_tab, current_tab = pcall(vim.api.nvim_get_current_tabpage)
+  local sessions = {}
+  if ok_tab and current_tab then
+    for _, s in ipairs(sm.list_sessions()) do
+      if reg.tab_for_session(s.id) == current_tab then
+        table.insert(sessions, s)
+      end
+    end
+  end
   local active_id = session_id or sm.get_active_session_id()
 
   if #sessions == 0 then

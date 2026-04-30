@@ -88,6 +88,14 @@ function M.destroy_session(session_id)
   -- Clean up selection state
   session.selection = nil
 
+  -- Drop tab registry binding so a destroyed session id doesn't keep its tab
+  -- slot occupied. Keep this *before* we remove from M.sessions so the
+  -- registry observer (if any) can still resolve the session if needed.
+  local ok_reg, tab_registry = pcall(require, "claudecode.tab_registry")
+  if ok_reg then
+    tab_registry.unbind_session(session_id)
+  end
+
   -- Remove from sessions table
   M.sessions[session_id] = nil
 
@@ -125,9 +133,20 @@ function M.get_active_session()
   return M.sessions[M.active_session_id]
 end
 
----Get the active session ID
+---Get the active session ID.
+---Resolves to the session bound to the current Neovim tabpage when the
+---tab_registry has a binding for it; otherwise falls back to the global
+---active session. The fallback covers sessions created before binding logic
+---ran (e.g. on plugin reload) and tabs that have not yet opened a session.
 ---@return string|nil session_id The active session ID or nil
 function M.get_active_session_id()
+  local ok_reg, tab_registry = pcall(require, "claudecode.tab_registry")
+  if ok_reg then
+    local sid = tab_registry.current_session()
+    if sid and M.sessions[sid] then
+      return sid
+    end
+  end
   return M.active_session_id
 end
 
@@ -182,6 +201,23 @@ function M.find_session_by_bufnr(bufnr)
     end
   end
   return nil
+end
+
+---Find the most recently created session that has no bound WebSocket client.
+---Used at handshake time to attach an incoming Claude CLI client to its
+---session without depending on the global "active" pointer (which can race
+---with tab switches between termopen and the websocket handshake).
+---@return ClaudeCodeSession|nil session The unbound session or nil
+function M.find_unbound_session()
+  local newest
+  for _, session in pairs(M.sessions) do
+    if not session.client_id then
+      if not newest or session.created_at > newest.created_at then
+        newest = session
+      end
+    end
+  end
+  return newest
 end
 
 ---Find session by WebSocket client ID

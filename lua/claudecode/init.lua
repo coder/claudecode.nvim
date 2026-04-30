@@ -390,6 +390,35 @@ function M.setup(opts)
     desc = "Automatically stop Claude Code integration when exiting Neovim",
   })
 
+  -- Dispose Claude Code sessions whose owning tabpage was just closed.
+  -- Deferred via vim.schedule so Neovim has finished tearing the tabpage
+  -- down by the time we ask the registry which bindings are now orphaned.
+  vim.api.nvim_create_autocmd("TabClosed", {
+    group = vim.api.nvim_create_augroup("ClaudeCodeTabLifecycle", { clear = true }),
+    callback = function()
+      vim.schedule(function()
+        local ok_reg, tab_registry = pcall(require, "claudecode.tab_registry")
+        if not ok_reg then
+          return
+        end
+        local orphaned = tab_registry.prune_invalid_tabs()
+        if #orphaned == 0 then
+          return
+        end
+        local ok_sm, session_manager = pcall(require, "claudecode.session")
+        if not ok_sm then
+          return
+        end
+        for _, sid in ipairs(orphaned) do
+          if session_manager.get_session(sid) then
+            session_manager.destroy_session(sid)
+          end
+        end
+      end)
+    end,
+    desc = "Dispose Claude Code sessions bound to closed tabpages",
+  })
+
   M.state.initialized = true
   return M
 end
@@ -1050,9 +1079,12 @@ function M._create_commands()
         return
       end
 
-      local sessions = terminal.list_sessions()
+      local sessions = terminal.list_sessions_for_current_tab()
       if session_index < 1 or session_index > #sessions then
-        logger.error("command", "Invalid session number: " .. session_index .. " (have " .. #sessions .. " sessions)")
+        logger.error(
+          "command",
+          "Invalid session number: " .. session_index .. " (have " .. #sessions .. " sessions in this tab)"
+        )
         return
       end
 
@@ -1067,9 +1099,12 @@ function M._create_commands()
       local session_index = opts.args and opts.args ~= "" and tonumber(opts.args)
 
       if session_index then
-        local sessions = terminal.list_sessions()
+        local sessions = terminal.list_sessions_for_current_tab()
         if session_index < 1 or session_index > #sessions then
-          logger.error("command", "Invalid session number: " .. session_index .. " (have " .. #sessions .. " sessions)")
+          logger.error(
+            "command",
+            "Invalid session number: " .. session_index .. " (have " .. #sessions .. " sessions in this tab)"
+          )
           return
         end
         terminal.close_session(sessions[session_index].id)
@@ -1148,13 +1183,13 @@ M.open_with_model = function(additional_args)
   end)
 end
 
----Show session picker UI for selecting between active sessions
+---Show session picker UI for selecting between active sessions in the current tab
 function M.show_session_picker()
   local terminal = require("claudecode.terminal")
-  local sessions = terminal.list_sessions()
+  local sessions = terminal.list_sessions_for_current_tab()
 
   if #sessions == 0 then
-    logger.warn("command", "No active Claude Code sessions")
+    logger.warn("command", "No Claude Code sessions in this tab. Run :ClaudeCode to start one.")
     return
   end
 
@@ -1214,7 +1249,7 @@ function M._try_picker(items, on_select)
     -- Use a finder function for dynamic refresh support
     local function session_finder()
       local terminal_mod = require("claudecode.terminal")
-      local sessions = terminal_mod.list_sessions()
+      local sessions = terminal_mod.list_sessions_for_current_tab()
       local active_session_id = terminal_mod.get_active_session_id()
       local picker_items = {}
       for i, session in ipairs(sessions) do
@@ -1259,7 +1294,7 @@ function M._try_picker(items, on_select)
             terminal_mod.close_session(item.item.session.id)
             vim.notify("Closed session: " .. item.item.session.name, vim.log.levels.INFO)
             -- Refresh the picker to show updated session list
-            local sessions = terminal_mod.list_sessions()
+            local sessions = terminal_mod.list_sessions_for_current_tab()
             if #sessions == 0 then
               picker:close()
             else
@@ -1314,8 +1349,8 @@ function M._try_picker(items, on_select)
                 local terminal_mod = require("claudecode.terminal")
                 terminal_mod.close_session(item.session.id)
                 vim.notify("Closed session: " .. item.session.name, vim.log.levels.INFO)
-                -- Reopen picker with updated sessions if any remain
-                local sessions = terminal_mod.list_sessions()
+                -- Reopen picker with updated sessions if any remain in this tab
+                local sessions = terminal_mod.list_sessions_for_current_tab()
                 if #sessions > 0 then
                   vim.schedule(function()
                     M.show_session_picker()

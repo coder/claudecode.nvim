@@ -59,14 +59,18 @@ function M.start(config, auth_token)
         logger.debug("server", "WebSocket client connected (no auth):", client.id)
       end
 
-      -- Try to bind client to an available session (active session or first unbound session)
-      local active_session_id = session_manager.get_active_session_id()
-      if active_session_id then
-        local active_session = session_manager.get_session(active_session_id)
-        if active_session and not active_session.client_id then
-          session_manager.bind_client(active_session_id, client.id)
-          logger.debug("server", "Bound client", client.id, "to active session", active_session_id)
-        end
+      -- Bind client to the most recently created session that has no client
+      -- yet. Sessions are created right before their Claude CLI process
+      -- spawns, so the newest unbound session is the one whose handshake is
+      -- arriving now. Avoids a race where switching Neovim tabs between
+      -- termopen and the websocket handshake would otherwise route the new
+      -- client to whatever tab the user happens to be focused on.
+      local target_session = session_manager.find_unbound_session()
+      if target_session then
+        session_manager.bind_client(target_session.id, client.id)
+        logger.debug("server", "Bound client", client.id, "to session", target_session.id)
+      else
+        logger.debug("server", "No unbound session available for client", client.id)
       end
 
       -- Notify main module about new connection for queue processing

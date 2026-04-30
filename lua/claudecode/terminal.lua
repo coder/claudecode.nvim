@@ -8,6 +8,7 @@ local M = {}
 local claudecode_server_module = require("claudecode.server.init")
 local osc_handler = require("claudecode.terminal.osc_handler")
 local session_manager = require("claudecode.session")
+local tab_registry = require("claudecode.tab_registry")
 
 -- Use global to survive module reloads (Fix 3: Plugin Reload Protection)
 ---@type table<number, number> Map of job_id -> unix_pid
@@ -74,6 +75,82 @@ function M.unregister_buffer_session(bufnr)
   if bufnr then
     buffer_to_session[bufnr] = nil
   end
+end
+
+---Bind a session to the current Neovim tabpage so subsequent open/toggle/picker
+---calls in that tab route to it. Idempotent.
+---@param session_id string
+function M._bind_to_current_tab(session_id)
+  if not session_id then
+    return
+  end
+  local ok, tab = pcall(vim.api.nvim_get_current_tabpage)
+  if ok and tab then
+    tab_registry.bind(tab, session_id)
+  end
+end
+
+---Resolve the session bound to the current tabpage, if any, including a check
+---that the session record actually still exists.
+---@return string|nil session_id, ClaudeCodeSession|nil session
+local function current_tab_session()
+  local ok, tab = pcall(vim.api.nvim_get_current_tabpage)
+  if not ok or not tab then
+    return nil, nil
+  end
+  local sid = tab_registry.session_for_tab(tab)
+  if not sid then
+    return nil, nil
+  end
+  local sess = session_manager.get_session(sid)
+  if not sess then
+    return nil, nil
+  end
+  return sid, sess
+end
+
+---True when the current tab owns a session whose terminal buffer is still alive.
+---@return boolean
+local function current_tab_has_live_terminal()
+  local _, sess = current_tab_session()
+  return sess ~= nil and sess.terminal_bufnr ~= nil and vim.api.nvim_buf_is_valid(sess.terminal_bufnr)
+end
+
+---Wire up the auxiliary state for a freshly-spawned session terminal: tab bind,
+---buffer→session map, terminal_info on the session, OSC title watcher, provider
+---registration. Returns the session id.
+---@param session_id string
+---@param bufnr number
+---@param provider table The terminal provider module
+---@return string session_id
+local function finalize_session_terminal(session_id, bufnr, provider)
+  if bufnr then
+    session_manager.update_terminal_info(session_id, { bufnr = bufnr })
+    if provider.register_terminal_for_session then
+      provider.register_terminal_for_session(session_id, bufnr)
+    end
+    M.register_buffer_session(bufnr, session_id)
+    osc_handler.setup_buffer_handler(bufnr, function(title)
+      if title and title ~= "" then
+        session_manager.update_session_name(session_id, title)
+      end
+    end)
+  end
+  return session_id
+end
+
+---Ensure the current tab has a session, creating and binding one if not.
+---Returns the session id and whether it was newly created.
+---@return string session_id, boolean newly_created
+local function ensure_current_tab_session()
+  local sid = current_tab_session()
+  if sid then
+    return sid, false
+  end
+  local new_sid = session_manager.create_session()
+  session_manager.set_active_session(new_sid)
+  M._bind_to_current_tab(new_sid)
+  return new_sid, true
 end
 
 -- Setup global BufUnload handler to cleanup orphaned sessions (Fix 1: Zombie Sessions)
@@ -857,6 +934,16 @@ local function build_config(opts_override)
       resolved_cwd = cwd_mod.git_root(cwd_ctx.file_dir or cwd_ctx.cwd)
     end
   end
+  -- Final fallback: tab/window-aware cwd. Without this, termopen({cwd=nil})
+  -- inherits Neovim's process cwd and ignores :tcd / :lcd, so a Claude
+  -- terminal launched in a tab that switched into a worktree via :tcd would
+  -- still spawn in the original startup directory.
+  if not resolved_cwd then
+    local ok_g, cwd_g = pcall(vim.fn.getcwd)
+    if ok_g and type(cwd_g) == "string" and cwd_g ~= "" then
+      resolved_cwd = cwd_g
+    end
+  end
 
   return {
     split_side = effective_config.split_side,
@@ -958,47 +1045,53 @@ local function get_claude_command_and_env(cmd_args)
   return cmd_string, env_table
 end
 
----Common helper to open terminal without focus if not already visible
+---Common helper to open terminal without focus if not already visible.
+---Per-tab: targets the session bound to the current tab; creates and binds a
+---fresh session if the tab has none.
 ---@param opts_override table? Optional config overrides
 ---@param cmd_args string? Optional command arguments
 ---@return boolean visible True if terminal was opened or already visible
 local function ensure_terminal_visible_no_focus(opts_override, cmd_args)
   local provider = get_provider()
 
-  -- Check if provider has an ensure_visible method
+  -- Provider-managed visibility (e.g. snacks `ensure_visible`) bypasses our
+  -- per-tab logic for now; rely on the provider knowing what to do.
   if provider.ensure_visible then
     provider.ensure_visible()
     return true
   end
 
+  local effective_config = build_config(opts_override)
+  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+
+  if provider.open_session then
+    -- Per-tab path
+    if current_tab_has_live_terminal() then
+      return true
+    end
+    local session_id, newly_created = ensure_current_tab_session()
+    provider.open_session(session_id, cmd_string, claude_env_table, effective_config, false)
+    if newly_created then
+      finalize_session_terminal(session_id, provider.get_active_bufnr(), provider)
+    end
+    return true
+  end
+
+  -- Legacy provider path
   local active_bufnr = provider.get_active_bufnr()
   local had_terminal = active_bufnr ~= nil
 
   if is_terminal_visible(active_bufnr) then
-    -- Terminal is already visible, do nothing
     return true
   end
 
-  -- Terminal is not visible, open it without focus
-  local effective_config = build_config(opts_override)
-  local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
+  provider.open(cmd_string, claude_env_table, effective_config, false)
 
-  provider.open(cmd_string, claude_env_table, effective_config, false) -- false = don't focus
-
-  -- If we didn't have a terminal before but do now, ensure a session exists
   if not had_terminal then
     local new_bufnr = provider.get_active_bufnr()
     if new_bufnr then
-      -- Ensure we have a session for this terminal
       local session_id = session_manager.ensure_session()
-      -- Update session with terminal info
-      session_manager.update_terminal_info(session_id, {
-        bufnr = new_bufnr,
-      })
-      -- Register terminal with provider for session switching support
-      if provider.register_terminal_for_session then
-        provider.register_terminal_for_session(session_id, new_bufnr)
-      end
+      finalize_session_terminal(session_id, new_bufnr, provider)
     end
   end
 
@@ -1277,31 +1370,30 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
   end
 end
 
----Opens or focuses the Claude terminal.
+---Opens or focuses the Claude terminal for the current tabpage.
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
 ---@param cmd_args string? Arguments to append to the claude command.
 function M.open(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
-
   local provider = get_provider()
-  local had_terminal = provider.get_active_bufnr() ~= nil
 
-  provider.open(cmd_string, claude_env_table, effective_config)
-
-  -- If we didn't have a terminal before but do now, ensure a session exists
-  if not had_terminal then
-    local active_bufnr = provider.get_active_bufnr()
-    if active_bufnr then
-      -- Ensure we have a session for this terminal
-      local session_id = session_manager.ensure_session()
-      -- Update session with terminal info
-      session_manager.update_terminal_info(session_id, {
-        bufnr = active_bufnr,
-      })
-      -- Register terminal with provider for session switching support
-      if provider.register_terminal_for_session then
-        provider.register_terminal_for_session(session_id, active_bufnr)
+  if provider.open_session then
+    -- Per-tab path: route through the session-aware provider API.
+    local session_id, newly_created = ensure_current_tab_session()
+    provider.open_session(session_id, cmd_string, claude_env_table, effective_config, true)
+    if newly_created then
+      finalize_session_terminal(session_id, provider.get_active_bufnr(), provider)
+    end
+  else
+    -- Legacy / custom provider without per-session support: keep historic behavior.
+    local had_terminal = provider.get_active_bufnr() ~= nil
+    provider.open(cmd_string, claude_env_table, effective_config)
+    if not had_terminal then
+      local active_bufnr = provider.get_active_bufnr()
+      if active_bufnr then
+        local session_id = session_manager.ensure_session()
+        finalize_session_terminal(session_id, active_bufnr, provider)
       end
     end
   end
@@ -1323,49 +1415,59 @@ function M.close()
   get_provider().close()
 end
 
----Simple toggle: always show/hide the Claude terminal regardless of focus.
+---Simple toggle: show/hide the Claude terminal for the current tabpage.
 ---@param opts_override table? Overrides for terminal appearance (split_side, split_width_percentage).
 ---@param cmd_args string? Arguments to append to the claude command.
 function M.simple_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
-
-  -- Check if we had a terminal before the toggle
   local provider = get_provider()
+
+  if provider.open_session then
+    -- Per-tab path
+    local window_manager = require("claudecode.terminal.window_manager")
+
+    if window_manager.is_visible() and current_tab_has_live_terminal() then
+      window_manager.close_window()
+      detach_tabbar()
+      return
+    end
+
+    local session_id, newly_created = ensure_current_tab_session()
+    provider.open_session(session_id, cmd_string, claude_env_table, effective_config, false)
+    if newly_created then
+      finalize_session_terminal(session_id, provider.get_active_bufnr(), provider)
+    end
+
+    local active_bufnr = provider.get_active_bufnr()
+    if active_bufnr and vim.fn.getbufinfo then
+      local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
+      if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+        attach_tabbar(bufinfo[1].windows[1], active_bufnr)
+      end
+    end
+    return
+  end
+
+  -- Legacy provider path (no open_session): preserve historic behavior so
+  -- custom providers (and test mocks) keep working unchanged.
   local had_terminal = provider.get_active_bufnr() ~= nil
   local was_visible = is_terminal_visible(provider.get_active_bufnr())
 
   provider.simple_toggle(cmd_string, claude_env_table, effective_config)
 
-  -- If we didn't have a terminal before but do now, ensure a session exists
   if not had_terminal then
     local active_bufnr = provider.get_active_bufnr()
     if active_bufnr then
-      -- Ensure we have a session for this terminal
       local session_id = session_manager.ensure_session()
-      -- Update session with terminal info
-      session_manager.update_terminal_info(session_id, {
-        bufnr = active_bufnr,
-      })
-      -- Register terminal with provider for session switching support
-      if provider.register_terminal_for_session then
-        provider.register_terminal_for_session(session_id, active_bufnr)
-      end
-      -- Setup title watcher to capture terminal title changes
-      osc_handler.setup_buffer_handler(active_bufnr, function(title)
-        if title and title ~= "" then
-          session_manager.update_session_name(session_id, title)
-        end
-      end)
+      finalize_session_terminal(session_id, active_bufnr, provider)
     end
   end
 
-  -- Handle tab bar visibility based on terminal visibility
   local active_bufnr = provider.get_active_bufnr()
   local is_visible_now = is_terminal_visible(active_bufnr)
 
   if is_visible_now and not was_visible then
-    -- Terminal just became visible, attach tab bar
     if active_bufnr and vim.fn.getbufinfo then
       local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
       if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
@@ -1373,54 +1475,71 @@ function M.simple_toggle(opts_override, cmd_args)
       end
     end
   elseif was_visible and not is_visible_now then
-    -- Terminal was hidden, detach tab bar
     detach_tabbar()
   end
 end
 
 ---Smart focus toggle: switches to terminal if not focused, hides if currently focused.
+---Operates on the current tabpage's session.
 ---@param opts_override table (optional) Overrides for terminal appearance (split_side, split_width_percentage).
 ---@param cmd_args string|nil (optional) Arguments to append to the claude command.
 function M.focus_toggle(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
-
-  -- Check if we had a terminal before the toggle
   local provider = get_provider()
+
+  if provider.open_session then
+    local window_manager = require("claudecode.terminal.window_manager")
+
+    if window_manager.is_visible() and current_tab_has_live_terminal() then
+      local winid = window_manager.get_window()
+      local current_win = vim.api.nvim_get_current_win()
+      if winid == current_win then
+        window_manager.close_window()
+        detach_tabbar()
+        return
+      end
+      if winid then
+        vim.api.nvim_set_current_win(winid)
+        pcall(vim.cmd, "startinsert")
+        return
+      end
+    end
+
+    local session_id, newly_created = ensure_current_tab_session()
+    provider.open_session(session_id, cmd_string, claude_env_table, effective_config, true)
+    if newly_created then
+      finalize_session_terminal(session_id, provider.get_active_bufnr(), provider)
+    end
+
+    local active_bufnr = provider.get_active_bufnr()
+    if active_bufnr and vim.fn.getbufinfo then
+      local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
+      if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
+        attach_tabbar(bufinfo[1].windows[1], active_bufnr)
+      end
+    end
+    return
+  end
+
+  -- Legacy provider path
   local had_terminal = provider.get_active_bufnr() ~= nil
   local was_visible = is_terminal_visible(provider.get_active_bufnr())
 
   provider.focus_toggle(cmd_string, claude_env_table, effective_config)
 
-  -- If we didn't have a terminal before but do now, ensure a session exists
   if not had_terminal then
     local active_bufnr = provider.get_active_bufnr()
     if active_bufnr then
-      -- Ensure we have a session for this terminal
       local session_id = session_manager.ensure_session()
-      -- Update session with terminal info
-      session_manager.update_terminal_info(session_id, {
-        bufnr = active_bufnr,
-      })
-      -- Register terminal with provider for session switching support
-      if provider.register_terminal_for_session then
-        provider.register_terminal_for_session(session_id, active_bufnr)
-      end
-      -- Setup OSC title handler to capture terminal title changes
-      osc_handler.setup_buffer_handler(active_bufnr, function(title)
-        if title and title ~= "" then
-          session_manager.update_session_name(session_id, title)
-        end
-      end)
+      finalize_session_terminal(session_id, active_bufnr, provider)
     end
   end
 
-  -- Handle tab bar visibility based on terminal visibility
   local active_bufnr = provider.get_active_bufnr()
   local is_visible_now = is_terminal_visible(active_bufnr)
 
   if is_visible_now and not was_visible then
-    -- Terminal just became visible, attach tab bar
     if active_bufnr and vim.fn.getbufinfo then
       local ok, bufinfo = pcall(vim.fn.getbufinfo, active_bufnr)
       if ok and bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0 then
@@ -1428,7 +1547,6 @@ function M.focus_toggle(opts_override, cmd_args)
       end
     end
   elseif was_visible and not is_visible_now then
-    -- Terminal was hidden, detach tab bar
     detach_tabbar()
   end
 end
@@ -1487,8 +1605,11 @@ function M.open_new_session(opts_override, cmd_args)
   local effective_config = build_config(opts_override)
   local cmd_string, claude_env_table = get_claude_command_and_env(cmd_args)
 
-  -- Make the new session active immediately
+  -- Make the new session active immediately and bind it to the current tab.
+  -- Binding before termopen ensures the websocket handshake (which selects the
+  -- newest unbound session) hits a session that already knows its tab.
   session_manager.set_active_session(session_id)
+  M._bind_to_current_tab(session_id)
 
   local provider = get_provider()
 
@@ -1518,13 +1639,29 @@ function M.close_session(session_id)
   local session_count = session_manager.get_session_count()
 
   if session_count > 1 then
-    -- There are other sessions - keep the window and switch to another session
-    -- Figure out which session to switch to: prefer previous tab, fallback to next
-    local sessions = session_manager.list_sessions()
+    -- There are other sessions - keep the window and switch to another session.
+    -- Prefer another session bound to the same tabpage as the one being
+    -- closed; fall back to global ordering if the tab has no other sessions.
+    local closing_owner_tab = tab_registry.tab_for_session(session_id)
+    local global_sessions = session_manager.list_sessions()
+
+    local sessions = global_sessions
+    if closing_owner_tab then
+      local same_tab = {}
+      for _, s in ipairs(global_sessions) do
+        if tab_registry.tab_for_session(s.id) == closing_owner_tab then
+          table.insert(same_tab, s)
+        end
+      end
+      if #same_tab > 1 then
+        sessions = same_tab
+      end
+    end
+
     local new_active_id = nil
     local current_index = nil
 
-    -- Find the index of the session being closed
+    -- Find the index of the session being closed within the chosen list
     for i, s in ipairs(sessions) do
       if s.id == session_id then
         current_index = i
@@ -1541,9 +1678,10 @@ function M.close_session(session_id)
       end
     end
 
-    -- Fallback: just pick any other session
+    -- Fallback: just pick any other session (from the global list now, in case
+    -- the tab-scoped list was a singleton)
     if not new_active_id then
-      for _, s in ipairs(sessions) do
+      for _, s in ipairs(global_sessions) do
         if s.id ~= session_id then
           new_active_id = s.id
           break
@@ -1616,6 +1754,10 @@ function M.switch_to_session(session_id, opts_override)
 
   session_manager.set_active_session(session_id)
 
+  -- Make the picker selection sticky on the current tab. Without this, the
+  -- next tab-scoped picker call wouldn't see the session the user just chose.
+  M._bind_to_current_tab(session_id)
+
   local provider = get_provider()
 
   if provider.focus_session then
@@ -1649,6 +1791,24 @@ end
 ---@return table[] sessions Array of session info
 function M.list_sessions()
   return session_manager.list_sessions()
+end
+
+---Lists sessions owned by the current Neovim tabpage.
+---Strictly tab-scoped: a session must have an explicit registry binding to the
+---current tab to be returned. Unbound sessions never leak into other tabs.
+---@return ClaudeCodeSession[] sessions Tab-scoped list (empty array when no session belongs to the current tab)
+function M.list_sessions_for_current_tab()
+  local ok, tab = pcall(vim.api.nvim_get_current_tabpage)
+  if not ok or not tab then
+    return {}
+  end
+  local result = {}
+  for _, session in ipairs(session_manager.list_sessions()) do
+    if tab_registry.tab_for_session(session.id) == tab then
+      table.insert(result, session)
+    end
+  end
+  return result
 end
 
 ---Gets the number of active sessions.
