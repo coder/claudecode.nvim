@@ -263,6 +263,140 @@ describe("Configuration", function()
     expect(success).to_be_true()
   end)
 
+  it("should have ide_name in defaults with correct values", function()
+    expect(config.defaults).to_have_key("ide_name")
+    expect(config.defaults.ide_name).to_be_table()
+    expect(config.defaults.ide_name.override).to_be_nil()
+    expect(config.defaults.ide_name.tmux_include_pane).to_be_false()
+  end)
+
+  it("should accept valid ide_name with override string", function()
+    local user_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = { layout = "vertical", open_in_new_tab = false, keep_terminal_focus = false },
+      env = {},
+      models = { { name = "Test Model", value = "test" } },
+      ide_name = { override = "My Neovim", tmux_include_pane = true },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(user_config)
+    end)
+
+    expect(success).to_be_true()
+  end)
+
+  it("should accept ide_name with only tmux_include_pane set", function()
+    local user_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = { layout = "vertical", open_in_new_tab = false, keep_terminal_focus = false },
+      env = {},
+      models = { { name = "Test Model", value = "test" } },
+      ide_name = { tmux_include_pane = true },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(user_config)
+    end)
+
+    expect(success).to_be_true()
+  end)
+
+  it("should reject ide_name that is not a table", function()
+    local invalid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = { layout = "vertical", open_in_new_tab = false, keep_terminal_focus = false },
+      env = {},
+      models = { { name = "Test Model", value = "test" } },
+      ide_name = "Neovim",
+    }
+
+    local success, _ = pcall(function()
+      config.validate(invalid_config)
+    end)
+
+    expect(success).to_be_false()
+  end)
+
+  it("should reject non-string ide_name.override", function()
+    local invalid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = { layout = "vertical", open_in_new_tab = false, keep_terminal_focus = false },
+      env = {},
+      models = { { name = "Test Model", value = "test" } },
+      ide_name = { override = 123 },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(invalid_config)
+    end)
+
+    expect(success).to_be_false()
+  end)
+
+  it("should reject non-boolean ide_name.tmux_include_pane", function()
+    local invalid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = { layout = "vertical", open_in_new_tab = false, keep_terminal_focus = false },
+      env = {},
+      models = { { name = "Test Model", value = "test" } },
+      ide_name = { tmux_include_pane = "yes" },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(invalid_config)
+    end)
+
+    expect(success).to_be_false()
+  end)
+
+  it("should merge ide_name from user config with defaults", function()
+    local user_config = {
+      auto_start = false,
+      ide_name = { tmux_include_pane = true },
+    }
+
+    local merged = config.apply(user_config)
+
+    expect(merged.ide_name).to_be_table()
+    expect(merged.ide_name.tmux_include_pane).to_be_true()
+  end)
+
   it("should reject invalid type for external_terminal_cmd", function()
     local invalid_config = {
       port_range = { min = 10000, max = 65535 },

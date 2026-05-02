@@ -60,6 +60,39 @@ local function generate_auth_token()
   return uuid
 end
 
+---Build the ideName label shown in the /ide session picker.
+---@param ide_name_config table The ide_name subtable from ClaudeCodeConfig
+---@return string label e.g. "Neovim [tmux:mysession:mywindow]"
+local function build_ide_name(ide_name_config)
+  local cfg = ide_name_config or {}
+
+  if cfg.override and cfg.override ~= "" then
+    return cfg.override
+  end
+
+  local context
+
+  local tmux = os.getenv("TMUX")
+  if tmux and tmux ~= "" then
+    local session = vim.fn.system("tmux display-message -p '#S'"):gsub("%s+$", "")
+    local window = vim.fn.system("tmux display-message -p '#W'"):gsub("%s+$", "")
+    context = "tmux:" .. session .. ":" .. window
+    if cfg.tmux_include_pane then
+      local pane = vim.fn.system("tmux display-message -p '#P'"):gsub("%s+$", "")
+      context = context .. ":" .. pane
+    end
+  else
+    local cwd = vim.fn.getcwd()
+    local home = os.getenv("HOME") or ""
+    if home ~= "" and cwd:sub(1, #home) == home then
+      cwd = "~" .. cwd:sub(#home + 1)
+    end
+    context = cwd
+  end
+
+  return "Neovim [" .. context .. "]"
+end
+
 ---Generate a new authentication token
 ---@return string auth_token A newly generated authentication token
 function M.generate_auth_token()
@@ -69,10 +102,11 @@ end
 ---Create the lock file for a specified WebSocket port
 ---@param port number The port number for the WebSocket server
 ---@param auth_token? string Optional pre-generated auth token (generates new one if not provided)
+---@param ide_name_config? table Optional ide_name subtable from ClaudeCodeConfig
 ---@return boolean success Whether the operation was successful
 ---@return string result_or_error The lock file path if successful, or error message if failed
 ---@return string? auth_token The authentication token if successful
-function M.create(port, auth_token)
+function M.create(port, auth_token, ide_name_config)
   if not port or type(port) ~= "number" then
     return false, "Invalid port number"
   end
@@ -115,7 +149,7 @@ function M.create(port, auth_token)
   local lock_content = {
     pid = vim.fn.getpid(),
     workspaceFolders = workspace_folders,
-    ideName = "Neovim",
+    ideName = build_ide_name(ide_name_config),
     transport = "ws",
     authToken = auth_token,
   }
@@ -178,10 +212,11 @@ end
 
 ---Update the lock file for the given port
 ---@param port number The port number of the WebSocket server
+---@param ide_name_config? table Optional ide_name subtable from ClaudeCodeConfig
 ---@return boolean success Whether the operation was successful
 ---@return string result_or_error The lock file path if successful, or error message if failed
 ---@return string? auth_token The authentication token if successful
-function M.update(port)
+function M.update(port, ide_name_config)
   if not port or type(port) ~= "number" then
     return false, "Invalid port number"
   end
@@ -194,7 +229,7 @@ function M.update(port)
     end
   end
 
-  return M.create(port)
+  return M.create(port, nil, ide_name_config)
 end
 
 ---Read the authentication token from a lock file
