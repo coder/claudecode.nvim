@@ -397,4 +397,170 @@ describe("Lockfile Module", function()
       assert(error:find("Lock file does not exist"))
     end)
   end)
+
+  describe("build_ide_name (via lockfile.create)", function()
+    local orig_getenv
+    local orig_system
+    local orig_getcwd
+
+    local function get_ide_name_from_lock(port)
+      local temp_dir = os.getenv("TMPDIR") or "/tmp"
+      local lock_path = temp_dir .. "/claude_test/.claude/ide/" .. port .. ".lock"
+      local f = io.open(lock_path, "r")
+      if not f then
+        return nil
+      end
+      local content = f:read("*a")
+      f:close()
+      return content:match('"ideName"%s*:%s*"([^"]*)"')
+    end
+
+    before_each(function()
+      orig_getenv = os.getenv
+      orig_system = vim.fn.system
+      orig_getcwd = vim.fn.getcwd
+    end)
+
+    after_each(function()
+      os.getenv = orig_getenv
+      vim.fn.system = orig_system
+      vim.fn.getcwd = orig_getcwd
+    end)
+
+    it("should use override when provided", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return nil
+        end
+        return orig_getenv(key)
+      end
+
+      local success = lockfile.create(23001, "test-token-override-123", { override = "My Custom Label" })
+      assert(success == true)
+      assert("My Custom Label" == get_ide_name_from_lock(23001))
+    end)
+
+    it("should fall through to cwd when override is empty string", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return nil
+        end
+        if key == "HOME" then
+          return "/home/testuser"
+        end
+        return orig_getenv(key)
+      end
+      vim.fn.getcwd = function()
+        return "/home/testuser/projects/myproject"
+      end
+
+      local success = lockfile.create(23002, "test-token-empty-override-12", { override = "" })
+      assert(success == true)
+      assert("Neovim [~/projects/myproject]" == get_ide_name_from_lock(23002))
+    end)
+
+    it("should abbreviate HOME in cwd when not in tmux", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return nil
+        end
+        if key == "HOME" then
+          return "/home/testuser"
+        end
+        return orig_getenv(key)
+      end
+      vim.fn.getcwd = function()
+        return "/home/testuser/code/myrepo"
+      end
+
+      local success = lockfile.create(23003, "test-token-cwd-abbrev-12345", {})
+      assert(success == true)
+      assert("Neovim [~/code/myrepo]" == get_ide_name_from_lock(23003))
+    end)
+
+    it("should use full cwd when not under HOME", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return nil
+        end
+        if key == "HOME" then
+          return "/home/testuser"
+        end
+        return orig_getenv(key)
+      end
+      vim.fn.getcwd = function()
+        return "/opt/projects/myrepo"
+      end
+
+      local success = lockfile.create(23004, "test-token-cwd-full-1234567", {})
+      assert(success == true)
+      assert("Neovim [/opt/projects/myrepo]" == get_ide_name_from_lock(23004))
+    end)
+
+    it("should include tmux session and window when inside tmux", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return "/tmp/tmux-1000/default,12345,0"
+        end
+        return orig_getenv(key)
+      end
+      vim.fn.system = function(cmd)
+        if cmd:find("#S") then
+          return "work\n"
+        end
+        if cmd:find("#W") then
+          return "editor\n"
+        end
+        return ""
+      end
+
+      local success = lockfile.create(23005, "test-token-tmux-no-pane-123", { tmux_include_pane = false })
+      assert(success == true)
+      assert("Neovim [tmux:work:editor]" == get_ide_name_from_lock(23005))
+    end)
+
+    it("should include pane index when tmux_include_pane is true", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return "/tmp/tmux-1000/default,12345,0"
+        end
+        return orig_getenv(key)
+      end
+      vim.fn.system = function(cmd)
+        if cmd:find("#S") then
+          return "work\n"
+        end
+        if cmd:find("#W") then
+          return "editor\n"
+        end
+        if cmd:find("#P") then
+          return "2\n"
+        end
+        return ""
+      end
+
+      local success = lockfile.create(23006, "test-token-tmux-with-pane-12", { tmux_include_pane = true })
+      assert(success == true)
+      assert("Neovim [tmux:work:editor:2]" == get_ide_name_from_lock(23006))
+    end)
+
+    it("should default to cwd label when ide_name_config is nil", function()
+      os.getenv = function(key)
+        if key == "TMUX" then
+          return nil
+        end
+        if key == "HOME" then
+          return "/home/testuser"
+        end
+        return orig_getenv(key)
+      end
+      vim.fn.getcwd = function()
+        return "/home/testuser/work"
+      end
+
+      local success = lockfile.create(23007, "test-token-nil-config-12345", nil)
+      assert(success == true)
+      assert("Neovim [~/work]" == get_ide_name_from_lock(23007))
+    end)
+  end)
 end)

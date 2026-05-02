@@ -441,7 +441,8 @@ function M.start(show_startup_notification)
   M.state.port = tonumber(result)
   M.state.auth_token = auth_token
 
-  local lock_success, lock_result, returned_auth_token = lockfile.create(M.state.port, auth_token)
+  local lock_success, lock_result, returned_auth_token =
+    lockfile.create(M.state.port, auth_token, M.state.config.ide_name)
 
   if not lock_success then
     server.stop()
