@@ -69,37 +69,43 @@ The observer is wired in as `terminal_cmd`, so pastes flow through the _real_ pl
 
 ## Reproduce it
 
-The bug only appears on an affected Neovim. Install one with mise:
-
-```bash
-mise install neovim@0.11.6      # affected (also 0.11.5, 0.12.1)
-```
+The bug only appears on an affected Neovim (`< 0.12.2`). You do **not** need to change your
+installed/active Neovim — `mise exec neovim@<ver> -- nvim …` runs an old build ephemerally. mise
+keeps versions side-by-side in its own cache and only switches the active one via `mise use`, so
+this never touches your default Neovim. (`mise exec neovim@<ver> -- nvim` resolves the managed tool
+directly, so it also isn't shadowed by other version managers on your `PATH`.) `agent-repro.sh`
+does this for you via `NVIM_VERSION`.
 
 ### A. Automated (agent-tty) — deterministic, no manual steps
 
 From the repo root:
 
 ```bash
-NVIM_BIN="$HOME/.local/share/mise/installs/neovim/0.11.6/bin/nvim" \
-  fixtures/paste-repro/agent-repro.sh
+NVIM_VERSION=0.11.7 fixtures/paste-repro/agent-repro.sh   # affected: also 0.11.5/0.11.6/0.12.0/0.12.1
 ```
 
-Expected on 0.11.6:
+Expected on an affected version:
 
 ```
   default            TOTAL ... start_markers=6 end_markers=6  => BUG (fragmented)
   with-workaround    TOTAL ... start_markers=1 end_markers=1  => OK (single paste)
 ```
 
-Re-run with a 0.12.2 `NVIM_BIN` and both rows report `OK` — demonstrating the version fix.
+Re-run with `NVIM_VERSION=0.12.2` and both rows report `OK` — demonstrating the version fix.
 The script drives a real Neovim TUI in an isolated agent-tty session, auto-opens the plugin's
 Claude terminal (`PASTE_REPRO_AUTOOPEN=1`), pastes via bracketed paste, and reports segments.
+(`NVIM_VERSION` resolves the binary through mise without touching your active Neovim; pass an
+explicit `NVIM_BIN=/path/to/nvim` instead if you prefer.)
 
 ### B. Manual (interactive)
 
+The `vv` alias calls bare `nvim` (subject to whatever's first on `PATH`), so launch Neovim directly
+through `mise exec` instead — it runs the managed build unambiguously:
+
 ```bash
-source fixtures/nvim-aliases.sh
-PATH="$HOME/.local/share/mise/installs/neovim/0.11.6/bin:$PATH" vv paste-repro
+cd fixtures && \
+  NVIM_APPNAME=paste-repro XDG_CONFIG_HOME="$PWD" \
+  mise exec neovim@0.11.7 -- nvim
 ```
 
 Then inside Neovim:
@@ -114,9 +120,9 @@ Then inside Neovim:
 ### C. Pure-Neovim isolation (no plugin) — proves it's core, not the plugin
 
 ```bash
-NVIM=$HOME/.local/share/mise/installs/neovim/0.11.6/bin/nvim
-$NVIM --clean -c "terminal python3 $PWD/fixtures/paste-repro/observer.py /tmp/obs.log" -c startinsert
-# paste 100+ lines, then: grep TOTAL /tmp/obs.log   -> start_markers=6 on 0.11.6, =1 on 0.12.2
+mise exec neovim@0.11.7 -- nvim --clean \
+  -c "terminal python3 $PWD/fixtures/paste-repro/observer.py /tmp/obs.log" -c startinsert
+# paste 100+ lines, then: grep TOTAL /tmp/obs.log   -> start_markers=6 on 0.11.7, =1 on 0.12.2
 ```
 
 ## The workaround (and its edge cases)

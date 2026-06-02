@@ -14,21 +14,42 @@
 #
 # Requirements: agent-tty, python3, and one or more Neovim builds.
 # The bug is version-dependent (fixed upstream by neovim/neovim#39152, in 0.12.2):
-#   * Neovim 0.11.x / 0.12.1  -> reproduces (N segments)
-#   * Neovim 0.12.2+          -> single segment
-# Install older builds with mise, e.g.:  mise install neovim@0.11.6
+#   * Neovim 0.11.x / 0.12.0 / 0.12.1  -> reproduces (N segments)
+#   * Neovim 0.12.2+                   -> single segment
 #
 # Usage:
-#   ./agent-repro.sh                 # uses `nvim` on PATH, default + workaround
+#   ./agent-repro.sh                       # uses `nvim` on PATH
+#   NVIM_VERSION=0.11.7 ./agent-repro.sh   # run an old Neovim via mise (recommended)
 #   NVIM_BIN=/path/to/nvim ./agent-repro.sh
-#   LINES=300 ./agent-repro.sh       # bigger payload
+#   LINES=300 ./agent-repro.sh             # bigger payload
+#
+# NVIM_VERSION resolves the binary through mise. mise installs versions
+# side-by-side under its own cache, so this NEVER changes your active/default
+# Neovim (that only changes via `mise use`). To run one off without this script:
+#   mise exec neovim@0.11.7 -- nvim ...
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FIX_DIR="$(dirname "$HERE")" # .../fixtures
-NVIM="${NVIM_BIN:-$(command -v nvim)}"
 LINES="${LINES:-120}"
 export _ZO_DOCTOR=0
+
+# Resolve how to launch Neovim (used both verbatim and embedded in a `bash -lc`):
+#   explicit NVIM_BIN > NVIM_VERSION (via `mise exec`, side-by-side/ephemeral) > `nvim` on PATH.
+# `mise exec neovim@X -- nvim` resolves the managed tool directly, so it is not affected by other
+# nvim managers on PATH and never changes your active Neovim.
+if [ -n "${NVIM_BIN:-}" ]; then
+  NVIM="$NVIM_BIN"
+elif [ -n "${NVIM_VERSION:-}" ]; then
+  command -v mise >/dev/null || {
+    echo "ERROR: NVIM_VERSION set but mise not found on PATH"
+    exit 1
+  }
+  mise install "neovim@$NVIM_VERSION" >/dev/null 2>&1 || true
+  NVIM="mise exec neovim@$NVIM_VERSION -- nvim"
+else
+  NVIM="nvim"
+fi
 
 command -v agent-tty >/dev/null || {
   echo "ERROR: agent-tty not found on PATH"
@@ -38,8 +59,11 @@ command -v python3 >/dev/null || {
   echo "ERROR: python3 not found on PATH"
   exit 1
 }
-[ -x "$NVIM" ] || {
-  echo "ERROR: nvim not found (set NVIM_BIN)"
+# $NVIM may be a path, "nvim", or "mise exec neovim@X -- nvim", so smoke-test it
+# (unquoted, to word-split the launcher) rather than checking for an executable file.
+# shellcheck disable=SC2086
+$NVIM --version >/dev/null 2>&1 || {
+  echo "ERROR: could not run Neovim ('$NVIM'); set NVIM_BIN or NVIM_VERSION"
   exit 1
 }
 
@@ -56,7 +80,8 @@ path, n = sys.argv[1], int(sys.argv[2])
 open(path, "w").write("\n".join("L%03d: the quick brown fox jumps over the lazy dog" % i for i in range(1, n+1)) + "\n")
 PY
 echo "Payload: $LINES lines, $(wc -c <"$PAYLOAD") bytes"
-echo "Neovim:  $("$NVIM" --version | head -1)"
+# shellcheck disable=SC2086
+echo "Neovim:  $($NVIM --version | head -1)"
 echo
 
 run() { # run <apply_fix 0|1> <label>
@@ -66,7 +91,7 @@ run() { # run <apply_fix 0|1> <label>
   local a=(agent-tty --home "$AGENT_HOME")
   local sid
   sid="$("${a[@]}" create --json --cols 110 --rows 32 -- \
-    bash -lc "cd '$FIX_DIR' && PASTE_OBSERVER_LOG='$log' APPLY_PASTE_FIX='$fix' PASTE_REPRO_AUTOOPEN=1 NVIM_APPNAME=paste-repro XDG_CONFIG_HOME='$FIX_DIR' '$NVIM' --clean -u '$FIX_DIR/paste-repro/init.lua'" |
+    bash -lc "cd '$FIX_DIR' && PASTE_OBSERVER_LOG='$log' APPLY_PASTE_FIX='$fix' PASTE_REPRO_AUTOOPEN=1 NVIM_APPNAME=paste-repro XDG_CONFIG_HOME='$FIX_DIR' $NVIM --clean -u '$FIX_DIR/paste-repro/init.lua'" |
     python3 -c "import json,sys;print(json.load(sys.stdin)['result']['sessionId'])")"
   "${a[@]}" wait "$sid" --text 'OBSERVER READY' --timeout-ms 15000 --json >/dev/null 2>&1
   "${a[@]}" paste "$sid" "$(cat "$PAYLOAD")" --json >/dev/null 2>&1
