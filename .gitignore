@@ -6,6 +6,9 @@ luac.out
 *.zip
 *.tar.gz
 
+# Project-local Lua rock tree built by `mise run setup`
+/.luarocks/
+
 # Object files
 *.o
 *.os

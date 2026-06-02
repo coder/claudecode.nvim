@@ -10,32 +10,36 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 
 ### Testing
 
-- `make test` - Run all tests using busted with coverage
+- `mise run test` - Run all tests using busted with coverage
 - `busted tests/unit/specific_spec.lua` - Run specific test file
 - `busted --coverage -v` - Run tests with coverage
 
 ### Code Quality
 
-- `make check` - Check Lua syntax and run luacheck
-- `make format` - Format code with stylua (or nix fmt if available)
+- `mise run check` - Check Lua syntax and run luacheck
+- `mise run format` - Format code with treefmt
 - `luacheck lua/ tests/ --no-unused-args --no-max-line-length` - Direct linting
 
 ### Build Commands
 
-- `make` - **RECOMMENDED**: Run formatting, linting, and testing (complete validation)
-- `make all` - Run check and format (default target)
-- `make test` - Run all tests using busted with coverage
-- `make check` - Check Lua syntax and run luacheck
-- `make format` - Format code with stylua (or nix fmt if available)
-- `make clean` - Remove generated test files
-- `make help` - Show available commands
+- `mise run all` - **RECOMMENDED**: Run formatting, linting, and testing (complete validation)
+- `mise run test` - Run all tests using busted with coverage
+- `mise run check` - Check Lua syntax and run luacheck
+- `mise run format` - Format code with treefmt
+- `mise run clean` - Remove generated test files
+- `mise tasks` - List available tasks
 
-**Best Practice**: Always use `make` at the end of editing sessions for complete validation.
+**Best Practice**: Always use `mise run all` at the end of editing sessions for complete validation.
 
-### Development with Nix
+### Development with mise
 
-- `nix develop` - Enter development shell with all dependencies
-- `nix fmt` - Format all files using nix formatter
+The dev toolchain is provisioned by [mise](https://mise.jdx.dev) (see `mise.toml`), which replaced the former Nix flake devShell.
+
+- `mise install` - Install all tools (Neovim, LuaJIT, formatters, etc.)
+- `mise run setup` - Build the Lua test rocks (busted/luacheck/luacov) into `./.luarocks`
+- `mise run all` - Format, lint, and test
+- `mise run format` - Format all files with treefmt
+- Activate mise in your shell so its tools (and `fixtures/bin`) are on PATH — add `eval "$(mise activate bash)"` (or `zsh`/`fish`) to your shell rc. (`mise run <task>` works without activation.)
 
 ### Integration Testing with Fixtures
 
@@ -156,7 +160,7 @@ claudecode.nvim implements **100% feature parity** with Anthropic's official VS 
 
 ### Protocol Validation
 
-Run `make test` to verify MCP compliance:
+Run `mise run test` to verify MCP compliance:
 
 - **Tool Format Validation**: All tools return proper MCP structure
 - **Schema Compliance**: JSON schemas validated against VS Code specs
@@ -184,12 +188,11 @@ Test files follow the pattern `*_spec.lua` or `*_test.lua` and use the busted fr
 **Test Pattern**: Run specific test files during development:
 
 ```bash
-# Run specific tool tests with proper LUA_PATH
-export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
+# Run a specific test file (mise sets LUA_PATH automatically)
 busted tests/unit/tools/specific_tool_spec.lua --verbose
 
-# Or use make for full validation
-make test  # Recommended for complete validation
+# Or run the whole suite
+mise run test  # Recommended for complete validation
 ```
 
 **Coverage Metrics**:
@@ -371,13 +374,11 @@ When updating the version number for a new release, you must update **ALL** of t
    ```
 
 2. **`scripts/claude_interactive.sh`** - Multiple client version references:
-
    - Line ~52: `"version": "0.2.0"` (handshake)
    - Line ~223: `"version": "0.2.0"` (initialize)
    - Line ~309: `"version": "0.2.0"` (reconnect)
 
 3. **`scripts/lib_claude.sh`** - ClaudeCodeNvim version:
-
    - Line ~120: `"version": "0.2.0"` (init message)
 
 4. **`CHANGELOG.md`** - Add new release section with:
@@ -396,7 +397,7 @@ gh pr list --state merged --base main --json number,title,mergedAt,url --jq 'sor
 git log --oneline v0.1.0..HEAD
 
 # Always run before committing
-make
+mise run all
 
 # Verify no old version references remain
 rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
@@ -406,15 +407,15 @@ rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
 
 ### Pre-commit Requirements
 
-**ALWAYS run `make` before committing any changes.** This runs code quality checks and formatting that must pass for CI to succeed. Never skip this step - many PRs fail CI because contributors don't run the build commands before committing.
+**ALWAYS run `mise run all` before committing any changes.** This runs code quality checks and formatting that must pass for CI to succeed. Never skip this step - many PRs fail CI because contributors don't run the build commands before committing.
 
 ### Recommended Development Flow
 
 1. **Start Development**: Use existing tests and documentation to understand the system
 2. **Make Changes**: Follow existing patterns and conventions in the codebase
-3. **Validate Work**: Run `make` to ensure formatting, linting, and tests pass
+3. **Validate Work**: Run `mise run all` to ensure formatting, linting, and tests pass
 4. **Document Changes**: Update relevant documentation (this file, PROTOCOL.md, etc.)
-5. **Commit**: Only commit after successful `make` execution
+5. **Commit**: Only commit after successful `mise run all` execution
 
 ### Integration Development Guidelines
 
@@ -424,7 +425,7 @@ rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
 2. **Create Fixture Configuration**: **REQUIRED** - Add a complete Neovim config in `fixtures/[integration-name]/`
 3. **Test Integration**: Use fixture to verify functionality with `vv [integration-name]`
 4. **Update Documentation**: Add integration to fixtures list and relevant tool documentation
-5. **Run Full Test Suite**: Ensure `make` passes with new integration
+5. **Run Full Test Suite**: Ensure `mise run all` passes with new integration
 
 **Fixture Requirements**:
 
@@ -472,14 +473,14 @@ error({
 - **Zero Warnings**: All code must pass luacheck with 0 warnings/errors
 - **MCP Compliance**: All tools must return proper MCP format with JSON-stringified content
 - **VS Code Compatibility**: New tools must match VS Code extension behavior exactly
-- **Consistent Formatting**: Use `nix fmt` or `stylua` for consistent code style
+- **Consistent Formatting**: Use `mise run format` (treefmt) for consistent code style
 - **Documentation**: Update CLAUDE.md for architectural changes, PROTOCOL.md for protocol changes
 
 ### Development Quality Gates
 
-1. **`make check`** - Syntax and linting (0 warnings required)
-2. **`make test`** - All tests passing (320/320 success rate required)
-3. **`make format`** - Consistent code formatting
+1. **`mise run check`** - Syntax and linting (0 warnings required)
+2. **`mise run test`** - All tests passing (320/320 success rate required)
+3. **`mise run format`** - Consistent code formatting
 4. **MCP Validation** - Tools return proper format structure
 5. **Integration Test** - End-to-end protocol flow verification
 
@@ -489,11 +490,7 @@ error({
 
 **Test Failures with LUA_PATH**:
 
-```bash
-# Tests can't find modules - use proper LUA_PATH
-export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
-busted tests/unit/specific_test.lua
-```
+`mise` sets `LUA_PATH`/`LUA_CPATH` automatically (see `mise.toml` `[env]`), so prefer `mise run test` or run `busted` through the activated mise environment (`mise exec -- busted ...`). If a module still can't be found, you're likely running `busted` outside the mise environment.
 
 **JSON Format Issues**:
 
