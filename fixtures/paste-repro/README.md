@@ -129,15 +129,27 @@ fixture with `APPLY_PASTE_FIX=1`):
 - kyleawayan's refinement re-glues the mid-line chunk seam
   (`chunks[#chunks] = chunks[#chunks] .. lines[1]`); without it, every chunk boundary injects a
   spurious newline (because `lines` is a `readfile()`-style split with delimiters dropped).
-- **Residual edge case** (flagged for the fix phase, not verified here): a chunk boundary landing
-  exactly on a source newline could drop a legitimate newline. Worth a targeted test before
-  shipping.
+- **Residual edge case** (now verified safe): a chunk boundary landing exactly on a source newline
+  does _not_ drop a newline — a `readfile()`-style split of newline-terminated text yields a
+  trailing empty element, so the seam becomes a harmless empty-string concat. This was confirmed
+  byte-for-byte against fixed-Neovim output for newline-on-boundary, consecutive blank lines, no
+  trailing newline, CRLF, and a 20 KB multi-boundary paste.
 
-## Recommendation
+## Status / fix
+
+This is **shipped** in the plugin as of the change that added this fixture:
 
 - **Real fix:** upgrade Neovim to **0.12.2+**.
-- **Mitigation for users on 0.11.x / 0.12.1:** ship the coalescing `vim.paste` override behind a
-  config flag (e.g. `terminal.fix_streamed_paste`), scoped to `buftype == 'terminal'`.
+- **Plugin shim (default `"auto"`):** `lua/claudecode/terminal/paste_fix.lua` installs a scoped,
+  version-gated, cooperative `vim.paste` override (config: `terminal.fix_streamed_paste`). Unlike
+  the community snippet it is **scoped to the plugin's own managed terminal buffer** (not all
+  `:terminal` buffers), is a **no-op on Neovim >= 0.12.2**, and delegates to any pre-existing
+  `vim.paste`. Verified end-to-end: on 0.11.7 the shipped shim collapses a 20 KB paste from 6
+  segments to 1, byte-identical to 0.12.2. Set `fix_streamed_paste = false` to opt out, or `true`
+  to force it on. Unit tests: `tests/unit/terminal/paste_fix_spec.lua`.
+
+The `APPLY_PASTE_FIX=1` toggle in this fixture applies the _standalone_ community override and is
+kept for isolating the workaround independently of the plugin.
 
 ## Files
 

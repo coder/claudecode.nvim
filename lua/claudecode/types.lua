@@ -87,6 +87,7 @@
 ---@field cwd string|nil                 -- static working directory for Claude terminal
 ---@field git_repo_cwd boolean|nil      -- use git root of current file/cwd as working directory
 ---@field cwd_provider? ClaudeCodeCwdProvider -- custom function to compute working directory
+---@field fix_streamed_paste boolean|"auto"|nil -- work around Neovim <0.12.2 terminal paste fragmentation (#161); "auto" (default) enables only on affected versions
 
 -- Port range configuration
 ---@class ClaudeCodePortRange

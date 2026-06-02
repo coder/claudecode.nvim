@@ -81,7 +81,7 @@ run() { # run <apply_fix 0|1> <label>
   [ "${segs:-0}" = "1" ] && verdict="OK (single paste)"
   [ "${segs:-0}" -gt 1 ] 2>/dev/null && verdict="BUG (fragmented)"
   printf '  %-28s %s  => %s\n' "$label" "$total" "$verdict"
-  "${a[@]}" send-keys "$sid" 'C-\' 'C-n' --json >/dev/null 2>&1
+  "${a[@]}" send-keys "$sid" "C-\\" "C-n" --json >/dev/null 2>&1
   "${a[@]}" type "$sid" ':qa!' --json >/dev/null 2>&1
   "${a[@]}" send-keys "$sid" Enter --json >/dev/null 2>&1
   sleep 0.3

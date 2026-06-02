@@ -264,6 +264,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
+      -- Work around a Neovim core bug (< 0.12.2) that fragments large pastes into
+      -- the terminal, making Cmd+V appear to truncate ([#161]). true | false | "auto"
+      -- ("auto", the default, enables it only on affected Neovim versions).
+      fix_streamed_paste = "auto",
 
       -- Provider-specific options
       provider_opts = {
