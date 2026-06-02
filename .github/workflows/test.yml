@@ -16,11 +16,11 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Unit/component tests run under LuaJIT with a mocked vim global (busted), so
+  # they do not need a real Neovim binary — hence no neovim-version matrix here.
+  # Real-Neovim coverage lives in the integration-tests job below.
   unit-tests:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        neovim-version: ["stable", "nightly"]
 
     steps:
       - name: Checkout
@@ -29,38 +29,38 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Nix
-        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703 # v30
+      # Build deps: PUC Lua builds from source, and the test rocks compile C modules.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::Retries=3 install -y build-essential libreadline-dev unzip
 
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
+      - name: Set up mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+
+      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds.
+      - name: Cache Lua test rocks
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          primary-key: nix-claudecode-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
-          restore-prefixes-first-match: nix-claudecode-${{ runner.os }}-
-          gc-max-store-size-linux: 2G
-          purge: true
-          purge-prefixes: nix-claudecode-${{ runner.os }}-
-          purge-created: 0
-          purge-primary-key: never
+          path: .luarocks
+          key: luarocks-${{ runner.os }}-${{ hashFiles('mise.toml') }}
 
-      - name: Setup Neovim
-        uses: rhysd/action-setup-vim@8e931b9954b19d4203d5caa5ff5521f3bc21dcc7 # v1.4.2
-        with:
-          neovim: true
-          version: ${{ matrix.neovim-version }}
+      - name: Install Lua test rocks
+        run: mise run setup
 
-      - name: Run Luacheck
-        run: nix develop .#ci -c make check
+      - name: Run luacheck
+        run: mise run check
 
       - name: Run tests
-        run: nix develop .#ci -c make test
+        run: mise run test
 
       - name: Check formatting
-        run: nix flake check
+        run: mise run format-check
 
       - name: Generate coverage report
         run: |
           if [ -f "luacov.stats.out" ]; then
-            nix develop .#ci -c luacov
+            mise exec -- luacov
 
             echo "Creating lcov.info from luacov.report.out"
             {
@@ -134,19 +134,8 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Setup Nix
-        uses: nixbuild/nix-quick-install-action@5bb6a3b3abe66fd09bbf250dce8ada94f856a703 # v30
-
-      - uses: nix-community/cache-nix-action@135667ec418502fa5a3598af6fb9eb733888ce6a # v6.1.3
-        with:
-          primary-key: nix-claudecode-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
-          restore-prefixes-first-match: nix-claudecode-${{ runner.os }}-
-          gc-max-store-size-linux: 2G
-          purge: true
-          purge-prefixes: nix-claudecode-${{ runner.os }}-
-          purge-created: 0
-          purge-primary-key: never
-
+      # Neovim here comes from action-setup-vim (matrix-driven), independent of
+      # the mise.toml neovim pin used for local dev.
       - name: Setup Neovim
         uses: rhysd/action-setup-vim@8e931b9954b19d4203d5caa5ff5521f3bc21dcc7 # v1.4.2
         with:
@@ -159,4 +148,4 @@ jobs:
           ln -s "$(pwd)" ~/.local/share/nvim/site/pack/vendor/start/claudecode.nvim
 
       - name: Run integration tests
-        run: nix develop .#ci -c ./scripts/run_integration_tests_individually.sh
+        run: ./scripts/run_integration_tests_individually.sh

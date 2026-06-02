@@ -2,6 +2,17 @@
 
 Quick guide for contributors to the claudecode.nvim project.
 
+## Development Environment
+
+The toolchain (Neovim, LuaJIT, formatters, test runners) is provisioned by [mise](https://mise.jdx.dev) via `mise.toml`. After installing mise:
+
+```bash
+mise install      # install all tools (builds Lua/LuaJIT from source)
+mise run setup     # build the Lua test rocks (busted/luacheck/luacov) into ./.luarocks
+```
+
+Activate mise in your shell — add `eval "$(mise activate bash)"` (or `zsh`/`fish`) to your shell rc, per the [mise docs](https://mise.jdx.dev/getting-started.html) — so its tools are on PATH. Common tasks: `mise run all` (format + lint + test), `mise run test`, `mise run check`, `mise run format` — run `mise tasks` to list them all. (`mise run <task>` works even without shell activation.)
+
 ## Project Structure
 
 ```none
@@ -54,19 +65,16 @@ claudecode.nvim/
 ## Development Priorities
 
 1. **Advanced MCP Tools**
-
    - Add Neovim-specific tools (LSP integration, diagnostics, Telescope integration)
    - Implement diffview.nvim integration for the diff provider system
    - Add Git integration tools (branch info, status, etc.)
 
 2. **Performance Optimization**
-
    - Monitor WebSocket server performance under load
    - Optimize selection tracking for large files
    - Fine-tune debouncing and event handling
 
 3. **User Experience**
-
    - Add more user commands and keybindings
    - Improve error messages and user feedback
    - Create example configurations for popular setups
@@ -82,34 +90,31 @@ Run tests using:
 
 ```bash
 # Run all tests
-make test
+mise run test
 
 # Run specific test file
 nvim --headless -u tests/minimal_init.lua -c "lua require('tests.unit.config_spec')"
 
 # Run linting
-make check
+mise run check
 
 # Format code
-make format
+mise run format
 ```
 
 ## Implementation Guidelines
 
 1. **Error Handling**
-
    - All public functions should have error handling
    - Return `success, result_or_error` pattern
    - Log meaningful error messages
 
 2. **Performance**
-
    - Minimize impact on editor performance
    - Debounce event handlers
    - Use asynchronous operations where possible
 
 3. **Compatibility**
-
    - Support Neovim >= 0.8.0
    - Zero external dependencies (pure Lua implementation)
    - Follow Neovim plugin best practices

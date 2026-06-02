@@ -1,0 +1,149 @@
+# mise — development environment for claudecode.nvim
+#
+# Replaces the former Nix flake devShell. Quick start:
+#
+#   mise install      # provision all tools
+#   mise run setup     # build the Lua test rocks (busted/luacheck/luacov)
+#   mise run all       # format + lint + test
+#
+# Run `mise tasks` to list everything below.
+#
+# Tool versions are pinned (mise.lock records resolved checksums; see [settings]).
+# The test rocks built by `mise run setup` (busted/luacheck/luacov) pin only their
+# top-level versions; transitive deps are resolved by LuaRocks at build time.
+
+[settings]
+# Maintain a committed mise.lock pinning resolved URLs + checksums for the
+# binary-download tools (the integrity role flake.lock used to play).
+# Caveats: the conda-backed luajit only locks the platform it was resolved on
+# (Linux CI backfills its entry on first install); source-built tools (lua,
+# neovim) and npm-backed prettier record a URL/version but no checksum.
+# Regenerate with: mise lock -p linux-x64,macos-arm64
+lockfile = true
+
+[tools]
+# LuaJIT is the runtime Neovim embeds, and the test suite *requires* it: the
+# blocking-diff tools yield coroutines across pcall/C-call boundaries, which
+# PUC Lua 5.1 cannot do. busted/luacheck/luacov all run under LuaJIT.
+luajit = "2.1.1744318430"
+# PUC Lua 5.1 is installed only for its bundled LuaRocks, which `mise run
+# setup` uses to build the test rocks *targeting LuaJIT* (luarocks --lua-dir).
+# (The LuaJIT plugin does not ship a LuaRocks.)
+lua = "5.5.0"
+# Neovim for the integration test suite and local plugin testing.
+neovim = "0.12.2"
+
+# Node provides the runtime for prettier (installed via the npm backend).
+node = "26.3.0"
+
+# treefmt drives every formatter/linter below (replaces `nix fmt`).
+"github:numtide/treefmt" = "2.5.0"
+stylua = "2.5.2"
+prettier = "3.8.3"
+shfmt = "3.13.1"
+shellcheck = "0.11.0"
+actionlint = "1.7.12"
+zizmor = "1.25.2"
+
+# Developer tooling (formerly the flake's devPackages).
+# websocat + jq drive the manual WebSocket test scripts in scripts/; fzf backs
+# the fixtures/bin config picker. They stay global because those are interactive
+# helpers run directly (not via `mise run`), so they must be on the shell PATH.
+# reviewfixer is intentionally NOT here — it is scoped to the `reviewfix` task
+# below so normal `mise install`/CI don't fetch the beta binary.
+websocat = "1.14.1"
+jq = "1.8.1"
+fzf = "0.73.1"
+
+[env]
+# Lua test rocks (busted/luacheck/luacov) live in a project-local tree that
+# `mise run setup` populates. fixtures/bin holds the nvim-config helpers
+# (vv/vve/list-configs/repro). Both go on PATH when mise is active.
+_.path = [".luarocks/bin", "fixtures/bin"]
+# Resolve the plugin's modules, test helpers (e.g. require("tests.busted_setup")),
+# and the rock tree from any CWD when running busted/luacheck/luajit directly.
+LUA_PATH = "{{config_root}}/?.lua;{{config_root}}/?/init.lua;{{config_root}}/lua/?.lua;{{config_root}}/lua/?/init.lua;{{config_root}}/.luarocks/share/lua/5.1/?.lua;{{config_root}}/.luarocks/share/lua/5.1/?/init.lua;;"
+LUA_CPATH = "{{config_root}}/.luarocks/lib/lua/5.1/?.so;;"
+
+[tasks.setup]
+description = "Build the Lua test rocks (busted/luacheck/luacov) for LuaJIT into ./.luarocks"
+run = '''
+set -eu
+if [ -x .luarocks/bin/busted ] && [ -x .luarocks/bin/luacheck ] && [ -x .luarocks/bin/luacov ]; then
+  echo ".luarocks already populated (run 'rm -rf .luarocks && mise run setup' to rebuild)"
+  exit 0
+fi
+LUAJIT_PREFIX="$(mise where luajit)"
+TREE="$PWD/.luarocks"
+echo "Building Lua test rocks for LuaJIT into $TREE ..."
+# Pinned to match what the former Nix flake provided (nixpkgs luajitPackages).
+for rock in "busted 2.2.0" "luacheck 1.2.0" "luacov 0.16.0"; do
+  ok=0
+  for attempt in 1 2 3; do
+    # shellcheck disable=SC2086
+    if luarocks --lua-dir "$LUAJIT_PREFIX" --lua-version 5.1 install --tree "$TREE" $rock; then
+      ok=1
+      break
+    fi
+    echo ">> luarocks install '$rock' failed (attempt $attempt/3)" >&2
+    # Back off before retrying so a transient luarocks.org/DNS blip can clear.
+    if [ "$attempt" -lt 3 ]; then sleep $((attempt * 3)); fi
+  done
+  [ "$ok" = 1 ] || { echo "ERROR: could not install $rock" >&2; exit 1; }
+done
+'''
+
+[tasks.check]
+description = "Check Lua syntax and run luacheck"
+depends = ["setup"]
+run = '''
+echo "Checking Lua files for syntax errors..."
+# Pipe into xargs so a failed loadfile propagates a non-zero exit on BSD find
+# (macOS) too — `find -exec ... \;` swallows the child's status there.
+find lua -name "*.lua" -type f -print0 | xargs -0 -I{} luajit -e "assert(loadfile('{}'))"
+echo "Running luacheck..."
+luacheck lua/ tests/ --no-unused-args --no-max-line-length
+'''
+
+[tasks.test]
+description = "Run the test suite with coverage"
+depends = ["setup"]
+run = '''
+echo "Running all tests..."
+TEST_FILES=$(find tests -type f -name "*_test.lua" -o -name "*_spec.lua" | sort)
+echo "Found test files:"
+echo "$TEST_FILES"
+if [ -n "$TEST_FILES" ]; then
+  busted --coverage -v $TEST_FILES
+else
+  echo "No test files found"
+fi
+'''
+
+[tasks.format]
+description = "Format the whole tree with treefmt"
+run = "treefmt"
+
+[tasks.format-check]
+description = "Verify formatting without writing (used in CI)"
+run = "treefmt --ci"
+
+[tasks.reviewfix]
+description = "Run reviewfixer against PR review findings (see reviewfixer.yaml)"
+# Scoped tool: only provisioned when this task runs, so `mise install`/CI skip
+# the beta Go binary. reviewfixer also needs node/npx for its ACP adapter, which
+# the top-level `node` tool already provides. Pass subcommands through, e.g.
+# `mise run reviewfix -- validate` or `mise run reviewfix -- run`.
+tools = { "github:ThomasK33/reviewfixer" = "0.1.0-beta.0" }
+run = 'reviewfixer --config ./reviewfixer.yaml'
+
+[tasks.clean]
+description = "Remove generated coverage files"
+run = '''
+rm -f luacov.report.out luacov.stats.out
+rm -f tests/lcov.info
+'''
+
+[tasks.all]
+description = "Format, lint, and test (full validation)"
+run = "mise run format && mise run check && mise run test"

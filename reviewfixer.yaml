@@ -3,17 +3,21 @@
 # reviewfixer automatically addresses PR review findings using an AI agent.
 #
 # Prerequisites:
-# - Use the project's Nix devShell (`nix develop` or `direnv allow`) which
-#   already includes `reviewfixer`; this is the primary dev path here, or
-# - `reviewfixer` CLI installed (`go install github.com/ThomasK33/reviewfixer@v0.1.0-beta.0`,
-#   or download a binary from https://github.com/ThomasK33/reviewfixer/releases)
-# - `node` and `npm`/`npx` available on PATH (for the ACP adapter below)
 # - `ANTHROPIC_API_KEY` exported in the shell that launches reviewfixer
+# - The `reviewfix` mise task provisions `reviewfixer` on demand (and `node`,
+#   already a top-level tool, supplies the npx-based ACP adapter below). It is
+#   intentionally NOT a global mise tool, so `mise install`/CI skip the beta
+#   binary. Run it via the task — see Usage. Alternatively, install the CLI
+#   yourself (`go install github.com/ThomasK33/reviewfixer@v0.1.0-beta.0`, or a
+#   binary from https://github.com/ThomasK33/reviewfixer/releases).
 #
-# Usage:
-#   reviewfixer validate --config ./reviewfixer.yaml
+# Usage (preferred — the task scopes the reviewfixer binary):
+#   mise run reviewfix                 # reviewfixer --config ./reviewfixer.yaml
+#   mise run reviewfix -- validate     # pass subcommands/flags after `--`
+#   mise run reviewfix -- run
+#
+# Or, with reviewfixer already on PATH:
 #   reviewfixer --config ./reviewfixer.yaml
-#   reviewfixer run --config ./reviewfixer.yaml
 #
 # If you install the adapter globally instead of using `npx`, you can replace:
 #   command: npx

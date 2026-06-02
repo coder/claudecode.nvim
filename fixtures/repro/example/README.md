@@ -42,7 +42,6 @@ The Neovim config lives at `fixtures/repro/init.lua`.
 A basic end-to-end diff flow you can use to sanity-check the environment:
 
 1. Start Claude:
-
    - press `<leader>ac` (starts the server if needed, then opens the terminal), **or**
    - run `:ClaudeCodeStart` then `:ClaudeCode`
 
