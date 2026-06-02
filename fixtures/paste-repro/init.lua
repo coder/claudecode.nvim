@@ -73,6 +73,19 @@ if fix_active then
   end
 end
 
+-- Whether to enable the *plugin's own* paste shim. Defaults to false so the
+-- fixture reproduces the raw bug (with APPLY_PASTE_FIX as the controlled
+-- variable). Set PASTE_REPRO_PLUGIN_FIX=auto|true to instead exercise the
+-- shipped plugin fix end-to-end.
+local plugin_fix = os.getenv("PASTE_REPRO_PLUGIN_FIX")
+if plugin_fix == "auto" then
+  plugin_fix = "auto"
+elseif plugin_fix == "true" then
+  plugin_fix = true
+else
+  plugin_fix = false
+end
+
 local ok, claudecode = pcall(require, "claudecode")
 assert(ok, "Failed to load claudecode.nvim from repo root: " .. tostring(claudecode))
 
@@ -86,6 +99,12 @@ claudecode.setup({
   terminal = {
     provider = "native",
     auto_close = false,
+    -- Disabled by default so this fixture reproduces the RAW bug (APPLY_PASTE_FIX
+    -- is the controlled variable). If the plugin's shim ("auto") were left on, it
+    -- would coalesce the paste on exactly the affected Neovim versions, so the
+    -- "default" run could never observe the >1-segment fragmentation it is meant
+    -- to show. Set PASTE_REPRO_PLUGIN_FIX=auto to exercise the shipped fix.
+    fix_streamed_paste = plugin_fix,
   },
 })
 

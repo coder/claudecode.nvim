@@ -148,12 +148,15 @@ This is **shipped** in the plugin as of the change that added this fixture:
   segments to 1, byte-identical to 0.12.2. Set `fix_streamed_paste = false` to opt out, or `true`
   to force it on. Unit tests: `tests/unit/terminal/paste_fix_spec.lua`.
 
-The `APPLY_PASTE_FIX=1` toggle in this fixture applies the _standalone_ community override and is
-kept for isolating the workaround independently of the plugin.
+This fixture sets `terminal.fix_streamed_paste = false` by default so it reproduces the **raw** bug
+(`APPLY_PASTE_FIX` toggles the _standalone_ community override, kept for isolating the workaround
+independently of the plugin). To instead exercise the **shipped plugin fix** end-to-end, launch
+with `PASTE_REPRO_PLUGIN_FIX=auto` (or `=true`).
 
 ## Files
 
-- `init.lua` — fixture config (native provider; `terminal_cmd` → observer; `APPLY_PASTE_FIX`,
-  `PASTE_REPRO_AUTOOPEN`, `PASTE_OBSERVER_LOG` env toggles).
+- `init.lua` — fixture config (native provider; `terminal_cmd` → observer). Env toggles:
+  `APPLY_PASTE_FIX` (standalone workaround), `PASTE_REPRO_PLUGIN_FIX` (the plugin's own
+  `fix_streamed_paste`, default off here), `PASTE_REPRO_AUTOOPEN`, `PASTE_OBSERVER_LOG`.
 - `observer.py` — bracketed-paste segment counter (the measurement instrument).
 - `agent-repro.sh` — self-contained automated reproduction via agent-tty.

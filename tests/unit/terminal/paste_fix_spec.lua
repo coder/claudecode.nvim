@@ -155,7 +155,8 @@ describe("claudecode.terminal.paste_fix", function()
           return managed_bufnr
         end,
       }
-      paste_fix.install()
+      -- apply(true) sets enabled and installs the override.
+      paste_fix.apply(true)
     end
 
     it("coalesces a streamed paste into one phase==-1 replay for the managed terminal", function()
@@ -169,12 +170,50 @@ describe("claudecode.terminal.paste_fix", function()
       assert.are.same({ "hello world", "second line" }, orig_calls[1].lines)
     end)
 
+    it("coalesces a three-phase (1->2->3) stream including the middle phase", function()
+      setup_env()
+      -- Source "foo\nbar\nbaz" streamed across three chunks, each split mid-line.
+      assert.is_true(vim.paste({ "foo", "ba" }, 1))
+      assert.is_true(vim.paste({ "r", "ba" }, 2))
+      assert.is_true(vim.paste({ "z" }, 3))
+
+      assert.are.equal(1, #orig_calls)
+      assert.are.equal(-1, orig_calls[1].phase)
+      assert.are.same({ "foo", "bar", "baz" }, orig_calls[1].lines)
+    end)
+
     it("delegates a non-streamed (phase==-1) paste unchanged", function()
       setup_env()
       vim.paste({ "whole" }, -1)
       assert.are.equal(1, #orig_calls)
       assert.are.equal(-1, orig_calls[1].phase)
       assert.are.same({ "whole" }, orig_calls[1].lines)
+    end)
+
+    it("keeps buffered content when focus leaves the managed terminal mid-stream", function()
+      setup_env()
+      -- Phase 1 targets the managed terminal; the decision is latched.
+      assert.is_true(vim.paste({ "kept ", "dat" }, 1))
+      -- Focus moves away before phase 3 (active bufnr no longer current).
+      current_bufnr = 99
+      buftype_by_buf[99] = ""
+      vim.paste({ "a" }, 3)
+      -- Still coalesced into one replay; buffered content is not stranded.
+      assert.are.equal(1, #orig_calls)
+      assert.are.equal(-1, orig_calls[1].phase)
+      assert.are.same({ "kept ", "data" }, orig_calls[1].lines)
+    end)
+
+    it("respects a later apply(false): delegates instead of coalescing", function()
+      setup_env()
+      paste_fix.apply(false) -- disable without uninstalling
+      assert.is_false(paste_fix._is_enabled())
+      vim.paste({ "a", "b" }, 1)
+      vim.paste({ "c" }, 3)
+      -- No coalescing: each phase passes straight through.
+      assert.are.equal(2, #orig_calls)
+      assert.are.equal(1, orig_calls[1].phase)
+      assert.are.equal(3, orig_calls[2].phase)
     end)
 
     it("delegates pastes into a non-managed terminal unchanged", function()

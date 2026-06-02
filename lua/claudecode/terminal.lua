@@ -19,11 +19,7 @@ local defaults = {
   auto_close = true,
   env = {},
   snacks_win_opts = {},
-  -- Workaround for a Neovim core bug (< 0.12.2) that fragments large bracketed
-  -- pastes into the terminal; see lua/claudecode/terminal/paste_fix.lua and
-  -- https://github.com/coder/claudecode.nvim/issues/161.
-  -- true = force on, false = off, "auto" = on only for affected Neovim versions.
-  fix_streamed_paste = "auto",
+  fix_streamed_paste = "auto", -- work around Neovim <0.12.2 paste fragmentation (#161): true|false|"auto"
   -- Working directory control
   cwd = nil, -- static cwd override
   git_repo_cwd = false, -- resolve to git root when spawning
@@ -508,8 +504,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
   -- Setup providers with config
   get_provider().setup(defaults)
 
-  -- Install the streamed-paste compatibility shim for issue #161. No-op on
-  -- Neovim >= 0.12.2 (and when disabled), scoped to the managed terminal buffer.
+  -- Streamed-paste compatibility shim for #161 (no-op on Neovim >= 0.12.2).
   require("claudecode.terminal.paste_fix").apply(defaults.fix_streamed_paste)
 end
 
