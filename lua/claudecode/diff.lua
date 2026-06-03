@@ -1063,6 +1063,12 @@ function M._cleanup_diff_state(tab_name, reason)
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
     end
 
+    -- Close the fallback window we created when no editor window existed (issue #231); it's reused
+    -- as the original pane, so target_window_created_by_plugin below doesn't cover it.
+    if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
+      pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
+    end
+
     -- If we created an extra window/split for the diff, close it. Otherwise just disable diff mode.
     if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
       if diff_data.target_window_created_by_plugin then
@@ -1132,6 +1138,12 @@ function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
   logger.debug("diff", "Setting up diff for:", params.old_file_path)
 
+  -- Hoisted so the error handler can clean them up if setup fails before the diff state is
+  -- registered: otherwise the terminal-only fallback split and the proposed buffer are stranded
+  -- (the state-based cleanup is gated on a registered diff). Issue #231.
+  local fallback_window = nil
+  local new_buffer = nil
+
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
     local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
@@ -1197,17 +1209,26 @@ function M._setup_blocking_diff(params, resolution_callback)
         target_window = find_main_editor_window()
       end
     end
-    -- If created_new_tab is true, target_window stays nil and will be created in the new tab
-    -- If we still can't find a suitable window AND we're not in a new tab, error out
+    -- If created_new_tab is true, target_window stays nil and will be created in the new tab.
+    -- Otherwise, if no editor window is suitable (e.g. the Claude terminal is the only window --
+    -- issue #231), create one by splitting the current window instead of erroring out, mirroring
+    -- the fallback in lua/claudecode/tools/open_file.lua.
     if not target_window and not created_new_tab then
-      error({
-        code = -32000,
-        message = "No suitable editor window found",
-        data = "Could not find a main editor window to display the diff",
-      })
+      create_split()
+      local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
+      if scratch_buf ~= 0 then
+        -- wipe it once it leaves the window so it isn't leaked when the diff reuses it (new file)
+        -- or :edit replaces it with the real file (existing file)
+        vim.api.nvim_buf_set_option(scratch_buf, "bufhidden", "wipe")
+        vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch_buf)
+      end
+      target_window = vim.api.nvim_get_current_win()
+      -- Track it so _cleanup_diff_state closes it; the reused scratch buffer means it won't be
+      -- flagged target_window_created_by_plugin.
+      fallback_window = target_window
     end
 
-    local new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
+    new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch (hoisted above the pcall)
     if new_buffer == 0 then
       error({
         code = -32000,
@@ -1253,6 +1274,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       new_window = diff_info.new_window,
       target_window = diff_info.target_window,
       target_window_created_by_plugin = diff_info.target_window_created_by_plugin,
+      fallback_window = fallback_window,
       original_buffer = diff_info.original_buffer,
       original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,
@@ -1288,6 +1310,16 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- Clean up any partial state that might have been created
     if active_diffs[tab_name] then
       M._cleanup_diff_state(tab_name, "setup failed")
+    else
+      -- Errored before the diff state was registered, so the state-based cleanup can't run. Close
+      -- the fallback split we may have created (its bufhidden=wipe scratch self-cleans) and delete
+      -- the proposed buffer; neither is owned by a registered diff.
+      if fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
+        pcall(vim.api.nvim_win_close, fallback_window, true)
+      end
+      if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
+        pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
+      end
     end
 
     -- Re-throw the error for MCP compliance
