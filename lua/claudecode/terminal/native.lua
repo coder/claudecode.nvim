@@ -147,6 +147,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.notify("Native terminal opened. Press Ctrl-\\ Ctrl-N to return to Normal mode.", vim.log.levels.INFO)
     tip_shown = true
   end
+  vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalOpened", modeline = false })
   return true
 end
 
@@ -196,6 +197,7 @@ local function hide_terminal()
     winid = nil -- Clear window reference
 
     logger.debug("terminal", "Terminal window hidden, process preserved")
+    vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalHidden", modeline = false })
   end
 end
 
@@ -244,6 +246,7 @@ local function show_hidden_terminal(effective_config, focus)
   end
 
   logger.debug("terminal", "Showed hidden terminal in new window")
+  vim.api.nvim_exec_autocmds("User", { pattern = "ClaudeCodeTerminalOpened", modeline = false })
   return true
 end
 
