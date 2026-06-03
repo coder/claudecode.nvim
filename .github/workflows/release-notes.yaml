@@ -1,0 +1,82 @@
+name: Release Notes
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  release-notes:
+    name: release-notes
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release inputs
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY secret is required}"
+          : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
+          : "${RELEASE_TAG:?release tag is required}"
+
+          case "$RELEASE_TAG" in
+            v*) ;;
+            *)
+              echo "release tag must start with 'v': $RELEASE_TAG" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      # install_args installs only communique (pinned in mise.toml), not the
+      # full dev toolchain. cache: false avoids zizmor's cache-poisoning finding
+      # on this publish workflow (caching saves little on a release-only job).
+      - name: Set up mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          install_args: communique
+          cache: false
+
+      - name: Resolve previous release ref
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          release_commit="$(git rev-parse --verify "${RELEASE_TAG}^{commit}")"
+          : "${release_commit:?release commit is required}"
+
+          if previous_ref="$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*' "${release_commit}^" 2>/dev/null)"; then
+            echo "Previous release tag: $previous_ref"
+          else
+            previous_ref="$(git rev-list --max-parents=0 "$release_commit" | head -n 1)"
+            : "${previous_ref:?previous release ref is required}"
+            echo "No previous release tag found; using root commit: $previous_ref"
+          fi
+
+          echo "PREVIOUS_RELEASE_REF=$previous_ref" >> "$GITHUB_ENV"
+
+      - name: Generate GitHub release notes
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          : "${PREVIOUS_RELEASE_REF:?previous release ref is required}"
+
+          communique generate "$RELEASE_TAG" "$PREVIOUS_RELEASE_REF" \
+            --github-release --repo "${{ github.repository }}"
