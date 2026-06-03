@@ -19,6 +19,7 @@ local defaults = {
   auto_close = true,
   env = {},
   snacks_win_opts = {},
+  fix_streamed_paste = "auto", -- work around Neovim <0.12.2 paste fragmentation (#161): true|false|"auto"
   -- Working directory control
   cwd = nil, -- static cwd override
   git_repo_cwd = false, -- resolve to git root when spawning
@@ -453,6 +454,17 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify("claudecode.terminal.setup: Invalid value for snacks_win_opts", vim.log.levels.WARN)
       end
+    elseif k == "fix_streamed_paste" then
+      if type(v) == "boolean" or v == "auto" then
+        defaults.fix_streamed_paste = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for fix_streamed_paste: "
+            .. tostring(v)
+            .. " (expected true, false, or 'auto')",
+          vim.log.levels.WARN
+        )
+      end
     elseif k == "cwd" then
       if v == nil or type(v) == "string" then
         defaults.cwd = v
@@ -491,6 +503,9 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
 
   -- Setup providers with config
   get_provider().setup(defaults)
+
+  -- Streamed-paste compatibility shim for #161 (no-op on Neovim >= 0.12.2).
+  require("claudecode.terminal.paste_fix").apply(defaults.fix_streamed_paste)
 end
 
 ---Opens or focuses the Claude terminal.
