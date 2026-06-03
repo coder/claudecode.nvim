@@ -115,4 +115,25 @@ describe("Tool: close_all_diff_tabs", function()
     expect(result.content[1].text).to_be("CLOSED_1_DIFF_TABS")
     assert.spy(_G.vim.api.nvim_buf_delete).was_called_with(1, { force = true })
   end)
+
+  it("drains tracked diffs via diff.close_all_diffs and includes them in the count", function()
+    -- Stub the diff module so we can assert the handler delegates to it. This is
+    -- the fix for issue #248's secondary bug: the tool must resolve/clean tracked
+    -- diffs (which the window/buffer scan never touched), not just close windows.
+    local saved = package.loaded["claudecode.diff"]
+    local close_all_spy = spy.new(function()
+      return 3
+    end)
+    package.loaded["claudecode.diff"] = { close_all_diffs = close_all_spy }
+
+    local success, result = pcall(close_all_diff_tabs_handler, {})
+
+    package.loaded["claudecode.diff"] = saved
+
+    expect(success).to_be_true()
+    assert.spy(close_all_spy).was_called()
+    -- default window/buffer mocks find nothing, so the count is purely the
+    -- tracked diffs the diff module reported closing.
+    expect(result.content[1].text).to_be("CLOSED_3_DIFF_TABS")
+  end)
 end)

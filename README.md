@@ -198,6 +198,7 @@ Configure the plugin with the detected path:
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
 - `:ClaudeCodeDiffAccept` - Accept diff changes
 - `:ClaudeCodeDiffDeny` - Reject diff changes
+- `:ClaudeCodeCloseAllDiffs` - Close all open Claude diffs (rejecting any still pending)
 
 ## Working with Diffs
 
@@ -207,6 +208,8 @@ When Claude proposes changes, the plugin opens a native Neovim diff view:
 - **Reject**: `:q` or `<leader>ad`
 
 You can edit Claude's suggestions before accepting them.
+
+If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects, and you can always run `:ClaudeCodeCloseAllDiffs` to clear any that remain.
 
 ## How It Works
 

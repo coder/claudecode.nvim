@@ -15,7 +15,12 @@ local schema = {
 local function handler(params)
   local closed_count = 0
 
-  -- Get all windows
+  -- Tear down tracked diffs first (resolving their pending coroutines); the
+  -- window/buffer scan below would otherwise leak that diff state (issue #248).
+  local diff = require("claudecode.diff")
+  closed_count = closed_count + diff.close_all_diffs("closeAllDiffTabs tool")
+
+  -- Get all windows (catches any untracked diff windows, e.g. fugitive)
   local windows = vim.api.nvim_list_wins()
   local windows_to_close = {} -- Use set to avoid duplicates
 

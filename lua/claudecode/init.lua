@@ -1042,6 +1042,18 @@ function M._create_commands()
     desc = "Deny/reject the current diff changes",
   })
 
+  vim.api.nvim_create_user_command("ClaudeCodeCloseAllDiffs", function()
+    local diff = require("claudecode.diff")
+    local count = diff.close_all_diffs("user command")
+    if count > 0 then
+      vim.notify(("Closed %d Claude diff(s)"):format(count), vim.log.levels.INFO)
+    else
+      vim.notify("No active Claude diffs to close", vim.log.levels.WARN)
+    end
+  end, {
+    desc = "Close all active Claude Code diffs (rejecting any still pending)",
+  })
+
   vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)
     local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
     M.open_with_model(cmd_args)
