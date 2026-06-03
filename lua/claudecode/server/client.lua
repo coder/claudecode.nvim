@@ -121,9 +121,16 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- Fatal protocol violation: close with the RFC 6455 status code and drop
         -- the offending bytes instead of leaving them buffered to be re-parsed
         -- forever (which previously wedged the connection).
+        --
+        -- close_client MUST run before on_error: on_error tears the connection
+        -- down synchronously (tcp.lua: _disconnect_client -> _remove_client ->
+        -- tcp_handle:close()) without setting client.state, so if it ran first
+        -- the Close frame would be written to an already-closed handle and never
+        -- reach the peer. Closing first writes the Close frame while the handle
+        -- is open and sets client.state, after which on_error's teardown no-ops.
         client.buffer = ""
-        on_error(client, "WebSocket protocol error in frame")
         M.close_client(client, close_code, "Protocol error")
+        on_error(client, "WebSocket protocol error in frame")
       end
       break -- No close_code means the frame is incomplete; wait for more bytes.
     end
@@ -169,12 +176,14 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
     elseif parsed_frame.opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
     elseif parsed_frame.opcode == frame.OPCODE.CONTINUATION then
-      -- Continuation frame - for simplicity, we don't support fragmentation
-      on_error(client, "Fragmented messages not supported")
+      -- Continuation frame - for simplicity, we don't support fragmentation.
+      -- close_client before on_error so the Close frame reaches the peer (see
+      -- the fatal-frame branch above for why ordering matters).
       M.close_client(client, 1003, "Unsupported data")
+      on_error(client, "Fragmented messages not supported")
     else
-      on_error(client, "Unknown WebSocket opcode: " .. parsed_frame.opcode)
       M.close_client(client, 1002, "Protocol error")
+      on_error(client, "Unknown WebSocket opcode: " .. parsed_frame.opcode)
     end
   end
 end
@@ -220,11 +229,23 @@ function M.close_client(client, code, reason)
   code = code or 1000
   reason = reason or ""
 
+  -- Defensive guard for callers that don't gate on client.state: if the
+  -- underlying handle is already closing (e.g. a TCP error path closed it),
+  -- writing a Close frame would target a dead handle and never reach the peer.
+  -- Just mark the client closed in that case. Mirrors the is_closing() check
+  -- in tcp.lua's _remove_client.
+  if client.tcp_handle:is_closing() then
+    client.state = "closed"
+    return
+  end
+
   if client.handshake_complete then
     local close_frame = frame.create_close_frame(code, reason)
     client.tcp_handle:write(close_frame, function()
       client.state = "closed"
-      client.tcp_handle:close()
+      if not client.tcp_handle:is_closing() then
+        client.tcp_handle:close()
+      end
     end)
     -- Mark as "closing" while the Close frame write/teardown is in flight. The
     -- write callback transitions to "closed". Do not clobber the "closed" state

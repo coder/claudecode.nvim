@@ -150,12 +150,17 @@ end)
 describe("WebSocket client malformed frame handling", function()
   -- Build a client whose tcp_handle records writes so we can assert that a
   -- Close frame was sent and the connection torn down.
+  --
+  -- The handle records, per write, whether it occurred while the handle was
+  -- already closing. In production a write to a closed handle never reaches the
+  -- peer, so the Close frame this PR is designed to send would be silently lost.
+  -- Asserting `closing == false` on the recorded write is what catches that.
   local function make_client()
     local writes = {}
     local handle = {
       _closed = false,
-      write = function(_, data, callback)
-        table.insert(writes, data)
+      write = function(self, data, callback)
+        table.insert(writes, { data = data, closing = self._closed })
         if callback then
           callback()
         end
@@ -185,10 +190,44 @@ describe("WebSocket client malformed frame handling", function()
 
   local function noop() end
 
+  -- Returns an on_error callback that faithfully reproduces the production
+  -- teardown wired in tcp.lua: on a client error the TCP handle is closed
+  -- synchronously (via _disconnect_client -> _remove_client -> handle:close())
+  -- WITHOUT touching client.state. A noop spy would mask the ordering bug this
+  -- suite is meant to catch, so the realistic version must close the handle.
+  local function make_realistic_on_error(c)
+    return spy.new(function()
+      if not c.tcp_handle:is_closing() then
+        c.tcp_handle:close()
+      end
+    end)
+  end
+
+  -- Find the Close frame among recorded writes and assert it was written while
+  -- the handle was still open (i.e. it actually reached the peer).
+  local function assert_open_close_frame_written(writes, expected_code)
+    local found_close
+    for _, w in ipairs(writes) do
+      local parsed = frame.parse_frame(w.data)
+      if parsed and parsed.opcode == frame.OPCODE.CLOSE then
+        found_close = w
+        -- A Close frame written to an already-closed handle never reaches the
+        -- peer. This is the production bug: on_error closed the handle first.
+        assert.is_false(w.closing, "Close frame was written to an already-closed handle")
+        if expected_code then
+          assert.is_true(#parsed.payload >= 2)
+          local code = parsed.payload:byte(1) * 256 + parsed.payload:byte(2)
+          assert.equals(expected_code, code)
+        end
+      end
+    end
+    assert.is_table(found_close, "expected a Close frame to be written")
+  end
+
   it("closes the connection and drains the buffer on a malformed frame", function()
     local c, writes = make_client()
 
-    local on_error = spy.new(noop)
+    local on_error = make_realistic_on_error(c)
     local on_close = spy.new(noop)
 
     -- A text frame whose payload is invalid UTF-8 is a fatal (1007) violation.
@@ -199,11 +238,8 @@ describe("WebSocket client malformed frame handling", function()
     -- Connection must be torn down rather than left wedged.
     assert.is_true(c.state == "closing" or c.state == "closed")
 
-    -- A Close frame must have been written.
-    assert.is_true(#writes >= 1)
-    local last_frame = frame.parse_frame(writes[#writes])
-    assert.is_table(last_frame)
-    assert.equals(frame.OPCODE.CLOSE, last_frame.opcode)
+    -- A Close frame must have been delivered (written while the handle was open).
+    assert_open_close_frame_written(writes, 1007)
 
     -- The error callback must have fired for the protocol violation.
     assert.spy(on_error).was_called()
@@ -215,19 +251,15 @@ describe("WebSocket client malformed frame handling", function()
   it("sends a Close frame carrying the 1002 status for an invalid opcode", function()
     local c, writes = make_client()
 
+    local on_error = make_realistic_on_error(c)
+
     -- Invalid opcode 0x3 => fatal 1002 protocol error.
     local malformed = string.char(0x83, 0x00)
 
-    client.process_data(c, malformed, noop, noop, noop)
+    client.process_data(c, malformed, noop, noop, on_error)
 
-    assert.is_true(#writes >= 1)
-    local close_frame = frame.parse_frame(writes[#writes])
-    assert.is_table(close_frame)
-    assert.equals(frame.OPCODE.CLOSE, close_frame.opcode)
-    -- Close payload begins with the 2-byte big-endian status code.
-    assert.is_true(#close_frame.payload >= 2)
-    local code = close_frame.payload:byte(1) * 256 + close_frame.payload:byte(2)
-    assert.equals(1002, code)
+    -- The 1002 Close frame must reach the peer (written before teardown).
+    assert_open_close_frame_written(writes, 1002)
   end)
 
   it("keeps an incomplete frame buffered and the connection open", function()
