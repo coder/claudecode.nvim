@@ -1,0 +1,4 @@
+This is file A.
+
+Keep this window focused.
+This simulates "you are looking at nvim".
