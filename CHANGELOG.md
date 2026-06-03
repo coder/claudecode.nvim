@@ -4,7 +4,7 @@
 
 ### Features
 
-- `:ClaudeCodeCloseAllDiffs` command to close all open Claude diffs at once (rejecting any still pending). Useful when diffs were resolved outside this Neovim (e.g. via Claude remote control). ([#248](https://github.com/coder/claudecode.nvim/issues/248))
+- `:ClaudeCodeCloseAllDiffs` command to close pending Claude diffs at once (e.g. proposals orphaned by resolving them via Claude remote control). Diffs you have already accepted but whose file has not been written yet are left intact so saved edits are never discarded. ([#248](https://github.com/coder/claudecode.nvim/issues/248))
 
 ### Bug Fixes
 

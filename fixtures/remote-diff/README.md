@@ -75,6 +75,6 @@ diff), then ask it to edit a file. The diff opens in Neovim (`:DiffState` shows
 
 - `:DiffState` — notify window count + active diff tab names/status.
 - `:DiffStateFile [path]` — write the same info to a file (for automation;
-  defaults to `stdpath('run')/diff_state.txt`).
+  defaults to `stdpath('cache')/diff_state.txt`).
 - `<leader>as` — run `:DiffState`.
 - `<leader>aa` / `<leader>ad` — accept / deny the focused diff.
