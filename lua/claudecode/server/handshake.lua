@@ -60,7 +60,7 @@ function M.validate_upgrade_request(request, expected_auth_token)
       return false, "Authentication token too short (min 10 characters)"
     end
 
-    if auth_header ~= expected_auth_token then
+    if not utils.constant_time_compare(auth_header, expected_auth_token) then
       return false, "Invalid authentication token"
     end
   end

@@ -19,45 +19,54 @@ end
 
 M.lock_dir = get_lock_dir()
 
--- Track if random seed has been initialized
-local random_initialized = false
-
----Generate a random UUID for authentication
----@return string uuid A randomly generated UUID string
-local function generate_auth_token()
-  -- Initialize random seed only once
-  if not random_initialized then
-    local seed = os.time() + vim.fn.getpid()
-    -- Add more entropy if available
-    if vim.loop and vim.loop.hrtime then
-      seed = seed + (vim.loop.hrtime() % 1000000)
+---Read n random bytes from a cryptographically secure source.
+---Tries libuv's OS CSPRNG first, then falls back to /dev/urandom.
+---Never falls back to math.random: a weak token is worse than a startup error.
+---@param n number The number of random bytes to read
+---@return string bytes A string of exactly n random bytes
+local function get_random_bytes(n)
+  -- Prefer libuv's uv_random (OS CSPRNG). Use vim.loop.random (available on
+  -- Neovim 0.8+) rather than vim.uv.random (only aliased on 0.10+).
+  if vim.loop and vim.loop.random then
+    local ok, bytes = pcall(vim.loop.random, n)
+    if ok and type(bytes) == "string" and #bytes == n then
+      return bytes
     end
-    math.randomseed(seed)
-
-    -- Call math.random a few times to "warm up" the generator
-    for _ = 1, 10 do
-      math.random()
-    end
-    random_initialized = true
   end
 
-  -- Generate UUID v4 format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-  local template = "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx"
-  local uuid = template:gsub("[xy]", function(c)
-    local v = (c == "x") and math.random(0, 15) or math.random(8, 11)
-    return string.format("%x", v)
+  -- Fallback: read directly from the kernel CSPRNG.
+  local file = io.open("/dev/urandom", "rb")
+  if file then
+    local bytes = file:read(n)
+    file:close()
+    if type(bytes) == "string" and #bytes == n then
+      return bytes
+    end
+  end
+
+  error("Failed to obtain " .. n .. " bytes of secure random data (no vim.loop.random or readable /dev/urandom)")
+end
+
+---Generate a cryptographically secure authentication token.
+---@return string token A 32-character lowercase hex string (128 bits of entropy)
+local function generate_auth_token()
+  local bytes = get_random_bytes(16)
+
+  -- Hex-encode the random bytes into a 32-character lowercase string.
+  local token = bytes:gsub(".", function(c)
+    return string.format("%02x", string.byte(c))
   end)
 
-  -- Validate generated UUID format
-  if not uuid:match("^[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$") then
-    error("Generated invalid UUID format: " .. uuid)
+  -- Sanity-check the generated token shape.
+  if not token:match("^[0-9a-f]+$") then
+    error("Generated invalid auth token format")
   end
 
-  if #uuid ~= 36 then
-    error("Generated UUID has invalid length: " .. #uuid .. " (expected 36)")
+  if #token < 16 then
+    error("Generated auth token too short: " .. #token .. " (expected at least 16)")
   end
 
-  return uuid
+  return token
 end
 
 ---Generate a new authentication token
@@ -82,7 +91,7 @@ function M.create(port, auth_token)
   end
 
   local ok, err = pcall(function()
-    return vim.fn.mkdir(M.lock_dir, "p")
+    return vim.fn.mkdir(M.lock_dir, "p", "0700")
   end)
 
   if not ok then
@@ -130,21 +139,42 @@ function M.create(port, auth_token)
     return false, "Failed to encode lock file content: " .. (json_err or "unknown error")
   end
 
-  local file = io.open(lock_path, "w")
-  if not file then
-    return false, "Failed to create lock file: " .. lock_path
-  end
+  -- Write atomically with restrictive (0600) permissions: write to a temp file
+  -- in the same directory, then rename into place. Using "wx" (O_CREAT|O_EXCL)
+  -- refuses to follow an existing file or symlink at the temp path.
+  local tmp_path = lock_path .. ".tmp." .. vim.fn.getpid()
 
   local write_ok, write_err = pcall(function()
-    file:write(json)
-    file:close()
+    local fd = vim.loop.fs_open(tmp_path, "wx", tonumber("600", 8))
+    if not fd then
+      error("could not open temp file: " .. tmp_path)
+    end
+
+    local close_and_raise = function(message)
+      pcall(vim.loop.fs_close, fd)
+      error(message)
+    end
+
+    local ok_write, write_result = pcall(vim.loop.fs_write, fd, json)
+    if not ok_write or not write_result then
+      close_and_raise("could not write temp file: " .. tostring(write_result))
+    end
+
+    local ok_close = pcall(vim.loop.fs_close, fd)
+    if not ok_close then
+      error("could not close temp file: " .. tmp_path)
+    end
   end)
 
   if not write_ok then
-    pcall(function()
-      file:close()
-    end)
+    pcall(vim.loop.fs_unlink, tmp_path)
     return false, "Failed to write lock file: " .. (write_err or "unknown error")
+  end
+
+  local rename_ok, rename_err = os.rename(tmp_path, lock_path)
+  if not rename_ok then
+    pcall(vim.loop.fs_unlink, tmp_path)
+    return false, "Failed to write lock file: " .. (rename_err or "rename failed")
   end
 
   return true, lock_path, auth_token

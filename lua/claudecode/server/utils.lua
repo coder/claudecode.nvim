@@ -410,11 +410,34 @@ end
 ---Shuffle an array in place using Fisher-Yates algorithm
 ---@param tbl table The array to shuffle
 function M.shuffle_array(tbl)
-  math.randomseed(os.time())
   for i = #tbl, 2, -1 do
     local j = math.random(i)
     tbl[i], tbl[j] = tbl[j], tbl[i]
   end
+end
+
+---Compare two strings in constant time relative to their length.
+---Returns false immediately on a length mismatch; otherwise every byte is
+---examined so total work does not depend on the matching-prefix length.
+---@param a string First string
+---@param b string Second string
+---@return boolean equal True if the strings are byte-for-byte equal
+function M.constant_time_compare(a, b)
+  if type(a) ~= "string" or type(b) ~= "string" then
+    return false
+  end
+
+  if #a ~= #b then
+    return false
+  end
+
+  local bit = require("bit")
+  local diff = 0
+  for i = 1, #a do
+    diff = bit.bor(diff, bit.bxor(a:byte(i), b:byte(i)))
+  end
+
+  return diff == 0
 end
 
 return M
