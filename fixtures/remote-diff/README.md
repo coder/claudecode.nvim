@@ -51,7 +51,7 @@ drains the diff registry (resolving pending diffs), so `:DiffState` likewise sho
 
 ## Verifying with the _real_ Claude CLI
 
-The synthetic script is convenient, but the same leak happens with the real CLI:
+The synthetic script is convenient, but you can confirm the fix with the real CLI too:
 
 ```sh
 # Point a real Claude at this Neovim's MCP server (use the port from the lock file):
@@ -67,9 +67,11 @@ diff), then ask it to edit a file. The diff opens in Neovim (`:DiffState` shows
 
 - Accept it (in Neovim **or** in Claude's prompt) → Claude sends `close_tab` →
   the diff closes. This is the normal local flow.
-- Instead, **kill the Claude process** (or otherwise resolve the edit out of
-  band) before it sends `close_tab` → `:DiffState` still shows the diff. The
-  window leaked, exactly as a phone/remote-control resolution would.
+- Instead, **kill the Claude process** before it sends `close_tab` (mimicking a
+  phone/remote-control resolution). With the #248 fix the pending diff is now
+  auto-closed by `on_disconnect` — `:DiffState` shows `windows=1 active_diffs=0`
+  (before the fix the window leaked and stayed open). A diff you had already
+  accepted with `:w` is instead left open, so its not-yet-written edits survive.
 
 ## Inspector commands (added by this fixture)
 

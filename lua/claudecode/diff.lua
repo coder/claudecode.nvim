@@ -1459,10 +1459,11 @@ local function close_active_diffs(filter_fn, reason)
 end
 
 ---Close all active diffs, resolving any still pending as rejected.
----Closes diffs in any state, so only use this for explicit, user/Claude-driven
----requests (the closeAllDiffTabs tool, :ClaudeCodeCloseAllDiffs). For automatic
----cleanup prefer close_pending_diffs / close_diffs_for_client, which leave
----already-saved diffs alone -- see close_pending_diffs for why.
+---Closes diffs in ANY state (including saved), so its only caller is the
+---closeAllDiffTabs tool, where Claude is the connected client and has written
+---accepted files. Automatic cleanup and the :ClaudeCodeCloseAllDiffs command
+---deliberately use close_pending_diffs / close_diffs_for_client instead, to
+---leave already-saved diffs alone -- see close_pending_diffs for why.
 ---@param reason string Human-readable reason (for logging)
 ---@return number count Number of diffs closed
 function M.close_all_diffs(reason)
