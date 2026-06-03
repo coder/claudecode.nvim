@@ -1,0 +1,19 @@
+context = """
+claudecode.nvim is a Neovim plugin written in pure Lua with zero dependencies. It implements the same WebSocket-based MCP protocol as Anthropic's official IDE extensions, letting the Claude CLI drive Neovim: opening files, reading selections and diagnostics, showing native diffs, and managing terminal sessions.
+
+Releases matter to Neovim users who install the plugin via their package manager and to integrators relying on MCP tool behavior. Call out changes to the public setup() configuration (such as terminal or diff_opts), MCP tool behavior and compatibility with the VS Code extension, supported Neovim versions, file explorer and terminal integrations (snacks.nvim, native, external, nvim-tree, oil.nvim, neo-tree, mini.files), and any breaking changes to keybindings or commands.
+
+Primary readers are Neovim users and plugin integrators, not the plugin's own maintainers, so frame notes around user-visible impact rather than internal refactors.
+"""
+
+system_extra = """
+Write direct, practical release notes for Neovim users and integrators.
+Lead with what changed and why it matters.
+Group changes into clear sections (for example Features, Fixes, Breaking Changes) and keep them concise.
+Avoid marketing language.
+Provide concrete migration guidance when configuration options, commands, or MCP tool behavior changed.
+Do not invent changes that are not supported by the commits, pull requests, or diffs.
+"""
+
+[defaults]
+model = "claude-opus-4-8"
