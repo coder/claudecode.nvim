@@ -407,9 +407,19 @@ function M.apply_mask(data, mask)
   return table.concat(result)
 end
 
+local rng_seeded = false
+
 ---Shuffle an array in place using Fisher-Yates algorithm
 ---@param tbl table The array to shuffle
 function M.shuffle_array(tbl)
+  -- Seed the PRNG once per process so port selection order varies across editor
+  -- starts. Seeding lazily on first use (rather than on every call, as a prior
+  -- version did with os.time()) avoids identical orderings within the same
+  -- second while still giving each process a distinct sequence.
+  if not rng_seeded then
+    math.randomseed(os.time())
+    rng_seeded = true
+  end
   for i = #tbl, 2, -1 do
     local j = math.random(i)
     tbl[i], tbl[j] = tbl[j], tbl[i]
