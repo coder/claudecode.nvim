@@ -407,14 +407,52 @@ function M.apply_mask(data, mask)
   return table.concat(result)
 end
 
+local rng_seeded = false
+
 ---Shuffle an array in place using Fisher-Yates algorithm
 ---@param tbl table The array to shuffle
 function M.shuffle_array(tbl)
-  math.randomseed(os.time())
+  -- Seed the PRNG once per process so port selection order varies across editor
+  -- starts. Seeding lazily on first use (rather than on every call, as a prior
+  -- version did with os.time()) avoids identical orderings within the same
+  -- second while still giving each process a distinct sequence.
+  if not rng_seeded then
+    math.randomseed(os.time())
+    rng_seeded = true
+  end
   for i = #tbl, 2, -1 do
     local j = math.random(i)
     tbl[i], tbl[j] = tbl[j], tbl[i]
   end
+end
+
+---Compare two strings in constant time relative to their length.
+---Returns false immediately on a length mismatch; otherwise every byte is
+---examined so total work does not depend on the matching-prefix length.
+---@param a string First string
+---@param b string Second string
+---@return boolean equal True if the strings are byte-for-byte equal
+function M.constant_time_compare(a, b)
+  if type(a) ~= "string" or type(b) ~= "string" then
+    return false
+  end
+
+  if #a ~= #b then
+    return false
+  end
+
+  -- Accumulate a value that is non-zero iff any byte differs, doing identical,
+  -- branchless work per byte (subtract + multiply + add). This keeps the timing
+  -- independent of the matching-prefix length without the bit module or the
+  -- file-local arithmetic-emulated bor/bxor, whose loop counts depend on operand
+  -- magnitude and would themselves reintroduce prefix-length timing leakage.
+  local diff = 0
+  for i = 1, #a do
+    local d = a:byte(i) - b:byte(i)
+    diff = diff + d * d
+  end
+
+  return diff == 0
 end
 
 return M
