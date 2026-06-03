@@ -84,4 +84,35 @@ describe("issue #248: closing orphaned diffs", function()
     -- registry fully drained (this is the secondary closeAllDiffTabs bug)
     assert.is_nil(next(diff._get_active_diffs()))
   end)
+
+  -- A status="saved" diff still holds the user's :w'd edits only in its proposed
+  -- buffer (until Claude writes the file). Auto-cleanup must NOT close it, or those
+  -- edits are silently destroyed if Claude died before writing. Pending diffs only.
+  it("close_diffs_for_client leaves SAVED diffs alone (preserves the user's edits)", function()
+    open_pending(file_a, "tab-A", "clientA")
+    local saved_buf = diff._get_active_diffs()["tab-A"].new_buffer
+    diff._resolve_diff_as_saved("tab-A", saved_buf) -- user accepted: status -> saved
+    assert.equal("saved", diff._get_active_diffs()["tab-A"].status)
+
+    local closed = diff.close_diffs_for_client("clientA", "disconnect")
+
+    assert.equal(0, closed)
+    assert.is_table(diff._get_active_diffs()["tab-A"])
+    assert.equal("saved", diff._get_active_diffs()["tab-A"].status)
+  end)
+
+  it("close_pending_diffs closes pending diffs but leaves saved ones", function()
+    local a = open_pending(file_a, "tab-A", "clientA") -- stays pending
+    open_pending(file_b, "tab-B", "clientB")
+    local saved_buf = diff._get_active_diffs()["tab-B"].new_buffer
+    diff._resolve_diff_as_saved("tab-B", saved_buf) -- tab-B -> saved
+
+    local closed = diff.close_pending_diffs("server stopping")
+
+    assert.equal(1, closed)
+    assert.equal("dead", coroutine.status(a.co))
+    assert.is_nil(diff._get_active_diffs()["tab-A"]) -- pending closed
+    assert.is_table(diff._get_active_diffs()["tab-B"]) -- saved preserved
+    assert.equal("saved", diff._get_active_diffs()["tab-B"].status)
+  end)
 end)

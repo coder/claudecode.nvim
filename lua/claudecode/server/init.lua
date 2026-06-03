@@ -119,11 +119,13 @@ function M.stop()
     M.state.ping_timer = nil
   end
 
-  -- Close open diffs before teardown -- stop_server bypasses on_disconnect (#248).
-  -- Only if the diff module is in use; clients are still connected for DIFF_REJECTED.
+  -- Reject any still-pending diffs before teardown -- stop_server bypasses
+  -- on_disconnect (#248). Pending only, so saved-but-unflushed edits survive;
+  -- only if the diff module is in use, and while clients can still receive
+  -- DIFF_REJECTED.
   local diff = package.loaded["claudecode.diff"]
   if diff then
-    diff.close_all_diffs("server stopping")
+    diff.close_pending_diffs("server stopping")
   end
 
   tcp_server.stop_server(M.state.server)

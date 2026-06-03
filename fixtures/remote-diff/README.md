@@ -34,21 +34,20 @@ vv remote-diff
 scripts/repro_issue_248.sh            # open 3 diffs, then DISCONNECT (no close_tab)
 ```
 
-Now back in Neovim run `:DiffState`. You will see something like:
+Now back in Neovim run `:DiffState`. With the #248 fix you will see:
 
 ```
-windows=6  active_diffs=3
-    [pending] ✻ [Claude Code] a.txt (repro1) ⧉
-    [pending] ✻ [Claude Code] b.txt (repro2) ⧉
-    [pending] ✻ [Claude Code] c.lua (repro3) ⧉
+windows=1  active_diffs=0
 ```
 
-The client has gone, yet the diff windows remain. **That is the bug.**
+The client went away, and `on_disconnect` automatically closed the diffs it had
+opened. **Before the fix** the diff windows lingered (`windows=6 active_diffs=3`,
+all `[pending]`) because teardown depended entirely on a `close_tab` the departed
+client never sent — that was the bug.
 
-Contrast: `scripts/repro_issue_248.sh --cleanup` opens the diffs and then sends
-`closeAllDiffTabs`. The windows close — proving the only thing that ever closes
-a diff is an explicit close call from the client. (Note the windows close but
-`active_diffs` does **not** drain to 0 — see the investigation notes.)
+`scripts/repro_issue_248.sh --cleanup` instead sends `closeAllDiffTabs`, which now
+drains the diff registry (resolving pending diffs), so `:DiffState` likewise shows
+`active_diffs=0` — before the fix it closed the windows but left `active_diffs > 0`.
 
 ## Verifying with the _real_ Claude CLI
 

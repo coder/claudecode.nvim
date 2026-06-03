@@ -15,8 +15,9 @@
 #   3. opens N diffs via `openDiff` (each blocks server-side — deferred),
 #   4. disconnects WITHOUT sending `close_tab`.
 #
-# After it exits, look at Neovim: the diff windows are still open. That is the
-# bug — a client going away (or resolving elsewhere) leaks the diff windows.
+# After it exits, look at Neovim. With the #248 fix, on_disconnect auto-closes the
+# orphaned diffs (`:DiffState` -> windows=1, active_diffs=0). Before the fix the
+# client going away left the diff windows open forever — that was the bug.
 #
 # Usage:
 #   # Terminal 1 — start the test editor (quiet repro fixture):
@@ -24,8 +25,8 @@
 #   vv remote-diff           # or: NVIM_APPNAME=remote-diff XDG_CONFIG_HOME=fixtures nvim a.txt
 #
 #   # Terminal 2 — drive the MCP side:
-#   scripts/repro_issue_248.sh            # open 3 diffs, then disconnect  -> diffs LEAK
-#   scripts/repro_issue_248.sh --cleanup  # open 3 diffs, then closeAllDiffTabs -> diffs close
+#   scripts/repro_issue_248.sh            # open 3 diffs, disconnect -> fix auto-closes them
+#   scripts/repro_issue_248.sh --cleanup  # open 3 diffs, then closeAllDiffTabs
 #   scripts/repro_issue_248.sh -n 5       # open 5 diffs
 #
 # In Neovim, run :DiffState (provided by the remote-diff fixture) to print the
@@ -139,12 +140,13 @@ fi
 
 echo
 if [[ $CLEANUP == 1 ]]; then
-  echo "Sent closeAllDiffTabs — the diff windows should now be gone in Neovim."
-  echo "NOTE: closeAllDiffTabs closes the *windows* but does NOT drain the diff"
-  echo "      registry for still-pending diffs (run :DiffState — active_diffs may be > 0)."
+  echo "Sent closeAllDiffTabs."
+  echo ">>> Run :DiffState in Neovim — expect windows=1, active_diffs=0. <<<"
+  echo "    With the #248 fix, closeAllDiffTabs drains the diff registry (resolving"
+  echo "    pending diffs), not just the windows. Pre-fix, active_diffs stayed > 0."
 else
   echo "Client has DISCONNECTED without sending close_tab."
-  echo ">>> Look at Neovim: the $NUM_DIFFS diff window(s) are STILL OPEN. <<<"
-  echo "    Run :DiffState in Neovim — windows and active_diffs stayed up."
-  echo "    This is issue #248: diffs resolved/abandoned outside this Neovim never close."
+  echo ">>> Run :DiffState in Neovim — expect windows=1, active_diffs=0. <<<"
+  echo "    With the #248 fix, on_disconnect auto-closes this client's pending diffs."
+  echo "    Pre-fix, the $NUM_DIFFS diff window(s) would have stayed open (the bug)."
 fi

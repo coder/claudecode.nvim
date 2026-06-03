@@ -1459,15 +1459,36 @@ local function close_active_diffs(filter_fn, reason)
 end
 
 ---Close all active diffs, resolving any still pending as rejected.
+---Closes diffs in any state, so only use this for explicit, user/Claude-driven
+---requests (the closeAllDiffTabs tool, :ClaudeCodeCloseAllDiffs). For automatic
+---cleanup prefer close_pending_diffs / close_diffs_for_client, which leave
+---already-saved diffs alone -- see close_pending_diffs for why.
 ---@param reason string Human-readable reason (for logging)
 ---@return number count Number of diffs closed
 function M.close_all_diffs(reason)
   return close_active_diffs(nil, reason or "close all diffs")
 end
 
----Close all active diffs that were opened by a specific MCP client.
----Used when that client disconnects so its orphaned diff windows don't linger
----(e.g. the Claude session that opened them exited or moved to remote control).
+-- Automatic teardown (client disconnect, server stop) must only touch *pending*
+-- diffs. A diff with status == "saved" has been :w'd by the user -- its edits
+-- live only in the proposed buffer until Claude writes them to disk -- so closing
+-- it would run close_diff_by_tab_name's saved-branch, wiping the proposed buffer
+-- and reloading the file from unchanged disk, silently destroying the edits if
+-- Claude died before writing. Pending diffs carry no such accepted content.
+
+---Close every still-pending diff (e.g. on server stop, which bypasses
+---on_disconnect). Leaves saved/rejected diffs for client-driven finalization.
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+function M.close_pending_diffs(reason)
+  return close_active_diffs(function(diff_data)
+    return diff_data.status == "pending"
+  end, reason or "close pending diffs")
+end
+
+---Close the still-pending diffs opened by a specific MCP client, used when that
+---client disconnects so its orphaned diff windows don't linger (e.g. the Claude
+---session that opened them exited or moved to remote control).
 ---@param client_id string The id of the client whose diffs should be closed
 ---@param reason string Human-readable reason (for logging)
 ---@return number count Number of diffs closed
@@ -1476,7 +1497,7 @@ function M.close_diffs_for_client(client_id, reason)
     return 0
   end
   return close_active_diffs(function(diff_data)
-    return diff_data.client_id == client_id
+    return diff_data.client_id == client_id and diff_data.status == "pending"
   end, reason or ("client " .. tostring(client_id)))
 end
 

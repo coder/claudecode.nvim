@@ -87,7 +87,8 @@ end, { desc = "Show window count + active claudecode diffs" })
 -- Scriptable variant: writes the state to a file so external automation can
 -- assert on it without scraping the message area.
 vim.api.nvim_create_user_command("DiffStateFile", function(opts)
-  local path = opts.args ~= "" and opts.args or (vim.fn.stdpath("run") .. "/diff_state.txt")
+  -- stdpath("cache") (not "run") so this works on the plugin's Neovim 0.8 floor.
+  local path = opts.args ~= "" and opts.args or (vim.fn.stdpath("cache") .. "/diff_state.txt")
   local lines = diff_state()
   vim.fn.writefile(lines, path)
 end, { nargs = "?", desc = "Write window/diff state to a file" })
