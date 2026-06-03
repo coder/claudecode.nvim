@@ -441,9 +441,15 @@ function M.constant_time_compare(a, b)
     return false
   end
 
+  -- Accumulate a value that is non-zero iff any byte differs, doing identical,
+  -- branchless work per byte (subtract + multiply + add). This keeps the timing
+  -- independent of the matching-prefix length without the bit module or the
+  -- file-local arithmetic-emulated bor/bxor, whose loop counts depend on operand
+  -- magnitude and would themselves reintroduce prefix-length timing leakage.
   local diff = 0
   for i = 1, #a do
-    diff = bor(diff, bxor(a:byte(i), b:byte(i)))
+    local d = a:byte(i) - b:byte(i)
+    diff = diff + d * d
   end
 
   return diff == 0
