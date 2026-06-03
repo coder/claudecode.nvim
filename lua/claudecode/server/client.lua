@@ -114,6 +114,14 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
   end
 
   while #client.buffer >= 2 do -- Minimum frame size
+    -- Stop if a prior frame (or a TCP error) already initiated teardown. The
+    -- handle can still be open (Close-frame write / scheduled on_close/on_error
+    -- pending) and read is not stopped, so a later TCP segment could otherwise
+    -- re-enter process_data and dispatch frames against a closing/closed client.
+    if client.state == "closing" or client.state == "closed" then
+      break
+    end
+
     local parsed_frame, bytes_consumed, close_code = frame.parse_frame(client.buffer)
 
     if not parsed_frame then
