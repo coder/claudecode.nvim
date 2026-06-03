@@ -11,13 +11,16 @@ describe("claudecode.terminal.paste_fix", function()
     paste_fix = require("claudecode.terminal.paste_fix")
   end
 
-  local saved_version, saved_paste, saved_bo, saved_get_buf
+  local saved_version, saved_paste, saved_bo, saved_get_buf, saved_get_win, saved_win_valid, saved_win_call
 
   before_each(function()
     saved_version = vim.version
     saved_paste = vim.paste
     saved_bo = vim.bo
     saved_get_buf = vim.api.nvim_get_current_buf
+    saved_get_win = vim.api.nvim_get_current_win
+    saved_win_valid = vim.api.nvim_win_is_valid
+    saved_win_call = vim.api.nvim_win_call
     fresh()
   end)
 
@@ -26,6 +29,9 @@ describe("claudecode.terminal.paste_fix", function()
     vim.paste = saved_paste
     vim.bo = saved_bo
     vim.api.nvim_get_current_buf = saved_get_buf
+    vim.api.nvim_get_current_win = saved_get_win
+    vim.api.nvim_win_is_valid = saved_win_valid
+    vim.api.nvim_win_call = saved_win_call
     package.loaded["claudecode.terminal.paste_fix"] = nil
     package.loaded["claudecode.terminal"] = nil
   end)
@@ -148,16 +154,29 @@ describe("claudecode.terminal.paste_fix", function()
 
   describe("install (cooperative override)", function()
     local managed_bufnr, current_bufnr, buftype_by_buf, orig_calls
+    local current_win, win_calls
 
     -- Build a controlled vim environment for the override and install the shim.
     local function setup_env()
       managed_bufnr = 10
       current_bufnr = 10
       buftype_by_buf = { [10] = "terminal" }
+      current_win = 1000 -- the managed terminal's window
+      win_calls = {}
       orig_calls = {}
 
       vim.api.nvim_get_current_buf = function()
         return current_bufnr
+      end
+      vim.api.nvim_get_current_win = function()
+        return current_win
+      end
+      vim.api.nvim_win_is_valid = function(_)
+        return true
+      end
+      vim.api.nvim_win_call = function(win, fn)
+        win_calls[#win_calls + 1] = win
+        return fn()
       end
       vim.bo = setmetatable({}, {
         __index = function(_, b)
@@ -211,19 +230,30 @@ describe("claudecode.terminal.paste_fix", function()
       assert.are.same({ "whole" }, orig_calls[1].lines)
     end)
 
-    it("coalesces into a single replay even if focus leaves mid-stream", function()
+    it("replays in the captured window if focus leaves mid-stream", function()
       setup_env()
-      -- Phase 1 targets the managed terminal; the streaming decision is latched.
+      -- Phase 1 targets the managed terminal in window 1000; both are captured.
       assert.is_true(vim.paste({ "kept ", "dat" }, 1))
-      -- Focus moves to a normal buffer before phase 3.
+      -- Focus moves to a different window/buffer before phase 3.
       current_bufnr = 99
       buftype_by_buf[99] = ""
+      current_win = 2000
       vim.paste({ "a" }, 3)
-      -- Still one coalesced replay through the original handler (delivery is
-      -- delegated to vim.paste rather than reconstructed by us).
+      -- The coalesced replay is run in the captured terminal window (1000) via
+      -- nvim_win_call, delegating delivery/framing to the original handler.
+      assert.are.same({ 1000 }, win_calls)
       assert.are.equal(1, #orig_calls)
       assert.are.equal(-1, orig_calls[1].phase)
       assert.are.same({ "kept ", "data" }, orig_calls[1].lines)
+    end)
+
+    it("replays directly (no win_call) when focus stays on the terminal", function()
+      setup_env()
+      vim.paste({ "x", "y" }, 1)
+      vim.paste({ "z" }, 3) -- still in window 1000
+      assert.are.equal(0, #win_calls)
+      assert.are.equal(1, #orig_calls)
+      assert.are.equal(-1, orig_calls[1].phase)
     end)
 
     it("respects a later apply(false): delegates instead of coalescing", function()

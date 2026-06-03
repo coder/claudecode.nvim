@@ -12,6 +12,7 @@ local chunks = {} -- accumulator for the in-flight streamed paste (pastes are se
 local installed = false -- the global vim.paste wrap happens at most once
 local enabled = false -- config-controlled; lets a later setup() disable in place
 local streaming = false -- does the current stream target the managed terminal? (decided at phase 1)
+local target_win = nil -- window that owns the paste, captured at phase 1, for the phase-3 replay
 local terminal_mod = nil -- lazily required to avoid a terminal -> paste_fix cycle
 
 --- True if the running Neovim has the per-phase terminal-paste fragmentation
@@ -109,10 +110,11 @@ function M.install()
     end
 
     -- Decide once per stream (at phase 1) whether it targets the managed
-    -- terminal, so phases 2/3 follow that decision and we don't re-resolve the
-    -- provider on every phase.
+    -- terminal, capturing the window so phases 2/3 follow that decision and the
+    -- replay can be aimed back at it.
     if phase == 1 then
       streaming = is_managed_terminal(vim.api.nvim_get_current_buf())
+      target_win = vim.api.nvim_get_current_win()
       chunks = {}
     end
 
@@ -126,13 +128,18 @@ function M.install()
       local buffered = chunks
       chunks = {}
       streaming = false
-      -- Replay as a single non-streamed paste through the original handler. We
-      -- deliberately delegate rather than writing to the terminal channel
-      -- ourselves: only Neovim's terminal paste knows whether the child enabled
-      -- bracketed paste (it is not queryable from Lua), so reconstructing the
-      -- ESC[200~/ESC[201~ framing ourselves would corrupt input for programs
-      -- that have not. (A focus change between phases is not reachable from a
-      -- TUI bracketed paste, which is processed as one atomic input burst.)
+      -- Replay as a single non-streamed paste through the original handler so
+      -- Neovim's own terminal paste delivers it (and decides whether to emit
+      -- bracketed-paste markers based on the child's state — which is not
+      -- queryable from Lua). If focus has moved off the terminal since phase 1
+      -- (e.g. a scheduled callback or a GUI/RPC paste stream), run the replay in
+      -- the captured window via nvim_win_call so it still reaches the terminal
+      -- instead of the now-current buffer.
+      if target_win and target_win ~= vim.api.nvim_get_current_win() and vim.api.nvim_win_is_valid(target_win) then
+        return vim.api.nvim_win_call(target_win, function()
+          return orig_paste(buffered, -1)
+        end)
+      end
       return orig_paste(buffered, -1)
     end
     return true
