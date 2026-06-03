@@ -1063,6 +1063,12 @@ function M._cleanup_diff_state(tab_name, reason)
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
     end
 
+    -- Close the fallback window we created when no editor window existed (issue #231); it's reused
+    -- as the original pane, so target_window_created_by_plugin below doesn't cover it.
+    if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
+      pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
+    end
+
     -- If we created an extra window/split for the diff, close it. Otherwise just disable diff mode.
     if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
       if diff_data.target_window_created_by_plugin then
@@ -1197,14 +1203,21 @@ function M._setup_blocking_diff(params, resolution_callback)
         target_window = find_main_editor_window()
       end
     end
-    -- If created_new_tab is true, target_window stays nil and will be created in the new tab
-    -- If we still can't find a suitable window AND we're not in a new tab, error out
+    -- If created_new_tab is true, target_window stays nil and will be created in the new tab.
+    -- Otherwise, if no editor window is suitable (e.g. the Claude terminal is the only window --
+    -- issue #231), create one by splitting the current window instead of erroring out, mirroring
+    -- the fallback in lua/claudecode/tools/open_file.lua.
+    local fallback_window = nil
     if not target_window and not created_new_tab then
-      error({
-        code = -32000,
-        message = "No suitable editor window found",
-        data = "Could not find a main editor window to display the diff",
-      })
+      create_split()
+      local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
+      if scratch_buf ~= 0 then
+        vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch_buf)
+      end
+      target_window = vim.api.nvim_get_current_win()
+      -- Track it so _cleanup_diff_state closes it; the reused scratch buffer means it won't be
+      -- flagged target_window_created_by_plugin.
+      fallback_window = target_window
     end
 
     local new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
@@ -1253,6 +1266,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       new_window = diff_info.new_window,
       target_window = diff_info.target_window,
       target_window_created_by_plugin = diff_info.target_window_created_by_plugin,
+      fallback_window = fallback_window,
       original_buffer = diff_info.original_buffer,
       original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,

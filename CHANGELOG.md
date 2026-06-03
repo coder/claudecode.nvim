@@ -9,6 +9,7 @@
 ### Bug Fixes
 
 - Diffs opened via `openDiff` no longer linger forever when they are resolved outside this Neovim or their Claude session goes away. Pending diffs are now automatically closed when the client that opened them disconnects or the integration is stopped, and `closeAllDiffTabs` now also resolves/cleans the diff module's tracked state instead of only closing windows. ([#248](https://github.com/coder/claudecode.nvim/issues/248))
+- Show diffs when the Claude Code terminal is the only window (no other splits). Previously `openDiff` failed with "No suitable editor window found"; now a split is created to host the diff, matching the behavior of the `openFile` tool. ([#231](https://github.com/coder/claudecode.nvim/issues/231))
 - Work around a Neovim core bug (< 0.12.2) that fragmented large bracketed pastes into the terminal across `vim.paste` phases, making Cmd+V appear to truncate content. Added a scoped, version-gated `vim.paste` shim controlled by `terminal.fix_streamed_paste` (`"auto"` by default; no-op on Neovim >= 0.12.2). ([#161](https://github.com/coder/claudecode.nvim/issues/161))
 
 ## [0.3.0] - 2025-09-15
