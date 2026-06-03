@@ -128,7 +128,12 @@ function M.open(cmd_string, env_table, config, focus)
   end
 
   local opts = build_opts(config, env_table, focus)
-  local term_instance = Snacks.terminal.open(cmd_string, opts)
+  -- Pass an argv list (not a string) so Snacks spawns Claude via termopen()
+  -- without a shell. A shell would glob-expand bracketed model aliases like
+  -- "opus[1m]" (e.g. zsh aborts with "no matches found"). parse_command keeps
+  -- quoted arguments intact and expands a leading "~". Mirrors native.
+  local cmd = utils.parse_command(cmd_string)
+  local term_instance = Snacks.terminal.open(cmd, opts)
   if term_instance and term_instance:buf_valid() then
     setup_terminal_events(term_instance, config)
     terminal = term_instance

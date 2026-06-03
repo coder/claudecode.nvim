@@ -97,6 +97,21 @@ describe("claudecode.terminal.external", function()
       assert.are.equal("/cwd", call_args[2].cwd)
     end)
 
+    it("preserves quoted arguments instead of splitting on inner spaces", function()
+      local config = {
+        provider_opts = {
+          external_terminal_cmd = "alacritty -e %s",
+        },
+      }
+      external_provider.setup(config)
+
+      external_provider.open("claude --message='hello world'", { ENABLE_IDE_INTEGRATION = "true" })
+
+      assert.spy(mock_vim.fn.jobstart).was_called(1)
+      local call_args = mock_vim.fn.jobstart.calls[1].vals
+      assert.are.same({ "alacritty", "-e", "claude", "--message=hello world" }, call_args[1])
+    end)
+
     it("should error if string command missing %s placeholder", function()
       local config = {
         provider_opts = {

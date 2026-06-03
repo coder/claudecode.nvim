@@ -27,11 +27,16 @@ M.defaults = {
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
     on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
   },
+  -- `value` is passed verbatim to `claude --model`. These short aliases resolve
+  -- to the latest model on the Anthropic API, so labels stay version-free to
+  -- avoid going stale on every release.
   models = {
-    { name = "Claude Opus 4.1 (Latest)", value = "opus" },
-    { name = "Claude Sonnet 4.5 (Latest)", value = "sonnet" },
-    { name = "Opusplan: Claude Opus 4.1 (Latest) + Sonnet 4.5 (Latest)", value = "opusplan" },
-    { name = "Claude Haiku 4.5 (Latest)", value = "haiku" },
+    { name = "Claude Opus (Latest)", value = "opus" },
+    { name = "Claude Opus (Latest, 1M context)", value = "opus[1m]" },
+    { name = "Claude Sonnet (Latest)", value = "sonnet" },
+    { name = "Claude Sonnet (Latest, 1M context)", value = "sonnet[1m]" },
+    { name = "Claude Haiku (Latest)", value = "haiku" },
+    { name = "Default (account recommended)", value = "default" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
 }

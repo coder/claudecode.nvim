@@ -6,6 +6,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 local jobid = nil
 ---@type ClaudeCodeTerminalConfig
@@ -62,8 +63,9 @@ function M.open(cmd_string, env_table)
 
     -- Result can be either a string or a table
     if type(result) == "string" then
-      -- Parse the string into command parts
-      cmd_parts = vim.split(result, " ")
+      -- Shell-aware parse (quotes/escapes + leading ~) so it stays consistent
+      -- with the native/snacks providers (see utils.parse_command).
+      cmd_parts = utils.parse_command(result)
       full_command = result
     elseif type(result) == "table" then
       -- Use the table directly as command parts
@@ -109,7 +111,7 @@ function M.open(cmd_string, env_table)
       return
     end
 
-    cmd_parts = vim.split(full_command, " ")
+    cmd_parts = utils.parse_command(full_command)
   else
     vim.notify("external_terminal_cmd must be a string or function, got: " .. type(external_cmd), vim.log.levels.ERROR)
     return
