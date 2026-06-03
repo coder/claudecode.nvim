@@ -91,7 +91,7 @@ function M.create(port, auth_token)
   end
 
   local ok, err = pcall(function()
-    return vim.fn.mkdir(M.lock_dir, "p", "0700")
+    return vim.fn.mkdir(M.lock_dir, "p", tonumber("700", 8))
   end)
 
   if not ok then

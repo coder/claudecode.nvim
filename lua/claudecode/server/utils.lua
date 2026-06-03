@@ -441,10 +441,9 @@ function M.constant_time_compare(a, b)
     return false
   end
 
-  local bit = require("bit")
   local diff = 0
   for i = 1, #a do
-    diff = bit.bor(diff, bit.bxor(a:byte(i), b:byte(i)))
+    diff = bor(diff, bxor(a:byte(i), b:byte(i)))
   end
 
   return diff == 0

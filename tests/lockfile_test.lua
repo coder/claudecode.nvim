@@ -508,8 +508,10 @@ describe("Lockfile Module", function()
       vim.fn.mkdir = orig_mkdir
 
       assert(success == true)
-      -- New directories get 0700 from mkdir's mode argument...
-      assert("0700" == captured_mkdir_mode)
+      -- New directories get 0700 from mkdir's mode argument, passed as an octal
+      -- number (tonumber("700", 8)); the string "0700" would be coerced to
+      -- decimal 700 and apply the wrong mode to freshly-created parents...
+      assert(tonumber("700", 8) == captured_mkdir_mode)
       -- ...but mkdir's mode is a no-op for a pre-existing dir, so an explicit
       -- chmod must also tighten the lock dir to 0700 on upgrade.
       assert(_G._test_last_fs_chmod ~= nil)
