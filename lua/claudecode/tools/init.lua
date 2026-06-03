@@ -105,7 +105,7 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
     -- Wrap in coroutine for blocking behavior
     require("claudecode.logger").debug("tools", "Wrapping " .. tool_name .. " in coroutine for blocking behavior")
     local co = coroutine.create(function()
-      return tool_data.handler(input)
+      return tool_data.handler(input, client)
     end)
 
     require("claudecode.logger").debug("tools", "About to resume coroutine for " .. tool_name)

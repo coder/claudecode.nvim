@@ -1042,6 +1042,22 @@ function M._create_commands()
     desc = "Deny/reject the current diff changes",
   })
 
+  vim.api.nvim_create_user_command("ClaudeCodeCloseAllDiffs", function()
+    -- Pending only: a status="saved" diff holds the user's :w'd edits in its
+    -- proposed buffer until Claude writes the file, and closing it would discard
+    -- them (same data-loss branch the auto-cleanup avoids). So this clears
+    -- orphaned proposals but leaves accepted diffs for the user to handle.
+    local diff = require("claudecode.diff")
+    local count = diff.close_pending_diffs("user command")
+    if count > 0 then
+      vim.notify(("Closed %d pending Claude diff(s)"):format(count), vim.log.levels.INFO)
+    else
+      vim.notify("No pending Claude diffs to close", vim.log.levels.WARN)
+    end
+  end, {
+    desc = "Close pending Claude Code diffs (leaves accepted/saved diffs intact)",
+  })
+
   vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)
     local cmd_args = opts.args and opts.args ~= "" and opts.args or nil
     M.open_with_model(cmd_args)

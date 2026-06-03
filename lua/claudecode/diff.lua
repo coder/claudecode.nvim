@@ -1267,6 +1267,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       resolution_callback = resolution_callback,
       result_content = nil,
       is_new_file = is_new_file,
+      client_id = params.client_id,
     })
   end) -- End of pcall
 
@@ -1303,8 +1304,9 @@ end
 ---@param new_file_path string Path to the new file (used for naming)
 ---@param new_file_contents string Contents of the new file
 ---@param tab_name string Name for the diff tab/view
+---@param client_id string|nil Id of the MCP client opening the diff (so it can be cleaned up if that client disconnects)
 ---@return table response MCP-compliant response with content array
-function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name)
+function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
   -- Check for existing diff with same tab_name
   if active_diffs[tab_name] then
     local existing_diff = active_diffs[tab_name]
@@ -1334,6 +1336,7 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     new_file_path = new_file_path,
     new_file_contents = new_file_contents,
     tab_name = tab_name,
+    client_id = client_id,
   }, function(result)
     -- Resume the coroutine with the result
     local resume_success, resume_result = coroutine.resume(co, result)
@@ -1436,6 +1439,77 @@ function M.close_diff_by_tab_name(tab_name)
   end
 
   return false
+end
+
+---Close every active diff matching an optional filter.
+---Reuses close_diff_by_tab_name, which resolves still-pending diffs as rejected
+---(resuming their coroutine) before tearing down the UI.
+---@param filter_fn (fun(diff_data: table): boolean)|nil Only close diffs for which this returns true (nil = all)
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+local function close_active_diffs(filter_fn, reason)
+  local count = 0
+  -- Snapshot the tab names first: close_diff_by_tab_name nils out entries as it
+  -- goes, and mutating a table while iterating it with pairs() is undefined.
+  local tab_names = {}
+  for tab_name, diff_data in pairs(active_diffs) do
+    if not filter_fn or filter_fn(diff_data) then
+      tab_names[#tab_names + 1] = tab_name
+    end
+  end
+  for _, tab_name in ipairs(tab_names) do
+    if M.close_diff_by_tab_name(tab_name) then
+      count = count + 1
+    end
+  end
+  if count > 0 then
+    logger.debug("diff", "Closed", count, "active diff(s):", reason)
+  end
+  return count
+end
+
+---Close all active diffs, resolving any still pending as rejected.
+---Closes diffs in ANY state (including saved), so its only caller is the
+---closeAllDiffTabs tool, where Claude is the connected client and has written
+---accepted files. Automatic cleanup and the :ClaudeCodeCloseAllDiffs command
+---deliberately use close_pending_diffs / close_diffs_for_client instead, to
+---leave already-saved diffs alone -- see close_pending_diffs for why.
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+function M.close_all_diffs(reason)
+  return close_active_diffs(nil, reason or "close all diffs")
+end
+
+-- Automatic teardown (client disconnect, server stop) must only touch *pending*
+-- diffs. A diff with status == "saved" has been :w'd by the user -- its edits
+-- live only in the proposed buffer until Claude writes them to disk -- so closing
+-- it would run close_diff_by_tab_name's saved-branch, wiping the proposed buffer
+-- and reloading the file from unchanged disk, silently destroying the edits if
+-- Claude died before writing. Pending diffs carry no such accepted content.
+
+---Close every still-pending diff (e.g. on server stop, which bypasses
+---on_disconnect). Leaves saved/rejected diffs for client-driven finalization.
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+function M.close_pending_diffs(reason)
+  return close_active_diffs(function(diff_data)
+    return diff_data.status == "pending"
+  end, reason or "close pending diffs")
+end
+
+---Close the still-pending diffs opened by a specific MCP client, used when that
+---client disconnects so its orphaned diff windows don't linger (e.g. the Claude
+---session that opened them exited or moved to remote control).
+---@param client_id string The id of the client whose diffs should be closed
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+function M.close_diffs_for_client(client_id, reason)
+  if not client_id then
+    return 0
+  end
+  return close_active_diffs(function(diff_data)
+    return diff_data.client_id == client_id and diff_data.status == "pending"
+  end, reason or ("client " .. tostring(client_id)))
 end
 
 ---Test helper function (only for testing)

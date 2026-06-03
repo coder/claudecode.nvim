@@ -76,6 +76,16 @@ function M.start(config, auth_token)
         ", reason:",
         (reason or "N/A") .. ")"
       )
+
+      -- Close diffs this client opened but never resolved (issue #248) -- only if
+      -- the diff module is in use. Scheduled: diff cleanup touches window APIs.
+      local diff = package.loaded["claudecode.diff"]
+      if diff then
+        local client_id = client.id
+        vim.schedule(function()
+          diff.close_diffs_for_client(client_id, "client disconnected")
+        end)
+      end
     end,
     on_error = function(error_msg)
       logger.error("server", "WebSocket server error:", error_msg)
@@ -107,6 +117,15 @@ function M.stop()
     M.state.ping_timer:stop()
     M.state.ping_timer:close()
     M.state.ping_timer = nil
+  end
+
+  -- Reject any still-pending diffs before teardown -- stop_server bypasses
+  -- on_disconnect (#248). Pending only, so saved-but-unflushed edits survive;
+  -- only if the diff module is in use, and while clients can still receive
+  -- DIFF_REJECTED.
+  local diff = package.loaded["claudecode.diff"]
+  if diff then
+    diff.close_pending_diffs("server stopping")
   end
 
   tcp_server.stop_server(M.state.server)
