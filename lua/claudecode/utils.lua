@@ -81,4 +81,43 @@ function M.shell_split(cmd)
   return argv
 end
 
+---Expand a leading `~` or `~/` in a single argument to the user's home
+---directory, matching shell tilde expansion at the start of a word. Embedded
+---tildes (e.g. `--path=~/x`) and the `~user` form are intentionally left
+---untouched, exactly as a shell would treat a non-word-initial tilde.
+---@param arg string
+---@return string
+function M.expand_tilde(arg)
+  if arg:sub(1, 1) ~= "~" then
+    return arg
+  end
+  local home = os.getenv("HOME")
+  if not home or home == "" then
+    return arg
+  end
+  if arg == "~" then
+    return home
+  elseif arg:sub(1, 2) == "~/" then
+    return home .. arg:sub(2)
+  end
+  return arg
+end
+
+---Parse a command string into an argv list the way a shell would for our
+---purposes: split into words honoring quotes/escapes (see `shell_split`), then
+---expand a leading tilde in each word. Terminal providers use this to spawn
+---Claude directly (no shell) while still preserving quoted arguments and the
+---documented `terminal_cmd = "~/.claude/local/claude"` local-install path.
+---Globbing and variable expansion are deliberately NOT performed -- avoiding the
+---shell is what keeps bracketed aliases like `opus[1m]` intact.
+---@param cmd string
+---@return string[] argv
+function M.parse_command(cmd)
+  local argv = M.shell_split(cmd)
+  for i = 1, #argv do
+    argv[i] = M.expand_tilde(argv[i])
+  end
+  return argv
+end
+
 return M

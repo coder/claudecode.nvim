@@ -79,9 +79,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.cmd("enew")
   end)
 
-  -- Shell-aware split so quoted args survive and no shell touches bracketed
-  -- model aliases like "opus[1m]" (see utils.shell_split).
-  local term_cmd_arg = utils.shell_split(cmd_string)
+  -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
+  -- paths survive, while no shell touches bracketed model aliases like
+  -- "opus[1m]" (see utils.parse_command).
+  local term_cmd_arg = utils.parse_command(cmd_string)
 
   jobid = vim.fn.termopen(term_cmd_arg, {
     env = env_table,

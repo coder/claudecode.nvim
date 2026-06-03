@@ -147,4 +147,12 @@ describe("claudecode.terminal.snacks command handling", function()
     assert.is_table(captured.cmd)
     assert.are.same({ "claude", "--message=hello world" }, captured.cmd)
   end)
+
+  it("expands a tilde in terminal_cmd before handing argv to Snacks", function()
+    local home = os.getenv("HOME")
+    snacks_provider.open("~/.claude/local/claude", {}, base_config(), true)
+
+    assert.is_table(captured.cmd)
+    assert.are.same({ home .. "/.claude/local/claude" }, captured.cmd)
+  end)
 end)
