@@ -1138,6 +1138,10 @@ function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
   logger.debug("diff", "Setting up diff for:", params.old_file_path)
 
+  -- Hoisted so the error handler can close it if setup fails before the diff state is registered,
+  -- which would otherwise strand the split we create for the terminal-only fallback (issue #231).
+  local fallback_window = nil
+
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
     local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
@@ -1207,7 +1211,6 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- Otherwise, if no editor window is suitable (e.g. the Claude terminal is the only window --
     -- issue #231), create one by splitting the current window instead of erroring out, mirroring
     -- the fallback in lua/claudecode/tools/open_file.lua.
-    local fallback_window = nil
     if not target_window and not created_new_tab then
       create_split()
       local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
@@ -1305,6 +1308,10 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- Clean up any partial state that might have been created
     if active_diffs[tab_name] then
       M._cleanup_diff_state(tab_name, "setup failed")
+    elseif fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
+      -- Errored before the diff state was registered: close the fallback split we created so it
+      -- (and its bufhidden=wipe scratch) isn't stranded.
+      pcall(vim.api.nvim_win_close, fallback_window, true)
     end
 
     -- Re-throw the error for MCP compliance
