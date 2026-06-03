@@ -14,11 +14,11 @@ explorer enabled as a left sidebar, plus the local `claudecode.nvim` checkout
 
 ```bash
 source fixtures/nvim-aliases.sh
-cd fixtures/snacks-explorer/example   # so the explorer roots at some files
-vv snacks-explorer sample.txt
+# `vv` always cd's to the fixtures/ dir, so pass the file path relative to it.
+vv snacks-explorer snacks-explorer/example/sample.txt
 ```
 
-Inside Neovim:
+Inside Neovim (the explorer roots at the `fixtures/` dir — `example/` is in it):
 
 1. `:lua Snacks.explorer()` (or `<leader>e`) to open the explorer sidebar.
 2. Start Claude and ask it to **create a new file** or **edit a file that is not
