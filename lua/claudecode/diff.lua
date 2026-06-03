@@ -1212,6 +1212,9 @@ function M._setup_blocking_diff(params, resolution_callback)
       create_split()
       local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
       if scratch_buf ~= 0 then
+        -- wipe it once it leaves the window so it isn't leaked when the diff reuses it (new file)
+        -- or :edit replaces it with the real file (existing file)
+        vim.api.nvim_buf_set_option(scratch_buf, "bufhidden", "wipe")
         vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch_buf)
       end
       target_window = vim.api.nvim_get_current_win()

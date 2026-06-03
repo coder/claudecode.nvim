@@ -90,11 +90,14 @@ describe("Diff with the Claude terminal as the only window (issue #231)", functi
     assert.is_number(state.fallback_window)
     assert.are_not.equal(1000, state.fallback_window)
     assert.is_true(vim.api.nvim_win_is_valid(state.fallback_window))
+    local fallback_buf = vim.api.nvim_win_get_buf(state.fallback_window)
 
-    -- Cleanup must close the plugin-created fallback window while leaving the terminal (1000).
-    -- Regression guard for the window leak (the fallback host window was left open on every diff).
+    -- Cleanup must close the plugin-created fallback window (leaving the terminal, 1000) and wipe
+    -- its throwaway scratch buffer. Regression guard for the window + buffer leak (the host window
+    -- was left open and the scratch buffer left behind on every terminal-only diff).
     diff._cleanup_diff_state(tab_name, "test cleanup")
     assert.is_false(vim.api.nvim_win_is_valid(state.fallback_window))
+    assert.is_false(vim.api.nvim_buf_is_valid(fallback_buf))
     assert.is_true(vim.api.nvim_win_is_valid(1000))
   end)
 end)
