@@ -173,6 +173,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       vim.schedule(function()
         on_close(client, code, reason)
       end)
+      -- A CLOSE is terminal: drop any bytes that followed it (a frame after CLOSE
+      -- is a protocol violation) and stop iterating, so we neither echo a PONG
+      -- after our own Close nor dispatch on_message after on_close. Matches the
+      -- other termination branches.
+      client.buffer = ""
+      break
     elseif parsed_frame.opcode == frame.OPCODE.PING then
       local pong_frame = frame.create_pong_frame(parsed_frame.payload)
       client.tcp_handle:write(pong_frame)
