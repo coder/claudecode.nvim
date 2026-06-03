@@ -118,19 +118,22 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
     if not parsed_frame then
       if close_code then
-        -- Fatal protocol violation: close with the RFC 6455 status code and drop
-        -- the offending bytes instead of leaving them buffered to be re-parsed
-        -- forever (which previously wedged the connection).
+        -- Fatal protocol violation: send the RFC 6455 Close frame, drop the
+        -- offending bytes (so they are not re-parsed forever, which previously
+        -- wedged the connection), and tear the connection down.
         --
-        -- close_client MUST run before on_error: on_error tears the connection
-        -- down synchronously (tcp.lua: _disconnect_client -> _remove_client ->
-        -- tcp_handle:close()) without setting client.state, so if it ran first
-        -- the Close frame would be written to an already-closed handle and never
-        -- reach the peer. Closing first writes the Close frame while the handle
-        -- is open and sets client.state, after which on_error's teardown no-ops.
+        -- close_client runs first to queue the Close frame while the handle is
+        -- open; on_error is deferred with vim.schedule so that queued write
+        -- flushes before on_error's synchronous teardown (tcp.lua
+        -- _disconnect_client -> _remove_client -> tcp_handle:close()) runs --
+        -- otherwise closing the handle in the same tick cancels the pending
+        -- write and the status code never reaches the peer. This mirrors the
+        -- CLOSE opcode path below, which schedules on_close after writing.
         client.buffer = ""
         M.close_client(client, close_code, "Protocol error")
-        on_error(client, "WebSocket protocol error in frame")
+        vim.schedule(function()
+          on_error(client, "WebSocket protocol error in frame")
+        end)
       end
       break -- No close_code means the frame is incomplete; wait for more bytes.
     end
@@ -177,13 +180,23 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       client.last_pong = vim.loop.now()
     elseif parsed_frame.opcode == frame.OPCODE.CONTINUATION then
       -- Continuation frame - for simplicity, we don't support fragmentation.
-      -- close_client before on_error so the Close frame reaches the peer (see
-      -- the fatal-frame branch above for why ordering matters).
+      -- Send the Close frame, defer on_error, then clear the buffer and break so
+      -- the queued write can flush and we stop iterating over a connection that
+      -- is being torn down. See the fatal-frame branch above for the rationale.
       M.close_client(client, 1003, "Unsupported data")
-      on_error(client, "Fragmented messages not supported")
+      vim.schedule(function()
+        on_error(client, "Fragmented messages not supported")
+      end)
+      client.buffer = ""
+      break
     else
+      local opcode = parsed_frame.opcode
       M.close_client(client, 1002, "Protocol error")
-      on_error(client, "Unknown WebSocket opcode: " .. parsed_frame.opcode)
+      vim.schedule(function()
+        on_error(client, "Unknown WebSocket opcode: " .. opcode)
+      end)
+      client.buffer = ""
+      break
     end
   end
 end
