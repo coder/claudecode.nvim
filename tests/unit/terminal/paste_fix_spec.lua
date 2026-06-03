@@ -11,13 +11,15 @@ describe("claudecode.terminal.paste_fix", function()
     paste_fix = require("claudecode.terminal.paste_fix")
   end
 
-  local saved_version, saved_paste, saved_bo, saved_get_buf
+  local saved_version, saved_paste, saved_bo, saved_get_buf, saved_buf_valid, saved_chan_send
 
   before_each(function()
     saved_version = vim.version
     saved_paste = vim.paste
     saved_bo = vim.bo
     saved_get_buf = vim.api.nvim_get_current_buf
+    saved_buf_valid = vim.api.nvim_buf_is_valid
+    saved_chan_send = vim.api.nvim_chan_send
     fresh()
   end)
 
@@ -26,6 +28,8 @@ describe("claudecode.terminal.paste_fix", function()
     vim.paste = saved_paste
     vim.bo = saved_bo
     vim.api.nvim_get_current_buf = saved_get_buf
+    vim.api.nvim_buf_is_valid = saved_buf_valid
+    vim.api.nvim_chan_send = saved_chan_send
     package.loaded["claudecode.terminal.paste_fix"] = nil
     package.loaded["claudecode.terminal"] = nil
   end)
@@ -126,21 +130,29 @@ describe("claudecode.terminal.paste_fix", function()
   end)
 
   describe("install (cooperative override)", function()
-    local managed_bufnr, current_bufnr, buftype_by_buf, orig_calls
+    local managed_bufnr, current_bufnr, buftype_by_buf, channel_by_buf, orig_calls, chan_sends
 
     -- Build a controlled vim environment for the override and install the shim.
     local function setup_env()
       managed_bufnr = 10
       current_bufnr = 10
       buftype_by_buf = { [10] = "terminal" }
+      channel_by_buf = { [10] = 77 }
       orig_calls = {}
+      chan_sends = {}
 
       vim.api.nvim_get_current_buf = function()
         return current_bufnr
       end
+      vim.api.nvim_buf_is_valid = function(b)
+        return buftype_by_buf[b] ~= nil
+      end
+      vim.api.nvim_chan_send = function(chan, data)
+        chan_sends[#chan_sends + 1] = { chan = chan, data = data }
+      end
       vim.bo = setmetatable({}, {
         __index = function(_, b)
-          return { buftype = buftype_by_buf[b] or "" }
+          return { buftype = buftype_by_buf[b] or "", channel = channel_by_buf[b] or 0 }
         end,
       })
       -- The original paste handler the shim must delegate to / replay through.
@@ -190,18 +202,20 @@ describe("claudecode.terminal.paste_fix", function()
       assert.are.same({ "whole" }, orig_calls[1].lines)
     end)
 
-    it("keeps buffered content when focus leaves the managed terminal mid-stream", function()
+    it("sends to the captured terminal's channel when focus leaves mid-stream", function()
       setup_env()
-      -- Phase 1 targets the managed terminal; the decision is latched.
+      -- Phase 1 targets the managed terminal (buf 10); the target is captured.
       assert.is_true(vim.paste({ "kept ", "dat" }, 1))
-      -- Focus moves away before phase 3 (active bufnr no longer current).
+      -- Focus moves to a normal buffer before phase 3.
       current_bufnr = 99
       buftype_by_buf[99] = ""
       vim.paste({ "a" }, 3)
-      -- Still coalesced into one replay; buffered content is not stranded.
-      assert.are.equal(1, #orig_calls)
-      assert.are.equal(-1, orig_calls[1].phase)
-      assert.are.same({ "kept ", "data" }, orig_calls[1].lines)
+      -- The buffered paste must NOT be dumped into the now-current buffer via the
+      -- original handler; it goes straight to the captured terminal's channel.
+      assert.are.equal(0, #orig_calls)
+      assert.are.equal(1, #chan_sends)
+      assert.are.equal(77, chan_sends[1].chan) -- buf 10's channel
+      assert.are.equal("\27[200~kept \ndata\27[201~", chan_sends[1].data)
     end)
 
     it("respects a later apply(false): delegates instead of coalescing", function()

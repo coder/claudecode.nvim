@@ -12,6 +12,7 @@ local chunks = {} -- accumulator for the in-flight streamed paste (pastes are se
 local installed = false -- the global vim.paste wrap happens at most once
 local enabled = false -- config-controlled; lets a later setup() disable in place
 local streaming = false -- does the current stream target the managed terminal? (decided at phase 1)
+local target_buf = nil -- the managed terminal buffer captured at phase 1 of the current stream
 local terminal_mod = nil -- lazily required to avoid a terminal -> paste_fix cycle
 
 --- True if the running Neovim has the per-phase terminal-paste fragmentation
@@ -99,9 +100,11 @@ function M.install()
     end
 
     -- Decide once per stream (at phase 1) whether it targets the managed
-    -- terminal, so phases 2/3 stay coalesced even if focus moves mid-stream.
+    -- terminal, capturing that buffer, so phases 2/3 stay coalesced even if
+    -- focus moves mid-stream.
     if phase == 1 then
-      streaming = is_managed_terminal(vim.api.nvim_get_current_buf())
+      target_buf = vim.api.nvim_get_current_buf()
+      streaming = is_managed_terminal(target_buf)
       chunks = {}
     end
 
@@ -115,7 +118,22 @@ function M.install()
       local buffered = chunks
       chunks = {}
       streaming = false
-      return orig_paste(buffered, -1) -- one non-streamed replay = one bracketed segment
+      -- Common case: still on the terminal that started the paste. Let the
+      -- original handler replay it (it wraps in one bracketed segment and
+      -- respects the inner program's bracketed-paste state).
+      if vim.api.nvim_get_current_buf() == target_buf then
+        return orig_paste(buffered, -1)
+      end
+      -- Focus left the terminal mid-stream: replaying via the original handler
+      -- would dump the buffered text into whatever buffer is now current. Send
+      -- it straight to the captured terminal's channel instead, matching the
+      -- bytes Neovim would have written (one bracketed-paste segment).
+      local chan = vim.api.nvim_buf_is_valid(target_buf) and vim.bo[target_buf].channel
+      if chan and chan > 0 then
+        pcall(vim.api.nvim_chan_send, chan, "\27[200~" .. table.concat(buffered, "\n") .. "\27[201~")
+        return true
+      end
+      return orig_paste(buffered, -1)
     end
     return true
   end
