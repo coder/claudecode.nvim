@@ -24,7 +24,7 @@ The IDE writes a discovery file to `~/.claude/ide/[port].lock`:
   "workspaceFolders": ["/path/to/project"], // Open folders
   "ideName": "VS Code", // or "Neovim", "IntelliJ", etc.
   "transport": "ws", // WebSocket transport
-  "authToken": "550e8400-e29b-41d4-a716-446655440000" // Random UUID for authentication
+  "authToken": "a3f1c2d4e5f60718293a4b5c6d7e8f90" // 32-char lowercase hex token (128 bits) from the OS CSPRNG
 }
 ```
 
@@ -44,7 +44,7 @@ Claude reads the lock files, finds the matching port from the environment, and c
 When Claude connects to the IDE's WebSocket server, it must authenticate using the token from the lock file. The authentication happens via a custom WebSocket header:
 
 ```
-x-claude-code-ide-authorization: 550e8400-e29b-41d4-a716-446655440000
+x-claude-code-ide-authorization: a3f1c2d4e5f60718293a4b5c6d7e8f90
 ```
 
 The IDE validates this header against the `authToken` value from the lock file. If the token doesn't match, the connection is rejected.
@@ -514,7 +514,12 @@ local server = create_websocket_server("127.0.0.1", random_port)
 
 ```lua
 -- ~/.claude/ide/[port].lock
-local auth_token = generate_uuid() -- Generate random UUID
+-- Generate a 128-bit token (32-char lowercase hex) from the OS CSPRNG.
+-- Never use math.random for this; a weak token is worse than a startup error.
+local bytes = vim.loop.random(16) -- 16 secure random bytes
+local auth_token = bytes:gsub(".", function(c)
+  return string.format("%02x", string.byte(c))
+end)
 local lock_data = {
   pid = vim.fn.getpid(),
   workspaceFolders = { vim.fn.getcwd() },

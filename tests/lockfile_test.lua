@@ -200,6 +200,9 @@ end
 
 -- Track the most recent fs_open mode so permission-intent assertions can read it.
 _G._test_last_fs_open_mode = nil
+-- Track the most recent fs_chmod call (path, mode) so the directory-permission
+-- assertion can verify an existing dir gets tightened to 0700 on upgrade.
+_G._test_last_fs_chmod = nil
 
 -- Provide a vim.loop mock with a CSPRNG and atomic-write file primitives.
 -- The fs_* helpers write to real files so get_auth_token round-trips work.
@@ -234,10 +237,16 @@ do
     return fd
   end
 
-  loop.fs_write = function(fd, data)
+  -- Mirror libuv's signature: fs_write(fd, data, offset). The production code
+  -- now writes in a loop honoring the returned byte count and an offset, so
+  -- seek to the offset before writing and report the number of bytes written.
+  loop.fs_write = function(fd, data, offset)
     local fh = open_files[fd]
     if not fh then
       return nil
+    end
+    if offset then
+      fh:seek("set", offset)
     end
     fh:write(data)
     return #data
@@ -255,6 +264,19 @@ do
   loop.fs_unlink = function(path)
     os.remove(path)
     return true
+  end
+
+  -- Record chmod calls so tests can assert the lock dir is tightened to 0700.
+  loop.fs_chmod = function(path, mode)
+    _G._test_last_fs_chmod = { path = path, mode = mode }
+    return true
+  end
+
+  -- Monotonic-ish clock used to keep the temp-file path unique across calls.
+  local hrtime_counter = 0
+  loop.hrtime = function()
+    hrtime_counter = hrtime_counter + 1
+    return hrtime_counter
   end
 end
 
@@ -480,12 +502,41 @@ describe("Lockfile Module", function()
         return orig_mkdir(path, flags, mode)
       end
 
+      _G._test_last_fs_chmod = nil
       local port = 12348
       local success = lockfile.create(port)
       vim.fn.mkdir = orig_mkdir
 
       assert(success == true)
+      -- New directories get 0700 from mkdir's mode argument...
       assert("0700" == captured_mkdir_mode)
+      -- ...but mkdir's mode is a no-op for a pre-existing dir, so an explicit
+      -- chmod must also tighten the lock dir to 0700 on upgrade.
+      assert(_G._test_last_fs_chmod ~= nil)
+      assert(lockfile.lock_dir == _G._test_last_fs_chmod.path)
+      assert(tonumber("700", 8) == _G._test_last_fs_chmod.mode)
+    end)
+
+    it("should write the full lock file content when fs_write reports short writes", function()
+      -- Force fs_write to write at most one byte per call so the production
+      -- write loop has to iterate; the resulting lock file must be complete.
+      local loop = vim.loop
+      local orig_fs_write = loop.fs_write
+      loop.fs_write = function(fd, data, offset)
+        return orig_fs_write(fd, data:sub(1, 1), offset)
+      end
+
+      local port = 12349
+      local success, _, auth_token = lockfile.create(port)
+      loop.fs_write = orig_fs_write
+
+      assert(success == true)
+      assert("string" == type(auth_token))
+
+      -- The token must round-trip, proving the JSON was written in full.
+      local read_success, read_token = lockfile.get_auth_token(port)
+      assert(read_success == true)
+      assert(auth_token == read_token)
     end)
   end)
 end)

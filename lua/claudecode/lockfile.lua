@@ -98,6 +98,11 @@ function M.create(port, auth_token)
     return false, "Failed to create lock directory: " .. (err or "unknown error")
   end
 
+  -- mkdir's mode argument only applies to newly created directories; a lock dir
+  -- left over from an earlier version may still be 0755. Tighten it to 0700.
+  -- pcall-wrapped because fs_chmod is unsupported on some non-POSIX platforms.
+  pcall(vim.loop.fs_chmod, M.lock_dir, tonumber("700", 8))
+
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
   local workspace_folders = M.get_workspace_folders()
@@ -142,7 +147,11 @@ function M.create(port, auth_token)
   -- Write atomically with restrictive (0600) permissions: write to a temp file
   -- in the same directory, then rename into place. Using "wx" (O_CREAT|O_EXCL)
   -- refuses to follow an existing file or symlink at the temp path.
-  local tmp_path = lock_path .. ".tmp." .. vim.fn.getpid()
+  -- Include hrtime() so the temp path stays unique even after a crash where the
+  -- PID is reused for the same port (otherwise "wx" would fail EEXIST).
+  -- string.format keeps hrtime() (a double on LuaJIT) as a plain integer rather
+  -- than scientific notation (e.g. 1.75e+15), which would corrupt the path.
+  local tmp_path = lock_path .. ".tmp." .. vim.fn.getpid() .. "." .. string.format("%d", vim.loop.hrtime())
 
   local write_ok, write_err = pcall(function()
     local fd = vim.loop.fs_open(tmp_path, "wx", tonumber("600", 8))
@@ -155,13 +164,25 @@ function M.create(port, auth_token)
       error(message)
     end
 
-    local ok_write, write_result = pcall(vim.loop.fs_write, fd, json)
-    if not ok_write or not write_result then
-      close_and_raise("could not write temp file: " .. tostring(write_result))
+    -- fs_write may write fewer bytes than requested (quota/disk-full/odd FS),
+    -- so loop on the returned count and an offset until all bytes are written.
+    -- Otherwise a truncated lock file could be renamed into place.
+    local pos = 0
+    while pos < #json do
+      local ok_write, written = pcall(vim.loop.fs_write, fd, json:sub(pos + 1), pos)
+      if not ok_write then
+        close_and_raise("could not write temp file: " .. tostring(written))
+      end
+      if type(written) ~= "number" or written <= 0 then
+        close_and_raise("could not write temp file: short write at offset " .. pos .. "/" .. #json)
+      end
+      pos = pos + written
     end
 
-    local ok_close = pcall(vim.loop.fs_close, fd)
-    if not ok_close then
+    -- fs_close returns (nil, err) on libuv failure without raising, so check
+    -- both the pcall status and the libuv result before renaming.
+    local ok_close, close_result = pcall(vim.loop.fs_close, fd)
+    if not ok_close or not close_result then
       error("could not close temp file: " .. tmp_path)
     end
   end)

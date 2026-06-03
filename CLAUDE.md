@@ -82,7 +82,7 @@ The `fixtures/` directory contains test Neovim configurations for verifying plug
 
 The WebSocket server implements secure authentication using:
 
-- **UUID v4 Tokens**: Generated per session with enhanced entropy
+- **128-bit Tokens**: 32-char lowercase hex from the OS CSPRNG, generated per session
 - **Header-based Auth**: Uses `x-claude-code-ide-authorization` header
 - **Lock File Discovery**: Tokens stored in `~/.claude/ide/[port].lock` for Claude CLI
 - **MCP Compliance**: Follows official Claude Code IDE authentication protocol
@@ -145,7 +145,7 @@ opts = {
 
 - ✅ **WebSocket Server**: RFC 6455 compliant with MCP message format
 - ✅ **Tool Registration**: JSON Schema-based tool definitions
-- ✅ **Authentication**: UUID v4 token-based secure handshake
+- ✅ **Authentication**: 128-bit token-based secure handshake (32-char lowercase hex from the OS CSPRNG)
 - ✅ **Message Format**: JSON-RPC 2.0 with MCP content structure
 - ✅ **Error Handling**: Comprehensive JSON-RPC error responses
 
@@ -212,7 +212,7 @@ mise run test  # Recommended for complete validation
 
 ## Authentication Testing
 
-The plugin implements authentication using UUID v4 tokens that are generated for each server session and stored in lock files. This ensures secure connections between Claude CLI and the Neovim WebSocket server.
+The plugin implements authentication using 128-bit tokens (32-char lowercase hex) from the OS CSPRNG that are generated for each server session and stored in lock files. This ensures secure connections between Claude CLI and the Neovim WebSocket server.
 
 ### Testing Authentication Features
 
@@ -340,7 +340,7 @@ Log levels for authentication events:
 ### Security Considerations
 
 - WebSocket server only accepts local connections (127.0.0.1) for security
-- Authentication tokens are UUID v4 with enhanced entropy
+- Authentication tokens are 128-bit tokens (32-char lowercase hex) from the OS CSPRNG
 - Lock files created at `~/.claude/ide/[port].lock` for Claude CLI discovery
 - All authentication events are logged for security auditing
 
