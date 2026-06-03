@@ -74,6 +74,7 @@ local function find_main_editor_window()
         or filetype == "aerial"
         or filetype == "tagbar"
         or filetype == "snacks_picker_list"
+        or filetype == "snacks_layout_box"
       )
     then
       is_suitable = false
@@ -86,6 +87,9 @@ local function find_main_editor_window()
 
   return nil
 end
+
+-- Exposed for testing the sidebar/explorer exclusion logic.
+M._find_main_editor_window = find_main_editor_window
 
 ---Find the Claude Code terminal window to keep focus there.
 ---Uses the terminal provider to get the active terminal buffer, then finds its window.
@@ -933,7 +937,13 @@ function M._create_diff_view_from_window(
       local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
       local filetype = vim.api.nvim_buf_get_option(buf, "filetype")
 
-      if buftype == "terminal" or buftype == "prompt" or filetype == "neo-tree" or filetype == "snacks_picker_list" then
+      if
+        buftype == "terminal"
+        or buftype == "prompt"
+        or filetype == "neo-tree"
+        or filetype == "snacks_picker_list"
+        or filetype == "snacks_layout_box"
+      then
         create_split()
       end
 
