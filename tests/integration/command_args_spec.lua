@@ -321,9 +321,21 @@ describe("ClaudeCode command arguments integration", function()
       assert.is_true(#executed_commands > 0, "No terminal commands were executed")
       local last_cmd = executed_commands[#executed_commands]
 
-      local cmd_string = type(last_cmd.cmd) == "table" and table.concat(last_cmd.cmd, " ") or last_cmd.cmd
-      assert.is_true(cmd_string:find("--message='hello world'") ~= nil, "Special characters not preserved")
-      assert.is_true(cmd_string:find("--path=/tmp/test") ~= nil, "Path arguments not preserved")
+      -- The native provider parses the command into an argv table via
+      -- utils.shell_split, so a quoted argument with a space survives as a single
+      -- entry (surrounding quotes are consumed, like a real shell) instead of
+      -- being mangled into "--message='hello" and "world'".
+      assert.is_table(last_cmd.cmd, "Native provider should pass an argv table")
+      local has_message, has_path = false, false
+      for _, arg in ipairs(last_cmd.cmd) do
+        if arg == "--message=hello world" then
+          has_message = true
+        elseif arg == "--path=/tmp/test" then
+          has_path = true
+        end
+      end
+      assert.is_true(has_message, "Quoted argument with space should be a single argv entry")
+      assert.is_true(has_path, "Path argument not preserved")
     end)
 
     it("should handle very long argument strings", function()

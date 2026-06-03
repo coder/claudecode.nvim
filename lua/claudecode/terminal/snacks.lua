@@ -128,16 +128,11 @@ function M.open(cmd_string, env_table, config, focus)
   end
 
   local opts = build_opts(config, env_table, focus)
-  -- Pass the command as an argv list so Snacks runs it via termopen() without a
-  -- shell. As a string, Snacks would hand it to the shell, which glob-expands
-  -- bracketed model aliases like "opus[1m]" (e.g. zsh aborts with "no matches
-  -- found"), preventing Claude from launching. Mirrors the native provider.
-  local cmd
-  if cmd_string:find(" ", 1, true) then
-    cmd = vim.split(cmd_string, " ", { plain = true, trimempty = false })
-  else
-    cmd = { cmd_string }
-  end
+  -- Pass an argv list (not a string) so Snacks spawns Claude via termopen()
+  -- without a shell. A shell would glob-expand bracketed model aliases like
+  -- "opus[1m]" (e.g. zsh aborts with "no matches found"). shell_split keeps
+  -- quoted arguments intact. Mirrors the native provider.
+  local cmd = utils.shell_split(cmd_string)
   local term_instance = Snacks.terminal.open(cmd, opts)
   if term_instance and term_instance:buf_valid() then
     setup_terminal_events(term_instance, config)

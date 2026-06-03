@@ -79,12 +79,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.cmd("enew")
   end)
 
-  local term_cmd_arg
-  if cmd_string:find(" ", 1, true) then
-    term_cmd_arg = vim.split(cmd_string, " ", { plain = true, trimempty = false })
-  else
-    term_cmd_arg = { cmd_string }
-  end
+  -- Shell-aware split so quoted args survive and no shell touches bracketed
+  -- model aliases like "opus[1m]" (see utils.shell_split).
+  local term_cmd_arg = utils.shell_split(cmd_string)
 
   jobid = vim.fn.termopen(term_cmd_arg, {
     env = env_table,

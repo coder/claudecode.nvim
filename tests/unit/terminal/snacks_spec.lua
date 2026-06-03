@@ -106,14 +106,9 @@ describe("claudecode.terminal.snacks command handling", function()
       warn = spy.new(function() end),
       error = spy.new(function() end),
     }
-    package.loaded["claudecode.utils"] = {
-      normalize_focus = function(focus)
-        if focus == nil then
-          return true
-        end
-        return focus
-      end,
-    }
+    -- Use the real utils module: snacks.lua calls utils.shell_split, and utils
+    -- is pure Lua (safe under the mocked vim).
+    package.loaded["claudecode.utils"] = nil
     package.loaded["claudecode.terminal.snacks"] = nil
 
     snacks_provider = require("claudecode.terminal.snacks")
@@ -144,5 +139,12 @@ describe("claudecode.terminal.snacks command handling", function()
 
     assert.is_table(captured.cmd)
     assert.are.same({ "claude" }, captured.cmd)
+  end)
+
+  it("keeps quoted arguments intact instead of splitting on inner spaces", function()
+    snacks_provider.open("claude --message='hello world'", {}, base_config(), true)
+
+    assert.is_table(captured.cmd)
+    assert.are.same({ "claude", "--message=hello world" }, captured.cmd)
   end)
 end)
