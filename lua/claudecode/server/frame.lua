@@ -22,9 +22,15 @@ M.OPCODE = {
 ---@field payload string Frame payload data
 
 ---Parse a WebSocket frame from binary data
+---
+---Failure is disambiguated via the optional third return value:
+---  * incomplete input ("need more bytes") returns `nil, 0` with NO third value
+---  * a fatal protocol violation returns `nil, 0, <close_code>` where the close
+---    code is the RFC 6455 status to send in the Close frame (1002/1007/1009)
 ---@param data string The binary frame data
 ---@return WebSocketFrame|nil frame The parsed frame, or nil if incomplete/invalid
 ---@return number bytes_consumed Number of bytes consumed from input
+---@return number|nil close_code WebSocket close code for fatal protocol violations
 function M.parse_frame(data)
   if type(data) ~= "string" then
     return nil, 0
@@ -65,18 +71,18 @@ function M.parse_frame(data)
   }
 
   if not valid_opcodes[opcode] then
-    return nil, 0 -- Invalid opcode
+    return nil, 0, 1002 -- Invalid opcode (protocol error)
   end
 
   -- Check for reserved bits (must be 0)
   if rsv1 or rsv2 or rsv3 then
-    return nil, 0 -- Protocol error
+    return nil, 0, 1002 -- Reserved bits set (protocol error)
   end
 
   -- Control frames must have fin=1 and payload ≤ 125 (RFC 6455 Section 5.5)
   if opcode >= M.OPCODE.CLOSE then
     if not fin or payload_len > 125 then
-      return nil, 0 -- Protocol violation
+      return nil, 0, 1002 -- Control frame fragmented or oversized (protocol error)
     end
   end
 
@@ -103,13 +109,13 @@ function M.parse_frame(data)
 
     -- Prevent extremely large payloads (DOS protection)
     if actual_payload_len > 100 * 1024 * 1024 then -- 100MB limit
-      return nil, 0
+      return nil, 0, 1009 -- Message too big
     end
   end
 
   -- Additional payload length validation
   if actual_payload_len < 0 then
-    return nil, 0 -- Invalid negative length
+    return nil, 0, 1002 -- Invalid negative length (protocol error)
   end
 
   -- Read mask if present
@@ -138,19 +144,19 @@ function M.parse_frame(data)
 
   -- Validate text frame payload is valid UTF-8
   if opcode == M.OPCODE.TEXT and not utils.is_valid_utf8(payload) then
-    return nil, 0 -- Invalid UTF-8 in text frame
+    return nil, 0, 1007 -- Invalid UTF-8 in text frame (invalid payload data)
   end
 
   -- Basic validation for close frame payload
   if opcode == M.OPCODE.CLOSE and actual_payload_len > 0 then
     if actual_payload_len == 1 then
-      return nil, 0 -- Close frame with 1 byte payload is invalid
+      return nil, 0, 1002 -- Close frame with 1 byte payload is invalid (protocol error)
     end
     -- Allow most close codes for compatibility, only validate UTF-8 for reason text
     if actual_payload_len > 2 then
       local reason = payload:sub(3)
       if not utils.is_valid_utf8(reason) then
-        return nil, 0 -- Invalid UTF-8 in close reason
+        return nil, 0, 1007 -- Invalid UTF-8 in close reason (invalid payload data)
       end
     end
   end
