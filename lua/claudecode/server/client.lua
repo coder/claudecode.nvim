@@ -114,10 +114,18 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
   end
 
   while #client.buffer >= 2 do -- Minimum frame size
-    local parsed_frame, bytes_consumed = frame.parse_frame(client.buffer)
+    local parsed_frame, bytes_consumed, close_code = frame.parse_frame(client.buffer)
 
     if not parsed_frame then
-      break
+      if close_code then
+        -- Fatal protocol violation: close with the RFC 6455 status code and drop
+        -- the offending bytes instead of leaving them buffered to be re-parsed
+        -- forever (which previously wedged the connection).
+        client.buffer = ""
+        on_error(client, "WebSocket protocol error in frame")
+        M.close_client(client, close_code, "Protocol error")
+      end
+      break -- No close_code means the frame is incomplete; wait for more bytes.
     end
 
     -- Frame validation is now handled entirely within frame.parse_frame.
@@ -218,12 +226,14 @@ function M.close_client(client, code, reason)
       client.state = "closed"
       client.tcp_handle:close()
     end)
+    -- Mark as "closing" while the Close frame write/teardown is in flight. The
+    -- write callback transitions to "closed". Do not clobber the "closed" state
+    -- set synchronously on the not-handshake-complete branch below.
+    client.state = "closing"
   else
     client.state = "closed"
     client.tcp_handle:close()
   end
-
-  client.state = "closing"
 end
 
 ---Check if a client connection is alive
