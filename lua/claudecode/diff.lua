@@ -1138,9 +1138,11 @@ function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
   logger.debug("diff", "Setting up diff for:", params.old_file_path)
 
-  -- Hoisted so the error handler can close it if setup fails before the diff state is registered,
-  -- which would otherwise strand the split we create for the terminal-only fallback (issue #231).
+  -- Hoisted so the error handler can clean them up if setup fails before the diff state is
+  -- registered: otherwise the terminal-only fallback split and the proposed buffer are stranded
+  -- (the state-based cleanup is gated on a registered diff). Issue #231.
   local fallback_window = nil
+  local new_buffer = nil
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
@@ -1226,7 +1228,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       fallback_window = target_window
     end
 
-    local new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
+    new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch (hoisted above the pcall)
     if new_buffer == 0 then
       error({
         code = -32000,
@@ -1308,10 +1310,16 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- Clean up any partial state that might have been created
     if active_diffs[tab_name] then
       M._cleanup_diff_state(tab_name, "setup failed")
-    elseif fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
-      -- Errored before the diff state was registered: close the fallback split we created so it
-      -- (and its bufhidden=wipe scratch) isn't stranded.
-      pcall(vim.api.nvim_win_close, fallback_window, true)
+    else
+      -- Errored before the diff state was registered, so the state-based cleanup can't run. Close
+      -- the fallback split we may have created (its bufhidden=wipe scratch self-cleans) and delete
+      -- the proposed buffer; neither is owned by a registered diff.
+      if fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
+        pcall(vim.api.nvim_win_close, fallback_window, true)
+      end
+      if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
+        pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
+      end
     end
 
     -- Re-throw the error for MCP compliance

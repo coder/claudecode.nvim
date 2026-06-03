@@ -101,14 +101,15 @@ describe("Diff with the Claude terminal as the only window (issue #231)", functi
     assert.is_true(vim.api.nvim_win_is_valid(1000))
   end)
 
-  -- If setup errors after the fallback window is created but before the diff state is registered,
-  -- the error handler must still close that window (it isn't covered by the state-based cleanup).
-  it("closes the fallback window when setup errors before the diff state is registered", function()
+  -- If setup errors after the fallback window + proposed buffer are created but before the diff
+  -- state is registered, the error handler must still clean them up (not covered by state cleanup).
+  it("cleans up the fallback window and proposed buffer when setup errors before registration", function()
     -- Force a failure after the fallback split is created (winid 1001) but before registration.
     diff._create_diff_view_from_window = function()
       error({ code = -32000, message = "boom" })
     end
 
+    local bufs_before = #vim.api.nvim_list_bufs()
     local tab_name = "✻ [Claude Code] err.md ⧉"
     local ok = pcall(function()
       diff._setup_blocking_diff({
@@ -123,5 +124,6 @@ describe("Diff with the Claude terminal as the only window (issue #231)", functi
     assert.is_nil(diff._get_active_diffs()[tab_name]) -- no diff state registered
     assert.is_false(vim.api.nvim_win_is_valid(1001)) -- the stranded fallback split was closed
     assert.is_true(vim.api.nvim_win_is_valid(1000)) -- the terminal window survives
+    assert.equals(bufs_before, #vim.api.nvim_list_bufs()) -- proposed buffer + scratch not leaked
   end)
 end)
