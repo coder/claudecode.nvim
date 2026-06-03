@@ -123,6 +123,27 @@ describe("claudecode.terminal.paste_fix", function()
         assert.are.equal(expected, paste_fix.is_affected_version())
       end)
     end
+
+    it("treats a 0.12.2 prerelease (nightly built before the backport) as affected", function()
+      vim.version = function()
+        return { major = 0, minor = 12, patch = 2, prerelease = "dev" }
+      end
+      assert.is_true(paste_fix.is_affected_version())
+    end)
+
+    it("treats the 0.12.2 release (no prerelease) as fixed", function()
+      vim.version = function()
+        return { major = 0, minor = 12, patch = 2, prerelease = nil }
+      end
+      assert.is_false(paste_fix.is_affected_version())
+    end)
+
+    it("treats a 0.13.0 prerelease as fixed (past the boundary)", function()
+      vim.version = function()
+        return { major = 0, minor = 13, patch = 0, prerelease = "dev" }
+      end
+      assert.is_false(paste_fix.is_affected_version())
+    end)
   end)
 
   describe("install (cooperative override)", function()

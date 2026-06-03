@@ -27,7 +27,17 @@ function M.is_affected_version()
   end
   local minor = v.minor or 0
   local patch = v.patch or 0
-  return minor < 12 or (minor == 12 and patch < 2)
+  if minor < 12 or (minor == 12 and patch < 2) then
+    return true
+  end
+  -- The fix shipped in the 0.12.2 *release*. A 0.12.2 prerelease/nightly
+  -- (vim.version().prerelease is set, e.g. "dev") can predate the backport, so
+  -- treat it as affected. Enabling the shim on a build that already has the fix
+  -- is a verified no-op, so erring toward "affected" at the boundary is safe.
+  if minor == 12 and patch == 2 and v.prerelease then
+    return true
+  end
+  return false
 end
 
 --- Resolve whether the shim should be active for a given config value.
