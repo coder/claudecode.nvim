@@ -27,6 +27,26 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
   "coder/claudecode.nvim",
   dependencies = { "folke/snacks.nvim" },
   config = true,
+  -- `cmd` lets lazy.nvim create command stubs that load the plugin on first use,
+  -- so `:ClaudeCode` and friends work on a fresh start. Without it, a keys-only
+  -- spec defers loading until a <leader>a* mapping is pressed and the commands
+  -- would not exist yet.
+  cmd = {
+    "ClaudeCode",
+    "ClaudeCodeFocus",
+    "ClaudeCodeSelectModel",
+    "ClaudeCodeAdd",
+    "ClaudeCodeSend",
+    "ClaudeCodeTreeAdd",
+    "ClaudeCodeStatus",
+    "ClaudeCodeStart",
+    "ClaudeCodeStop",
+    "ClaudeCodeOpen",
+    "ClaudeCodeClose",
+    "ClaudeCodeDiffAccept",
+    "ClaudeCodeDiffDeny",
+    "ClaudeCodeCloseAllDiffs",
+  },
   keys = {
     { "<leader>a", nil, desc = "AI/Claude Code" },
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
@@ -50,6 +70,12 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
 ```
 
 That's it! The plugin will auto-configure everything else.
+
+> **Lazy-loading:** with this spec the plugin loads on first use — when a listed
+> `cmd` is run or a mapped key is pressed — not at startup. The `cmd` list is what
+> makes `:ClaudeCode` (and the other commands below) available before any keymap is
+> pressed. If you would rather load the plugin eagerly at startup, set `lazy = false`
+> (the `cmd`/`keys` triggers then become optional).
 
 ## Requirements
 
@@ -96,6 +122,8 @@ If you have a local installation, configure the plugin with the direct path:
     terminal_cmd = "~/.claude/local/claude", -- Point to local installation
   },
   config = true,
+  -- Also copy the `cmd = { ... }` list from the Installation section above so the
+  -- :ClaudeCode* commands load without having to press a key first.
   keys = {
     -- Your keymaps here
   },
@@ -153,6 +181,8 @@ Configure the plugin with the detected path:
     terminal_cmd = "/path/to/your/claude", -- Use output from 'which claude'
   },
   config = true,
+  -- Also copy the `cmd = { ... }` list from the Installation section above so the
+  -- :ClaudeCode* commands load without having to press a key first.
   keys = {
     -- Your keymaps here
   },
