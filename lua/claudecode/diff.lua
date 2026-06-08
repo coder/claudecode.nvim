@@ -1143,6 +1143,11 @@ function M._setup_blocking_diff(params, resolution_callback)
   -- (the state-based cleanup is gated on a registered diff). Issue #231.
   local fallback_window = nil
   local new_buffer = nil
+  -- Same rationale for the open_in_new_tab path: display_terminal_in_new_tab() runs `:tabnew`
+  -- early, so a failure before registration would strand that tab. Hoist its handle (and the tab
+  -- we came from, to refocus) so the error handler can close it and switch back. Issue #262.
+  local new_tab_handle = nil
+  local original_tab_handle = nil
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
@@ -1165,11 +1170,15 @@ function M._setup_blocking_diff(params, resolution_callback)
     local terminal_win_in_new_tab = nil
     local existing_buffer = nil
     local target_window = nil
-    -- Track new tab handle and original terminal visibility for robust cleanup
-    local new_tab_handle = nil
+    -- new_tab_handle is hoisted above the pcall (issue #262) so the error handler can reach it;
+    -- only the original-terminal visibility flag is local here.
     local had_terminal_in_original = false
 
     if config and config.diff_opts and config.diff_opts.open_in_new_tab then
+      -- Capture the tab we're leaving BEFORE display_terminal_in_new_tab() runs `:tabnew`, so the
+      -- error handler can still refocus it if that helper throws partway (Lua then leaves
+      -- new_tab_handle unassigned -- see the error branch below). Issue #262.
+      original_tab_handle = vim.api.nvim_get_current_tabpage()
       original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
         display_terminal_in_new_tab()
       created_new_tab = true
@@ -1319,6 +1328,29 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
       if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
         pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
+      end
+      -- Close the tab opened by display_terminal_in_new_tab() before registration (issue #262).
+      -- That helper runs `:tabnew` (switching to the new tab) and the tab holds no user content.
+      -- Prefer the returned handle; if the helper itself threw after `:tabnew`, Lua never assigned
+      -- new_tab_handle, so fall back to the current tab (which is still that new tab) when we can
+      -- tell it apart from the original. Refocus the original tab afterwards.
+      local stranded_tab = new_tab_handle
+      if not (stranded_tab and vim.api.nvim_tabpage_is_valid(stranded_tab)) then
+        local current_tab = vim.api.nvim_get_current_tabpage()
+        if
+          original_tab_handle
+          and vim.api.nvim_tabpage_is_valid(original_tab_handle)
+          and current_tab ~= original_tab_handle
+        then
+          stranded_tab = current_tab
+        end
+      end
+      if stranded_tab and vim.api.nvim_tabpage_is_valid(stranded_tab) and stranded_tab ~= original_tab_handle then
+        pcall(vim.api.nvim_set_current_tabpage, stranded_tab)
+        pcall(vim.cmd, "tabclose")
+        if original_tab_handle and vim.api.nvim_tabpage_is_valid(original_tab_handle) then
+          pcall(vim.api.nvim_set_current_tabpage, original_tab_handle)
+        end
       end
     end
 
