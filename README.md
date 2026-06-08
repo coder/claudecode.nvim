@@ -60,7 +60,7 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
       "<leader>as",
       "<cmd>ClaudeCodeTreeAdd<cr>",
       desc = "Add file",
-      ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw" },
+      ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw", "snacks_picker_list" },
     },
     -- Diff management
     { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
@@ -212,7 +212,8 @@ Configure the plugin with the detected path:
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
 2. **Send context**:
    - Select text in visual mode and use `<leader>as` to send it to Claude
-   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, press `<leader>as` on a file to add it to Claude's context
+   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, or a focused snacks picker list / the Snacks Explorer sidebar, press `<leader>as` on a file to add it to Claude's context
+   - For modal snacks pickers (`Snacks.picker.files()`/`grep()`), which keep focus in the input box, bind a picker action that calls `require("claudecode").send_at_mention(...)` for the selected item(s) — the [claude-fzf.nvim](#-claude-fzfnvim) community extension does the equivalent for `fzf-lua`
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor
