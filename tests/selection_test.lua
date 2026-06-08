@@ -76,6 +76,10 @@ if not _G.vim then
         return { mode = _G.vim._current_mode }
       end,
 
+      nvim_buf_get_changedtick = function(_)
+        return _G.vim._changedtick or 0
+      end,
+
       nvim_buf_get_lines = function(bufnr, start, end_line, _strict) -- Prefix unused param with underscore
         if not _G.vim._buffers[bufnr] then
           return {}
@@ -116,12 +120,20 @@ if not _G.vim then
         return -1
       end,
       getpos = function(mark)
+        -- Tests can override specific marks via _G.vim._marks (e.g. { ["'<"] = {0,1,1,0} }).
+        if _G.vim._marks and _G.vim._marks[mark] then
+          return _G.vim._marks[mark]
+        end
         if mark == "'<" then
           return { 0, 1, 1, 0 }
         elseif mark == "'>" then
           return { 0, 5, 10, 0 }
         end
         return { 0, 0, 0, 0 }
+      end,
+      -- Last completed visual mode; tests set _G.vim._visualmode.
+      visualmode = function()
+        return _G.vim._visualmode or ""
       end,
       -- Add other vim.fn mocks as needed by selection tests
       mode = function()
@@ -302,6 +314,7 @@ if not _G.vim then
       return {}
     end, -- Mock for vim.empty_dict()
     g = {}, -- Mock for vim.g
+    v = { event = {} }, -- Mock for vim.v (ModeChanged supplies v:event.old_mode/new_mode)
     deepcopy = function(orig)
       local orig_type = type(orig)
       local copy
@@ -883,6 +896,308 @@ describe("Range Selection Tests", function()
       selection.state.tracking_enabled = false
       local result = selection.send_at_mention_for_visual_selection(2, 4)
       assert(result == false)
+    end)
+  end)
+
+  describe("issue #246 - flush on visual exit + cursor-guarded demotion", function()
+    local terminal_module = require("claudecode.terminal")
+    local original_get_term
+    -- Own mock_server (declared local-first so the broadcast closure captures THIS table).
+    -- `selection` reuses the enclosing describe's upvalue, refreshed per-test in before_each.
+    local mock_server = {}
+    mock_server.broadcast = function(event, data)
+      mock_server.last_broadcast = { event = event, data = data }
+    end
+
+    before_each(function()
+      package.loaded["claudecode.selection"] = nil
+      selection = require("claudecode.selection")
+      original_get_term = terminal_module.get_active_terminal_bufnr
+      terminal_module.get_active_terminal_bufnr = function()
+        return nil -- external Claude: no in-Neovim terminal buffer
+      end
+      mock_server.last_broadcast = nil
+      _G.vim.v.event = {}
+    end)
+
+    after_each(function()
+      if selection.state.tracking_enabled then
+        selection.disable()
+      end
+      terminal_module.get_active_terminal_bufnr = original_get_term
+      _G.vim._marks = nil
+      _G.vim._visualmode = nil
+      _G.vim._changedtick = nil
+      _G.vim.v.event = {}
+      -- Restore the default shared buffer so later specs are unaffected.
+      _G.vim.test.add_buffer(1, "/path/to/test.lua", "local test = {}\nreturn test")
+      _G.vim.test.set_cursor(1, 1, 0)
+    end)
+
+    describe("get_visual_selection_from_marks()", function()
+      it("extracts a single-line charwise selection from the '<,'> marks", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma" })
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+
+        local sel = selection.get_visual_selection_from_marks()
+
+        assert(sel ~= nil)
+        assert.are.equal("alpha", sel.text)
+        assert.are.equal(false, sel.selection.isEmpty)
+        assert.are.equal(0, sel.selection.start.line)
+        assert.are.equal(0, sel.selection.start.character)
+        assert.are.equal(0, sel.selection["end"].line)
+        assert.are.equal(5, sel.selection["end"].character)
+      end)
+
+      it("extracts a single-line linewise V selection (whole line), clamping MAXCOL '>", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma", "delta epsilon zeta" })
+        _G.vim._visualmode = "V"
+        _G.vim._marks = { ["'<"] = { 0, 2, 1, 0 }, ["'>"] = { 0, 2, 2147483647, 0 } }
+
+        local sel = selection.get_visual_selection_from_marks()
+
+        assert(sel ~= nil)
+        assert.are.equal("delta epsilon zeta", sel.text)
+        assert.are.equal(false, sel.selection.isEmpty)
+        assert.are.equal(1, sel.selection.start.line)
+        assert.are.equal(0, sel.selection.start.character)
+        assert.are.equal(1, sel.selection["end"].line)
+        assert.are.equal(#"delta epsilon zeta", sel.selection["end"].character)
+      end)
+
+      it("returns nil when no visual selection was ever recorded", function()
+        _G.vim._visualmode = ""
+        assert(selection.get_visual_selection_from_marks() == nil)
+      end)
+
+      it("reports an empty-line linewise selection as isEmpty", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "" })
+        _G.vim._visualmode = "V"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 2147483647, 0 } }
+
+        local sel = selection.get_visual_selection_from_marks()
+
+        assert(sel ~= nil)
+        assert.are.equal("", sel.text)
+        assert.are.equal(true, sel.selection.isEmpty)
+      end)
+
+      it("approximates a blockwise selection as the contiguous charwise span (documented limitation)", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta", "gamma delta" })
+        _G.vim._visualmode = "\22" -- CTRL-V blockwise
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 2, 2, 0 } } -- cols 1-2 across 2 lines
+
+        local sel = selection.get_visual_selection_from_marks()
+
+        assert(sel ~= nil)
+        -- Charwise approximation, NOT the rectangular block "al"/"ga": selection_changed
+        -- carries a single range, so the block is sent as its contiguous span.
+        assert.are.equal("alpha beta\nga", sel.text)
+        assert.are.equal(false, sel.selection.isEmpty)
+      end)
+    end)
+
+    describe("on_mode_changed() flush", function()
+      it("broadcasts a fast single-line selection on visual->normal exit", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("n") -- nvim_get_mode already reports normal at this point
+        _G.vim.test.set_cursor(0, 1, 4)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert(mock_server.last_broadcast ~= nil)
+        assert.are.equal("selection_changed", mock_server.last_broadcast.event)
+        assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+        assert.are.equal(false, mock_server.last_broadcast.data.selection.isEmpty)
+        assert(selection.state.latest_selection ~= nil)
+        assert.are.equal("alpha", selection.state.latest_selection.text)
+        assert(selection.state.cursor_at_flush ~= nil)
+      end)
+
+      it("does NOT flush on a visual->visual transition (v to V)", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma" })
+        selection.enable(mock_server)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+        _G.vim.v.event = { old_mode = "v", new_mode = "V" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert(mock_server.last_broadcast == nil)
+      end)
+
+      it("does NOT flush a phantom selection when an operator mutated the buffer (viwd)", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma" })
+        selection.enable(mock_server)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+
+        -- Enter visual mode: records the entry changedtick.
+        _G.vim._changedtick = 7
+        _G.vim.v.event = { old_mode = "n", new_mode = "v" }
+        selection.on_mode_changed()
+
+        -- An operator (d) mutates the buffer (tick advances) and exits visual mode.
+        _G.vim._changedtick = 8
+        _G.vim.test.set_mode("n")
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert(mock_server.last_broadcast == nil) -- no phantom post-edit broadcast
+        assert(selection.state.latest_selection == nil)
+      end)
+
+      it("does not double-send a selection already broadcast by the in-visual debounce", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma" })
+        selection.enable(mock_server)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+        -- The in-visual debounce already sent this exact selection.
+        selection.state.latest_selection = selection.get_visual_selection_from_marks()
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 4)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert(mock_server.last_broadcast == nil) -- dedup: no resend on exit
+      end)
+
+      it("does not flush when the active buffer is the Claude terminal", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma" })
+        selection.enable(mock_server)
+        terminal_module.get_active_terminal_bufnr = function()
+          return 1 -- the current buffer IS the Claude terminal
+        end
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+        _G.vim.test.set_mode("n")
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert(mock_server.last_broadcast == nil)
+      end)
+    end)
+
+    describe("cursor-guarded demotion", function()
+      local function seed_held_selection()
+        local visual_selection = {
+          text = "alpha",
+          filePath = "/path/to/test.lua",
+          fileUrl = "file:///path/to/test.lua",
+          selection = {
+            start = { line = 0, character = 0 },
+            ["end"] = { line = 0, character = 5 },
+            isEmpty = false,
+          },
+        }
+        selection.state.last_active_visual_selection = { bufnr = 1, selection_data = visual_selection, timestamp = 0 }
+        selection.state.latest_selection = visual_selection
+        selection.state.cursor_at_flush = { bufnr = 1, pos = { 1, 4 } }
+      end
+
+      it("keeps a held selection when the cursor has not moved since the flush", function()
+        selection.enable(mock_server)
+        seed_held_selection()
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 4) -- identical to cursor_at_flush -> unmoved
+        mock_server.last_broadcast = nil
+
+        selection.update_selection()
+        local timer = selection.state.demotion_timer
+        assert(timer ~= nil)
+        timer:fire()
+
+        assert.are.equal("alpha", selection.state.latest_selection.text)
+        assert.are.equal(false, selection.state.latest_selection.selection.isEmpty)
+        assert(mock_server.last_broadcast == nil)
+        -- kept intact so a later real cursor move can still re-arm demotion
+        assert(selection.state.last_active_visual_selection ~= nil)
+      end)
+
+      it("demotes to an empty cursor once the cursor has moved since the flush", function()
+        selection.enable(mock_server)
+        seed_held_selection()
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 6) -- moved from {1,4}
+        mock_server.last_broadcast = nil
+
+        selection.update_selection()
+        local timer = selection.state.demotion_timer
+        assert(timer ~= nil)
+        timer:fire()
+
+        assert.are.equal("", selection.state.latest_selection.text)
+        assert.are.equal(true, selection.state.latest_selection.selection.isEmpty)
+        assert(mock_server.last_broadcast ~= nil)
+        assert.are.equal("selection_changed", mock_server.last_broadcast.event)
+      end)
+
+      it("still demotes when no flush occurred (cursor_at_flush nil = legacy path)", function()
+        selection.enable(mock_server)
+        seed_held_selection()
+        selection.state.cursor_at_flush = nil -- e.g. selection captured by the in-visual debounce only
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 2, 3)
+        mock_server.last_broadcast = nil
+
+        selection.update_selection()
+        local timer = selection.state.demotion_timer
+        assert(timer ~= nil)
+        timer:fire()
+
+        assert.are.equal(true, selection.state.latest_selection.selection.isEmpty)
+        assert(mock_server.last_broadcast ~= nil)
+      end)
+
+      it("does not wipe a held selection on a pending-demotion re-entry while unmoved", function()
+        selection.enable(mock_server)
+        seed_held_selection() -- cursor_at_flush = { bufnr = 1, pos = { 1, 4 } }
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 4) -- unmoved
+
+        selection.update_selection() -- arms the demotion timer
+        assert(selection.state.demotion_timer ~= nil)
+        mock_server.last_broadcast = nil
+
+        -- A second update runs while demotion is still pending and the cursor has not moved
+        -- (reachable when visual_demotion_delay_ms >= debounce_ms). It must NOT wipe the selection.
+        selection.update_selection()
+
+        assert.are.equal("alpha", selection.state.latest_selection.text)
+        assert.are.equal(false, selection.state.latest_selection.selection.isEmpty)
+        assert(mock_server.last_broadcast == nil)
+      end)
+
+      it("clears a held selection's tracked state when normal mode is entered in another buffer", function()
+        selection.enable(mock_server)
+        -- A held selection that belongs to a DIFFERENT buffer (2); current buffer is 1.
+        seed_held_selection()
+        selection.state.last_active_visual_selection.bufnr = 2
+        selection.state.cursor_at_flush = { bufnr = 2, pos = { 1, 4 } }
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 0)
+
+        selection.update_selection() -- else branch: different buffer, no demotion pending
+
+        -- Stale cross-buffer state must not leak (no demotion timer armed for the other buffer).
+        assert(selection.state.last_active_visual_selection == nil)
+        assert(selection.state.cursor_at_flush == nil)
+        assert(selection.state.demotion_timer == nil)
+      end)
     end)
   end)
 end)
