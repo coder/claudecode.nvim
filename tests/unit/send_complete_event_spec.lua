@@ -123,6 +123,8 @@ describe("ClaudeCodeSendComplete event (#228)", function()
     assert.is_equal(2, ev.opts.data.start_line)
     assert.is_equal(4, ev.opts.data.end_line)
     assert.is_equal("ClaudeCodeSend", ev.opts.data.context)
+    -- notification-only event must not re-process the buffer's modeline (#228 review)
+    assert.is_false(ev.opts.modeline)
   end)
 
   it("falls back to the raw args when no payload is returned", function()

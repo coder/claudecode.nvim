@@ -279,6 +279,10 @@ end
 ---NOTE: the `data` field of nvim_exec_autocmds requires Neovim >= 0.8.0 (the
 ---plugin floor). Guarded so minimal vim stubs are a no-op, and pcall'd so a
 ---faulty user callback cannot break the send path or abort batch loops.
+---`modeline = false` because this is a notification-only event: without it
+---nvim_exec_autocmds defaults `modeline = true` and would re-process the current
+---buffer's modeline on every send (re-applying options / surfacing unrelated
+---modeline errors).
 ---@param file_path string Path Claude received (formatted/relative)
 ---@param start_line number|nil Start line (0-indexed for Claude), or nil
 ---@param end_line number|nil End line (0-indexed for Claude), or nil
@@ -289,6 +293,7 @@ local function fire_send_complete(file_path, start_line, end_line, context)
   end
   pcall(vim.api.nvim_exec_autocmds, "User", {
     pattern = "ClaudeCodeSendComplete",
+    modeline = false,
     data = {
       file_path = file_path,
       start_line = start_line,
