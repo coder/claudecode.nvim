@@ -657,7 +657,7 @@ function M._create_commands()
       or current_ft == "oil"
       or current_ft == "minifiles"
       or current_ft == "netrw"
-      or string.match(current_bufname, "neo%-tree")
+      or string.match(current_bufname, "^neo%-tree%s")
       or string.match(current_bufname, "NvimTree")
       or string.match(current_bufname, "minifiles://")
 
@@ -712,7 +712,7 @@ function M._create_commands()
       or current_ft == "oil"
       or current_ft == "minifiles"
       or current_ft == "netrw"
-      or string.match(current_bufname, "neo%-tree")
+      or string.match(current_bufname, "^neo%-tree%s")
       or string.match(current_bufname, "NvimTree")
       or string.match(current_bufname, "minifiles://")
 
