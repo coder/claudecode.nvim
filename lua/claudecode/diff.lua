@@ -867,6 +867,39 @@ local function register_diff_autocmds(tab_name, new_buffer)
     end,
   })
 
+  -- WinClosed: reject when the proposed window is closed (`:q`, `:close`, `<C-w>c`, `:tabclose`).
+  -- The proposed buffer is scratch (bufhidden="hide"), so closing its window merely HIDES the
+  -- still-loaded buffer and none of BufDelete/BufUnload/BufWipeout below fire -> `:q` would never
+  -- resolve the diff and Claude would never receive DIFF_REJECTED (issue #238).
+  --
+  -- We do NOT bind to a single window-id pattern: the proposed buffer may be split into several
+  -- windows (<C-w>v), and rejecting just because the *tracked* window closed would prematurely
+  -- reject while the user still views a clone (and closing a clone would never match the pattern).
+  -- Instead we reject only once the proposed buffer is displayed in NO window (across all tabs;
+  -- a copy the user split into another tab defers rejection until that copy is closed too).
+  -- WinClosed fires BEFORE the closing window leaves the layout, so we exclude it (args.match).
+  -- _resolve_diff_as_rejected no-ops once status != "pending", so this is harmless after :w
+  -- (accept) or during _cleanup_diff_state (which deletes these autocmds before closing windows).
+  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("WinClosed", {
+    group = get_autocmd_group(),
+    callback = function(args)
+      if not vim.api.nvim_buf_is_valid(new_buffer) then
+        return
+      end
+      local closing_win = tonumber(args.match)
+      local still_visible = false
+      for _, win in ipairs(vim.fn.win_findbuf(new_buffer)) do
+        if win ~= closing_win then
+          still_visible = true
+          break
+        end
+      end
+      if not still_visible then
+        M._resolve_diff_as_rejected(tab_name)
+      end
+    end,
+  })
+
   -- Buffer deletion monitoring for rejection (multiple events to catch all deletion methods)
 
   -- BufDelete: When buffer is deleted with :bdelete, :bwipeout, etc.
@@ -901,6 +934,9 @@ local function register_diff_autocmds(tab_name, new_buffer)
 
   return autocmd_ids
 end
+
+-- Exposed for testing the reject-on-window-close (WinClosed) behavior.
+M._register_diff_autocmds = register_diff_autocmds
 
 ---Create diff view from a specific window
 ---@param target_window NvimWin|nil The window to use as base for the diff

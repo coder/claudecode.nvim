@@ -149,3 +149,9 @@ jobs:
 
       - name: Run integration tests
         run: ./scripts/run_integration_tests_individually.sh
+
+      # Real-Neovim regression gate for issue #238 (reject-with-:q). The unit spec
+      # only exercises the WinClosed handler logic against a mock; this drives a
+      # genuine `:q` and self-reports via cquit (exit 0 = fixed, 1 = regressed).
+      - name: Reject-on-quit regression gate (#238)
+        run: nvim --headless -u NONE -l scripts/repro_issue_238.lua
