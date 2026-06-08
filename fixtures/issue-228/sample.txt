@@ -1,0 +1,6 @@
+issue #228 sample buffer
+------------------------
+line 1: select me
+line 2: select me
+line 3: select me
+line 4: then run :'<,'>ClaudeCodeSend (or :Issue228Probe)

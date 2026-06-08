@@ -241,6 +241,43 @@ You can edit Claude's suggestions before accepting them.
 
 If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects. If you resolve diffs remotely while the session is still connected, run `:ClaudeCodeCloseAllDiffs` to clear the leftover pending proposals — it leaves any diff you have already accepted (`:w`) but whose file has not been written yet untouched, so your saved edits are never discarded.
 
+## Events
+
+The plugin fires `User` autocmds you can hook with `nvim_create_autocmd`.
+
+### `ClaudeCodeSendComplete`
+
+Fired once per file, synchronously, when a send (`:ClaudeCodeSend`, `:ClaudeCodeAdd`, tree add, etc.) is **accepted while a Claude client is connected**. This is the recommended way to focus a Claude session that runs **outside** Neovim (`provider = "none"`/`"external"`), where `focus_after_send` cannot help.
+
+The autocmd `data` carries:
+
+| field        | type           | notes                                                                                |
+| ------------ | -------------- | ------------------------------------------------------------------------------------ |
+| `file_path`  | `string`       | The formatted/cwd-relative path Claude received                                      |
+| `start_line` | `integer\|nil` | **0-indexed** (Claude convention, not 1-indexed editor lines); `nil` for whole files |
+| `end_line`   | `integer\|nil` | 0-indexed; `nil` for whole-file/directory sends                                      |
+| `context`    | `string\|nil`  | Internal trigger tag (e.g. `"ClaudeCodeSend"`); best-effort, may change              |
+
+Notes and caveats:
+
+- Fires at **acceptance** time, not delivery — sending is debounced, so a later transport failure is logged, not reported here.
+- Fires **per file**: sending a multi-file selection from a file-explorer buffer (`:ClaudeCodeSend` / `:ClaudeCodeTreeAdd`) fires it once per file. `:ClaudeCodeAdd` sends a single path and fires once. Keep handlers idempotent.
+- Fires only when Claude is **already connected** at send time; a send that queues while Claude is launching is delivered later without firing this event.
+
+Example — focus a tmux pane after sending (supply your own pane target):
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeSendComplete",
+  callback = function(ev)
+    -- ev.data.file_path / ev.data.start_line / ev.data.end_line / ev.data.context
+    if vim.env.TMUX then
+      vim.fn.system({ "tmux", "select-pane", "-t", "{last}" }) -- replace target as needed
+    end
+  end,
+})
+```
+
 ## How It Works
 
 This plugin creates a WebSocket server that Claude Code CLI connects to, implementing the same protocol as the official VS Code extension. When you launch Claude, it automatically detects Neovim and gains full access to your editor.
@@ -283,7 +320,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
                         -- For native binary: use output from 'which claude'
 
     -- Send/Focus Behavior
-    -- When true, successful sends will focus the Claude terminal if already connected
+    -- When true, successful sends focus the in-editor Claude terminal if already
+    -- connected. NOTE: this only works for in-editor providers (snacks/native);
+    -- it has no effect with provider = "none"/"external" (Claude runs outside
+    -- Neovim). For those, hook the `User ClaudeCodeSendComplete` event (see Events).
     focus_after_send = false,
 
     -- Selection Tracking
@@ -551,6 +591,7 @@ Notes:
 
 - No windows/buffers are created. `:ClaudeCode` and related commands will not open anything.
 - The WebSocket server still starts and broadcasts work as usual. Launch the Claude CLI externally when desired.
+- `focus_after_send` has no effect here (there is no in-editor terminal to focus); enabling it logs a one-time warning at startup. To focus your external session after a send, hook the [`User ClaudeCodeSendComplete`](#claudecodesendcomplete) event.
 
 ### External Terminal Provider
 

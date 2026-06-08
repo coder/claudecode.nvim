@@ -60,6 +60,17 @@
 ---@field end_line number? Optional end line (0-indexed for Claude compatibility)
 ---@field timestamp number Creation timestamp from vim.loop.now() for expiry tracking
 
+-- Payload delivered as `data` to a `User ClaudeCodeSendComplete` autocmd. Fired
+-- once per file, synchronously, when a send is accepted while Claude is connected.
+-- Lines are 0-indexed (Claude convention, NOT 1-indexed editor lines) and may be
+-- nil for whole-file/directory sends. file_path is the formatted/relative path
+-- Claude received. See README "Events".
+---@class ClaudeCodeSendCompleteData
+---@field file_path string Formatted path Claude received (relative to cwd when applicable)
+---@field start_line number? Start line, 0-indexed for Claude, or nil
+---@field end_line number? End line, 0-indexed for Claude, or nil
+---@field context string? Internal logging tag (e.g. "ClaudeCodeSend"); best-effort, may change
+
 -- Terminal provider interface
 ---@class ClaudeCodeTerminalProvider
 ---@field setup fun(config: ClaudeCodeTerminalConfig)

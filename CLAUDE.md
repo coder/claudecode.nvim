@@ -139,6 +139,12 @@ opts = {
 - `plugin/claudecode.lua` - Plugin loader with version checks
 - `tests/` - Comprehensive test suite with unit, component, and integration tests
 
+### Autocmd Events
+
+The plugin emits `User` autocmds (not config fields) that integrations can hook:
+
+- **`ClaudeCodeSendComplete`** - Fired in `M.send_at_mention` (init.lua) once per file, synchronously, when a send is accepted on the connected branch (acceptance-time, not delivery; not fired on the queued/disconnected path). `data = { file_path, start_line, end_line, context }` — `file_path` is the formatted path Claude received, lines are 0-indexed and may be nil. Primary use: focus an external Claude session (`provider = "none"`/`"external"`) where `focus_after_send` is inert. Emitted via the guarded, pcall-wrapped `fire_send_complete` helper (no-op when `vim.api.nvim_exec_autocmds` is absent, e.g. minimal test stubs). See `lua/claudecode/types.lua` `ClaudeCodeSendCompleteData` and README "Events".
+
 ## MCP Protocol Compliance
 
 ### Protocol Implementation Status

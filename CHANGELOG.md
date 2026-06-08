@@ -4,10 +4,12 @@
 
 ### Features
 
+- `User ClaudeCodeSendComplete` autocmd, fired once per file when a send is accepted while Claude is connected, with `data = { file_path, start_line, end_line, context }` (lines 0-indexed). Lets you run arbitrary post-send logic — in particular, focus a Claude session running outside Neovim (`provider = "none"`/`"external"`), e.g. via `tmux select-pane`, which `focus_after_send` cannot do. ([#228](https://github.com/coder/claudecode.nvim/issues/228))
 - `:ClaudeCodeCloseAllDiffs` command to close pending Claude diffs at once (e.g. proposals orphaned by resolving them via Claude remote control). Diffs you have already accepted but whose file has not been written yet are left intact so saved edits are never discarded. ([#248](https://github.com/coder/claudecode.nvim/issues/248))
 
 ### Bug Fixes
 
+- `focus_after_send = true` no longer fails silently with `terminal.provider = "none"`/`"external"`: those providers run Claude outside Neovim, so focus cannot move there. A one-time warning is now emitted at setup pointing to the new `User ClaudeCodeSendComplete` autocmd, which you can hook to focus your own terminal. (`focus_after_send` still only auto-focuses the in-editor providers.) ([#228](https://github.com/coder/claudecode.nvim/issues/228))
 - Diffs opened via `openDiff` no longer linger forever when they are resolved outside this Neovim or their Claude session goes away. Pending diffs are now automatically closed when the client that opened them disconnects or the integration is stopped, and `closeAllDiffTabs` now also resolves/cleans the diff module's tracked state instead of only closing windows. ([#248](https://github.com/coder/claudecode.nvim/issues/248))
 - Show diffs when the Claude Code terminal is the only window (no other splits). Previously `openDiff` failed with "No suitable editor window found"; now a split is created to host the diff, matching the behavior of the `openFile` tool. ([#231](https://github.com/coder/claudecode.nvim/issues/231))
 - Work around a Neovim core bug (< 0.12.2) that fragmented large bracketed pastes into the terminal across `vim.paste` phases, making Cmd+V appear to truncate content. Added a scoped, version-gated `vim.paste` shim controlled by `terminal.fix_streamed_paste` (`"auto"` by default; no-op on Neovim >= 0.12.2). ([#161](https://github.com/coder/claudecode.nvim/issues/161))
