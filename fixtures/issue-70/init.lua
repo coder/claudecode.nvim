@@ -9,20 +9,20 @@
 -- the queue is cleared with the error above.
 --
 -- This fixture launches the REAL plugin with the native terminal provider so the
--- Claude CLI runs inside Neovim. Run it with a proxy set in the environment but no
--- `no_proxy` exclusion for localhost to reproduce the dominant, currently-live root
--- cause (see fixtures/issue-70/README.md):
+-- Claude CLI runs inside Neovim. Because it loads the plugin from the repo, the
+-- outcome depends on the branch state (see fixtures/issue-70/README.md):
 --
 --   export http_proxy=http://127.0.0.1:1 all_proxy=http://127.0.0.1:1
 --   unset no_proxy NO_PROXY
 --   ISSUE70_LOG=/tmp/issue70.log \
 --     NVIM_APPNAME=issue-70 XDG_CONFIG_HOME="$PWD/fixtures" \
 --     nvim fixtures/issue-70/sample.txt
---   :Issue70Send        " launches Claude (cannot connect through the dead proxy)
---   " ...wait ~10s...    -> the Connection timeout ERROR notification appears
+--   :Issue70Send        " launches Claude and queues sample.txt
 --
--- With NO proxy (or with `no_proxy=localhost,127.0.0.1,::1`) the same steps connect
--- cleanly and the @ mention is delivered -- that contrast is the whole bug.
+-- PRE-FIX (parent commit / terminal.lua reverted): Claude cannot connect through the
+-- dead proxy -> after ~10s the Connection timeout ERROR notification appears.
+-- WITH THE FIX (this branch): the plugin injects `no_proxy=localhost,...` so Claude
+-- connects and the @ mention is delivered -- no timeout. That contrast is the bug/fix.
 
 local config_dir = vim.fn.stdpath("config")
 local repo_root = vim.fn.fnamemodify(config_dir, ":h:h")

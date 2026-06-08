@@ -99,10 +99,18 @@ PASS issue #70 reproduced: a proxy with no localhost exclusion blocks Claude's
      IDE WebSocket (B), while baseline (A) and the no_proxy fix (C) connect.
 ```
 
-### Interactive (the exact user-facing error, in the real plugin)
+### Interactive (in the real plugin)
+
+> **Note on branch state:** this fixture loads the plugin from the repo, so its
+> behavior depends on whether the fix is present. On a branch/commit that
+> **includes the fix**, the plugin injects `no_proxy` into the Claude terminal, so
+> the steps below now **connect** (the `@` mention is delivered, no timeout) — that
+> is the fix working. To watch the **original failure**, run the same steps against
+> **pre-fix code** (check out the parent commit, or temporarily revert the
+> `lua/claudecode/terminal.lua` change).
 
 ```sh
-# proxy set, localhost NOT excluded -> launched Claude cannot reach the server
+# proxy set, localhost NOT excluded
 export http_proxy=http://127.0.0.1:1 https_proxy=http://127.0.0.1:1 all_proxy=http://127.0.0.1:1
 unset no_proxy NO_PROXY
 
@@ -110,16 +118,18 @@ source fixtures/nvim-aliases.sh && vv issue-70      # or the explicit form below
 #   NVIM_APPNAME=issue-70 XDG_CONFIG_HOME="$PWD/fixtures" nvim fixtures/issue-70/sample.txt
 ```
 
-Then run `:Issue70Send` (or `<leader>s`). The plugin launches Claude (which cannot
-connect through the dead proxy) and queues `sample.txt`. After ~10s:
+Then run `:Issue70Send` (or `<leader>s`). The plugin launches Claude and queues
+`sample.txt`.
 
-```
-[ClaudeCode] [queue] [ERROR] Connection timeout - clearing 1 queued @ mentions
-```
+- **Pre-fix:** Claude cannot connect through the dead proxy; after ~10s the queue
+  clears with `[ClaudeCode] [queue] [ERROR] Connection timeout - clearing 1 queued @ mentions`.
+- **With the fix:** the plugin adds `localhost` to `no_proxy`, so Claude connects and
+  the `@` mention is delivered — no timeout.
 
-Run the same steps in a shell **without** the proxy (or with
-`export no_proxy=localhost,127.0.0.1,::1`) and the `@` mention is delivered with
-no error — that contrast is the whole bug.
+Unlike this interactive path, the automated `scripts/repro_issue_70.sh` is
+**unaffected by the fix**: it launches Claude with its own environment, bypassing the
+plugin's env injection, so it reproduces the root cause at the Claude level on any
+checkout (and `export no_proxy=localhost,127.0.0.1,::1` is what makes it connect).
 
 > Set `ISSUE70_LOG=/path/to/log` before launching to also tee the plugin's
 > notifications (including the ERROR) to a file for scripted assertions.
