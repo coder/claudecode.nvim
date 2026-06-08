@@ -273,6 +273,31 @@ function M._ensure_terminal_visible_if_connected()
   return true
 end
 
+---Fire the `User ClaudeCodeSendComplete` autocmd so integrations can react after
+---a send (e.g. focus an externally-managed Claude session). Fires once per file,
+---synchronously on the same tick, right after the focus action.
+---NOTE: the `data` field of nvim_exec_autocmds requires Neovim >= 0.8.0 (the
+---plugin floor). Guarded so minimal vim stubs are a no-op, and pcall'd so a
+---faulty user callback cannot break the send path or abort batch loops.
+---@param file_path string Path Claude received (formatted/relative)
+---@param start_line number|nil Start line (0-indexed for Claude), or nil
+---@param end_line number|nil End line (0-indexed for Claude), or nil
+---@param context string|nil Internal logging context tag
+local function fire_send_complete(file_path, start_line, end_line, context)
+  if not (vim.api and vim.api.nvim_exec_autocmds) then
+    return
+  end
+  pcall(vim.api.nvim_exec_autocmds, "User", {
+    pattern = "ClaudeCodeSendComplete",
+    data = {
+      file_path = file_path,
+      start_line = start_line,
+      end_line = end_line,
+      context = context,
+    },
+  })
+end
+
 ---Send @ mention to Claude Code, handling connection state automatically
 ---@param file_path string The file path to send
 ---@param start_line number|nil Start line (0-indexed for Claude)
@@ -291,7 +316,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
   -- Check if Claude Code is connected
   if M.is_claude_connected() then
     -- Claude is connected, send immediately and ensure terminal is visible
-    local success, error_msg = M._broadcast_at_mention(file_path, start_line, end_line)
+    local success, error_msg, sent = M._broadcast_at_mention(file_path, start_line, end_line)
     if success then
       local terminal = require("claudecode.terminal")
       if M.state.config and M.state.config.focus_after_send then
@@ -300,6 +325,13 @@ function M.send_at_mention(file_path, start_line, end_line, context)
       else
         terminal.ensure_visible()
       end
+      -- Fire ClaudeCodeSendComplete. NOTE: in production `success` means the
+      -- mention was ACCEPTED/queued, not yet delivered (delivery is debounced and
+      -- failures are logged, not returned), so this is an "accepted/dispatched"
+      -- signal. `sent` carries the formatted path/lines Claude received; fall back
+      -- to the raw args when a caller/test stubs _broadcast_at_mention.
+      sent = sent or { file_path = file_path, start_line = start_line, end_line = end_line }
+      fire_send_complete(sent.file_path, sent.start_line, sent.end_line, context)
     end
     return success, error_msg
   else
@@ -313,6 +345,29 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
 
     return true, nil
+  end
+end
+
+---Warn once (at setup) when focus_after_send is enabled but the configured provider
+---runs Claude outside Neovim, where focus_after_send cannot take effect (#228). The
+---"none" provider is a no-op and "external" cannot move focus to an already-running
+---external terminal. Only the two built-in string providers are checked; a custom
+---table provider that is itself a no-op for focus is the author's responsibility.
+---@param config table|nil The resolved configuration
+function M._maybe_warn_unfocusable_provider(config)
+  if not (config and config.focus_after_send == true) then
+    return
+  end
+  local provider = config.terminal and config.terminal.provider
+  if provider == "none" or provider == "external" then
+    logger.warn(
+      "config",
+      string.format(
+        "focus_after_send=true does not focus a Claude session running outside Neovim "
+          .. "(terminal.provider=%q). Use a `User ClaudeCodeSendComplete` autocmd to focus it yourself.",
+        provider
+      )
+    )
   end
 end
 
@@ -361,6 +416,10 @@ function M.setup(opts)
   else
     logger.error("init", "Failed to load claudecode.terminal module for setup.")
   end
+
+  -- Surface the #228 footgun: focus_after_send is inert for providers that run
+  -- Claude outside Neovim. Warns once here at setup (not per-send).
+  M._maybe_warn_unfocusable_provider(M.state.config)
 
   local diff = require("claudecode.diff")
   diff.setup(M.state.config)
@@ -1181,6 +1240,15 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
     lineEnd = end_line,
   }
 
+  -- What Claude actually received, surfaced to send_at_mention so the
+  -- ClaudeCodeSendComplete event payload reflects the formatted path and the
+  -- directory-adjusted line numbers rather than the raw caller arguments.
+  local sent = {
+    file_path = formatted_path,
+    start_line = start_line,
+    end_line = end_line,
+  }
+
   -- For tests or when explicitly configured, broadcast immediately without queuing
   if
     (M.state.config and M.state.config.disable_broadcast_debouncing)
@@ -1188,7 +1256,7 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
   then
     local broadcast_success = M.state.server.broadcast("at_mentioned", params)
     if broadcast_success then
-      return true, nil
+      return true, nil, sent
     else
       local error_msg = "Failed to broadcast " .. (is_directory and "directory" or "file") .. " " .. formatted_path
       logger.error("command", error_msg)
@@ -1201,7 +1269,7 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
 
   -- Always return success since we're queuing the message
   -- The actual broadcast result will be logged in the queue processing
-  return true, nil
+  return true, nil, sent
 end
 
 function M._add_paths_to_claude(file_paths, options)

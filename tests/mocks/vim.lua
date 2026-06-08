@@ -113,6 +113,11 @@ local vim = {
       end
     end,
 
+    nvim_exec_autocmds = function(event, opts)
+      vim._exec_autocmds = vim._exec_autocmds or {}
+      table.insert(vim._exec_autocmds, { event = event, opts = opts })
+    end,
+
     nvim_get_current_buf = function()
       return 1
     end,
@@ -999,6 +1004,7 @@ vim._mock = {
     vim._next_winid = 1000
     vim._commands = {}
     vim._autocmds = {}
+    vim._exec_autocmds = {}
     vim._vars = {}
     vim._options = {}
     vim._last_command = nil
