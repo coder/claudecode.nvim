@@ -348,18 +348,31 @@ function M.send_at_mention(file_path, start_line, end_line, context)
   end
 end
 
----Warn once (at setup) when focus_after_send is enabled but the configured provider
+---Warn once (at setup) when focus_after_send is enabled but the effective provider
 ---runs Claude outside Neovim, where focus_after_send cannot take effect (#228). The
----"none" provider is a no-op and "external" cannot move focus to an already-running
----external terminal. Only the two built-in string providers are checked; a custom
----table provider that is itself a no-op for focus is the author's responsibility.
+---"none" provider is a no-op, and "external" cannot move focus to an already-running
+---external terminal -- but ONLY when it is actually usable: a misconfigured
+---"external" (no valid external_terminal_cmd) falls back to the native provider,
+---where focus_after_send works, so we must not warn there. Only the two built-in
+---string providers are checked; a custom table provider that is itself a no-op for
+---focus is the author's responsibility.
 ---@param config table|nil The resolved configuration
 function M._maybe_warn_unfocusable_provider(config)
   if not (config and config.focus_after_send == true) then
     return
   end
-  local provider = config.terminal and config.terminal.provider
-  if provider == "none" or provider == "external" then
+  local terminal = config.terminal
+  local provider = terminal and terminal.provider
+
+  local unfocusable = provider == "none"
+  if provider == "external" then
+    -- Mirror terminal.lua's has_external_cmd check: without a usable command,
+    -- "external" silently falls back to native (focusable), so do not warn.
+    local cmd = terminal.provider_opts and terminal.provider_opts.external_terminal_cmd
+    unfocusable = type(cmd) == "function" or (type(cmd) == "string" and cmd ~= "" and cmd:find("%%s") ~= nil)
+  end
+
+  if unfocusable then
     logger.warn(
       "config",
       string.format(

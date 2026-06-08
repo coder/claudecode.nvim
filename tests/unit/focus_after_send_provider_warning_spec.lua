@@ -42,10 +42,41 @@ describe("focus_after_send unfocusable-provider warning (#228)", function()
     assert.is_truthy(warnings[#warnings]:find("ClaudeCodeSendComplete", 1, true))
   end)
 
-  it("warns for provider=external + focus_after_send=true", function()
-    claudecode._maybe_warn_unfocusable_provider({ focus_after_send = true, terminal = { provider = "external" } })
+  it("warns for provider=external with a usable external_terminal_cmd (string)", function()
+    claudecode._maybe_warn_unfocusable_provider({
+      focus_after_send = true,
+      terminal = { provider = "external", provider_opts = { external_terminal_cmd = "xterm -e %s" } },
+    })
     assert.is_equal(1, focus_warnings())
     assert.is_truthy(warnings[#warnings]:find("ClaudeCodeSendComplete", 1, true))
+  end)
+
+  it("warns for provider=external with a function external_terminal_cmd", function()
+    claudecode._maybe_warn_unfocusable_provider({
+      focus_after_send = true,
+      terminal = {
+        provider = "external",
+        provider_opts = {
+          external_terminal_cmd = function()
+            return { "xterm" }
+          end,
+        },
+      },
+    })
+    assert.is_equal(1, focus_warnings())
+  end)
+
+  -- Codex P3: a misconfigured "external" (no usable command) falls back to the
+  -- native provider, where focus_after_send DOES work — so it must not warn.
+  it("does NOT warn for provider=external without a usable command (falls back to native)", function()
+    claudecode._maybe_warn_unfocusable_provider({ focus_after_send = true, terminal = { provider = "external" } })
+    assert.is_equal(0, focus_warnings())
+
+    claudecode._maybe_warn_unfocusable_provider({
+      focus_after_send = true,
+      terminal = { provider = "external", provider_opts = { external_terminal_cmd = "no-placeholder" } },
+    })
+    assert.is_equal(0, focus_warnings())
   end)
 
   it("does not warn for provider=native", function()
