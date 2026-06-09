@@ -633,6 +633,103 @@ function M.get_active_terminal_bufnr()
   return get_provider().get_active_bufnr()
 end
 
+---Sends raw text to the running Claude Code terminal's job channel, as if it were
+---typed at the prompt. By default a trailing carriage return submits the line.
+---
+---Only works for the in-editor providers ("native"/"snacks"). The "external" and
+---"none" providers run Claude outside Neovim and expose no buffer, so this warns and
+---returns false. This function is synchronous and does NOT open the terminal: it
+---requires one to already be running, otherwise it warns and returns false. The
+---`:ClaudeCodeSendText` command is a thin wrapper around this.
+---
+---Multi-line text is wrapped in bracketed-paste markers (ESC[200~ ... ESC[201~) so
+---embedded newlines arrive as one literal pasted block rather than several premature
+---submits; the submit carriage return is sent after the closing marker so it still
+---triggers submission. `chansend` writes straight to the PTY and bypasses `vim.paste`,
+---so the `fix_streamed_paste` shim is irrelevant here.
+---@param text string The text to send. Must be a non-empty string.
+---@param opts { submit?: boolean, focus?: boolean }? `submit` (default true) appends a carriage return so Claude submits the line; `focus` (default false) focuses the terminal after a successful send.
+---@return boolean success Whether the text was written to a terminal channel.
+function M.send_to_terminal(text, opts)
+  local logger = require("claudecode.logger")
+
+  if type(text) ~= "string" or text == "" then
+    logger.warn("terminal", "send_to_terminal: no text provided")
+    return false
+  end
+
+  opts = opts or {}
+  local submit = opts.submit ~= false
+
+  local bufnr = M.get_active_terminal_bufnr()
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    local provider_name = type(defaults.provider) == "string" and defaults.provider or "custom"
+    if provider_name == "none" or provider_name == "external" then
+      logger.warn(
+        "terminal",
+        string.format(
+          "Cannot send text: terminal.provider=%q runs Claude outside Neovim, so there is no pane to "
+            .. "write to. Use the 'native' or 'snacks' provider to send text programmatically.",
+          provider_name
+        )
+      )
+    else
+      logger.warn("terminal", "Cannot send text: no Claude terminal is currently running.")
+    end
+    return false
+  end
+
+  -- termopen() sets b:terminal_job_id; bo.channel is the robust fallback that also
+  -- survives a recovered terminal whose module-level job id was lost (native.lua).
+  local chan = vim.b[bufnr] and vim.b[bufnr].terminal_job_id
+  if not chan or chan == 0 then
+    chan = vim.bo[bufnr].channel
+  end
+  if not chan or chan == 0 then
+    logger.warn("terminal", "Cannot send text: no terminal job channel for buffer " .. tostring(bufnr))
+    return false
+  end
+
+  -- Normalize line endings so the ONLY submit byte is the trailing CR added below.
+  -- A bare "\r" is Enter at Claude's prompt, so any interior CR (e.g. CRLF or old-Mac
+  -- text from a programmatic caller) would otherwise fire one or more premature submits
+  -- -- the exact failure mode the bracketed-paste wrapping exists to prevent.
+  local normalized = (text:gsub("\r\n", "\n"):gsub("\r", "\n"))
+
+  local payload = normalized
+  if string.find(normalized, "\n", 1, true) then
+    -- Multi-line: bracketed paste so the newlines arrive as one literal block.
+    payload = "\27[200~" .. normalized .. "\27[201~"
+  end
+  if submit then
+    payload = payload .. "\r"
+  end
+
+  -- chansend can reject (0 bytes) or error if the channel is closed -- e.g. a recovered
+  -- terminal whose process already exited but whose buffer is still valid. Honor that
+  -- instead of reporting a false success.
+  local ok_send, written = pcall(vim.fn.chansend, chan, payload)
+  if not ok_send or written == 0 then
+    logger.warn("terminal", "Cannot send text: the Claude terminal channel is closed (the process may have exited).")
+    return false
+  end
+  logger.debug(
+    "terminal",
+    string.format(
+      "send_to_terminal: wrote %d byte(s) to channel %s (submit=%s)",
+      #payload,
+      tostring(chan),
+      tostring(submit)
+    )
+  )
+
+  if opts.focus then
+    M.open()
+  end
+
+  return true
+end
+
 ---Gets the managed terminal instance for testing purposes.
 -- NOTE: This function is intended for use in tests to inspect internal state.
 -- The underscore prefix indicates it's not part of the public API for regular use.

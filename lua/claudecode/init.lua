@@ -1098,6 +1098,22 @@ function M._create_commands()
     end, {
       desc = "Close the Claude Code terminal window",
     })
+
+    vim.api.nvim_create_user_command("ClaudeCodeSendText", function(opts)
+      local text = opts.args
+      if not text or text == "" then
+        logger.warn("command", "ClaudeCodeSendText: no text provided")
+        return
+      end
+      -- Sends to the currently-open Claude pane; the primitive warns if none is
+      -- running or the provider runs Claude outside Neovim (external/none). Bang
+      -- (`:ClaudeCodeSendText!`) inserts the text without submitting it.
+      terminal.send_to_terminal(text, { submit = not opts.bang })
+    end, {
+      nargs = "+",
+      bang = true,
+      desc = "Send text to the open Claude Code terminal and submit it (! to insert without submitting; native/snacks providers only)",
+    })
   else
     logger.error(
       "init",
