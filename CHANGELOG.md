@@ -6,6 +6,7 @@
 
 - `User ClaudeCodeSendComplete` autocmd, fired once per file when a send is accepted while Claude is connected, with `data = { file_path, start_line, end_line, context }` (lines 0-indexed). Lets you run arbitrary post-send logic — in particular, focus a Claude session running outside Neovim (`provider = "none"`/`"external"`), e.g. via `tmux select-pane`, which `focus_after_send` cannot do. ([#228](https://github.com/coder/claudecode.nvim/issues/228))
 - `:ClaudeCodeCloseAllDiffs` command to close pending Claude diffs at once (e.g. proposals orphaned by resolving them via Claude remote control). Diffs you have already accepted but whose file has not been written yet are left intact so saved edits are never discarded. ([#248](https://github.com/coder/claudecode.nvim/issues/248))
+- `:ClaudeCodeSendText {text}` command (and `require("claudecode.terminal").send_to_terminal(text, opts)` function) to send arbitrary text to the open Claude terminal as if typed at the prompt, submitting it by default. `:ClaudeCodeSendText!` inserts the text without submitting. Handy for scripting and keymaps; multi-line text is sent via bracketed paste. Works with the in-editor `native`/`snacks` providers only — `external`/`none` run Claude outside Neovim, where there is no pane to write to. ([#197](https://github.com/coder/claudecode.nvim/issues/197))
 
 ### Bug Fixes
 
