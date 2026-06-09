@@ -72,8 +72,11 @@ M._resolve_split_width_percentage = resolve_split_width_percentage
 
 ---Whether the plugin should manage (resize) the Claude terminal width across the
 ---diff lifecycle. Controlled by `diff_opts.auto_resize_terminal` (default true).
----When false, the plugin leaves the terminal width untouched so users can own it
----themselves via the `ClaudeCodeDiffOpened`/`ClaudeCodeDiffClosed` User autocmds.
+---When false, the plugin applies no width policy of its own; pair it with the
+---`ClaudeCodeDiffOpened`/`ClaudeCodeDiffClosed` User autocmds to size the terminal
+---yourself. Note the diff layout still runs `wincmd =` (which equalizes splits),
+---so opting out is "own the width via the events" rather than "freeze the width";
+---the events fire after the layout is built, so a handler's resize wins.
 ---@return boolean
 local function auto_resize_enabled()
   return not (config and config.diff_opts and config.diff_opts.auto_resize_terminal == false)

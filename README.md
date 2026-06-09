@@ -390,7 +390,10 @@ update a statusline, etc.). They are emitted regardless of `auto_resize_terminal
 `reason` is a best-effort, human-readable label (e.g. `"diff accepted"`, `"diff rejected"`, `"replaced by new diff"`); treat it as diagnostic text, not a stable enum to branch on. `tab_number` is only set when the diff opened in its own tab, and `terminal_window` may be `nil` if no Claude terminal is visible.
 
 To fully own the terminal width during diffs, set `diff_opts.auto_resize_terminal = false`
-(so the plugin keeps its hands off) and resize from the events yourself:
+(so the plugin applies no width policy of its own) and resize from the events yourself.
+Note this is "own the width via the events", not "freeze the width": the diff layout still
+runs `wincmd =`, which equalizes splits, so set your desired width in the `ClaudeCodeDiffOpened`
+handler — it fires after the layout is built, so it wins:
 
 ```lua
 vim.api.nvim_create_autocmd("User", {
