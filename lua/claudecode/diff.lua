@@ -39,6 +39,82 @@ local function get_autocmd_group()
   return autocmd_group
 end
 
+---Resolve the terminal split-width percentage for the current context.
+---While a diff is active, an optional `terminal.diff_split_width_percentage`
+---(a number in the open interval (0, 1)) takes precedence so the Claude
+---terminal can shrink to give the diff more room. It falls back to the idle
+---`terminal.split_width_percentage`, then to the 0.30 default.
+---@param when "diff"|"idle" Whether a diff is currently active or being torn down
+---@return number percentage A width fraction in (0, 1)
+local function resolve_split_width_percentage(when)
+  local terminal_config = (config and config.terminal) or {}
+
+  local idle = terminal_config.split_width_percentage
+  if type(idle) ~= "number" or idle <= 0 or idle >= 1 then
+    idle = 0.30
+  end
+
+  if when == "diff" then
+    -- Defensively validate here too: config.apply does not validate terminal
+    -- sub-keys, so this is the authoritative guard for the value we consume.
+    -- (terminal.setup additionally warns the user on a bad value at setup time.)
+    local diff_pct = terminal_config.diff_split_width_percentage
+    if type(diff_pct) == "number" and diff_pct > 0 and diff_pct < 1 then
+      return diff_pct
+    end
+  end
+
+  return idle
+end
+
+-- Exposed for testing the diff/idle width resolution logic.
+M._resolve_split_width_percentage = resolve_split_width_percentage
+
+---Whether the plugin should manage (resize) the Claude terminal width across the
+---diff lifecycle. Controlled by `diff_opts.auto_resize_terminal` (default true).
+---When false, the plugin leaves the terminal width untouched so users can own it
+---themselves via the `ClaudeCodeDiffOpened`/`ClaudeCodeDiffClosed` User autocmds.
+---@return boolean
+local function auto_resize_enabled()
+  return not (config and config.diff_opts and config.diff_opts.auto_resize_terminal == false)
+end
+
+-- Exposed for testing.
+M._auto_resize_enabled = auto_resize_enabled
+
+---Resize a Claude terminal split window for the current diff phase.
+---No-ops when the user opted out (`auto_resize_terminal = false`), when the
+---window is missing/invalid, or when it is a floating window (those manage their
+---own sizing). Used for both the during-diff shrink and the on-close restore.
+---@param win number? The terminal window id (may be nil)
+---@param when "diff"|"idle" The current diff phase
+local function resize_terminal_for_diff(win, when)
+  if not auto_resize_enabled() then
+    return
+  end
+  if not win or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+  local win_config = vim.api.nvim_win_get_config(win)
+  if win_config.relative and win_config.relative ~= "" then
+    return -- floating terminals control their own sizing
+  end
+  local split_width = resolve_split_width_percentage(when)
+  pcall(vim.api.nvim_win_set_width, win, math.floor(vim.o.columns * split_width))
+end
+
+-- Exposed for testing the gate + floating-skip + resize behavior.
+M._resize_terminal_for_diff = resize_terminal_for_diff
+
+---Fire a plugin User autocmd for the diff lifecycle. Always emitted, regardless
+---of `auto_resize_terminal`, so users can react to diffs opening/closing. Wrapped
+---in pcall so a faulty user handler can never break diff setup or teardown.
+---@param name string The User event pattern (e.g. "ClaudeCodeDiffOpened")
+---@param data table Payload exposed to handlers as `args.data`
+local function fire_diff_event(name, data)
+  pcall(vim.api.nvim_exec_autocmds, "User", { pattern = name, data = data, modeline = false })
+end
+
 ---Find a suitable main editor window to open diffs in.
 ---Excludes terminals, sidebars, and floating windows.
 ---@return number? win_id Window ID of the main editor window, or nil if not found
@@ -254,7 +330,6 @@ local function display_terminal_in_new_tab()
 
   local terminal_config = config.terminal or {}
   local split_side = terminal_config.split_side or "right"
-  local split_width = terminal_config.split_width_percentage or 0.30
 
   -- Optionally hide the Claude terminal in the new tab for more review space
   local hide_in_new_tab = false
@@ -294,9 +369,8 @@ local function display_terminal_in_new_tab()
     desc = "Auto-enter terminal mode when focusing Claude Code terminal",
   })
 
-  local total_width = vim.o.columns
-  local terminal_width = math.floor(total_width * split_width)
-  vim.api.nvim_win_set_width(terminal_win, terminal_width)
+  -- Size the terminal for the diff (unless the user opted out via auto_resize_terminal).
+  resize_terminal_for_diff(terminal_win, "diff")
 
   vim.cmd("wincmd " .. (split_side == "right" and "h" or "l"))
 
@@ -616,11 +690,7 @@ local function setup_new_buffer(
   end
 
   if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
-    local terminal_config = config.terminal or {}
-    local split_width = terminal_config.split_width_percentage or 0.30
-    local total_width = vim.o.columns
-    local terminal_width = math.floor(total_width * split_width)
-    vim.api.nvim_win_set_width(terminal_win_in_new_tab, terminal_width)
+    resize_terminal_for_diff(terminal_win_in_new_tab, "diff")
   else
     local terminal_win = find_claudecode_terminal_window()
     if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
@@ -630,17 +700,7 @@ local function setup_new_buffer(
         term_tab = vim.api.nvim_win_get_tabpage(terminal_win)
       end)
       if term_tab == current_tab then
-        local win_config = vim.api.nvim_win_get_config(terminal_win)
-        local is_floating = win_config.relative and win_config.relative ~= ""
-
-        -- Only resize split terminals. Floating terminals control their own sizing.
-        if not is_floating then
-          local terminal_config = config.terminal or {}
-          local split_width = terminal_config.split_width_percentage or 0.30
-          local total_width = vim.o.columns
-          local terminal_width = math.floor(total_width * split_width)
-          pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
-        end
+        resize_terminal_for_diff(terminal_win, "diff")
       end
     end
   end
@@ -1077,21 +1137,9 @@ function M._cleanup_diff_state(tab_name, reason)
     local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
     if terminal_ok and diff_data.had_terminal_in_original then
       pcall(terminal_module.ensure_visible)
-      -- And restore its configured width if it is visible.
-      -- (We intentionally do not resize floating terminals.)
-      local terminal_win = find_claudecode_terminal_window()
-      if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-        local win_config = vim.api.nvim_win_get_config(terminal_win)
-        local is_floating = win_config.relative and win_config.relative ~= ""
-
-        if not is_floating then
-          local terminal_config = config.terminal or {}
-          local split_width = terminal_config.split_width_percentage or 0.30
-          local total_width = vim.o.columns
-          local terminal_width = math.floor(total_width * split_width)
-          pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
-        end
-      end
+      -- Restore the idle terminal width if it is visible (unless the user opted
+      -- out via auto_resize_terminal). Floating terminals are skipped.
+      resize_terminal_for_diff(find_claudecode_terminal_window(), "idle")
     end
   else
     -- Close new diff window if still open (only if not in a new tab)
@@ -1120,21 +1168,9 @@ function M._cleanup_diff_state(tab_name, reason)
       end
     end
 
-    -- After closing the diff in the same tab, restore terminal width if visible.
-    -- (We intentionally do not resize floating terminals.)
-    local terminal_win = find_claudecode_terminal_window()
-    if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-      local win_config = vim.api.nvim_win_get_config(terminal_win)
-      local is_floating = win_config.relative and win_config.relative ~= ""
-
-      if not is_floating then
-        local terminal_config = config.terminal or {}
-        local split_width = terminal_config.split_width_percentage or 0.30
-        local total_width = vim.o.columns
-        local terminal_width = math.floor(total_width * split_width)
-        pcall(vim.api.nvim_win_set_width, terminal_win, terminal_width)
-      end
-    end
+    -- After closing the diff in the same tab, restore the idle terminal width
+    -- (unless the user opted out via auto_resize_terminal). Floating terminals are skipped.
+    resize_terminal_for_diff(find_claudecode_terminal_window(), "idle")
   end
 
   -- ALWAYS clean up buffers regardless of tab mode (fixes buffer leak)
@@ -1155,6 +1191,14 @@ function M._cleanup_diff_state(tab_name, reason)
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil
+
+  -- Notify listeners that the diff has closed. Always emitted; pairs with
+  -- ClaudeCodeDiffOpened. `reason` describes why (accepted/rejected/replaced/etc.).
+  fire_diff_event("ClaudeCodeDiffClosed", {
+    tab_name = tab_name,
+    file_path = diff_data.old_file_path,
+    reason = reason,
+  })
 
   logger.debug("diff", "Cleaned up diff for", tab_name)
 end
@@ -1335,6 +1379,20 @@ function M._setup_blocking_diff(params, resolution_callback)
       result_content = nil,
       is_new_file = is_new_file,
       client_id = params.client_id,
+    })
+
+    -- Notify listeners that a diff is now open. Always emitted (independent of
+    -- auto_resize_terminal); pairs with ClaudeCodeDiffClosed. Handlers receive
+    -- the payload as `args.data` and may resize/relayout however they like.
+    fire_diff_event("ClaudeCodeDiffOpened", {
+      tab_name = tab_name,
+      file_path = params.old_file_path,
+      new_file_path = params.new_file_path,
+      is_new_file = is_new_file,
+      diff_window = diff_info.new_window,
+      target_window = diff_info.target_window,
+      terminal_window = terminal_win_in_new_tab or find_claudecode_terminal_window(),
+      tab_number = created_new_tab and new_tab_handle or nil,
     })
   end) -- End of pcall
 

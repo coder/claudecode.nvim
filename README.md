@@ -335,6 +335,9 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
+      -- Optional: shrink (or widen) the terminal while a diff is open. Defaults to
+      -- split_width_percentage when unset, preserving today's behavior.
+      diff_split_width_percentage = nil, -- e.g. 0.20 to give diffs more room
       provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
@@ -359,6 +362,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       open_in_new_tab = false,
       keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
       hide_terminal_in_new_tab = false,
+      auto_resize_terminal = true, -- Let the plugin manage the terminal width across the diff lifecycle; set false to own it via the User autocmds below
       -- on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
 
       -- Legacy aliases (still supported):
@@ -371,6 +375,45 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
   },
 }
 ```
+
+### Diff Lifecycle Events
+
+The plugin fires `User` autocmds when a diff opens and closes, so you can react to
+the review lifecycle from your own config (resize windows, toggle a colorscheme,
+update a statusline, etc.). They are emitted regardless of `auto_resize_terminal`.
+
+| Event pattern          | When                                  | `event.data` fields                                                                                                      |
+| ---------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `ClaudeCodeDiffOpened` | A proposed-edit diff has opened       | `tab_name`, `file_path`, `new_file_path`, `is_new_file`, `diff_window`, `target_window`, `terminal_window`, `tab_number` |
+| `ClaudeCodeDiffClosed` | The diff was accepted/rejected/closed | `tab_name`, `file_path`, `reason`                                                                                        |
+
+`reason` is a best-effort, human-readable label (e.g. `"diff accepted"`, `"diff rejected"`, `"replaced by new diff"`); treat it as diagnostic text, not a stable enum to branch on. `tab_number` is only set when the diff opened in its own tab, and `terminal_window` may be `nil` if no Claude terminal is visible.
+
+To fully own the terminal width during diffs, set `diff_opts.auto_resize_terminal = false`
+(so the plugin keeps its hands off) and resize from the events yourself:
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeDiffOpened",
+  callback = function(ev)
+    local term = ev.data.terminal_window
+    if term and vim.api.nvim_win_is_valid(term) then
+      vim.api.nvim_win_set_width(term, math.floor(vim.o.columns * 0.20))
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeDiffClosed",
+  callback = function(ev)
+    -- restore your preferred idle layout here
+  end,
+})
+```
+
+> For the common "just make the terminal narrower during diffs" case you don't need
+> the events at all — set `terminal.diff_split_width_percentage` and leave
+> `auto_resize_terminal = true`.
 
 ### Working Directory Control
 

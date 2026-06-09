@@ -26,6 +26,7 @@ M.defaults = {
     keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (including floating terminals)
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
     on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
+    auto_resize_terminal = true, -- Let the plugin manage Claude terminal width across the diff lifecycle; false = own it via ClaudeCodeDiffOpened/Closed
   },
   -- `value` is passed verbatim to `claude --model`. These short aliases resolve
   -- to the latest model on the Anthropic API, so labels stay version-free to
@@ -145,6 +146,9 @@ function M.validate(config)
         ),
       "diff_opts.on_new_file_reject must be 'keep_empty' or 'close_window'"
     )
+  end
+  if config.diff_opts.auto_resize_terminal ~= nil then
+    assert(type(config.diff_opts.auto_resize_terminal) == "boolean", "diff_opts.auto_resize_terminal must be a boolean")
   end
 
   -- Legacy diff options (accept if present to avoid breaking old configs)
