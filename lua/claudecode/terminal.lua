@@ -283,7 +283,21 @@ local function is_terminal_visible(bufnr)
   end
 
   local bufinfo = vim.fn.getbufinfo(bufnr)
-  return bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0
+  if not (bufinfo and #bufinfo > 0) then
+    return false
+  end
+  -- A config-hidden window (e.g. a Snacks float parked via
+  -- nvim_win_set_config({hide=true}) to dodge the climbing-cursor bug #240/#183)
+  -- still lists the buffer but is not actually on screen; don't count it.
+  for _, win in ipairs(bufinfo[1].windows or {}) do
+    if vim.api.nvim_win_is_valid(win) then
+      local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+      if not (ok and cfg and cfg.hide == true) then
+        return true
+      end
+    end
+  end
+  return false
 end
 
 ---Builds a no_proxy value that is guaranteed to exclude the loopback hosts
