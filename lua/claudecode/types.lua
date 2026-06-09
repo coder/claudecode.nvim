@@ -20,6 +20,7 @@
 ---@field keep_terminal_focus boolean Keep focus in terminal after opening diff
 ---@field hide_terminal_in_new_tab boolean Hide Claude terminal in newly created diff tab
 ---@field on_new_file_reject ClaudeCodeNewFileRejectBehavior Behavior when rejecting a new-file diff
+---@field auto_resize_terminal boolean Let the plugin resize the Claude terminal across the diff lifecycle (default true); set false to own width via the ClaudeCodeDiffOpened/Closed User autocmds
 
 -- Model selection option
 ---@class ClaudeCodeModelOption
@@ -88,6 +89,7 @@
 ---@class ClaudeCodeTerminalConfig
 ---@field split_side ClaudeCodeSplitSide
 ---@field split_width_percentage number
+---@field diff_split_width_percentage number? -- optional terminal width while a diff is active; defaults to split_width_percentage
 ---@field provider ClaudeCodeTerminalProviderName|ClaudeCodeTerminalProvider
 ---@field show_native_term_exit_tip boolean
 ---@field terminal_cmd string?

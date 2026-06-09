@@ -85,12 +85,14 @@ return {
     --   open_in_new_tab = true, -- Open diff in a new tab (false = use current tab)
     --   keep_terminal_focus = true, -- Keep focus in terminal after opening diff
     --   hide_terminal_in_new_tab = true, -- Hide Claude terminal in the new diff tab for more review space
+    --   auto_resize_terminal = true, -- false = own terminal width via ClaudeCodeDiffOpened/Closed User autocmds
     -- },
 
     -- Terminal Configuration
     -- terminal = {
     --   split_side = "right",                     -- "left" or "right"
     --   split_width_percentage = 0.30,            -- Width as percentage (0.0 to 1.0)
+    --   diff_split_width_percentage = 0.20,       -- Optional: terminal width while a diff is open (defaults to split_width_percentage)
     --   provider = "auto",                        -- "auto", "snacks", or "native"
     --   show_native_term_exit_tip = true,         -- Show exit tip for native terminal
     --   auto_close = true,                        -- Auto-close terminal after command completion

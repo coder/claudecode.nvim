@@ -409,6 +409,20 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       )
     end)
 
+    it("should store a valid diff_split_width_percentage", function()
+      terminal_wrapper.setup({ diff_split_width_percentage = 0.2 })
+      assert.are.equal(0.2, terminal_wrapper.defaults.diff_split_width_percentage)
+    end)
+
+    it("should ignore an invalid diff_split_width_percentage and warn", function()
+      terminal_wrapper.setup({ diff_split_width_percentage = 2.0 })
+      assert.is_nil(terminal_wrapper.defaults.diff_split_width_percentage)
+      vim.notify:was_called_with(
+        spy.matching.string.match("Invalid value for diff_split_width_percentage"),
+        vim.log.levels.WARN
+      )
+    end)
+
     it("should ignore unknown keys", function()
       terminal_wrapper.setup({ unknown_key = "some_value", split_side = "left" })
       terminal_wrapper.open()

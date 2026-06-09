@@ -302,7 +302,12 @@ The `diff_opts` configuration allows you to customize diff behavior:
 - `open_in_new_tab` (boolean, default: `false`) - Open diffs in a new tab instead of the current tab.
 - `hide_terminal_in_new_tab` (boolean, default: `false`) - When opening diffs in a new tab, do not show the Claude terminal split in that new tab. The terminal remains in the original tab, giving maximum screen estate for reviewing the diff.
 - `on_new_file_reject` ("keep_empty"|"close_window", default: `"keep_empty"`) - Behavior when rejecting a diff for a new file (where the old file did not exist).
+- `auto_resize_terminal` (boolean, default: `true`) - Whether the plugin resizes the Claude terminal across the diff lifecycle. Set to `false` to keep the plugin's hands off the terminal width and manage it yourself via the `ClaudeCodeDiffOpened`/`ClaudeCodeDiffClosed` User autocmds.
 - Legacy aliases (still supported): `vertical_split` (maps to `layout`) and `open_in_current_tab` (inverse of `open_in_new_tab`).
+
+Related terminal option: `terminal.diff_split_width_percentage` (number, default: `nil`) shrinks/widens the terminal split while a diff is open, falling back to `terminal.split_width_percentage` when unset. It only applies when `auto_resize_terminal` is `true`.
+
+The plugin also emits `User` autocmds `ClaudeCodeDiffOpened` (data: `tab_name`, `file_path`, `new_file_path`, `is_new_file`, `diff_window`, `target_window`, `terminal_window`, `tab_number`) and `ClaudeCodeDiffClosed` (data: `tab_name`, `file_path`, `reason`). These fire regardless of `auto_resize_terminal`, letting user configs react to the diff lifecycle. `reason` is a best-effort human-readable label, not a stable enum; `tab_number` is set only for new-tab diffs and `terminal_window` may be `nil` when no Claude terminal is visible.
 
 **Example use case**: If you frequently use `<CR>` or arrow keys in the Claude Code terminal to accept/reject diffs, enable this option to prevent focus from moving to the diff buffer where `<CR>` might trigger unintended actions.
 
@@ -314,6 +319,7 @@ require("claudecode").setup({
     open_in_new_tab = true, -- Open diff in a separate tab
     hide_terminal_in_new_tab = true, -- In the new tab, do not show Claude terminal
     on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
+    auto_resize_terminal = true, -- false = own terminal width via ClaudeCodeDiffOpened/Closed User autocmds
 
     -- Legacy aliases (still supported):
     -- vertical_split = true,

@@ -10,6 +10,7 @@ local claudecode_server_module = require("claudecode.server.init")
 local defaults = {
   split_side = "right",
   split_width_percentage = 0.30,
+  diff_split_width_percentage = nil, -- optional terminal width while a diff is active; defaults to split_width_percentage
   provider = "auto",
   show_native_term_exit_tip = true,
   terminal_cmd = nil,
@@ -460,6 +461,15 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify(
           "claudecode.terminal.setup: Invalid value for split_width_percentage: " .. tostring(v),
+          vim.log.levels.WARN
+        )
+      end
+    elseif k == "diff_split_width_percentage" then
+      if v == nil or (type(v) == "number" and v > 0 and v < 1) then
+        defaults.diff_split_width_percentage = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for diff_split_width_percentage: " .. tostring(v),
           vim.log.levels.WARN
         )
       end
