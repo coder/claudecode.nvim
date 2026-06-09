@@ -120,6 +120,19 @@ local function supports_config_hide()
   return vim.fn ~= nil and vim.fn.has ~= nil and vim.fn.has("nvim-0.10") == 1
 end
 
+-- Resolve a Snacks width/height value to an absolute cell count: a fraction in
+-- (0,1) scales `total`; a value >= 1 is taken as absolute; otherwise fall back
+-- to `default_frac` of `total`.
+local function resolve_split_size(val, total, default_frac)
+  if type(val) == "number" and val > 0 then
+    if val < 1 then
+      return math.max(1, math.floor(total * val))
+    end
+    return math.floor(val)
+  end
+  return math.max(1, math.floor(total * default_frac))
+end
+
 local function start_insert_if_terminal(term)
   if
     term.buf
@@ -249,14 +262,16 @@ local function cc_show(term, focus, config)
     return true
   end
 
-  -- Window is fully gone. A FLOAT (one we closed on pre-0.10, or that was closed
-  -- externally) must be recreated by Snacks so it stays a float -- recreating it
-  -- as a split would be wrong. Splits use the native vsplit path, which preserves
-  -- Claude's cursor anchor.
-  local want_float = (term._cc and term._cc.kind == "float")
-    or (config and config.snacks_win_opts and config.snacks_win_opts.position == "float")
-  if want_float and term._cc and term._cc.orig_show then
-    logger.debug("terminal", "Snacks show: re-creating float via Snacks")
+  -- Window is fully gone. Recreate it honoring the configured Snacks position:
+  --   * float / any non-split position -> let Snacks re-create it (it owns the
+  --     geometry); recreating it as a plain split would change its kind.
+  --   * left/right -> vertical split, top/bottom -> horizontal split. Recreated
+  --     natively (the drift-free path), sized from the resolved Snacks opts.
+  local win_opts = (config and config.snacks_win_opts) or {}
+  local position = win_opts.position or (config and config.split_side) or "right"
+  local is_native_split = position == "left" or position == "right" or position == "top" or position == "bottom"
+  if (not is_native_split or (term._cc and term._cc.kind == "float")) and term._cc and term._cc.orig_show then
+    logger.debug("terminal", "Snacks show: re-creating via Snacks (position=" .. tostring(position) .. ")")
     term._cc.kind = nil
     term._cc.orig_show(term)
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
@@ -266,18 +281,28 @@ local function cc_show(term, focus, config)
     return true
   end
 
-  logger.debug("terminal", "Snacks show: re-creating split (native vsplit)")
   local original_win = vim.api.nvim_get_current_win()
-  local pct = (config and config.split_width_percentage) or 0.30
-  local width = math.floor(vim.o.columns * pct)
-  local placement = ((config and config.split_side) == "left") and "topleft " or "botright "
-  vim.cmd(placement .. width .. "vsplit")
-  local new_win = vim.api.nvim_get_current_win()
+  local horizontal = position == "top" or position == "bottom"
+  local lead = (position == "top" or position == "left") and "topleft " or "botright "
+  local new_win
+  if horizontal then
+    local height = resolve_split_size(win_opts.height, vim.o.lines, 0.30)
+    logger.debug("terminal", "Snacks show: re-creating " .. position .. " split (native, h=" .. height .. ")")
+    vim.cmd(lead .. height .. "split")
+    new_win = vim.api.nvim_get_current_win()
+  else
+    local width = resolve_split_size(win_opts.width, vim.o.columns, (config and config.split_width_percentage) or 0.30)
+    logger.debug("terminal", "Snacks show: re-creating " .. position .. " split (native, w=" .. width .. ")")
+    vim.cmd(lead .. width .. "vsplit")
+    new_win = vim.api.nvim_get_current_win()
+  end
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
   vim.api.nvim_win_set_buf(new_win, term.buf)
-  vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height, like native
+  if not horizontal then
+    vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native
+  end
   term.closed = false
   reapply_snacks_window_state(term, new_win)
   if focus then

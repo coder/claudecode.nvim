@@ -19,6 +19,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
   local next_buf_id
   local mock_snacks
   local open_show_spy
+  local last_split_cmd
 
   local function make_window(buf, opts)
     local id = next_win_id
@@ -74,6 +75,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     current_win = 0
     next_win_id = 1000
     next_buf_id = 1
+    last_split_cmd = nil
 
     open_show_spy = spy.new(function(self)
       -- Snacks re-creates the window from the original opts (e.g. a float).
@@ -107,11 +109,13 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       },
       cmd = function(c)
         c = tostring(c)
-        if c:find("vsplit") then
+        -- matches both "vsplit" (vertical) and "split" (horizontal); record only
+        -- split commands so a later startinsert/wincmd does not clobber it
+        if c:find("split") then
+          last_split_cmd = c
           local new_id = make_window(nil, { relative = "" })
           current_win = new_id
         end
-        -- startinsert / wincmd p / noh: no-ops for these tests
       end,
       tbl_deep_extend = function(_, ...)
         local res = {}
@@ -316,5 +320,40 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     -- Still the same visible window (no destroy/recreate when already visible).
     assert.are.equal(win, term.win)
     assert.is_true(windows[win].valid)
+  end)
+
+  it("recreates a top/bottom position as a horizontal split, not a vsplit", function()
+    local function bottom_config()
+      return {
+        cwd = "/w",
+        split_side = "right",
+        split_width_percentage = 0.3,
+        auto_close = false,
+        snacks_win_opts = { position = "bottom", height = 0.3 },
+      }
+    end
+    snacks_provider.open("claude", {}, bottom_config(), true)
+    snacks_provider.simple_toggle("claude", {}, bottom_config()) -- hide (close)
+    last_split_cmd = nil
+    snacks_provider.simple_toggle("claude", {}, bottom_config()) -- show (recreate)
+    assert.is_truthy(last_split_cmd and last_split_cmd:find("split"))
+    assert.is_nil(last_split_cmd:find("vsplit")) -- horizontal split, not vertical
+    assert.spy(open_show_spy).was_not_called() -- native recreate, not Snacks'
+  end)
+
+  it("recreates an unsupported position (e.g. current) via Snacks, not a raw split", function()
+    local function current_config()
+      return {
+        cwd = "/w",
+        split_side = "right",
+        split_width_percentage = 0.3,
+        auto_close = false,
+        snacks_win_opts = { position = "current" },
+      }
+    end
+    snacks_provider.open("claude", {}, current_config(), true)
+    snacks_provider.simple_toggle("claude", {}, current_config()) -- hide (close)
+    snacks_provider.simple_toggle("claude", {}, current_config()) -- show
+    assert.spy(open_show_spy).was_called() -- delegated to Snacks
   end)
 end)
