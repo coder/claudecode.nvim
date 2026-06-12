@@ -36,7 +36,7 @@ local function handler(params)
           text = vim.json.encode({
             success = false,
             message = "Document not open: " .. params.filePath,
-          }, { indent = 2 }),
+          }),
         },
       },
     }
@@ -55,7 +55,7 @@ local function handler(params)
           filePath = params.filePath,
           isDirty = is_dirty,
           isUntitled = is_untitled,
-        }, { indent = 2 }),
+        }),
       },
     },
   }

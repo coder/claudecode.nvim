@@ -167,6 +167,54 @@ describe("Tool: open_file", function()
     expect(parsed_result.filePath).to_be("test.txt")
   end)
 
+  it("should ignore empty startText and endText from Claude Code", function()
+    local params = { filePath = "test.txt", makeFrontmost = false, startText = "", endText = "" }
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_true()
+    expect(parsed_result.filePath).to_be("test.txt")
+    expect(#_G.vim.cmd_history).to_be(1)
+    expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+  end)
+
+  it("should report details from the background target window", function()
+    _G.vim.api.nvim_list_wins = spy.new(function()
+      return { 2000 }
+    end)
+    _G.vim.api.nvim_win_get_buf = spy.new(function(win)
+      if win == 2000 then
+        return 20
+      end
+      return 99
+    end)
+    _G.vim.api.nvim_get_current_buf = spy.new(function()
+      return 99
+    end)
+    _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
+      if option == "buftype" then
+        return ""
+      end
+      if option == "filetype" then
+        return buf == 20 and "lua" or "wrong"
+      end
+      return ""
+    end)
+    _G.vim.api.nvim_buf_line_count = spy.new(function(buf)
+      return buf == 20 and 42 or 1
+    end)
+
+    local params = { filePath = "test.txt", makeFrontmost = false }
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.languageId).to_be("lua")
+    expect(parsed_result.lineCount).to_be(42)
+    assert.spy(_G.vim.api.nvim_set_current_win).was_not_called()
+  end)
+
   it("should handle preview mode parameter", function()
     local params = { filePath = "test.txt", preview = true }
     local success, result = pcall(open_file_handler, params)

@@ -40,7 +40,7 @@ local function handler(params)
           text = vim.json.encode({
             success = false,
             message = "Document not open: " .. params.filePath,
-          }, { indent = 2 }),
+          }),
         },
       },
     }
@@ -59,7 +59,7 @@ local function handler(params)
             success = false,
             message = "Failed to save file: " .. tostring(err),
             filePath = params.filePath,
-          }, { indent = 2 }),
+          }),
         },
       },
     }
@@ -75,7 +75,7 @@ local function handler(params)
           filePath = params.filePath,
           saved = true,
           message = "Document saved successfully",
-        }, { indent = 2 }),
+        }),
       },
     },
   }

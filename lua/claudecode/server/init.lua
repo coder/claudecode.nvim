@@ -282,7 +282,6 @@ function M.register_handlers()
         capabilities = {
           logging = vim.empty_dict(), -- Ensure this is an object {} not an array []
           prompts = { listChanged = true },
-          resources = { subscribe = true, listChanged = true },
           tools = { listChanged = true },
         },
         serverInfo = {
