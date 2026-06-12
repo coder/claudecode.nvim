@@ -911,6 +911,7 @@ opts = {
 
 ## Troubleshooting
 
+- **First stop:** Run `:checkhealth claudecode` — it verifies the Claude CLI is installed, the WebSocket server is running, the lock file exists, and whether Claude is connected
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
