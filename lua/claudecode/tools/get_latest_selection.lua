@@ -30,7 +30,7 @@ local function handler(params)
           text = vim.json.encode({
             success = false,
             message = "No selection available",
-          }, { indent = 2 }),
+          }),
         },
       },
     }
@@ -41,7 +41,7 @@ local function handler(params)
     content = {
       {
         type = "text",
-        text = vim.json.encode(selection, { indent = 2 }),
+        text = vim.json.encode(selection),
       },
     },
   }

@@ -118,6 +118,21 @@ describe("WebSocket Server", function()
     expect(type(server.state.handlers["tools/list"])).to_be("function") -- Function, not table
   end)
 
+  it("should not advertise unsupported MCP resources", function()
+    server.register_handlers()
+
+    vim.empty_dict = vim.empty_dict or function()
+      return {}
+    end
+
+    local result = server.state.handlers["initialize"]({}, {})
+
+    expect(result).to_be_table()
+    expect(result.capabilities).to_be_table()
+    expect(result.capabilities.resources).to_be_nil()
+    expect(result.capabilities.tools).to_be_table()
+  end)
+
   it("should send message to client", function()
     -- Start server first
     local config = { port_range = { min = 10000, max = 65535 } }

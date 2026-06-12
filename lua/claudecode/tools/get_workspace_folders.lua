@@ -55,7 +55,7 @@ local function handler(params)
           success = true,
           folders = folders,
           rootPath = cwd,
-        }, { indent = 2 }),
+        }),
       },
     },
   }
