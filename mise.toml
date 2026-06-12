@@ -31,7 +31,7 @@ luajit = "2.1.1744318430"
 # (The LuaJIT plugin does not ship a LuaRocks.)
 lua = "5.5.0"
 # Neovim for the integration test suite and local plugin testing.
-neovim = "0.12.2"
+neovim = "0.12.3"
 
 # Node provides the runtime for prettier (installed via the npm backend).
 node = "26.3.0"
@@ -39,7 +39,7 @@ node = "26.3.0"
 # treefmt drives every formatter/linter below (replaces `nix fmt`).
 "github:numtide/treefmt" = "2.5.0"
 stylua = "2.5.2"
-prettier = "3.8.3"
+prettier = "3.8.4"
 shfmt = "3.13.1"
 shellcheck = "0.11.0"
 actionlint = "1.7.12"
