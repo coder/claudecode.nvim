@@ -1,0 +1,42 @@
+name: PR Title
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: PR title to validate
+        required: true
+        type: string
+  pull_request:
+    types:
+      - opened
+      - edited
+      - reopened
+      - ready_for_review
+      - synchronize
+
+permissions: {}
+
+jobs:
+  conventional-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title
+        env:
+          PR_TITLE: ${{ github.event_name == 'workflow_dispatch' && inputs.title || github.event.pull_request.title }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const title = process.env.PR_TITLE ?? "";
+          const conventionalTitle = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: .+$/;
+
+          if (conventionalTitle.test(title)) {
+            console.log(`PR title is a Conventional Commit: ${title}`);
+            process.exit(0);
+          }
+
+          console.error("PR title must be a Conventional Commit title.");
+          console.error(`Got: ${title}`);
+          console.error("Expected examples: feat: add health check, fix(diff): close stale tabs, chore(release): 0.4.0");
+          process.exit(1);
+          NODE

@@ -2,6 +2,7 @@
   "name": "claudecode.nvim-release-tools",
   "private": true,
   "devDependencies": {
+    "prettier": "3.8.4",
     "release-please": "17.9.0"
   },
   "scripts": {
