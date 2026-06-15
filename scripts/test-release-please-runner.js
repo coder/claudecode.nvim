@@ -28,6 +28,17 @@ function buildOptions() {
   };
 }
 
+function testPrettierResolution() {
+  assert.equal(
+    runner.resolvePrettierBin({ PRETTIER_BIN: "/tmp/prettier" }),
+    "/tmp/prettier",
+  );
+  assert.equal(
+    runner.resolvePrettierBin({}, () => false),
+    "prettier",
+  );
+}
+
 async function testCommuniqueArgs() {
   assert.deepEqual(
     runner.buildCommuniqueArgs({
@@ -66,13 +77,36 @@ async function testHeadingNormalization() {
 
 async function testUnreleasedUpdater() {
   const updated = new runner.UnreleasedAwareChangelog({
-    changelogEntry: "## [0.4.0] - 2026-06-15\n\n- Added x",
+    changelogEntry: "## [0.4.0] - 2026-06-15\n\n* Added x",
   }).updateContent(
     "# Changelog\n\n## [Unreleased]\n\n### Features\n\n- Draft\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
   );
   assert.equal(
     updated,
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+  );
+  assert.equal(updated, runner.formatChangelogMarkdown(updated));
+}
+
+function testPullRequestOutputs() {
+  assert.deepEqual(runner.formatPullRequestOutputs([]), {
+    prs_created: "false",
+    pr_branches: "",
+    pr_metadata: "[]",
+  });
+  assert.deepEqual(
+    runner.formatPullRequestOutputs([
+      {
+        headBranchName: "release-please--branches--main",
+        title: { toString: () => "chore(release): 0.4.0" },
+      },
+    ]),
+    {
+      prs_created: "true",
+      pr_branches: "release-please--branches--main",
+      pr_metadata:
+        '[{"branch":"release-please--branches--main","title":"chore(release): 0.4.0"}]',
+    },
   );
 }
 
@@ -111,9 +145,11 @@ async function testReleasableCommitRunsCommunique() {
 }
 
 async function main() {
+  testPrettierResolution();
   await testCommuniqueArgs();
   await testHeadingNormalization();
   await testUnreleasedUpdater();
+  testPullRequestOutputs();
   await testInternalCommitSkipsCommunique();
   await testReleasableCommitRunsCommunique();
 }

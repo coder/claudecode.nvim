@@ -11,7 +11,7 @@
  */
 
 const assert = require("node:assert/strict");
-const { execFile } = require("node:child_process");
+const { execFile, execFileSync } = require("node:child_process");
 const {
   appendFileSync,
   existsSync,
@@ -35,6 +35,13 @@ const {
 } = require("release-please/build/src/changelog-notes/default.js");
 const { Simple } = require("release-please/build/src/strategies/simple.js");
 const { Changelog } = require("release-please/build/src/updaters/changelog.js");
+
+const LOCAL_PRETTIER_BIN = join(
+  __dirname,
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "prettier.cmd" : "prettier",
+);
 
 const execFileAsync = promisify(execFile);
 
@@ -243,6 +250,29 @@ function findLineOutsideFences(lines, start, predicate) {
   return -1;
 }
 
+function resolvePrettierBin(env = process.env, fileExists = existsSync) {
+  if (env.PRETTIER_BIN !== undefined && env.PRETTIER_BIN !== "") {
+    return env.PRETTIER_BIN;
+  }
+  if (fileExists(LOCAL_PRETTIER_BIN)) {
+    return LOCAL_PRETTIER_BIN;
+  }
+  return "prettier";
+}
+
+function formatChangelogMarkdown(content) {
+  assert.equal(typeof content, "string", "content must be a string");
+  return execFileSync(
+    resolvePrettierBin(),
+    ["--stdin-filepath", "CHANGELOG.md"],
+    {
+      encoding: "utf8",
+      input: content,
+      maxBuffer: 16 * 1024 * 1024,
+    },
+  );
+}
+
 /**
  * Replaces release-please's stock CHANGELOG updater. It keeps `## [Unreleased]`
  * at the top, clears its draft body after Communique reconciles it into the
@@ -280,7 +310,7 @@ class UnreleasedAwareChangelog {
         (line) => NEXT_SECTION_PATTERN.test(line),
       );
       const rest = nextIndex === -1 ? "" : lines.slice(nextIndex).join("\n");
-      return joinSections(head, entry, rest);
+      return formatChangelogMarkdown(joinSections(head, entry, rest));
     }
 
     // Self-heal a missing Unreleased anchor so Communique has draft space on
@@ -290,9 +320,13 @@ class UnreleasedAwareChangelog {
     );
     if (titleIndex !== -1) {
       const head = `${lines.slice(0, titleIndex + 1).join("\n")}\n\n## [Unreleased]`;
-      return joinSections(head, entry, lines.slice(titleIndex + 1).join("\n"));
+      return formatChangelogMarkdown(
+        joinSections(head, entry, lines.slice(titleIndex + 1).join("\n")),
+      );
     }
-    return joinSections("# Changelog\n\n## [Unreleased]", entry, existing);
+    return formatChangelogMarkdown(
+      joinSections("# Changelog\n\n## [Unreleased]", entry, existing),
+    );
   }
 }
 
@@ -337,12 +371,16 @@ function formatReleaseOutputs(releases) {
 
 function formatPullRequestOutputs(pullRequests) {
   assert.ok(Array.isArray(pullRequests), "pullRequests must be an array");
-  const branches = pullRequests
+  const prs = pullRequests
     .filter((pullRequest) => pullRequest !== undefined)
-    .map((pullRequest) => pullRequest.headBranchName);
+    .map((pullRequest) => ({
+      branch: pullRequest.headBranchName,
+      title: pullRequest.title.toString(),
+    }));
   return {
-    prs_created: branches.length > 0 ? "true" : "false",
-    pr_branches: branches.join(" "),
+    prs_created: prs.length > 0 ? "true" : "false",
+    pr_branches: prs.map((pr) => pr.branch).join(" "),
+    pr_metadata: JSON.stringify(prs),
   };
 }
 
@@ -466,10 +504,12 @@ module.exports = {
   buildCommuniqueArgs,
   createCommuniqueChangelogNotes,
   findLineOutsideFences,
+  formatChangelogMarkdown,
   formatChangelogSection,
   formatPullRequestOutputs,
   formatReleaseOutputs,
   normalizeCommuniqueBody,
+  resolvePrettierBin,
   releasePleaseNotesAreEmpty,
   todayIsoDate,
 };

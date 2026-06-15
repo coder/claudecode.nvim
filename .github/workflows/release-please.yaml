@@ -32,6 +32,7 @@ jobs:
     outputs:
       prs_created: ${{ steps.release_please.outputs.prs_created }}
       pr_branches: ${{ steps.release_please.outputs.pr_branches }}
+      pr_metadata: ${{ steps.release_please.outputs.pr_metadata }}
       releases_created: ${{ steps.release_please.outputs.releases_created }}
       release_tags: ${{ steps.release_please.outputs.release_tags }}
     steps:
@@ -76,7 +77,6 @@ jobs:
     if: ${{ always() && !cancelled() && needs.release-please.outputs.releases_created == 'true' }}
     permissions:
       actions: write
-      contents: read
     steps:
       - name: Dispatch Communique release notes for created releases
         env:
@@ -86,7 +86,7 @@ jobs:
           set -euo pipefail
           read -ra tags <<< "$RELEASE_TAGS"
           for tag in "${tags[@]}"; do
-            gh workflow run release-notes.yaml --ref "$tag" --field "tag=$tag"
+            gh workflow run release-notes.yaml --repo "$GITHUB_REPOSITORY" --ref "$tag" --field "tag=$tag"
           done
 
   # Branch pushes made with the workflow token do not trigger `pull_request`
@@ -97,15 +97,50 @@ jobs:
     if: ${{ always() && !cancelled() && needs.release-please.outputs.prs_created == 'true' }}
     permissions:
       actions: write
-      contents: read
     steps:
       - name: Dispatch checks onto the release PR branch
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_BRANCHES: ${{ needs.release-please.outputs.pr_branches }}
+          PR_METADATA: ${{ needs.release-please.outputs.pr_metadata }}
         run: |
           set -euo pipefail
-          read -ra branches <<< "$PR_BRANCHES"
-          for branch in "${branches[@]}"; do
-            gh workflow run test.yml --ref "$branch"
-          done
+          node <<'NODE'
+          const { spawnSync } = require("node:child_process");
+
+          const repository = process.env.GITHUB_REPOSITORY;
+          const prMetadata = JSON.parse(process.env.PR_METADATA || "[]");
+          if (typeof repository !== "string" || repository === "") {
+            throw new Error("GITHUB_REPOSITORY is required");
+          }
+          if (!Array.isArray(prMetadata) || prMetadata.length === 0) {
+            throw new Error("release PR metadata is required");
+          }
+
+          function runGh(args) {
+            const result = spawnSync("gh", args, { stdio: "inherit" });
+            if (result.status !== 0) {
+              throw new Error(`gh ${args.join(" ")} failed with status ${result.status}`);
+            }
+          }
+
+          for (const pr of prMetadata) {
+            if (typeof pr.branch !== "string" || pr.branch === "") {
+              throw new Error("release PR branch is required");
+            }
+            if (typeof pr.title !== "string" || pr.title === "") {
+              throw new Error(`release PR title is required for branch ${pr.branch}`);
+            }
+            runGh([
+              "workflow",
+              "run",
+              "pr-title.yaml",
+              "--repo",
+              repository,
+              "--ref",
+              pr.branch,
+              "--raw-field",
+              `title=${pr.title}`,
+            ]);
+            runGh(["workflow", "run", "test.yml", "--repo", repository, "--ref", pr.branch]);
+          }
+          NODE
