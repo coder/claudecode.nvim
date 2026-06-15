@@ -13,7 +13,58 @@ local M = {}
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for errors
 
----Find an available port by attempting to bind
+-- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
+-- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
+-- left LuaJIT's fixed default seed in place -- so every fresh Neovim picked the
+-- *same* starting port and parallel instances always collided (#283). Mixing in a
+-- sub-second source avoids two instances launched in the same second seeding
+-- identically. hrtime is guarded because some test stubs omit it.
+local rng_seeded = false
+local function ensure_rng_seeded()
+  if rng_seeded then
+    return
+  end
+  local jitter
+  local ok, hr = pcall(function()
+    return vim.loop and vim.loop.hrtime and vim.loop.hrtime()
+  end)
+  if ok and type(hr) == "number" then
+    jitter = hr % 1000000
+  else
+    jitter = math.floor((os.clock() % 1) * 1000000)
+  end
+  math.randomseed((os.time() * 1000000) + jitter)
+  rng_seeded = true
+end
+
+-- Iterate the port range exactly once, starting from a random offset and wrapping
+-- around. Returns a closure rather than materializing the range: the default
+-- 10000-65535 range is ~55k entries, and building/shuffling it on every startup
+-- was the cost #282 set out to remove.
+local function port_iterator(min_port, max_port)
+  local port_count = max_port - min_port + 1
+  if port_count <= 0 then
+    return function()
+      return nil
+    end
+  end
+  ensure_rng_seeded()
+  local start_offset = math.random(port_count) - 1
+  local checked = -1
+  return function()
+    checked = checked + 1
+    if checked >= port_count then
+      return nil
+    end
+    return min_port + ((start_offset + checked) % port_count)
+  end
+end
+
+---Find an available port using a best-effort bind probe.
+---NOTE: this is only a pre-filter. A successful throwaway bind does NOT guarantee
+---the port is free: libuv's bind() defers EADDRINUSE to listen()/connect(), so a
+---port another process is actively listening on still passes this probe. The
+---authoritative check is create_server's bind+listen with retry.
 ---@param min_port number Minimum port to try
 ---@param max_port number Maximum port to try
 ---@return number|nil port Available port number, or nil if none found
@@ -25,14 +76,7 @@ function M.find_available_port(min_port, max_port)
     return nil
   end
 
-  local port_count = max_port - min_port + 1
-  local start_offset = math.random(port_count) - 1
-
-  -- Pick a random starting point, then scan the range once. This keeps the
-  -- selection spread across the configured range without building and shuffling
-  -- a 55k-entry table for the default 10000-65535 range on every startup.
-  for checked = 0, port_count - 1 do
-    local port = min_port + ((start_offset + checked) % port_count)
+  for port in port_iterator(min_port, max_port) do
     local test_server = vim.loop.new_tcp()
     if test_server then
       local success = test_server:bind("127.0.0.1", port)
@@ -47,6 +91,44 @@ function M.find_available_port(min_port, max_port)
   return nil
 end
 
+---Bind AND listen on a single fresh TCP handle, returning that same handle.
+---Binding then listening on one socket (instead of probing a throwaway socket and
+---re-binding) is what makes a busy port detectable: libuv's bind() defers
+---EADDRINUSE to listen(), so the listen() call is the real test, and keeping the
+---handle we listened on removes the probe/rebind TOCTOU window.
+---@param server TCPServer The server object whose connection handler to wire up
+---@param port number Port to bind and listen on
+---@return table|nil handle The bound+listening TCP handle, or nil on failure
+---@return string|nil error Error message if failed
+function M._bind_and_listen(server, port)
+  local handle = vim.loop.new_tcp()
+  if not handle then
+    return nil, "Failed to create TCP server"
+  end
+
+  local bind_success, bind_err = handle:bind("127.0.0.1", port)
+  if not bind_success then
+    handle:close()
+    return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")
+  end
+
+  local listen_success, listen_err = handle:listen(128, function(err)
+    if err then
+      server.on_error("Listen error: " .. err)
+      return
+    end
+
+    M._handle_new_connection(server)
+  end)
+
+  if not listen_success then
+    handle:close()
+    return nil, "Failed to listen on port " .. port .. ": " .. (listen_err or "unknown error")
+  end
+
+  return handle, nil
+end
+
 ---Create and start a TCP server
 ---@param config ClaudeCodeConfig Server configuration
 ---@param callbacks table Callback functions
@@ -54,20 +136,13 @@ end
 ---@return TCPServer|nil server The server object, or nil on error
 ---@return string|nil error Error message if failed
 function M.create_server(config, callbacks, auth_token)
-  local port = M.find_available_port(config.port_range.min, config.port_range.max)
-  if not port then
-    return nil, "No available ports in range " .. config.port_range.min .. "-" .. config.port_range.max
-  end
+  local min_port = config.port_range.min
+  local max_port = config.port_range.max
 
-  local tcp_server = vim.loop.new_tcp()
-  if not tcp_server then
-    return nil, "Failed to create TCP server"
-  end
-
-  -- Create server object
+  -- Build the server object up front so the listen callback can close over it.
   local server = {
-    server = tcp_server,
-    port = port,
+    server = nil,
+    port = nil,
     auth_token = auth_token,
     clients = {},
     on_message = callbacks.on_message or function() end,
@@ -76,28 +151,28 @@ function M.create_server(config, callbacks, auth_token)
     on_error = callbacks.on_error or function() end,
   }
 
-  local bind_success, bind_err = tcp_server:bind("127.0.0.1", port)
-  if not bind_success then
-    tcp_server:close()
-    return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")
-  end
-
-  -- Start listening
-  local listen_success, listen_err = tcp_server:listen(128, function(err)
-    if err then
-      callbacks.on_error("Listen error: " .. err)
-      return
+  -- Walk candidate ports and bind+listen on each until one succeeds. Retrying
+  -- here (rather than committing to a single pre-probed port) is what fixes #283:
+  -- when several Neovim instances race for the same port, the losers just advance
+  -- to the next candidate instead of giving up with EADDRINUSE.
+  local last_err
+  local tried_any = false
+  for port in port_iterator(min_port, max_port) do
+    tried_any = true
+    local handle, err = M._bind_and_listen(server, port)
+    if handle then
+      server.server = handle
+      server.port = port
+      return server, nil
     end
-
-    M._handle_new_connection(server)
-  end)
-
-  if not listen_success then
-    tcp_server:close()
-    return nil, "Failed to listen on port " .. port .. ": " .. (listen_err or "unknown error")
+    last_err = err
   end
 
-  return server, nil
+  if not tried_any then
+    return nil, "No available ports in range " .. min_port .. "-" .. max_port
+  end
+  return nil,
+    "Failed to bind to any port in range " .. min_port .. "-" .. max_port .. ": " .. (last_err or "unknown error")
 end
 
 ---Handle a new client connection
