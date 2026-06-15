@@ -30,6 +30,9 @@ const {
   registerChangelogNotes,
   registerReleaseType,
 } = require("release-please");
+const {
+  DefaultChangelogNotes,
+} = require("release-please/build/src/changelog-notes/default.js");
 const { Simple } = require("release-please/build/src/strategies/simple.js");
 const { Changelog } = require("release-please/build/src/updaters/changelog.js");
 
@@ -112,7 +115,7 @@ function normalizeCommuniqueBody(body) {
   assert.equal(typeof body, "string", "body must be a string");
   const withoutLeadingHeading = body
     .trim()
-    .replace(/^#{2,3} \[?v?\d[^\n]*\n*/, "");
+    .replace(/^#{1,3} \[?v?\d[^\n]*\n*/, "");
   let inFence = false;
   return withoutLeadingHeading
     .split("\n")
@@ -121,7 +124,7 @@ function normalizeCommuniqueBody(body) {
         inFence = !inFence;
         return line;
       }
-      if (!inFence && /^## (?!\[)/.test(line)) {
+      if (!inFence && /^## /.test(line)) {
         return `### ${line.slice(3)}`;
       }
       return line;
@@ -172,12 +175,25 @@ async function runCommuniqueBinary(args, env) {
   }
 }
 
+function releasePleaseNotesAreEmpty(notes) {
+  assert.equal(typeof notes, "string", "notes must be a string");
+  return notes.split("\n").length <= 1;
+}
+
 function createCommuniqueChangelogNotes(
   runCommunique = runCommuniqueBinary,
   env = process.env,
 ) {
   return {
-    async buildNotes(_commits, options) {
+    async buildNotes(commits, options) {
+      const defaultNotes = await new DefaultChangelogNotes().buildNotes(
+        commits,
+        options,
+      );
+      if (releasePleaseNotesAreEmpty(defaultNotes)) {
+        return defaultNotes;
+      }
+
       assertLlmCredentials(env);
       const scratchDir = mkdtempSync(join(tmpdir(), "communique-notes-"));
       const outputFile = join(scratchDir, "notes.md");
@@ -454,6 +470,7 @@ module.exports = {
   formatPullRequestOutputs,
   formatReleaseOutputs,
   normalizeCommuniqueBody,
+  releasePleaseNotesAreEmpty,
   todayIsoDate,
 };
 

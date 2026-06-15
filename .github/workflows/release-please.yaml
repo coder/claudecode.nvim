@@ -12,24 +12,33 @@ on:
       - main
 
 concurrency:
-  group: release-please-${{ github.ref }}
+  group: release-please-main
   cancel-in-progress: false
 
 permissions:
-  actions: write
-  contents: write
-  issues: write
-  pull-requests: write
+  contents: read
+
+env:
+  RELEASE_PLEASE_TARGET_BRANCH: main
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      prs_created: ${{ steps.release_please.outputs.prs_created }}
+      pr_branches: ${{ steps.release_please.outputs.pr_branches }}
+      releases_created: ${{ steps.release_please.outputs.releases_created }}
+      release_tags: ${{ steps.release_please.outputs.release_tags }}
     steps:
       - name: Check out main
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: main
+          ref: ${{ env.RELEASE_PLEASE_TARGET_BRANCH }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -42,6 +51,11 @@ jobs:
           install_args: node communique
           cache: false
 
+      - name: Install locked Release Please dependency
+        env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+        run: npm ci --prefix scripts
+
       - name: Run release-please with Communique notes
         id: release_please
         env:
@@ -51,16 +65,23 @@ jobs:
           COMMUNIQUE_MODEL: ${{ vars.COMMUNIQUE_MODEL }}
         run: |
           set -euo pipefail
-          npx --yes --package release-please@17.9.0 --call "./scripts/run-release-please.sh"
+          ./scripts/run-release-please.sh
 
-      # Releases created with the workflow token do not trigger the
-      # `release: published` workflow, so dispatch the Communique release-note
-      # rewrite explicitly for each tag the runner created.
+  # Releases created with the workflow token do not trigger the
+  # `release: published` workflow, so dispatch the Communique release-note
+  # rewrite explicitly for each tag the runner created.
+  dispatch-release-notes:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: ${{ always() && !cancelled() && needs.release-please.outputs.releases_created == 'true' }}
+    permissions:
+      actions: write
+      contents: read
+    steps:
       - name: Dispatch Communique release notes for created releases
-        if: ${{ !cancelled() && steps.release_please.outputs.releases_created == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAGS: ${{ steps.release_please.outputs.release_tags }}
+          RELEASE_TAGS: ${{ needs.release-please.outputs.release_tags }}
         run: |
           set -euo pipefail
           read -ra tags <<< "$RELEASE_TAGS"
@@ -68,14 +89,20 @@ jobs:
             gh workflow run release-notes.yaml --ref "$tag" --field "tag=$tag"
           done
 
-      # Branch pushes made with the workflow token do not trigger
-      # `pull_request` workflows, so dispatch checks explicitly against the
-      # release PR branch head.
+  # Branch pushes made with the workflow token do not trigger `pull_request`
+  # workflows, so dispatch checks explicitly against the release PR branch head.
+  dispatch-checks:
+    runs-on: ubuntu-latest
+    needs: release-please
+    if: ${{ always() && !cancelled() && needs.release-please.outputs.prs_created == 'true' }}
+    permissions:
+      actions: write
+      contents: read
+    steps:
       - name: Dispatch checks onto the release PR branch
-        if: ${{ !cancelled() && steps.release_please.outputs.prs_created == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_BRANCHES: ${{ steps.release_please.outputs.pr_branches }}
+          PR_BRANCHES: ${{ needs.release-please.outputs.pr_branches }}
         run: |
           set -euo pipefail
           read -ra branches <<< "$PR_BRANCHES"

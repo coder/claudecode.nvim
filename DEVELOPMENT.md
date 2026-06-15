@@ -106,16 +106,18 @@ mise run format
 
 Releases are managed by Release Please. After feature and fix PRs land on `main`, the `Release Please` workflow opens or updates a single release PR that bumps `VERSION`, updates `.release-please-manifest.json`, and rewrites the next `CHANGELOG.md` entry with Communique-generated notes. Merging that release PR creates the `v<version>` tag and GitHub Release, then dispatches the `Release Notes` workflow to rewrite the GitHub Release body with Communique's GitHub-release format.
 
-Release notes require either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; when using OpenAI-compatible credentials, set `COMMUNIQUE_MODEL` so Communique knows which model to call.
+Release notes require either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; when using OpenAI-compatible credentials, set `COMMUNIQUE_MODEL` so Communique knows which model to call. The pinned Communique Linux binary currently requires a glibc 2.39-compatible environment (for example Ubuntu 24.04 or the GitHub-hosted `ubuntu-latest` runner); on older Linux hosts, run the dry-run in a newer container or runner.
 
-To dogfood release automation without mutating GitHub, run the runner in dry-run mode against a branch that already contains the release config:
+To dogfood release automation without mutating GitHub, install the pinned tools from `mise.toml`, install the locked Release Please dependency graph under `scripts/`, and run the runner in dry-run mode against a branch that already contains the release config:
 
 ```bash
+mise install
+NPM_CONFIG_IGNORE_SCRIPTS=true npm ci --prefix scripts
 GITHUB_TOKEN=... \
 GITHUB_REPOSITORY=coder/claudecode.nvim \
 RELEASE_PLEASE_TARGET_BRANCH=your-branch \
 ANTHROPIC_API_KEY=... \
-npx --yes --package release-please@17.9.0 --call "./scripts/run-release-please.sh --dry-run"
+./scripts/run-release-please.sh --dry-run
 ```
 
 ## Implementation Guidelines

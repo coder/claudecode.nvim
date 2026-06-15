@@ -6,6 +6,9 @@ luac.out
 *.zip
 *.tar.gz
 
+# Node release tooling dependencies
+/scripts/node_modules/
+
 # Project-local Lua rock tree built by `mise run setup`
 /.luarocks/
 
