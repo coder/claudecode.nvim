@@ -40,6 +40,10 @@ M.defaults = {
     { name = "Default (account recommended)", value = "default" },
   },
   terminal = nil, -- Will be lazy-loaded to avoid circular dependency
+  ide_name = {
+    override = nil,
+    tmux_include_pane = false,
+  },
 }
 
 ---Validates the provided configuration table.
@@ -163,6 +167,16 @@ function M.validate(config)
   end
   if config.diff_opts.open_in_current_tab ~= nil then
     assert(type(config.diff_opts.open_in_current_tab) == "boolean", "diff_opts.open_in_current_tab must be a boolean")
+  end
+
+  if config.ide_name ~= nil then
+    assert(type(config.ide_name) == "table", "ide_name must be a table")
+    if config.ide_name.override ~= nil then
+      assert(type(config.ide_name.override) == "string", "ide_name.override must be a string")
+    end
+    if config.ide_name.tmux_include_pane ~= nil then
+      assert(type(config.ide_name.tmux_include_pane) == "boolean", "ide_name.tmux_include_pane must be a boolean")
+    end
   end
 
   -- Validate env
