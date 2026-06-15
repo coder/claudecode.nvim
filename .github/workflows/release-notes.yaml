@@ -1,6 +1,12 @@
 name: Release Notes
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to write notes for (for example, v0.4.0)
+        required: true
+        type: string
   release:
     types:
       - published
@@ -12,16 +18,26 @@ jobs:
   release-notes:
     name: release-notes
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
     steps:
       - name: Validate release inputs
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          COMMUNIQUE_MODEL: ${{ vars.COMMUNIQUE_MODEL }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          : "${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY secret is required}"
+          if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "ANTHROPIC_API_KEY or OPENAI_API_KEY is required to generate release notes with Communique." >&2
+            exit 1
+          fi
+          if [[ -z "${ANTHROPIC_API_KEY:-}" && -z "${COMMUNIQUE_MODEL:-}" ]]; then
+            echo "Set COMMUNIQUE_MODEL when using OPENAI_API_KEY so Communique can select an OpenAI-compatible model." >&2
+            exit 1
+          fi
           : "${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
           : "${RELEASE_TAG:?release tag is required}"
 
@@ -36,6 +52,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
@@ -50,8 +67,6 @@ jobs:
           cache: false
 
       - name: Resolve previous release ref
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
 
@@ -71,12 +86,19 @@ jobs:
       - name: Generate GitHub release notes
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          COMMUNIQUE_MODEL: ${{ vars.COMMUNIQUE_MODEL }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
           : "${PREVIOUS_RELEASE_REF:?previous release ref is required}"
 
+          communique_args=()
+          if [[ -n "${COMMUNIQUE_MODEL:-}" ]]; then
+            communique_args+=(--model "$COMMUNIQUE_MODEL")
+          fi
+
           communique generate "$RELEASE_TAG" "$PREVIOUS_RELEASE_REF" \
-            --github-release --repo "${{ github.repository }}"
+            --github-release --repo "${{ github.repository }}" \
+            "${communique_args[@]}"

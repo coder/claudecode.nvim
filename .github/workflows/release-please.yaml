@@ -1,0 +1,84 @@
+name: Release Please
+
+# Maintains the single release PR (VERSION bump + Communique-written
+# CHANGELOG section) and, when that PR merges, creates the tag + GitHub Release.
+# The stock release-please action cannot register a custom changelog generator,
+# so this workflow runs scripts/release-please-runner.js against the
+# release-please library and registers Communique there.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out main
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Install only the tools this release workflow needs. cache: false avoids
+      # persisting tool downloads on a workflow that has write permissions and
+      # release-note LLM secrets.
+      - name: Set up mise
+        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        with:
+          install_args: node communique
+          cache: false
+
+      - name: Run release-please with Communique notes
+        id: release_please
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          COMMUNIQUE_MODEL: ${{ vars.COMMUNIQUE_MODEL }}
+        run: |
+          set -euo pipefail
+          npx --yes --package release-please@17.9.0 --call "./scripts/run-release-please.sh"
+
+      # Releases created with the workflow token do not trigger the
+      # `release: published` workflow, so dispatch the Communique release-note
+      # rewrite explicitly for each tag the runner created.
+      - name: Dispatch Communique release notes for created releases
+        if: ${{ !cancelled() && steps.release_please.outputs.releases_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAGS: ${{ steps.release_please.outputs.release_tags }}
+        run: |
+          set -euo pipefail
+          read -ra tags <<< "$RELEASE_TAGS"
+          for tag in "${tags[@]}"; do
+            gh workflow run release-notes.yaml --ref "$tag" --field "tag=$tag"
+          done
+
+      # Branch pushes made with the workflow token do not trigger
+      # `pull_request` workflows, so dispatch checks explicitly against the
+      # release PR branch head.
+      - name: Dispatch checks onto the release PR branch
+        if: ${{ !cancelled() && steps.release_please.outputs.prs_created == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BRANCHES: ${{ steps.release_please.outputs.pr_branches }}
+        run: |
+          set -euo pipefail
+          read -ra branches <<< "$PR_BRANCHES"
+          for branch in "${branches[@]}"; do
+            gh workflow run test.yml --ref "$branch"
+          done

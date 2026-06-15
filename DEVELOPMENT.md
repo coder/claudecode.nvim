@@ -102,6 +102,22 @@ mise run check
 mise run format
 ```
 
+## Release Automation
+
+Releases are managed by Release Please. After feature and fix PRs land on `main`, the `Release Please` workflow opens or updates a single release PR that bumps `VERSION`, updates `.release-please-manifest.json`, and rewrites the next `CHANGELOG.md` entry with Communique-generated notes. Merging that release PR creates the `v<version>` tag and GitHub Release, then dispatches the `Release Notes` workflow to rewrite the GitHub Release body with Communique's GitHub-release format.
+
+Release notes require either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; when using OpenAI-compatible credentials, set `COMMUNIQUE_MODEL` so Communique knows which model to call.
+
+To dogfood release automation without mutating GitHub, run the runner in dry-run mode against a branch that already contains the release config:
+
+```bash
+GITHUB_TOKEN=... \
+GITHUB_REPOSITORY=coder/claudecode.nvim \
+RELEASE_PLEASE_TARGET_BRANCH=your-branch \
+ANTHROPIC_API_KEY=... \
+npx --yes --package release-please@17.9.0 --call "./scripts/run-release-please.sh --dry-run"
+```
+
 ## Implementation Guidelines
 
 1. **Error Handling**

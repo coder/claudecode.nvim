@@ -9,11 +9,16 @@ Primary readers are Neovim users and plugin integrators, not the plugin's own ma
 system_extra = """
 Write direct, practical release notes for Neovim users and integrators.
 Lead with what changed and why it matters.
+Use plain Markdown with no emoji.
 Group changes into clear sections (for example Features, Fixes, Breaking Changes) and keep them concise.
 Avoid marketing language.
 Provide concrete migration guidance when configuration options, commands, or MCP tool behavior changed.
+Do not mention version-only release preparation commits unless they affect users.
 Do not invent changes that are not supported by the commits, pull requests, or diffs.
 """
 
 [defaults]
 model = "claude-opus-4-8"
+repo = "coder/claudecode.nvim"
+verify_links = true
+match_style = true
