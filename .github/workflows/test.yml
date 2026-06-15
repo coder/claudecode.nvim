@@ -62,7 +62,7 @@ jobs:
       - name: Generate coverage report
         run: |
           if [ -f "luacov.stats.out" ]; then
-            mise exec -- luacov
+            ./.luarocks/bin/luacov
 
             echo "Creating lcov.info from luacov.report.out"
             {

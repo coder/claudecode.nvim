@@ -65,6 +65,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
   end
 
   before_each(function()
+    package.loaded["tests.mocks.vim"] = nil
     _G.vim = require("tests.mocks.vim")
 
     local spy_instance_methods = {}

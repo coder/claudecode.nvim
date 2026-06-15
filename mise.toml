@@ -103,7 +103,7 @@ echo "Checking Lua files for syntax errors..."
 # (macOS) too — `find -exec ... \;` swallows the child's status there.
 find lua -name "*.lua" -type f -print0 | xargs -0 -I{} luajit -e "assert(loadfile('{}'))"
 echo "Running luacheck..."
-luacheck lua/ tests/ --no-unused-args --no-max-line-length
+./.luarocks/bin/luacheck lua/ tests/ --no-unused-args --no-max-line-length
 '''
 
 [tasks.test]
@@ -115,7 +115,7 @@ TEST_FILES=$(find tests -type f -name "*_test.lua" -o -name "*_spec.lua" | sort)
 echo "Found test files:"
 echo "$TEST_FILES"
 if [ -n "$TEST_FILES" ]; then
-  busted --coverage -v $TEST_FILES
+  ./.luarocks/bin/busted --coverage -v $TEST_FILES
 else
   echo "No test files found"
 fi
