@@ -16,6 +16,62 @@ describe("TCP server disconnect handling", function()
     client_manager.process_data = original_process_data
   end)
 
+  describe("find_available_port", function()
+    local original_new_tcp
+    local original_random
+
+    before_each(function()
+      original_new_tcp = vim.loop.new_tcp
+      original_random = math.random
+    end)
+
+    after_each(function()
+      vim.loop.new_tcp = original_new_tcp
+      rawset(math, "random", original_random)
+    end)
+
+    it("should not build the whole default range when the first candidate is available", function()
+      local bind_count = 0
+      vim.loop.new_tcp = function()
+        return {
+          bind = function(self, host, port)
+            bind_count = bind_count + 1
+            return true
+          end,
+          close = function(self) end,
+        }
+      end
+
+      local port = tcp.find_available_port(10000, 65535)
+
+      assert.is_true(type(port) == "number")
+      assert.is_true(port >= 10000 and port <= 65535)
+      assert.are.equal(1, bind_count)
+    end)
+
+    it("should wrap and scan each port at most once", function()
+      local tried_ports = {}
+      rawset(math, "random", function(max)
+        assert.are.equal(3, max)
+        return 3
+      end)
+      vim.loop.new_tcp = function()
+        return {
+          bind = function(self, host, port)
+            table.insert(tried_ports, port)
+            return port == 10000
+          end,
+          close = function(self) end,
+        }
+      end
+
+      local port = tcp.find_available_port(10000, 10002)
+
+      assert.are.equal(10000, port)
+      assert.are.same({ 10002, 10000 }, tried_ports)
+    end)
+  end)
+
   it("should call on_disconnect and remove client on EOF", function()
     local callbacks = {
       on_message = spy.new(function() end),

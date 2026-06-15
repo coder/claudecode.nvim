@@ -39,7 +39,15 @@ M.defaults = {
     { name = "Claude Haiku (Latest)", value = "haiku" },
     { name = "Default (account recommended)", value = "default" },
   },
-  terminal = nil, -- Will be lazy-loaded to avoid circular dependency
+  -- Keep a minimal terminal config here instead of requiring claudecode.terminal
+  -- during config.apply(). Loading the terminal module pulls in the server/main
+  -- module graph and makes coverage-enabled config validation unexpectedly slow.
+  terminal = {
+    provider = "auto",
+    provider_opts = {
+      external_terminal_cmd = nil,
+    },
+  },
 }
 
 ---Validates the provided configuration table.
@@ -190,14 +198,6 @@ end
 ---@return ClaudeCodeConfig config The final, validated configuration table.
 function M.apply(user_config)
   local config = vim.deepcopy(M.defaults)
-
-  -- Lazy-load terminal defaults to avoid circular dependency
-  if config.terminal == nil then
-    local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
-    if terminal_ok and terminal_module.defaults then
-      config.terminal = terminal_module.defaults
-    end
-  end
 
   if user_config then
     -- Use vim.tbl_deep_extend if available, otherwise simple merge

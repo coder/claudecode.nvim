@@ -1,6 +1,5 @@
 ---@brief TCP server implementation using vim.loop
 local client_manager = require("claudecode.server.client")
-local utils = require("claudecode.server.utils")
 
 local M = {}
 
@@ -19,20 +18,21 @@ local M = {}
 ---@param max_port number Maximum port to try
 ---@return number|nil port Available port number, or nil if none found
 function M.find_available_port(min_port, max_port)
+  assert(type(min_port) == "number", "min_port must be a number")
+  assert(type(max_port) == "number", "max_port must be a number")
+
   if min_port > max_port then
-    return nil -- Or handle error appropriately
+    return nil
   end
 
-  local ports = {}
-  for i = min_port, max_port do
-    table.insert(ports, i)
-  end
+  local port_count = max_port - min_port + 1
+  local start_offset = math.random(port_count) - 1
 
-  -- Shuffle the ports
-  utils.shuffle_array(ports)
-
-  -- Try to bind to a port from the shuffled list
-  for _, port in ipairs(ports) do
+  -- Pick a random starting point, then scan the range once. This keeps the
+  -- selection spread across the configured range without building and shuffling
+  -- a 55k-entry table for the default 10000-65535 range on every startup.
+  for checked = 0, port_count - 1 do
+    local port = min_port + ((start_offset + checked) % port_count)
     local test_server = vim.loop.new_tcp()
     if test_server then
       local success = test_server:bind("127.0.0.1", port)
@@ -42,7 +42,6 @@ function M.find_available_port(min_port, max_port)
         return port
       end
     end
-    -- Continue to next port if test_server creation failed or bind failed
   end
 
   return nil

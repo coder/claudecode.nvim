@@ -47,6 +47,16 @@ describe("Configuration", function()
     expect(final_config.env).to_be_table() -- Should inherit default empty table
   end)
 
+  it("should not load terminal module while applying configuration", function()
+    package.loaded["claudecode.terminal"] = nil
+
+    local final_config = config.apply({ auto_start = false, log_level = "info" })
+
+    expect(final_config.terminal).to_be_table()
+    expect(final_config.terminal.provider).to_be("auto")
+    expect(package.loaded["claudecode.terminal"]).to_be_nil()
+  end)
+
   it("should reject invalid port range", function()
     local invalid_config = {
       port_range = { min = -1, max = 65536 },
