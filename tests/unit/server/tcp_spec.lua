@@ -98,6 +98,65 @@ describe("TCP server disconnect handling", function()
     expect(server.clients[client.id]).to_be_nil()
   end)
 
+  it("should bind the server to config.bind_address", function()
+    local bind_calls = {}
+    local original_new_tcp = vim.loop.new_tcp
+    vim.loop.new_tcp = function()
+      local handle = original_new_tcp()
+      local original_bind = handle.bind
+      handle.bind = function(self, host, port_arg)
+        table.insert(bind_calls, host)
+        return original_bind(self, host, port_arg)
+      end
+      return handle
+    end
+
+    local callbacks = {
+      on_message = function() end,
+      on_connect = function() end,
+      on_disconnect = function() end,
+      on_error = function() end,
+    }
+
+    local config = { port_range = { min = 10000, max = 10000 }, bind_address = "127.0.0.1" }
+    local server, err = tcp.create_server(config, callbacks, nil)
+    vim.loop.new_tcp = original_new_tcp
+
+    assert.is_nil(err)
+    assert.is_table(server)
+    -- The last bind call is from create_server (after find_available_port's test bind)
+    assert.are.equal("127.0.0.1", bind_calls[#bind_calls])
+  end)
+
+  it("should use a custom bind_address from config when specified", function()
+    local bind_calls = {}
+    local original_new_tcp = vim.loop.new_tcp
+    vim.loop.new_tcp = function()
+      local handle = original_new_tcp()
+      local original_bind = handle.bind
+      handle.bind = function(self, host, port_arg)
+        table.insert(bind_calls, host)
+        return original_bind(self, host, port_arg)
+      end
+      return handle
+    end
+
+    local callbacks = {
+      on_message = function() end,
+      on_connect = function() end,
+      on_disconnect = function() end,
+      on_error = function() end,
+    }
+
+    local config = { port_range = { min = 10000, max = 10000 }, bind_address = "0.0.0.0" }
+    local server, err = tcp.create_server(config, callbacks, nil)
+    vim.loop.new_tcp = original_new_tcp
+
+    assert.is_nil(err)
+    assert.is_table(server)
+    assert.are.equal("0.0.0.0", bind_calls[#bind_calls])
+  end)
+
   it("should only call on_disconnect once if multiple disconnect paths fire", function()
     client_manager.process_data = function(cl, data, on_message, on_close, on_error, auth_token)
       on_close(cl, 1000, "bye")
