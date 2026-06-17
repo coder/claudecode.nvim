@@ -70,6 +70,14 @@ describe("claudecode.utils.expand_tilde", function()
   it("returns non-tilde arguments unchanged", function()
     assert.are.equal("--model", utils.expand_tilde("--model"))
   end)
+
+  it("preserves a literal $ in the path (does not expand env vars)", function()
+    -- TanStack Router `$param` route files would otherwise be mangled by
+    -- vim.fn.expand treating `$post` as an undefined environment variable.
+    assert.are.equal("src/routes/$post.tsx", utils.expand_tilde("src/routes/$post.tsx"))
+    assert.are.equal("src/routes/$post/index.tsx", utils.expand_tilde("src/routes/$post/index.tsx"))
+    assert.are.equal(home .. "/routes/$post.tsx", utils.expand_tilde("~/routes/$post.tsx"))
+  end)
 end)
 
 describe("claudecode.utils.parse_command", function()

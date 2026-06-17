@@ -1030,7 +1030,11 @@ function M._create_commands()
       return
     end
 
-    file_path = vim.fn.expand(file_path)
+    -- Expand a leading `~` only. We intentionally avoid `vim.fn.expand`, which
+    -- treats `$name` as an environment variable and strips undefined ones --
+    -- mangling literal `$` in paths (e.g. TanStack Router `$param` route files
+    -- like `src/routes/$post.tsx`) so the existence check below fails.
+    file_path = require("claudecode.utils").expand_tilde(file_path)
     if vim.fn.filereadable(file_path) == 0 and vim.fn.isdirectory(file_path) == 0 then
       logger.error("command", "ClaudeCodeAdd: File or directory does not exist: " .. file_path)
       return

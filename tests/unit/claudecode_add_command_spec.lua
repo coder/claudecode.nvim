@@ -62,7 +62,18 @@ describe("ClaudeCodeAdd command", function()
     vim.notify = spy.new(function() end)
 
     _G.require = function(mod)
-      if mod == "claudecode.logger" then
+      if mod == "claudecode.utils" then
+        -- Tilde-only expansion mock: expand a leading `~`, otherwise return the
+        -- path unchanged. Crucially preserves literal `$` (TanStack `$param` files).
+        return {
+          expand_tilde = function(path)
+            if path == "~/test.lua" then
+              return "/home/user/test.lua"
+            end
+            return path
+          end,
+        }
+      elseif mod == "claudecode.logger" then
         return mock_logger
       elseif mod == "claudecode.config" then
         return {
@@ -113,6 +124,7 @@ describe("ClaudeCodeAdd command", function()
     package.loaded["claudecode.diff"] = nil
     package.loaded["claudecode.visual_commands"] = nil
     package.loaded["claudecode.terminal"] = nil
+    package.loaded["claudecode.utils"] = nil
 
     claudecode = require("claudecode")
 
@@ -191,21 +203,35 @@ describe("ClaudeCodeAdd command", function()
       it("should expand tilde paths", function()
         command_handler({ args = "~/test.lua" })
 
-        assert.spy(vim.fn.expand).was_called_with("~/test.lua")
-        assert.spy(mock_server.broadcast).was_called()
-      end)
-
-      it("should expand relative paths", function()
-        command_handler({ args = "./relative.lua" })
-
-        assert.spy(vim.fn.expand).was_called_with("./relative.lua")
-        assert.spy(mock_server.broadcast).was_called()
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "/home/user/test.lua",
+          lineStart = nil,
+          lineEnd = nil,
+        })
       end)
 
       it("should handle absolute paths", function()
         command_handler({ args = "/existing/file.lua" })
 
         assert.spy(mock_server.broadcast).was_called()
+      end)
+
+      it("should preserve a literal $ in the path (e.g. TanStack $param files)", function()
+        -- Regression for the bug where vim.fn.expand treated `$post` as an
+        -- undefined env var and stripped it, breaking ClaudeCodeAdd on paths
+        -- like src/routes/$post.tsx.
+        vim.fn.filereadable = spy.new(function(path)
+          return path == "/current/dir/src/routes/$post.tsx" and 1 or 0
+        end)
+
+        command_handler({ args = "/current/dir/src/routes/$post.tsx" })
+
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+          filePath = "src/routes/$post.tsx",
+          lineStart = nil,
+          lineEnd = nil,
+        })
+        assert.spy(mock_logger.error).was_not_called()
       end)
     end)
 
@@ -412,7 +438,6 @@ describe("ClaudeCodeAdd command", function()
         it("should expand tilde paths with line numbers", function()
           command_handler({ args = "~/test.lua 10 20" })
 
-          assert.spy(vim.fn.expand).was_called_with("~/test.lua")
           assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
             filePath = "/home/user/test.lua",
             lineStart = 9,
@@ -420,10 +445,9 @@ describe("ClaudeCodeAdd command", function()
           })
         end)
 
-        it("should expand relative paths with line numbers", function()
-          command_handler({ args = "./relative.lua 5" })
+        it("should format cwd-relative paths with line numbers", function()
+          command_handler({ args = "/current/dir/relative.lua 5" })
 
-          assert.spy(vim.fn.expand).was_called_with("./relative.lua")
           assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
             filePath = "relative.lua",
             lineStart = 4,
