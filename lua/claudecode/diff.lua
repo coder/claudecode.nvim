@@ -141,6 +141,13 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
+    -- Skip windows already in diff mode -- a user vimdiff/diffview.nvim/fugitive
+    -- pane, or one of claudecode's own diff panes. Opening a file into one
+    -- clears its window-local 'diff' and destroys that diff layout (issue #277).
+    if is_suitable and vim.api.nvim_win_get_option(win, "diff") then
+      is_suitable = false
+    end
+
     if
       is_suitable
       and (
@@ -1289,7 +1296,10 @@ function M._setup_blocking_diff(params, resolution_callback)
 
         if existing_buffer then
           for _, win in ipairs(vim.api.nvim_list_wins()) do
-            if vim.api.nvim_win_get_buf(win) == existing_buffer then
+            -- Don't reuse a window that is already in diff mode (e.g. the old
+            -- file shown inside the user's diffview/vimdiff): diffing into it
+            -- would join and corrupt that diff (issue #277).
+            if vim.api.nvim_win_get_buf(win) == existing_buffer and not vim.api.nvim_win_get_option(win, "diff") then
               target_window = win
               break
             end

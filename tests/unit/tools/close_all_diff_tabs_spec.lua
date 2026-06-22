@@ -73,24 +73,30 @@ describe("Tool: close_all_diff_tabs", function()
     expect(result.content[1].text).to_be("CLOSED_0_DIFF_TABS")
   end)
 
-  it("should close windows in diff mode", function()
+  it("spares unowned diff-mode windows, e.g. diffview.nvim / vimdiff (issue #277)", function()
+    -- Two windows in diff mode that claudecode did NOT create (the registry is
+    -- empty, so close_all_diffs returns 0). The tool must leave them alone --
+    -- it used to close every &diff window, destroying the user's diff.
     _G.vim.api.nvim_list_wins = spy.new(function()
       return { 1, 2 }
     end)
     _G.vim.api.nvim_win_get_option = spy.new(function(win, opt)
       if opt == "diff" then
-        return win == 1 -- Only window 1 is in diff mode
+        return true -- both windows are in diff mode
       end
       return false
     end)
 
     local success, result = pcall(close_all_diff_tabs_handler, {})
     expect(success).to_be_true()
-    expect(result.content[1].text).to_be("CLOSED_1_DIFF_TABS")
-    assert.spy(_G.vim.api.nvim_win_close).was_called_with(1, false)
+    expect(result.content[1].text).to_be("CLOSED_0_DIFF_TABS")
+    assert.spy(_G.vim.api.nvim_win_close).was_not_called()
   end)
 
-  it("should close diff-related buffers", function()
+  it("spares diff-related buffers like *.diff / fugitive:// (issue #277)", function()
+    -- Buffers whose names look diff-related but that claudecode did not create
+    -- must not be force-deleted (the old sweep discarded unsaved changes in
+    -- them with force = true).
     _G.vim.api.nvim_list_bufs = spy.new(function()
       return { 1, 2 }
     end)
@@ -102,7 +108,7 @@ describe("Tool: close_all_diff_tabs", function()
         return "/path/to/file.diff"
       end
       if buf == 2 then
-        return "/path/to/normal.txt"
+        return "fugitive:///repo/.git//0/foo.lua"
       end
       return ""
     end)
@@ -112,8 +118,8 @@ describe("Tool: close_all_diff_tabs", function()
 
     local success, result = pcall(close_all_diff_tabs_handler, {})
     expect(success).to_be_true()
-    expect(result.content[1].text).to_be("CLOSED_1_DIFF_TABS")
-    assert.spy(_G.vim.api.nvim_buf_delete).was_called_with(1, { force = true })
+    expect(result.content[1].text).to_be("CLOSED_0_DIFF_TABS")
+    assert.spy(_G.vim.api.nvim_buf_delete).was_not_called()
   end)
 
   it("drains tracked diffs via diff.close_all_diffs and includes them in the count", function()
