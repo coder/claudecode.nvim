@@ -8,6 +8,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 --- Current plugin version
 ---@type ClaudeCodeVersion
@@ -1030,7 +1031,10 @@ function M._create_commands()
       return
     end
 
-    file_path = vim.fn.expand(file_path)
+    -- Expand only a leading `~`; do NOT use vim.fn.expand(), which performs
+    -- environment-variable substitution and would mangle real paths containing
+    -- `$` (e.g. `src/routes/$post/index.tsx` -> `src/routes//index.tsx`). See #285.
+    file_path = utils.expand_tilde(file_path)
     if vim.fn.filereadable(file_path) == 0 and vim.fn.isdirectory(file_path) == 0 then
       logger.error("command", "ClaudeCodeAdd: File or directory does not exist: " .. file_path)
       return

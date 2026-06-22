@@ -2,11 +2,28 @@ require("tests.busted_setup") -- Ensure test helpers are loaded
 
 describe("Tool: open_file", function()
   local open_file_handler
+  local mock_utils
+  local saved_utils
 
   before_each(function()
     -- Reset mocks and require the module under test
     package.loaded["claudecode.tools.open_file"] = nil
     open_file_handler = require("claudecode.tools.open_file").handler
+
+    -- The handler resolves paths via claudecode.utils.expand_tilde (NOT
+    -- vim.fn.expand, which env-substitutes `$` segments -- see #285). Mock it to
+    -- mirror the real helper: leading `~/` expands; everything else (including
+    -- `$` paths) passes through unchanged.
+    saved_utils = package.loaded["claudecode.utils"]
+    mock_utils = {
+      expand_tilde = spy.new(function(path)
+        if type(path) == "string" and path:sub(1, 2) == "~/" then
+          return "/Users/testuser" .. path:sub(2)
+        end
+        return path
+      end),
+    }
+    package.loaded["claudecode.utils"] = mock_utils
 
     -- Mock Neovim functions used by the handler
     _G.vim = _G.vim or {}
@@ -90,6 +107,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = nil
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
+    package.loaded["claudecode.utils"] = saved_utils
   end)
 
   it("should error if filePath parameter is missing", function()
@@ -109,7 +127,7 @@ describe("Tool: open_file", function()
     expect(err.code).to_be(-32000) -- File operation error
     assert_contains(err.message, "File operation error")
     assert_contains(err.data, "File not found: non_readable_file.txt")
-    assert.spy(_G.vim.fn.expand).was_called_with("non_readable_file.txt")
+    assert.spy(mock_utils.expand_tilde).was_called_with("non_readable_file.txt")
     assert.spy(_G.vim.fn.filereadable).was_called_with("non_readable_file.txt")
   end)
 
@@ -124,7 +142,7 @@ describe("Tool: open_file", function()
     expect(result.content[1].type).to_be("text")
     expect(result.content[1].text).to_be("Opened file: readable_file.txt")
 
-    assert.spy(_G.vim.fn.expand).was_called_with("readable_file.txt")
+    assert.spy(mock_utils.expand_tilde).was_called_with("readable_file.txt")
     assert.spy(_G.vim.fn.filereadable).was_called_with("readable_file.txt")
     assert.spy(_G.vim.fn.fnameescape).was_called_with("readable_file.txt")
 
@@ -132,13 +150,8 @@ describe("Tool: open_file", function()
     expect(_G.vim.cmd_history[1]).to_be("edit readable_file.txt")
   end)
 
-  it("should handle filePath needing expansion", function()
-    _G.vim.fn.expand = spy.new(function(path)
-      if path == "~/.config/nvim/init.lua" then
-        return "/Users/testuser/.config/nvim/init.lua"
-      end
-      return path
-    end)
+  it("should handle filePath needing tilde expansion", function()
+    -- mock_utils.expand_tilde (from before_each) expands a leading `~/`.
     local params = { filePath = "~/.config/nvim/init.lua" }
     local success, result = pcall(open_file_handler, params)
 
@@ -147,10 +160,26 @@ describe("Tool: open_file", function()
     expect(result.content[1]).to_be_table()
     expect(result.content[1].type).to_be("text")
     expect(result.content[1].text).to_be("Opened file: /Users/testuser/.config/nvim/init.lua")
-    assert.spy(_G.vim.fn.expand).was_called_with("~/.config/nvim/init.lua")
+    assert.spy(mock_utils.expand_tilde).was_called_with("~/.config/nvim/init.lua")
     assert.spy(_G.vim.fn.filereadable).was_called_with("/Users/testuser/.config/nvim/init.lua")
     assert.spy(_G.vim.fn.fnameescape).was_called_with("/Users/testuser/.config/nvim/init.lua")
     expect(_G.vim.cmd_history[1]).to_be("edit /Users/testuser/.config/nvim/init.lua")
+  end)
+
+  it("should not env-substitute `$` segments in filePath (#285)", function()
+    -- A real file under a `$`-named directory (e.g. a TanStack Router dynamic
+    -- segment). vim.fn.expand() would drop `$post`, turning the path into
+    -- ".../routes//index.tsx" and making the readable file look missing.
+    local dollar_path = "/repo/src/routes/$post/index.tsx"
+    local params = { filePath = dollar_path }
+    local success, result = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    expect(result.content[1].text).to_be("Opened file: " .. dollar_path)
+    assert.spy(mock_utils.expand_tilde).was_called_with(dollar_path)
+    assert.spy(_G.vim.fn.filereadable).was_called_with(dollar_path)
+    assert.spy(_G.vim.fn.fnameescape).was_called_with(dollar_path)
+    expect(_G.vim.cmd_history[1]).to_be("edit " .. dollar_path)
   end)
 
   it("should handle makeFrontmost=false to return detailed JSON", function()
