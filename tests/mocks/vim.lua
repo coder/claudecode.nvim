@@ -392,6 +392,27 @@ local vim = {
       return {}
     end,
 
+    nvim_win_get_option = function(winid, name)
+      -- Window-local options (e.g. 'diff'). Default to false so a window is not
+      -- treated as a diff window unless a test explicitly sets it.
+      if vim._windows[winid] and vim._windows[winid].options then
+        local value = vim._windows[winid].options[name]
+        if value ~= nil then
+          return value
+        end
+      end
+      return false
+    end,
+
+    nvim_win_set_option = function(winid, name, value)
+      if vim._windows[winid] then
+        if not vim._windows[winid].options then
+          vim._windows[winid].options = {}
+        end
+        vim._windows[winid].options[name] = value
+      end
+    end,
+
     nvim_win_set_width = function(winid, width)
       if vim._windows[winid] then
         vim._windows[winid].width = width
@@ -404,6 +425,11 @@ local vim = {
 
     nvim_get_current_tabpage = function()
       return vim._current_tabpage
+    end,
+
+    nvim_tabpage_list_wins = function(tabpage)
+      local tab = (tabpage == nil or tabpage == 0) and vim._current_tabpage or tabpage
+      return vim._tab_windows[tab] or {}
     end,
 
     nvim_set_current_tabpage = function(tab)

@@ -48,6 +48,9 @@ describe("Tool: open_file", function()
     _G.vim.api.nvim_win_get_config = spy.new(function(win)
       return {} -- Return empty config (no relative positioning)
     end)
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      return false -- No window is in diff mode by default
+    end)
     _G.vim.api.nvim_win_call = spy.new(function(win, callback)
       return callback() -- Just execute the callback
     end)
@@ -213,6 +216,78 @@ describe("Tool: open_file", function()
     expect(parsed_result.languageId).to_be("lua")
     expect(parsed_result.lineCount).to_be(42)
     assert.spy(_G.vim.api.nvim_set_current_win).was_not_called()
+  end)
+
+  it("does not open into a diff-mode window; picks the plain editor (issue #277)", function()
+    -- Window 1000 is in diff mode (a user's vimdiff/diffview pane); window 2000
+    -- is a plain editor. openFile must :edit into 2000, never 1000 -- :edit-ing
+    -- into a diff window clears its 'diff' and breaks the user's review.
+    _G.vim.api.nvim_list_wins = spy.new(function()
+      return { 1000, 2000 }
+    end)
+    _G.vim.api.nvim_win_get_buf = spy.new(function(win)
+      return win == 1000 and 10 or 20
+    end)
+    _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
+      return "" -- plain buffers in both windows
+    end)
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      if option == "diff" then
+        return win == 1000 -- only the first window is in diff mode
+      end
+      return false
+    end)
+    local called_win
+    _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+      called_win = win
+      return callback()
+    end)
+
+    local params = { filePath = "test.txt" }
+    local success = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    expect(called_win).to_be(2000)
+    expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+  end)
+
+  it("splits instead of editing into a diff window when every window is a diff (issue #277)", function()
+    -- All windows are in diff mode, so the finder returns nil and the fallback
+    -- runs. It must create a split rather than :edit over a diff window.
+    _G.vim.api.nvim_list_wins = spy.new(function()
+      return { 1000 }
+    end)
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      if option == "diff" then
+        return true
+      end
+      return false
+    end)
+
+    local params = { filePath = "test.txt" }
+    local success = pcall(open_file_handler, params)
+
+    expect(success).to_be_true()
+    -- The fallback issues a vsplit and then clears diff on the new split (so the
+    -- opened file never joins the user's diff set), both before the edit.
+    local saw_vsplit, saw_diffoff, saw_edit = false, false, false
+    local vsplit_idx, edit_idx = nil, nil
+    for i, cmd in ipairs(_G.vim.cmd_history) do
+      if cmd == "vsplit" then
+        saw_vsplit = true
+        vsplit_idx = i
+      elseif cmd == "diffoff" then
+        saw_diffoff = true
+      elseif cmd == "edit test.txt" then
+        saw_edit = true
+        edit_idx = i
+      end
+    end
+    expect(saw_vsplit).to_be_true()
+    expect(saw_diffoff).to_be_true()
+    -- diffoff must precede the edit, and the edit must happen after the split.
+    expect(saw_edit).to_be_true()
+    expect(vsplit_idx < edit_idx).to_be_true()
   end)
 
   it("should handle preview mode parameter", function()

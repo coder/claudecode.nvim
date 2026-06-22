@@ -11,10 +11,10 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
   local diff
   local saved
 
-  -- Build a fake window layout and stub the four vim.api calls the function uses.
-  -- `wins` is an ordered list of { ft=, bt=, floating= } describing each window.
+  -- Build a fake window layout and stub the five vim.api calls the function uses.
+  -- `wins` is an ordered list of { ft=, bt=, floating=, diff= } describing each window.
   local function with_layout(wins)
-    local win_ids, buf_of, opt_of, cfg_of = {}, {}, {}, {}
+    local win_ids, buf_of, opt_of, cfg_of, winopt_of = {}, {}, {}, {}, {}
     for i, w in ipairs(wins) do
       local win_id = 1000 + i
       local buf_id = 2000 + i
@@ -22,6 +22,7 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
       buf_of[win_id] = buf_id
       opt_of[buf_id] = { buftype = w.bt or "", filetype = w.ft or "" }
       cfg_of[win_id] = { relative = w.floating and "editor" or "" }
+      winopt_of[win_id] = { diff = w.diff or false }
     end
 
     _G.vim.api.nvim_list_wins = function()
@@ -36,6 +37,9 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
     _G.vim.api.nvim_win_get_config = function(win)
       return cfg_of[win]
     end
+    _G.vim.api.nvim_win_get_option = function(win, name)
+      return winopt_of[win][name]
+    end
 
     return win_ids
   end
@@ -46,6 +50,7 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
       nvim_win_get_buf = _G.vim.api.nvim_win_get_buf,
       nvim_buf_get_option = _G.vim.api.nvim_buf_get_option,
       nvim_win_get_config = _G.vim.api.nvim_win_get_config,
+      nvim_win_get_option = _G.vim.api.nvim_win_get_option,
     }
     package.loaded["claudecode.diff"] = nil
     diff = require("claudecode.diff")
@@ -102,6 +107,26 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
     with_layout({
       { ft = "snacks_layout_box", bt = "nofile" },
       { ft = "", bt = "terminal" },
+    })
+
+    expect(diff._find_main_editor_window()).to_be(nil)
+  end)
+
+  it("skips windows in diff mode (vimdiff/diffview.nvim/fugitive) -- issue #277", function()
+    -- A user's diff occupies windows 1 and 2; the real editor is window 3.
+    local wins = with_layout({
+      { ft = "lua", bt = "", diff = true }, -- left diff pane
+      { ft = "lua", bt = "", diff = true }, -- right diff pane
+      { ft = "lua", bt = "" }, -- the actual editor
+    })
+
+    expect(diff._find_main_editor_window()).to_be(wins[3])
+  end)
+
+  it("returns nil when every window is a diff window -- issue #277", function()
+    with_layout({
+      { ft = "lua", bt = "", diff = true },
+      { ft = "lua", bt = "", diff = true },
     })
 
     expect(diff._find_main_editor_window()).to_be(nil)

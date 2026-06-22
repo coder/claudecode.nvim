@@ -72,6 +72,13 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
+    -- Skip windows that are part of a diff (vimdiff, diffview.nvim, fugitive, or
+    -- claudecode's own diff): :edit-ing into one clears its window-local 'diff'
+    -- and destroys the user's diff layout (issue #277).
+    if is_suitable and vim.api.nvim_win_get_option(win, "diff") then
+      is_suitable = false
+    end
+
     -- Skip known sidebar filetypes
     if
       is_suitable
@@ -145,12 +152,20 @@ local function handler(params)
     vim.cmd("wincmd t") -- Go to top-left
     vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
 
-    -- If we're still in a special window, create a new split
-    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+    -- If we're still in a special window (or a diff window — issue #277), create
+    -- a new split so we don't :edit over a terminal, sidebar, or someone's diff.
+    local cur_win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(cur_win)
     local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
 
-    if buftype == "terminal" or buftype == "nofile" then
+    if buftype == "terminal" or buftype == "nofile" or vim.api.nvim_win_get_option(cur_win, "diff") then
       vim.cmd("vsplit")
+      -- The new split inherits window-local options (including 'diff') from the
+      -- window we split off. Clear diff on it so the file we open never joins the
+      -- user's diff set -- e.g. opening a file that is itself one of the diffed
+      -- buffers would otherwise leave it diffing as an extra pane (issue #277).
+      -- :diffoff acts on the current (new) window only, never :diffoff!.
+      vim.cmd("diffoff")
     end
 
     if preview then

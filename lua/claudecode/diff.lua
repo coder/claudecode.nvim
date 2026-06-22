@@ -141,6 +141,13 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
+    -- Skip windows already in diff mode -- a user vimdiff/diffview.nvim/fugitive
+    -- pane, or one of claudecode's own diff panes. Opening a file into one
+    -- clears its window-local 'diff' and destroys that diff layout (issue #277).
+    if is_suitable and vim.api.nvim_win_get_option(win, "diff") then
+      is_suitable = false
+    end
+
     if
       is_suitable
       and (
@@ -169,6 +176,27 @@ end
 
 -- Exposed for testing the sidebar/explorer exclusion logic.
 M._find_main_editor_window = find_main_editor_window
+
+---Whether the given tabpage contains any window in diff mode. A Neovim diff is
+---scoped to a tabpage -- every &diff window in a tab participates in one shared
+---diff set -- so if a tab already hosts a foreign diff (vimdiff/diffview.nvim/
+---fugitive), creating Claude's diff in that tab would make its panes join and
+---corrupt the user's review. Such cases are routed to a dedicated tab instead
+---(issue #277). At diff-setup time claudecode has not created its own diff
+---windows yet, so any match here is a foreign diff.
+---@param tabpage integer Tabpage handle (0 = current)
+---@return boolean
+local function tabpage_has_diff_window(tabpage)
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+    if vim.api.nvim_win_get_option(win, "diff") then
+      return true
+    end
+  end
+  return false
+end
+
+-- Exposed for testing the foreign-diff-tab detection.
+M._tabpage_has_diff_window = tabpage_has_diff_window
 
 ---Find the Claude Code terminal window to keep focus there.
 ---Uses the terminal provider to get the active terminal buffer, then finds its window.
@@ -1289,7 +1317,10 @@ function M._setup_blocking_diff(params, resolution_callback)
 
         if existing_buffer then
           for _, win in ipairs(vim.api.nvim_list_wins()) do
-            if vim.api.nvim_win_get_buf(win) == existing_buffer then
+            -- Don't reuse a window that is already in diff mode (e.g. the old
+            -- file shown inside the user's diffview/vimdiff): diffing into it
+            -- would join and corrupt that diff (issue #277).
+            if vim.api.nvim_win_get_buf(win) == existing_buffer and not vim.api.nvim_win_get_option(win, "diff") then
               target_window = win
               break
             end
@@ -1300,11 +1331,31 @@ function M._setup_blocking_diff(params, resolution_callback)
       if not target_window then
         target_window = find_main_editor_window()
       end
+
+      -- A Neovim diff is scoped to its tabpage: all &diff windows in a tab share
+      -- one diff set. If the tab that would host Claude's diff already contains a
+      -- foreign diff (vimdiff/diffview.nvim/fugitive), running `diffthis` there
+      -- makes Claude's panes join and corrupt it -- even when a usable non-diff
+      -- window exists in that tab. So check the destination tab (the candidate
+      -- window's tab, or the current tab if none was found) and isolate the diff
+      -- in a dedicated tab when it already hosts a diff (issue #277). Mirrors the
+      -- open_in_new_tab path, including the issue #262 hoisting so a failure
+      -- before registration can still close the new tab.
+      local dest_tab = (target_window and vim.api.nvim_win_is_valid(target_window))
+          and vim.api.nvim_win_get_tabpage(target_window)
+        or vim.api.nvim_get_current_tabpage()
+      if tabpage_has_diff_window(dest_tab) then
+        original_tab_handle = vim.api.nvim_get_current_tabpage()
+        original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
+          display_terminal_in_new_tab()
+        created_new_tab = true
+        target_window = nil
+      end
     end
     -- If created_new_tab is true, target_window stays nil and will be created in the new tab.
     -- Otherwise, if no editor window is suitable (e.g. the Claude terminal is the only window --
-    -- issue #231), create one by splitting the current window instead of erroring out, mirroring
-    -- the fallback in lua/claudecode/tools/open_file.lua.
+    -- issue #231) and the tab has no foreign diff to corrupt, create one by splitting the current
+    -- window instead of erroring out, mirroring the fallback in lua/claudecode/tools/open_file.lua.
     if not target_window and not created_new_tab then
       create_split()
       local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch

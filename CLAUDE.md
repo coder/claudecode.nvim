@@ -101,7 +101,7 @@ The WebSocket server implements secure authentication using:
 - `checkDocumentDirty` - Checks if document has unsaved changes
 - `saveDocument` - Saves document with detailed success/failure reporting
 - `getWorkspaceFolders` - Gets workspace folder information
-- `closeAllDiffTabs` - Closes all diff-related tabs and windows
+- `closeAllDiffTabs` - Closes the diffs claudecode itself opened (its tracked diff registry only). It never touches diffs created by other tools such as diffview.nvim, fugitive, or native `:diffsplit`, and `openFile`/`openDiff` never reuse a window that is currently in diff mode (issue #277).
 - `getDiagnostics` - Gets language diagnostics (errors, warnings) from the editor
 
 **Internal Tools** (not exposed via MCP):
