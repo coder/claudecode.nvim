@@ -67,9 +67,12 @@ Doing the same in `regular_plugin.lua` sends the selection with no error.
 ## Helper commands (provided by this fixture's `init.lua`)
 
 - `:ReproState [path]` — write the current buffer's tree-classification state
-  (`filetype`, `bufname`, `matches_filetype`, `matches_bufname`,
-  `is_tree_buffer`, …) as JSON. On the affected files you will see
-  `matches_filetype=false` but `is_tree_buffer=true`.
+  (`filetype`, `bufname`, `matches_filetype`, `legacy_path_substring_match`,
+  `is_tree_buffer`, …) as JSON. `is_tree_buffer` mirrors the plugin's current
+  (filetype-only) predicate. On the affected files you will see
+  `legacy_path_substring_match=true` (the pre-#289 root cause) while
+  `matches_filetype=false`; on **unfixed** code `is_tree_buffer` is `true`
+  (the bug), and on **fixed** code it is `false` (correctly a normal buffer).
 - `:ReproDump [path]` — write all captured ClaudeCode notifications as JSON.
 - `:ReproClear` — clear the captured-notification buffer.
 

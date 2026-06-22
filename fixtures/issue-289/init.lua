@@ -116,19 +116,24 @@ vim.api.nvim_create_user_command("ReproState", function(opts)
   local buf = 0
   local ft = vim.bo[buf].filetype
   local bufname = vim.api.nvim_buf_get_name(buf)
-  -- Mirror the exact classification predicate from init.lua handle_send_*.
+  -- `is_tree_buffer` mirrors the plugin's CURRENT predicate (post-#289):
+  -- filetype only. On the fixed plugin, running this in `_neo-tree_.lua` reports
+  -- is_tree_buffer=false, i.e. the file is correctly treated as a normal buffer.
   local matches_filetype = ft == "NvimTree" or ft == "neo-tree" or ft == "oil" or ft == "minifiles" or ft == "netrw"
-  local matches_bufname = (string.match(bufname, "neo%-tree") ~= nil)
+  -- Legacy pre-#289 signal: the buffer-NAME substring match that USED to also
+  -- flip is_tree_buffer to true (the root cause of #289). Reported for
+  -- diagnostics so the fixture still shows why ordinary files misfired before
+  -- the fix: legacy_path_substring_match=true while is_tree_buffer=false means
+  -- "this file would have been misclassified by the old code".
+  local legacy_path_substring_match = (string.match(bufname, "neo%-tree") ~= nil)
     or (string.match(bufname, "NvimTree") ~= nil)
     or (string.match(bufname, "minifiles://") ~= nil)
   local state = {
     filetype = ft,
     bufname = bufname,
     matches_filetype = matches_filetype,
-    matches_bufname = matches_bufname,
-    -- The plugin's effective decision is the OR of the two; the bug is that
-    -- matches_bufname alone (with a non-tree filetype) flips this to true.
-    is_tree_buffer = matches_filetype or matches_bufname,
+    legacy_path_substring_match = legacy_path_substring_match,
+    is_tree_buffer = matches_filetype,
     has_send_command = vim.fn.exists(":ClaudeCodeSend") == 2,
     server_running = (function()
       local ok_cc, cc = pcall(require, "claudecode")
