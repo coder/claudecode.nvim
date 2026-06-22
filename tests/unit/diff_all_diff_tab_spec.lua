@@ -82,7 +82,7 @@ describe("Diff when the current tab is all foreign diff windows (issue #277)", f
 
   it("detects that the current tab hosts a diff (precondition)", function()
     expect(diff._find_main_editor_window()).to_be(nil)
-    expect(diff._current_tab_has_diff_window()).to_be(true)
+    expect(diff._tabpage_has_diff_window(0)).to_be(true)
   end)
 
   it("opens the diff in a NEW tab instead of splitting the foreign diff tab", function()
@@ -118,8 +118,45 @@ describe("Diff when the current tab is all foreign diff windows (issue #277)", f
     -- Flip both windows out of diff mode: now an ordinary multi-split tab.
     vim.api.nvim_win_set_option(1000, "diff", false)
     vim.api.nvim_win_set_option(1001, "diff", false)
-    expect(diff._current_tab_has_diff_window()).to_be(false)
+    expect(diff._tabpage_has_diff_window(0)).to_be(false)
     -- With a non-diff editor window available, the finder selects it (no fallback).
     expect(diff._find_main_editor_window()).to_be(1000)
+  end)
+
+  it("still uses a NEW tab when the diff tab also has a normal editor split (issue #277)", function()
+    -- The harder case from review: the tab has a user diff (1000/1001) AND a
+    -- normal editor split (1002). find_main_editor_window() would pick 1002, so
+    -- the all-diff fallback never fires -- but creating the diff in this tab
+    -- still makes diffthis join the user's tab-wide diff set. The destination
+    -- tab is what matters, so this must route to a new tab too.
+    vim._mock.add_buffer(3, "/repo/c.lua", "normal\neditor", { modified = false })
+    vim._mock.add_window(1002, 3, { 1, 0 }) -- not a diff window
+    vim._win_tab[1002] = 1
+    vim._tab_windows[1] = { 1000, 1001, 1002 }
+
+    -- Precondition: the finder now returns the normal window, not nil.
+    expect(diff._find_main_editor_window()).to_be(1002)
+    expect(diff._tabpage_has_diff_window(0)).to_be(true)
+
+    local tab_name = "✻ [Claude Code] a.lua (778899) ⧉"
+    local setup_ok, setup_err = pcall(function()
+      diff._setup_blocking_diff({
+        old_file_path = "/repo/a.lua",
+        new_file_path = "/repo/a.lua",
+        new_file_contents = "a\nPROPOSED\nc\n",
+        tab_name = tab_name,
+      }, function() end)
+    end)
+    assert.is_true(setup_ok, "diff setup should not error: " .. tostring(setup_err))
+
+    local state = diff._get_active_diffs()[tab_name]
+    assert.is_table(state)
+    -- Routed to a new tab even though a usable non-diff window (1002) existed.
+    assert.is_true(state.created_new_tab)
+    assert.is_nil(state.fallback_window)
+    -- The user's diff windows AND their normal split are untouched in tab 1.
+    assert.is_true(vim.api.nvim_win_is_valid(1000))
+    assert.is_true(vim.api.nvim_win_is_valid(1001))
+    assert.is_true(vim.api.nvim_win_is_valid(1002))
   end)
 end)
