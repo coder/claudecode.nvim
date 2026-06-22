@@ -7,6 +7,14 @@ local logger = require("claudecode.logger")
 
 local ns = vim.api.nvim_create_namespace("claudecode_inline_diff")
 
+--- Resolve the diff function. Neovim 0.12 renamed `vim.diff` to `vim.text.diff`
+--- (keeping `vim.diff` as a deprecated alias); prefer the new name and fall back to
+--- the old one so inline diff works across the supported range and stays forward-compatible.
+---@return function|nil
+local function get_diff_fn()
+  return (vim.text and vim.text.diff) or vim.diff
+end
+
 -- ── Highlight groups ──────────────────────────────────────────────
 
 local function setup_highlights()
@@ -42,7 +50,7 @@ function M.compute_inline_diff(old_text, new_text)
   old_text = old_text or ""
   new_text = new_text or ""
 
-  local hunks = vim.diff(old_text, new_text, { result_type = "indices" }) or {}
+  local hunks = get_diff_fn()(old_text, new_text, { result_type = "indices" }) or {}
 
   local old_lines = split_lines(old_text)
   local new_lines = split_lines(new_text)
@@ -143,12 +151,12 @@ end
 function M.setup_inline_diff(params, resolution_callback, config)
   local diff = require("claudecode.diff")
 
-  -- Version check: vim.diff requires Neovim >= 0.9.0
-  if not vim.diff then
+  -- Version check: the diff function (vim.text.diff / vim.diff) requires Neovim >= 0.9.0
+  if not get_diff_fn() then
     error({
       code = -32000,
       message = "Inline diff requires Neovim >= 0.9.0",
-      data = "vim.diff() is not available. Please use layout = 'vertical' or 'horizontal', or upgrade Neovim.",
+      data = "vim.text.diff()/vim.diff() is not available. Please use layout = 'vertical' or 'horizontal', or upgrade Neovim.",
     })
   end
 
@@ -338,6 +346,9 @@ function M.setup_inline_diff(params, resolution_callback, config)
     resolution_callback = resolution_callback,
     result_content = nil,
     layout = "inline",
+    -- Track the originating MCP client so close_diffs_for_client can tear this
+    -- diff down if that client disconnects (parity with the native path, #261).
+    client_id = params.client_id,
     -- Tab/window tracking
     original_tab_number = original_tab_number,
     created_new_tab = created_new_tab,
