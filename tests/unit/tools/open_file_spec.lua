@@ -268,14 +268,26 @@ describe("Tool: open_file", function()
     local success = pcall(open_file_handler, params)
 
     expect(success).to_be_true()
-    -- The fallback issues a vsplit before editing so the diff is left intact.
-    local saw_vsplit = false
-    for _, cmd in ipairs(_G.vim.cmd_history) do
+    -- The fallback issues a vsplit and then clears diff on the new split (so the
+    -- opened file never joins the user's diff set), both before the edit.
+    local saw_vsplit, saw_diffoff, saw_edit = false, false, false
+    local vsplit_idx, edit_idx = nil, nil
+    for i, cmd in ipairs(_G.vim.cmd_history) do
       if cmd == "vsplit" then
         saw_vsplit = true
+        vsplit_idx = i
+      elseif cmd == "diffoff" then
+        saw_diffoff = true
+      elseif cmd == "edit test.txt" then
+        saw_edit = true
+        edit_idx = i
       end
     end
     expect(saw_vsplit).to_be_true()
+    expect(saw_diffoff).to_be_true()
+    -- diffoff must precede the edit, and the edit must happen after the split.
+    expect(saw_edit).to_be_true()
+    expect(vsplit_idx < edit_idx).to_be_true()
   end)
 
   it("should handle preview mode parameter", function()

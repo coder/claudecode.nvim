@@ -160,6 +160,12 @@ local function handler(params)
 
     if buftype == "terminal" or buftype == "nofile" or vim.api.nvim_win_get_option(cur_win, "diff") then
       vim.cmd("vsplit")
+      -- The new split inherits window-local options (including 'diff') from the
+      -- window we split off. Clear diff on it so the file we open never joins the
+      -- user's diff set -- e.g. opening a file that is itself one of the diffed
+      -- buffers would otherwise leave it diffing as an extra pane (issue #277).
+      -- :diffoff acts on the current (new) window only, never :diffoff!.
+      vim.cmd("diffoff")
     end
 
     if preview then
