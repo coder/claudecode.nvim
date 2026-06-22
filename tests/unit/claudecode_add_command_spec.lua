@@ -22,7 +22,7 @@ describe("ClaudeCodeAdd command", function()
       warn = spy.new(function() end),
     }
 
-    -- The command expands only a leading `~` via claudecode.utils.expand_tilde
+    -- Plain filesystem paths are resolved via claudecode.utils.expand_tilde
     -- (NOT vim.fn.expand, which env-substitutes `$` segments -- see #285). This
     -- mock mirrors the real helper: leading `~/` expands; `$` paths, relative
     -- and absolute paths pass through unchanged.
@@ -35,9 +35,13 @@ describe("ClaudeCodeAdd command", function()
       end),
     }
 
-    -- Kept as a pass-through spy so a regression to vim.fn.expand() would still
-    -- be observable; the command must no longer route path inputs through it.
+    -- Vim's current/alternate-file tokens (`%`, `%:p`, `#`, `<cfile>`, ...) are
+    -- still resolved via vim.fn.expand (the documented `:ClaudeCodeAdd %`
+    -- "add current buffer" keymap relies on this). Plain paths must NOT reach it.
     vim.fn.expand = spy.new(function(path)
+      if path == "%" or path == "%:p" then
+        return "/current/dir/buffer.lua"
+      end
       return path
     end)
 
@@ -47,6 +51,7 @@ describe("ClaudeCodeAdd command", function()
         or path == "/home/user/test.lua"
         or path == "./relative.lua"
         or path == "/repo/src/routes/$post/index.tsx"
+        or path == "/current/dir/buffer.lua"
       then
         return 1
       end
@@ -237,6 +242,17 @@ describe("ClaudeCodeAdd command", function()
           lineStart = nil,
           lineEnd = nil,
         })
+        assert.spy(mock_logger.error).was_not_called()
+      end)
+
+      it("should expand the current-buffer token `%` (the documented 'add current buffer' keymap)", function()
+        -- `:ClaudeCodeAdd %` (README keymap) must resolve `%` to the current
+        -- buffer path via vim.fn.expand, NOT be left as the literal "%".
+        command_handler({ args = "%" })
+
+        assert.spy(vim.fn.expand).was_called_with("%")
+        assert.spy(mock_utils.expand_tilde).was_not_called()
+        assert.spy(mock_server.broadcast).was_called()
         assert.spy(mock_logger.error).was_not_called()
       end)
     end)

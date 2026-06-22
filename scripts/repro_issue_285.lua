@@ -192,6 +192,27 @@ local c_bug = (not c_ok) and c_msg:find("not found", 1, true) ~= nil
 out(("  => %s"):format(c_bug and "BUG: existing file reported not found" or "ok: file accepted"))
 out("")
 
+-- Scenario E: regression guard. The documented `:ClaudeCodeAdd %` "add current
+-- buffer" keymap (README) must keep working: expand_tilde alone would leave `%`
+-- literal and the readability check would reject it. The fix still expands Vim's
+-- %/#/<...> tokens via vim.fn.expand while keeping `$` paths intact.
+sent = {}
+vim.cmd("edit " .. vim.fn.fnameescape(file_plain))
+run_add("%")
+local e_err = last_error()
+local e_reached_send = #sent > 0
+local e_sent_path = e_reached_send and sent[#sent].file_path or nil
+out("[E] :ClaudeCodeAdd %   <current-buffer token; README 'add current buffer' keymap>")
+out(("  error logged : %s"):format(e_err or "(none)"))
+out(("  reached send : %s  (resolved: %s)"):format(tostring(e_reached_send), tostring(e_sent_path)))
+local e_bug = not e_reached_send
+out(
+  ("  => %s"):format(
+    e_bug and "BUG: % current-buffer token rejected (regression)" or "ok: % expanded to current buffer"
+  )
+)
+out("")
+
 -- Scenario D: the proposed fix. expand_tilde() preserves `$` (and globs) while
 -- still expanding a leading `~`.
 local utils = require("claudecode.utils")
@@ -213,6 +234,7 @@ pcall(vim.fn.delete, work, "rf")
 
 out("== verdict ==")
 local reproduced = a_bug or c_bug
+local regressed = e_bug
 if not b_reached_send then
   out("WARNING: control scenario B failed; harness may be unsound -- treat results with care.")
 end
@@ -224,10 +246,16 @@ if reproduced then
   if c_bug then
     out("  - openFile MCP tool reported an existing file as 'not found' for the same reason.")
   end
-  out("  Fix: replace vim.fn.expand() with claudecode.utils.expand_tilde() at both call sites.")
-else
-  out("FIXED: the $-path file is accepted by both :ClaudeCodeAdd and openFile.")
+  out("  Fix: route plain paths through claudecode.utils.expand_tilde() at both call sites.")
+end
+if regressed then
+  out("REGRESSION: :ClaudeCodeAdd % no longer resolves the current buffer (the fix must")
+  out("  still expand Vim's %/#/<...> tokens, only $-substitution should be dropped).")
+end
+if not reproduced and not regressed then
+  out("FIXED: the $-path file is accepted by both :ClaudeCodeAdd and openFile,")
+  out("       and the `%` current-buffer token still expands.")
 end
 
 io.stdout:flush()
-vim.cmd("cquit " .. (reproduced and 1 or 0))
+vim.cmd("cquit " .. ((reproduced or regressed) and 1 or 0))
