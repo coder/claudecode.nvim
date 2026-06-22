@@ -27,12 +27,19 @@ describe("ClaudeCodeAdd command", function()
         return "/home/user/test.lua"
       elseif path == "./relative.lua" then
         return "/current/dir/relative.lua"
+      elseif path == "%" or path == "%:p" then
+        return "/current/dir/buffer.lua"
       end
       return path
     end)
 
     vim.fn.filereadable = spy.new(function(path)
-      if path == "/existing/file.lua" or path == "/home/user/test.lua" or path == "/current/dir/relative.lua" then
+      if
+        path == "/existing/file.lua"
+        or path == "/home/user/test.lua"
+        or path == "/current/dir/relative.lua"
+        or path == "/current/dir/buffer.lua"
+      then
         return 1
       end
       return 0
@@ -231,6 +238,17 @@ describe("ClaudeCodeAdd command", function()
           lineStart = nil,
           lineEnd = nil,
         })
+        assert.spy(mock_logger.error).was_not_called()
+      end)
+
+      it("should expand the current-buffer token `%` (the documented 'add current buffer' keymap)", function()
+        -- `:ClaudeCodeAdd %` (README keymap) must resolve `%` to the current
+        -- buffer path via vim.fn.expand, NOT be left as the literal "%" -- which
+        -- a tilde-only expansion would do, breaking the workflow.
+        command_handler({ args = "%" })
+
+        assert.spy(vim.fn.expand).was_called_with("%")
+        assert.spy(mock_server.broadcast).was_called()
         assert.spy(mock_logger.error).was_not_called()
       end)
     end)

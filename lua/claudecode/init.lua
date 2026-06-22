@@ -1030,11 +1030,19 @@ function M._create_commands()
       return
     end
 
-    -- Expand a leading `~` only. We intentionally avoid `vim.fn.expand`, which
-    -- treats `$name` as an environment variable and strips undefined ones --
-    -- mangling literal `$` in paths (e.g. TanStack Router `$param` route files
-    -- like `src/routes/$post.tsx`) so the existence check below fails.
-    file_path = require("claudecode.utils").expand_tilde(file_path)
+    -- Resolve the path argument. Vim's current/alternate-file tokens (`%`,
+    -- `%:p`, `#`, `<cfile>`, ...) must still be expanded -- `:ClaudeCodeAdd %`
+    -- is the documented "add current buffer" keymap (README). But a plain
+    -- filesystem path must NOT go through `vim.fn.expand`, which treats `$name`
+    -- as an environment variable and strips undefined ones -- mangling literal
+    -- `$` in paths (e.g. TanStack Router `$param` files like `src/routes/$post.tsx`)
+    -- so the existence check below would fail. So: expand() only the special
+    -- token forms; otherwise expand just a leading `~` and leave `$` intact.
+    if file_path:match("^[%%#<]") then
+      file_path = vim.fn.expand(file_path)
+    else
+      file_path = require("claudecode.utils").expand_tilde(file_path)
+    end
     if vim.fn.filereadable(file_path) == 0 and vim.fn.isdirectory(file_path) == 0 then
       logger.error("command", "ClaudeCodeAdd: File or directory does not exist: " .. file_path)
       return
