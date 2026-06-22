@@ -427,6 +427,11 @@ local vim = {
       return vim._current_tabpage
     end,
 
+    nvim_tabpage_list_wins = function(tabpage)
+      local tab = (tabpage == nil or tabpage == 0) and vim._current_tabpage or tabpage
+      return vim._tab_windows[tab] or {}
+    end,
+
     nvim_set_current_tabpage = function(tab)
       if vim._tabs[tab] then
         vim._current_tabpage = tab

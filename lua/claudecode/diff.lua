@@ -177,6 +177,25 @@ end
 -- Exposed for testing the sidebar/explorer exclusion logic.
 M._find_main_editor_window = find_main_editor_window
 
+---Whether the current tabpage contains any window in diff mode. At diff-setup
+---time claudecode has not created its own diff windows yet, so a match means the
+---tab is hosting a foreign diff (vimdiff/diffview.nvim/fugitive). Splitting such a
+---tab to host Claude's proposal would make it join that single, tab-wide diff set
+---and corrupt the user's review, so the diff is opened in its own tab instead
+---(issue #277).
+---@return boolean
+local function current_tab_has_diff_window()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_option(win, "diff") then
+      return true
+    end
+  end
+  return false
+end
+
+-- Exposed for testing the all-diff-tab detection.
+M._current_tab_has_diff_window = current_tab_has_diff_window
+
 ---Find the Claude Code terminal window to keep focus there.
 ---Uses the terminal provider to get the active terminal buffer, then finds its window.
 ---@return number? win_id Window ID of the Claude Code terminal window, or nil if not found
@@ -1316,18 +1335,32 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- issue #231), create one by splitting the current window instead of erroring out, mirroring
     -- the fallback in lua/claudecode/tools/open_file.lua.
     if not target_window and not created_new_tab then
-      create_split()
-      local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
-      if scratch_buf ~= 0 then
-        -- wipe it once it leaves the window so it isn't leaked when the diff reuses it (new file)
-        -- or :edit replaces it with the real file (existing file)
-        vim.api.nvim_buf_set_option(scratch_buf, "bufhidden", "wipe")
-        vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch_buf)
+      if current_tab_has_diff_window() then
+        -- No usable non-diff window exists and the current tab is hosting a
+        -- foreign diff (vimdiff/diffview.nvim/fugitive). A same-tab split would
+        -- make Claude's proposal join that tab-wide diff set and corrupt the
+        -- user's review (issue #277), so open the diff in its own tab instead.
+        -- Mirror the open_in_new_tab path, including the issue #262 hoisting so
+        -- a failure before registration can still close the new tab.
+        original_tab_handle = vim.api.nvim_get_current_tabpage()
+        original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
+          display_terminal_in_new_tab()
+        created_new_tab = true
+        target_window = nil
+      else
+        create_split()
+        local scratch_buf = vim.api.nvim_create_buf(false, true) -- unlisted, scratch
+        if scratch_buf ~= 0 then
+          -- wipe it once it leaves the window so it isn't leaked when the diff reuses it (new file)
+          -- or :edit replaces it with the real file (existing file)
+          vim.api.nvim_buf_set_option(scratch_buf, "bufhidden", "wipe")
+          vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch_buf)
+        end
+        target_window = vim.api.nvim_get_current_win()
+        -- Track it so _cleanup_diff_state closes it; the reused scratch buffer means it won't be
+        -- flagged target_window_created_by_plugin.
+        fallback_window = target_window
       end
-      target_window = vim.api.nvim_get_current_win()
-      -- Track it so _cleanup_diff_state closes it; the reused scratch buffer means it won't be
-      -- flagged target_window_created_by_plugin.
-      fallback_window = target_window
     end
 
     new_buffer = vim.api.nvim_create_buf(false, true) -- unlisted, scratch (hoisted above the pcall)
