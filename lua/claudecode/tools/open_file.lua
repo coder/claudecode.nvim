@@ -114,7 +114,10 @@ local function handler(params)
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
 
-  local file_path = vim.fn.expand(params.filePath)
+  -- Expand a leading `~` only. `vim.fn.expand` would treat `$name` as an
+  -- environment variable and strip undefined ones, breaking literal `$` paths
+  -- (e.g. TanStack Router `$param` files like `src/routes/$post.tsx`).
+  local file_path = require("claudecode.utils").expand_tilde(params.filePath)
 
   if vim.fn.filereadable(file_path) == 0 then
     -- Using a generic error code for tool-specific operational errors
