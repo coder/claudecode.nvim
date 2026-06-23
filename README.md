@@ -353,6 +353,11 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       diff_split_width_percentage = nil, -- e.g. 0.20 to give diffs more room
       provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
+      -- Auto-enter insert/terminal mode whenever the Claude terminal window gains
+      -- focus. Set to false to stay in Normal mode and preserve your scroll position
+      -- when switching back to the terminal (e.g. via <C-w>l); press `i` to type.
+      -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
+      auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
       -- Work around a Neovim core bug (< 0.12.2) that fragments large pastes into
       -- the terminal, making Cmd+V appear to truncate ([#161]). true | false | "auto"

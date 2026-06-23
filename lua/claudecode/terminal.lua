@@ -18,6 +18,7 @@ local defaults = {
     external_terminal_cmd = nil,
   },
   auto_close = true,
+  auto_insert = true,
   env = {},
   snacks_win_opts = {},
   fix_streamed_paste = "auto", -- work around Neovim <0.12.2 paste fragmentation (#161): true|false|"auto"
@@ -270,6 +271,7 @@ local function build_config(opts_override)
     split_side = effective_config.split_side,
     split_width_percentage = effective_config.split_width_percentage,
     auto_close = effective_config.auto_close,
+    auto_insert = effective_config.auto_insert,
     snacks_win_opts = effective_config.snacks_win_opts,
     cwd = resolved_cwd,
   }
@@ -518,6 +520,12 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         defaults.auto_close = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for auto_close: " .. tostring(v), vim.log.levels.WARN)
+      end
+    elseif k == "auto_insert" then
+      if type(v) == "boolean" then
+        defaults.auto_insert = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for auto_insert: " .. tostring(v), vim.log.levels.WARN)
       end
     elseif k == "snacks_win_opts" then
       if type(v) == "table" then
