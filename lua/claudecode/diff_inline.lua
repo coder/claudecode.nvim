@@ -197,7 +197,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
     error({ code = -32000, message = "Buffer creation failed", data = "Could not create inline diff buffer" })
   end
 
-  pcall(vim.api.nvim_buf_set_name, buf, tab_name .. " (inline diff)")
+  pcall(vim.api.nvim_buf_set_name, buf, tab_name .. " (unified diff)")
   vim.api.nvim_buf_set_option(buf, "buftype", "acwrite")
   vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
 
@@ -330,7 +330,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
     })
   end
 
-  -- Register state with layout = "inline"
+  -- Register state with layout = "unified"
   diff._register_diff_state(tab_name, {
     old_file_path = params.old_file_path,
     new_file_path = params.new_file_path,
@@ -345,7 +345,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
     status = "pending",
     resolution_callback = resolution_callback,
     result_content = nil,
-    layout = "inline",
+    layout = "unified",
     -- Track the originating MCP client so close_diffs_for_client can tear this
     -- diff down if that client disconnects (parity with the native path, #261).
     client_id = params.client_id,

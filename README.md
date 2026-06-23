@@ -376,8 +376,8 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
     -- Diff Integration
     diff_opts = {
-      layout = "vertical", -- "vertical" (default), "horizontal", or "inline"
-      -- "inline": VS Code-style unified diff in a single buffer with deleted
+      layout = "vertical", -- "vertical" (default), "horizontal", or "unified"
+      -- "unified": VS Code-style unified diff in a single buffer with deleted
       --   (red/strikethrough) and added (green) lines interleaved. Requires
       --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
       --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
