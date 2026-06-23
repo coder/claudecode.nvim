@@ -132,8 +132,8 @@ function M.validate(config)
     assert(
       config.diff_opts.layout == "vertical"
         or config.diff_opts.layout == "horizontal"
-        or config.diff_opts.layout == "inline",
-      "diff_opts.layout must be 'vertical', 'horizontal', or 'inline'"
+        or config.diff_opts.layout == "unified",
+      "diff_opts.layout must be 'vertical', 'horizontal', or 'unified'"
     )
   end
   if config.diff_opts.open_in_new_tab ~= nil then

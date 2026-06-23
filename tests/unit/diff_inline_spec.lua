@@ -327,7 +327,7 @@ describe("Inline diff module", function()
   end)
 
   describe("config validation", function()
-    it("should accept layout = 'inline'", function()
+    it("should accept layout = 'unified'", function()
       package.loaded["claudecode.config"] = nil
       package.loaded["claudecode.terminal"] = nil
       -- Stub terminal module with defaults
@@ -347,8 +347,8 @@ describe("Inline diff module", function()
         ensure_visible = function() end,
       }
       local config = require("claudecode.config")
-      local applied = config.apply({ diff_opts = { layout = "inline" } })
-      assert.are.equal("inline", applied.diff_opts.layout)
+      local applied = config.apply({ diff_opts = { layout = "unified" } })
+      assert.are.equal("unified", applied.diff_opts.layout)
     end)
 
     it("should reject invalid layout values", function()
@@ -374,7 +374,33 @@ describe("Inline diff module", function()
         config.apply({ diff_opts = { layout = "invalid" } })
       end)
       assert.is_false(success)
-      assert_contains(tostring(err), "inline")
+      assert_contains(tostring(err), "'unified'")
+    end)
+
+    it("should reject the former layout = 'inline' (renamed to 'unified')", function()
+      package.loaded["claudecode.config"] = nil
+      package.loaded["claudecode.terminal"] = nil
+      package.loaded["claudecode.terminal"] = {
+        defaults = {
+          split_side = "right",
+          split_width_percentage = 0.30,
+          provider = "auto",
+          show_native_term_exit_tip = true,
+          auto_close = true,
+          env = {},
+          snacks_win_opts = {},
+        },
+        get_active_terminal_bufnr = function()
+          return nil
+        end,
+        ensure_visible = function() end,
+      }
+      local config = require("claudecode.config")
+      local success, err = pcall(function()
+        config.apply({ diff_opts = { layout = "inline" } })
+      end)
+      assert.is_false(success)
+      assert_contains(tostring(err), "'unified'")
     end)
   end)
 
