@@ -1171,6 +1171,11 @@ function M._cleanup_diff_state(tab_name, reason)
     local inline = require("claudecode.diff_inline")
     inline.cleanup_inline_diff(tab_name, diff_data)
     active_diffs[tab_name] = nil
+    fire_diff_event("ClaudeCodeDiffClosed", {
+      tab_name = tab_name,
+      file_path = diff_data.old_file_path,
+      reason = reason,
+    })
     return
   end
 
@@ -1319,6 +1324,20 @@ function M._setup_blocking_diff(params, resolution_callback)
     if config and config.diff_opts and config.diff_opts.layout == "unified" then
       local inline = require("claudecode.diff_inline")
       inline.setup_inline_diff(params, resolution_callback, config)
+
+      local state = active_diffs[tab_name]
+      if state then
+        fire_diff_event("ClaudeCodeDiffOpened", {
+          tab_name = tab_name,
+          file_path = params.old_file_path,
+          new_file_path = params.new_file_path,
+          is_new_file = state.is_new_file,
+          diff_window = state.new_window,
+          target_window = state.target_window,
+          terminal_window = state.terminal_win_in_new_tab or find_claudecode_terminal_window(),
+          tab_number = state.created_new_tab and state.new_tab_number or nil,
+        })
+      end
       return
     end
 

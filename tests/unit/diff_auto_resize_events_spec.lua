@@ -137,6 +137,16 @@ describe("Diff lifecycle User events", function()
     return captured
   end
 
+  local function find_events(captured, pattern)
+    local events = {}
+    for _, e in ipairs(captured) do
+      if e.event == "User" and e.opts and e.opts.pattern == pattern then
+        events[#events + 1] = e
+      end
+    end
+    return events
+  end
+
   local function find_event(captured, pattern)
     for i = #captured, 1, -1 do
       local e = captured[i]
@@ -145,6 +155,38 @@ describe("Diff lifecycle User events", function()
       end
     end
     return nil
+  end
+
+  local function reset_to_terminal_only()
+    assert(vim and vim._mock and vim._mock.reset, "expected vim mock with _mock.reset()")
+
+    vim._mock.reset()
+    vim._tabs = { [1] = true }
+    vim._current_tabpage = 1
+    vim._current_window = 1000
+    vim._next_winid = 1001
+
+    vim._mock.add_buffer(1, "term://fake/claude", "", { buftype = "terminal", modified = false })
+    vim._mock.add_window(1000, 1, { 1, 0 })
+    vim._win_tab[1000] = 1
+    vim._tab_windows[1] = { 1000 }
+  end
+
+  local function reset_to_default_editor_window()
+    if not (vim and vim._mock and vim._mock.reset) then
+      return
+    end
+
+    vim._mock.reset()
+    vim._tabs = { [1] = true }
+    vim._current_tabpage = 1
+    vim._current_window = 1000
+    vim._next_winid = 1001
+
+    vim._mock.add_buffer(1, "/home/user/project/test.lua", "local test = {}\nreturn test")
+    vim._mock.add_window(1000, 1, { 1, 0 })
+    vim._win_tab[1000] = 1
+    vim._tab_windows[1] = { 1000 }
   end
 
   before_each(function()
@@ -163,8 +205,10 @@ describe("Diff lifecycle User events", function()
   end)
 
   after_each(function()
+    diff._cleanup_all_active_diffs("test_cleanup")
     package.loaded["claudecode.terminal"] = nil
     os.remove(test_old_file)
+    reset_to_default_editor_window()
   end)
 
   it("emits ClaudeCodeDiffOpened with the full payload when a diff opens", function()
@@ -198,6 +242,122 @@ describe("Diff lifecycle User events", function()
     vim.wait(100, function()
       return coroutine.status(co) == "dead"
     end)
+  end)
+
+  it("emits ClaudeCodeDiffOpened and ClaudeCodeDiffClosed for unified layout", function()
+    diff.setup({ terminal = {}, diff_opts = { layout = "unified" } })
+
+    local co = coroutine.create(function()
+      open_diff_tool.handler({
+        old_file_path = test_old_file,
+        new_file_path = test_old_file,
+        new_file_contents = "local a = 1\nlocal b = 42\nlocal c = 3\n",
+        tab_name = "opened-unified-tab",
+      })
+    end)
+    local opened_captured = capture_events(function()
+      local ok, err = coroutine.resume(co)
+      assert(ok, tostring(err))
+    end)
+
+    local opened_events = find_events(opened_captured, "ClaudeCodeDiffOpened")
+    assert.are.equal(1, #opened_events)
+    local opened_data = opened_events[1].opts.data
+    assert.are.equal("opened-unified-tab", opened_data.tab_name)
+    assert.are.equal(test_old_file, opened_data.file_path)
+    assert.are.equal(test_old_file, opened_data.new_file_path)
+    assert.is_false(opened_data.is_new_file)
+    assert.is_not_nil(opened_data.diff_window)
+    assert.is_true(vim.api.nvim_win_is_valid(opened_data.diff_window))
+    assert.is_not_nil(opened_data.target_window)
+    assert.is_true(vim.api.nvim_win_is_valid(opened_data.target_window))
+    assert.is_false(opened_events[1].opts.modeline)
+
+    local closed_captured = capture_events(function()
+      diff._cleanup_diff_state("opened-unified-tab", "diff rejected")
+    end)
+    local closed_events = find_events(closed_captured, "ClaudeCodeDiffClosed")
+    assert.are.equal(1, #closed_events)
+    local closed_data = closed_events[1].opts.data
+    assert.are.equal("opened-unified-tab", closed_data.tab_name)
+    assert.are.equal(test_old_file, closed_data.file_path)
+    assert.are.equal("diff rejected", closed_data.reason)
+  end)
+
+  it("emits unified ClaudeCodeDiffOpened with a valid target_window from a terminal-only tab", function()
+    reset_to_terminal_only()
+    assert.is_nil(diff._find_main_editor_window())
+    diff.setup({ terminal = {}, diff_opts = { layout = "unified" } })
+
+    local co = coroutine.create(function()
+      open_diff_tool.handler({
+        old_file_path = test_old_file,
+        new_file_path = test_old_file,
+        new_file_contents = "local a = 1\nlocal b = 43\nlocal c = 3\n",
+        tab_name = "opened-unified-terminal-only-tab",
+      })
+    end)
+    local opened_captured = capture_events(function()
+      local ok, err = coroutine.resume(co)
+      assert(ok, tostring(err))
+    end)
+
+    local opened_events = find_events(opened_captured, "ClaudeCodeDiffOpened")
+    assert.are.equal(1, #opened_events)
+    local opened_data = opened_events[1].opts.data
+    assert.is_not_nil(opened_data.diff_window)
+    assert.is_true(vim.api.nvim_win_is_valid(opened_data.diff_window))
+    assert.is_not_nil(opened_data.target_window)
+    assert.is_true(vim.api.nvim_win_is_valid(opened_data.target_window))
+    assert.are_not.equal(1000, opened_data.target_window)
+    local target_buf = vim.api.nvim_win_get_buf(opened_data.target_window)
+    assert.are_not.equal("terminal", vim.api.nvim_buf_get_option(target_buf, "buftype"))
+
+    local state = diff._get_active_diffs()["opened-unified-terminal-only-tab"]
+    assert.is_table(state)
+    assert.are.equal(opened_data.target_window, state.fallback_window)
+
+    diff._cleanup_diff_state("opened-unified-terminal-only-tab", "diff rejected")
+    assert.is_false(vim.api.nvim_win_is_valid(opened_data.target_window))
+    assert.is_true(vim.api.nvim_win_is_valid(1000))
+    reset_to_default_editor_window()
+  end)
+
+  it("cleans up a terminal-only unified fallback when setup fails before state registration", function()
+    reset_to_terminal_only()
+    assert.is_nil(diff._find_main_editor_window())
+    diff.setup({ terminal = {}, diff_opts = { layout = "unified" } })
+
+    local original_cmd = vim.cmd
+    local vsplit_count = 0
+    vim.cmd = function(command)
+      if command == "rightbelow vsplit" then
+        vsplit_count = vsplit_count + 1
+        if vsplit_count == 2 then
+          error("forced unified setup failure after fallback split")
+        end
+      end
+      return original_cmd(command)
+    end
+
+    local co = coroutine.create(function()
+      open_diff_tool.handler({
+        old_file_path = test_old_file,
+        new_file_path = test_old_file,
+        new_file_contents = "local a = 1\nlocal b = 44\nlocal c = 3\n",
+        tab_name = "failed-unified-terminal-only-tab",
+      })
+    end)
+    local ok = coroutine.resume(co)
+    vim.cmd = original_cmd
+
+    assert.is_false(ok)
+    assert.are.equal(2, vsplit_count)
+    assert.is_nil(diff._get_active_diffs()["failed-unified-terminal-only-tab"])
+    assert.is_true(vim.api.nvim_win_is_valid(1000))
+    local wins = vim.api.nvim_list_wins()
+    assert.are.equal(1, #wins)
+    assert.are.equal(1000, wins[1])
   end)
 
   it("emits ClaudeCodeDiffClosed with tab_name/file_path/reason on cleanup", function()
