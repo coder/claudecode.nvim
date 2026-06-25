@@ -1105,6 +1105,18 @@ function M._create_commands()
       desc = "Open the Claude Code terminal window with optional arguments",
     })
 
+    vim.api.nvim_create_user_command("ClaudeCodeAgents", function(opts)
+      local current_mode = vim.fn.mode()
+      if current_mode == "v" or current_mode == "V" or current_mode == "\22" then
+        vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "n", false)
+      end
+      local extra = opts.args and opts.args ~= "" and (" " .. opts.args) or ""
+      terminal.simple_toggle({}, "agents" .. extra)
+    end, {
+      nargs = "*",
+      desc = "Toggle the Claude Code Agents terminal window with optional arguments",
+    })
+
     vim.api.nvim_create_user_command("ClaudeCodeClose", function()
       terminal.close()
     end, {
@@ -1129,7 +1141,7 @@ function M._create_commands()
   else
     logger.error(
       "init",
-      "Terminal module not found. Terminal commands (ClaudeCode, ClaudeCodeOpen, ClaudeCodeClose) not registered."
+      "Terminal module not found. Terminal commands (ClaudeCode, ClaudeCodeOpen, ClaudeCodeAgents, ClaudeCodeClose) not registered."
     )
   end
 
