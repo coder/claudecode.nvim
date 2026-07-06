@@ -404,11 +404,23 @@ function M.setup_inline_diff(params, resolution_callback, config)
   end
 
   local function reuse_or_open_diff_window()
-    local diff_win = diff.get_or_create_editor_win_in_diff_tab()
-    if diff_win then
-      vim.api.nvim_set_current_win(diff_win)
+    local diff_win = diff._get_or_create_editor_win_in_diff_tab()
+    if diff_win and vim.api.nvim_win_is_valid(diff_win) then
+      -- Only reuse a window that lives in the current tabpage, so we never hijack
+      -- or switch away from an unrelated user tab.
+      local in_current_tab = false
+      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if w == diff_win then
+          in_current_tab = true
+          break
+        end
+      end
+      if in_current_tab then
+        vim.api.nvim_set_current_win(diff_win)
+        return diff_win
+      end
     end
-    return diff_win
+    return nil
   end
 
   local editor_win

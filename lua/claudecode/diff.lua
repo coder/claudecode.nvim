@@ -397,10 +397,6 @@ local function display_terminal_in_new_tab()
   local original_tab = vim.api.nvim_get_current_tabpage()
 
   local function get_or_create_diff_tab()
-    local tabs = vim.api.nvim_list_tabpages()
-    if #tabs >= 2 then
-      return tabs[2]
-    end
     vim.cmd("tabnew")
     mark_tabnew_buffer_ephemeral()
     return vim.api.nvim_get_current_tabpage()
@@ -1141,6 +1137,30 @@ end
 -- Exposed for testing the reject-on-window-close (WinClosed) behavior.
 M._register_diff_autocmds = register_diff_autocmds
 
+---Format an error value (string or structured {message,data} table) into a flat,
+---bounded string. Avoids `tostring(table)` blowups that spam :messages and the UI.
+---Defined at module scope so both `_setup_blocking_diff` and `open_diff_blocking`
+---can use it (the error path must never itself raise a secondary error).
+---@param err any Error value (string or table with optional .message/.data)
+---@return string
+local function format_error(err)
+  if type(err) == "table" then
+    local msg = err.message or "unknown error"
+    local data = err.data
+    if data ~= nil and data ~= "" then
+      if type(data) == "table" then
+        data = "table"
+      end
+      return msg .. " (" .. tostring(data) .. ")"
+    end
+    return msg
+  end
+  return tostring(err)
+end
+
+-- Exposed for testing/debugging the error formatter.
+M._format_error = format_error
+
 ---Create diff view from a specific window
 ---@param target_window NvimWin|nil The window to use as base for the diff
 ---@param old_file_path string Path to the original file
@@ -1603,31 +1623,9 @@ function M._setup_blocking_diff(params, resolution_callback)
     })
   end) -- End of pcall
 
-  ---Format an error value (string or structured {message,data} table) into a flat,
----bounded string. Avoids `tostring(table)` blowups that spam :messages and the UI.
----@param err any Error value (string or table with optional .message/.data)
----@return string
-local function format_error(err)
-  if type(err) == "table" then
-    local msg = err.message or "unknown error"
-    local data = err.data
-    if data ~= nil and data ~= "" then
-      if type(data) == "table" then
-        data = "table"
-      end
-      return msg .. " (" .. tostring(data) .. ")"
-    end
-    return msg
-  end
-  return tostring(err)
-end
-
--- Exposed for testing/debugging the error formatter.
-M._format_error = format_error
-
   -- Handle setup errors
   if not setup_success then
-    error_msg = "Failed to setup diff operation: " .. format_error(setup_error)
+    local error_msg = "Failed to setup diff operation: " .. format_error(setup_error)
 
     vim.schedule(function()
       vim.notify("ClaudeCode diff setup failed: " .. format_error(setup_error), vim.log.levels.ERROR)
@@ -1969,7 +1967,7 @@ M._is_buffer_dirty = is_buffer_dirty
 M._detect_filetype = detect_filetype
 M._get_autocmd_group = get_autocmd_group
 M._display_terminal_in_new_tab = display_terminal_in_new_tab
-M.get_or_create_editor_win_in_diff_tab = get_or_create_editor_win_in_diff_tab
+M._get_or_create_editor_win_in_diff_tab = get_or_create_editor_win_in_diff_tab
 
 return M
 ---@alias NvimWin integer
