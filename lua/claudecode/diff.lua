@@ -232,6 +232,69 @@ local function find_claudecode_terminal_window()
   return floating_fallback
 end
 
+---Get or create a persistent editor window in tab 2 for Claude Code diffs.
+---Finds an existing non-terminal, non-diff window in tab 2 (the Claude editor).
+---If none exists, creates a new window to the left of any terminal in tab 2.
+local function get_or_create_editor_win_in_diff_tab()
+  local tabs = vim.api.nvim_list_tabpages()
+  if #tabs < 2 then
+    return nil
+  end
+  local tab2 = tabs[2]
+
+  -- First, look for an existing Claude Code editor window in tab 2:
+  -- a non-terminal, non-prompt, non-diff window showing a real file.
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab2)) do
+    local b = vim.api.nvim_win_get_buf(win)
+    local bt = vim.api.nvim_buf_get_option(b, "buftype")
+    local ft = vim.api.nvim_buf_get_option(b, "filetype")
+    if bt ~= "terminal" and bt ~= "prompt"
+      and not vim.api.nvim_win_get_option(win, "diff")
+      and ft ~= "neo-tree" and ft ~= "NvimTree"
+      and ft ~= "oil" and ft ~= "aerial"
+    then
+      return win
+    end
+  end
+
+  -- No editor window found; try to find any terminal in tab 2 to anchor a new split.
+  local terminal_win = nil
+  pcall(function()
+    local terminal_module = require("claudecode.terminal")
+    local terminal_bufnr = terminal_module.get_active_terminal_bufnr()
+    if terminal_bufnr then
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab2)) do
+        if vim.api.nvim_win_get_buf(win) == terminal_bufnr then
+          terminal_win = win
+          break
+        end
+      end
+    end
+  end)
+
+  -- If no terminal in tab 2, fall back to any non-floating, non-special window in tab 2.
+  if not terminal_win then
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab2)) do
+      local cfg = vim.api.nvim_win_get_config(win)
+      if not cfg.relative or cfg.relative == "" then
+        local b = vim.api.nvim_win_get_buf(win)
+        local bt = vim.api.nvim_buf_get_option(b, "buftype")
+        if bt ~= "terminal" and bt ~= "prompt" and not vim.api.nvim_win_get_option(win, "diff") then
+          return win
+        end
+      end
+    end
+    return nil
+  end
+
+  vim.api.nvim_set_current_tabpage(tab2)
+  vim.api.nvim_set_current_win(terminal_win)
+  vim.cmd("leftabove vsplit")
+  local new_editor = vim.api.nvim_get_current_win()
+  vim.cmd("wincmd =")
+  return new_editor
+end
+
 ---Create a split based on configured layout
 local function create_split()
   if config and config.diff_opts and config.diff_opts.layout == "horizontal" then
@@ -333,20 +396,28 @@ end
 local function display_terminal_in_new_tab()
   local original_tab = vim.api.nvim_get_current_tabpage()
 
+  local function get_or_create_diff_tab()
+    local tabs = vim.api.nvim_list_tabpages()
+    if #tabs >= 2 then
+      return tabs[2]
+    end
+    vim.cmd("tabnew")
+    mark_tabnew_buffer_ephemeral()
+    return vim.api.nvim_get_current_tabpage()
+  end
+
   -- Get existing terminal buffer
   local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
   if not terminal_ok then
-    vim.cmd("tabnew")
-    mark_tabnew_buffer_ephemeral()
-    local new_tab = vim.api.nvim_get_current_tabpage()
+    local new_tab = get_or_create_diff_tab()
+    vim.api.nvim_set_current_tabpage(new_tab)
     return original_tab, nil, false, new_tab
   end
 
   local terminal_bufnr = terminal_module.get_active_terminal_bufnr()
   if not terminal_bufnr or not vim.api.nvim_buf_is_valid(terminal_bufnr) then
-    vim.cmd("tabnew")
-    mark_tabnew_buffer_ephemeral()
-    local new_tab = vim.api.nvim_get_current_tabpage()
+    local new_tab = get_or_create_diff_tab()
+    vim.api.nvim_set_current_tabpage(new_tab)
     return original_tab, nil, false, new_tab
   end
 
@@ -359,9 +430,8 @@ local function display_terminal_in_new_tab()
     terminal_options = get_default_terminal_options()
   end
 
-  vim.cmd("tabnew")
-  mark_tabnew_buffer_ephemeral()
-  local new_tab = vim.api.nvim_get_current_tabpage()
+  local new_tab = get_or_create_diff_tab()
+  vim.api.nvim_set_current_tabpage(new_tab)
 
   local terminal_config = config.terminal or {}
   local split_side = terminal_config.split_side or "right"
@@ -377,15 +447,26 @@ local function display_terminal_in_new_tab()
     return original_tab, nil, had_terminal_in_original, new_tab
   end
 
-  vim.cmd("vsplit")
-
-  local terminal_win = vim.api.nvim_get_current_win()
-
-  if split_side == "left" then
-    vim.cmd("wincmd H")
-  else
-    vim.cmd("wincmd L")
+  -- Reuse an existing terminal window in the new tab if already present, instead of splitting again.
+  local existing_terminal_in_new_tab
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(new_tab)) do
+    if vim.api.nvim_win_get_buf(win) == terminal_bufnr then
+      existing_terminal_in_new_tab = win
+      break
+    end
   end
+
+  if not existing_terminal_in_new_tab then
+    vim.cmd("vsplit")
+    existing_terminal_in_new_tab = vim.api.nvim_get_current_win()
+    if split_side == "left" then
+      vim.cmd("wincmd H")
+    else
+      vim.cmd("wincmd L")
+    end
+  end
+
+  local terminal_win = existing_terminal_in_new_tab
 
   vim.api.nvim_win_set_buf(terminal_win, terminal_bufnr)
 
@@ -1308,6 +1389,7 @@ function M._setup_blocking_diff(params, resolution_callback)
   local setup_success, setup_error = pcall(function()
     local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
     local is_new_file = not old_file_exists
+    local original_tab_number = vim.api.nvim_get_current_tabpage()
 
     if old_file_exists then
       local is_dirty = is_buffer_dirty(params.old_file_path)
@@ -1337,6 +1419,12 @@ function M._setup_blocking_diff(params, resolution_callback)
           terminal_window = state.terminal_win_in_new_tab or find_claudecode_terminal_window(),
           tab_number = state.created_new_tab and state.new_tab_number or nil,
         })
+      end
+
+      if original_tab_number and vim.api.nvim_tabpage_is_valid(original_tab_number) then
+        vim.schedule(function()
+          vim.api.nvim_set_current_tabpage(original_tab_number)
+        end)
       end
       return
     end
@@ -1515,18 +1603,42 @@ function M._setup_blocking_diff(params, resolution_callback)
     })
   end) -- End of pcall
 
+  ---Format an error value (string or structured {message,data} table) into a flat,
+---bounded string. Avoids `tostring(table)` blowups that spam :messages and the UI.
+---@param err any Error value (string or table with optional .message/.data)
+---@return string
+local function format_error(err)
+  if type(err) == "table" then
+    local msg = err.message or "unknown error"
+    local data = err.data
+    if data ~= nil and data ~= "" then
+      if type(data) == "table" then
+        data = "table"
+      end
+      return msg .. " (" .. tostring(data) .. ")"
+    end
+    return msg
+  end
+  return tostring(err)
+end
+
+-- Exposed for testing/debugging the error formatter.
+M._format_error = format_error
+
   -- Handle setup errors
   if not setup_success then
-    local error_msg
-    if type(setup_error) == "table" and setup_error.message then
-      -- Handle structured error objects
-      error_msg = "Failed to setup diff operation: " .. setup_error.message
-      if setup_error.data then
-        error_msg = error_msg .. " (" .. setup_error.data .. ")"
-      end
+    error_msg = "Failed to setup diff operation: " .. format_error(setup_error)
+
+    vim.schedule(function()
+      vim.notify("ClaudeCode diff setup failed: " .. format_error(setup_error), vim.log.levels.ERROR)
+    end)
+
+    -- Log the structured error before we wrap it, so the original cause is visible in :messages.
+    local structured = setup_error
+    if type(structured) == "table" and structured.message then
+      logger.error("diff", "Diff setup failed for", tab_name, "-", structured.message, structured.data or "")
     else
-      -- Handle string errors or other types
-      error_msg = "Failed to setup diff operation: " .. tostring(setup_error)
+      logger.error("diff", "Diff setup failed for", tab_name, "-", tostring(structured))
     end
 
     -- Clean up any partial state that might have been created
@@ -1643,16 +1755,7 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
   end)
 
   if not success then
-    local error_msg
-    if type(err) == "table" and err.message then
-      error_msg = err.message
-      if err.data then
-        error_msg = error_msg .. " - " .. err.data
-      end
-    else
-      error_msg = tostring(err)
-    end
-    logger.error("diff", "Diff setup failed for", '"' .. tab_name .. '"', "error:", error_msg)
+    logger.error("diff", "Diff setup failed for", '"' .. tab_name .. '"', "error:", format_error(err))
     -- If the error is already structured, propagate it directly
     if type(err) == "table" and err.code then
       error(err)
@@ -1660,7 +1763,7 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
       error({
         code = -32000,
         message = "Error setting up diff",
-        data = tostring(err),
+        data = format_error(err),
       })
     end
   end
@@ -1813,6 +1916,7 @@ function M.accept_current_diff()
     local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
     if tab_name then
       M._resolve_diff_as_saved(tab_name, current_buffer)
+      M._cleanup_diff_state(tab_name, "user accepted")
     else
       vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
     end
@@ -1827,6 +1931,7 @@ function M.accept_current_diff()
   end
 
   M._resolve_diff_as_saved(tab_name, current_buffer)
+  M._cleanup_diff_state(tab_name, "user accepted")
 end
 
 ---Deny/reject the current diff (user command version)
@@ -1839,6 +1944,7 @@ function M.deny_current_diff()
     local tab_name = vim.b[current_buffer].claudecode_diff_tab_name
     if tab_name then
       M._resolve_diff_as_rejected(tab_name)
+      M._cleanup_diff_state(tab_name, "user denied")
     else
       vim.notify("No active diff found in current buffer", vim.log.levels.WARN)
     end
@@ -1852,8 +1958,8 @@ function M.deny_current_diff()
     return
   end
 
-  -- Do not close windows/tabs here; just mark as rejected.
   M._resolve_diff_as_rejected(tab_name)
+  M._cleanup_diff_state(tab_name, "user denied")
 end
 
 -- Expose internal utilities for use by diff_inline.lua
@@ -1863,6 +1969,7 @@ M._is_buffer_dirty = is_buffer_dirty
 M._detect_filetype = detect_filetype
 M._get_autocmd_group = get_autocmd_group
 M._display_terminal_in_new_tab = display_terminal_in_new_tab
+M.get_or_create_editor_win_in_diff_tab = get_or_create_editor_win_in_diff_tab
 
 return M
 ---@alias NvimWin integer
