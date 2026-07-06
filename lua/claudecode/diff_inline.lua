@@ -1,6 +1,6 @@
 --- Inline diff module for Claude Code Neovim integration.
 -- Provides a VS Code-style unified inline diff view with deleted (red/strikethrough)
--- and added (green) lines interleaved in a single read-only buffer.
+-- and added (green) lines interleaved in a single persistent buffer.
 local M = {}
 
 local logger = require("claudecode.logger")
@@ -12,13 +12,16 @@ local ns = vim.api.nvim_create_namespace("claudecode_inline_diff")
 --- so it always stays open showing the file whose changes were reviewed.
 local CLAUDE_BUFFER_NAME = "ClaudeCodeBuffer"
 
+--- Bumped whenever a reveal starts or the diff is torn down, so any in-flight
+--- streaming animation stops and does not mutate the buffer.
+local reveal_gen = 0
+
 ---Get the persistent ClaudeCodeBuffer, creating it on first use or resetting it for reuse.
 ---The buffer is kept alive (`bufhidden = "hide"`) so it survives window/tab closes.
 ---@return number buf The buffer handle
 local function get_or_create_claudecode_buffer()
   local existing = vim.fn.bufnr(CLAUDE_BUFFER_NAME)
   if existing ~= -1 and vim.api.nvim_buf_is_valid(existing) then
-    -- Reuse: reset state so a fresh diff can be rendered into it.
     pcall(function()
       vim.api.nvim_buf_set_option(existing, "modifiable", true)
       vim.api.nvim_buf_clear_namespace(existing, ns, 0, -1)
@@ -41,16 +44,13 @@ local function get_or_create_claudecode_buffer()
   return b
 end
 
----Resolve the diff function. Neovim 0.12 renamed `vim.diff` to `vim.text.diff`
---- (keeping `vim.diff` as a deprecated alias); prefer the new name and fall back to
---- the old one so inline diff works across the supported range and stays forward-compatible.
+---Resolve the diff function. Neovim 0.12 renamed `vim.diff` to `vim.text.diff`.
 ---@return function|nil
 local function get_diff_fn()
   return (vim.text and vim.text.diff) or vim.diff
 end
 
--- ── Highlight groups ──────────────────────────────────────────────
-
+---Setup highlight groups for added/deleted lines.
 local function setup_highlights()
   vim.api.nvim_set_hl(0, "ClaudeCodeInlineDiffAdd", { bg = "#2a4a2a", default = true })
   vim.api.nvim_set_hl(0, "ClaudeCodeInlineDiffDelete", { bg = "#4a2a2a", strikethrough = true, default = true })
@@ -75,7 +75,6 @@ local function split_lines(text)
 end
 
 --- Compute an interleaved inline diff from two strings.
---- Returns parallel arrays: lines[] (buffer content) and line_types[] ("unchanged"|"added"|"deleted").
 ---@param old_text string Original file content
 ---@param new_text string Proposed file content
 ---@return string[] lines Buffer lines for display
@@ -85,7 +84,6 @@ function M.compute_inline_diff(old_text, new_text)
   new_text = new_text or ""
 
   local hunks = get_diff_fn()(old_text, new_text, { result_type = "indices" }) or {}
-
   local old_lines = split_lines(old_text)
   local new_lines = split_lines(new_text)
 
@@ -97,12 +95,10 @@ function M.compute_inline_diff(old_text, new_text)
   for _, hunk in ipairs(hunks) do
     local start_a, count_a, _, count_b = hunk[1], hunk[2], hunk[3], hunk[4]
 
-    -- Unchanged lines before this hunk
     local unchanged_count
     if count_a > 0 then
       unchanged_count = start_a - old_pos
     else
-      -- Pure insertion: start_a is the last unchanged line before the insertion
       unchanged_count = start_a - old_pos + 1
     end
 
@@ -113,14 +109,12 @@ function M.compute_inline_diff(old_text, new_text)
       new_pos = new_pos + 1
     end
 
-    -- Deleted lines from old
     for _ = 1, count_a do
       result_lines[#result_lines + 1] = old_lines[old_pos]
       result_types[#result_types + 1] = "deleted"
       old_pos = old_pos + 1
     end
 
-    -- Added lines from new
     for _ = 1, count_b do
       result_lines[#result_lines + 1] = new_lines[new_pos]
       result_types[#result_types + 1] = "added"
@@ -128,7 +122,6 @@ function M.compute_inline_diff(old_text, new_text)
     end
   end
 
-  -- Remaining unchanged lines after the last hunk
   while new_pos <= #new_lines do
     result_lines[#result_lines + 1] = new_lines[new_pos]
     result_types[#result_types + 1] = "unchanged"
@@ -155,7 +148,6 @@ end
 -- ── Rendering ─────────────────────────────────────────────────────
 
 --- Apply the add/delete highlight + sign extmark for a single line.
---- Shared by the static and streaming renderers so the two stay consistent.
 ---@param buf number Buffer handle
 ---@param index number 1-based line index
 ---@param line_type string "added" | "deleted" | "unchanged"
@@ -181,36 +173,93 @@ end
 ---@param line_types string[] Parallel type array
 function M.render_diff_buffer(buf, lines, line_types)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-
   for i, lt in ipairs(line_types) do
     apply_line_mark(buf, i, lt)
   end
 end
 
---- Create a scratch editor window when the current tab only has terminal/sidebar windows.
----@return number win_id Window ID of the created scratch editor window
-local function create_fallback_editor_window()
-  vim.cmd("rightbelow vsplit")
-  local fallback_win = vim.api.nvim_get_current_win()
+---@param wpm number Words per minute
+local function wpm_to_ms_per_char(wpm)
+  return (60.0 / wpm / 5.0) * 1000.0
+end
 
-  local ok, err = pcall(function()
-    local scratch_buf = vim.api.nvim_create_buf(false, true)
-    if scratch_buf == 0 then
-      error({ code = -32000, message = "Buffer creation failed", data = "Could not create fallback editor buffer" })
-    end
+--- Progressively reveal `lines` in `buf` with a natural "typing" cadence.
+--- O(n) incremental, cancellable via `reveal_gen`.
+---@param buf number Buffer handle
+---@param lines string[] Full diff lines
+---@param line_types string[] Parallel type array
+---@param opts table|nil { delay_ms:number, chars_per_tick:number }
+local function render_diff_buffer_streamed(buf, lines, line_types, opts)
+  opts = opts or {}
+  local chars_per_tick = math.max(1, opts.chars_per_tick or 1)
+  local delay_floor_ms = math.max(0, opts.delay_ms or 0)
 
-    vim.api.nvim_buf_set_option(scratch_buf, "bufhidden", "wipe")
-    vim.api.nvim_win_set_buf(fallback_win, scratch_buf)
-  end)
-
-  if not ok then
-    if fallback_win and vim.api.nvim_win_is_valid(fallback_win) then
-      pcall(vim.api.nvim_win_close, fallback_win, true)
-    end
-    error(err)
+  local full = table.concat(lines, "\n")
+  local len = #full
+  if len == 0 then
+    vim.api.nvim_buf_set_option(buf, "modifiable", false)
+    return
   end
 
-  return fallback_win
+  reveal_gen = reveal_gen + 1
+  local my_gen = reveal_gen
+  local buf_lines = { "" }
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, buf_lines)
+  local committed = 0
+  local marked_count = 0
+
+  local function reveal_up_to(target_pos)
+    target_pos = math.min(len, target_pos)
+    if target_pos <= committed then
+      return
+    end
+
+    local delta = full:sub(committed + 1, target_pos)
+    committed = target_pos
+
+    local parts = vim.split(delta, "\n", { plain = true })
+    buf_lines[#buf_lines] = buf_lines[#buf_lines] .. parts[1]
+    for k = 2, #parts do
+      buf_lines[#buf_lines + 1] = parts[k]
+    end
+
+    local tail_from = #buf_lines - #parts + 1
+    vim.api.nvim_buf_set_lines(buf, tail_from - 1, -1, false, vim.list_slice(buf_lines, tail_from))
+
+    local complete_count
+    if committed >= len then
+      complete_count = (#buf_lines > 0 and buf_lines[#buf_lines] == "") and (#buf_lines - 1) or #buf_lines
+    else
+      complete_count = math.max(0, #buf_lines - 1)
+    end
+    complete_count = math.min(complete_count, #line_types)
+
+    for i = marked_count + 1, complete_count do
+      apply_line_mark(buf, i, line_types[i])
+    end
+    marked_count = complete_count
+  end
+
+  local function tick()
+    if my_gen ~= reveal_gen then
+      return
+    end
+    if not vim.api.nvim_buf_is_valid(buf) or committed >= len then
+      vim.api.nvim_buf_set_option(buf, "modifiable", false)
+      return
+    end
+
+    reveal_up_to(committed + chars_per_tick)
+    if committed >= len or not vim.api.nvim_buf_is_valid(buf) then
+      vim.api.nvim_buf_set_option(buf, "modifiable", false)
+      return
+    end
+
+    local wpm = math.random(400, 1000)
+    vim.defer_fn(tick, math.max(delay_floor_ms, math.floor(wpm_to_ms_per_char(wpm))))
+  end
+
+  tick()
 end
 
 --- Clean up inline diff resources if setup fails before state registration.
@@ -218,81 +267,35 @@ end
 ---@param partial table Partially created resources
 local function cleanup_unregistered_inline_setup(tab_name, partial)
   local diff = require("claudecode.diff")
-
   if diff._get_active_diffs()[tab_name] then
     diff._cleanup_diff_state(tab_name, "setup failed")
     return
   end
-
   for _, autocmd_id in ipairs(partial.autocmd_ids or {}) do
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
   end
-
-  local original_tab = partial.original_tab_number
-  local stranded_tab = partial.new_tab_number
-  if not (stranded_tab and vim.api.nvim_tabpage_is_valid(stranded_tab)) then
-    local current_tab = vim.api.nvim_get_current_tabpage()
-    if original_tab and vim.api.nvim_tabpage_is_valid(original_tab) and current_tab ~= original_tab then
-      stranded_tab = current_tab
-    end
-  end
-
-  if stranded_tab and vim.api.nvim_tabpage_is_valid(stranded_tab) and stranded_tab ~= original_tab then
-    pcall(vim.api.nvim_set_current_tabpage, stranded_tab)
-    pcall(vim.cmd, "tabclose")
-    if original_tab and vim.api.nvim_tabpage_is_valid(original_tab) then
-      pcall(vim.api.nvim_set_current_tabpage, original_tab)
-    end
-  else
-    if partial.diff_window and vim.api.nvim_win_is_valid(partial.diff_window) then
-      pcall(vim.api.nvim_win_close, partial.diff_window, true)
-    end
-
-    if partial.fallback_window and vim.api.nvim_win_is_valid(partial.fallback_window) then
-      pcall(vim.api.nvim_win_close, partial.fallback_window, true)
-    end
-  end
-
   if partial.new_buffer and vim.api.nvim_buf_is_valid(partial.new_buffer) then
     pcall(vim.api.nvim_buf_delete, partial.new_buffer, { force = true })
-  end
-
-  if partial.had_terminal_in_original then
-    local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
-    if terminal_ok then
-      pcall(terminal_module.ensure_visible)
-    end
   end
 end
 
 -- ── Setup ─────────────────────────────────────────────────────────
 
---- Set up an inline diff view for the given parameters.
+--- Prepare the unified diff in ClaudeCodeBuffer without auto-opening a window.
+--- Call `open_inline_diff()` to show the buffer wherever you want.
 ---@param params table Diff parameters (old_file_path, new_file_path, new_file_contents, tab_name)
 ---@param resolution_callback function Callback to call when diff resolves
 ---@param config table Plugin configuration
 function M.setup_inline_diff(params, resolution_callback, config)
   local diff = require("claudecode.diff")
 
-  -- Hoist handles/resources so the caller can clean up on failure before state registration.
-  local original_tab_number = nil
-  local new_tab_handle = nil
-  local had_terminal_in_original = false
-  local created_new_tab = false
-  local terminal_win_in_new_tab = nil
   local autocmd_ids = {}
   local buf = nil
   local partial_setup = {
     new_buffer = nil,
-    original_tab_number = nil,
-    new_tab_number = nil,
-    had_terminal_in_original = false,
-    diff_window = nil,
-    fallback_window = nil,
     autocmd_ids = autocmd_ids,
   }
 
-  -- Run a setup step, rolling back any unregistered resources on failure.
   local function guard(action)
     local results = { pcall(action) }
     if not results[1] then
@@ -302,12 +305,11 @@ function M.setup_inline_diff(params, resolution_callback, config)
     return unpack(results, 2)
   end
 
-  -- Version check: the diff function (vim.text.diff / vim.diff) requires Neovim >= 0.9.0
   if not get_diff_fn() then
     error({
       code = -32000,
       message = "Inline diff requires Neovim >= 0.9.0",
-      data = "vim.text.diff()/vim.diff() is not available. Please use layout = 'vertical' or 'horizontal', or upgrade Neovim.",
+      data = "vim.text.diff()/vim.diff() is not available.",
     })
   end
 
@@ -317,212 +319,74 @@ function M.setup_inline_diff(params, resolution_callback, config)
   local old_file_exists = vim.fn.filereadable(params.old_file_path) == 1
   local is_new_file = not old_file_exists
 
-  -- Dirty buffer check
   if old_file_exists then
     local is_dirty = diff._is_buffer_dirty(params.old_file_path)
     if is_dirty then
       error({
         code = -32000,
         message = "Cannot create diff: file has unsaved changes",
-        data = "Please save (:w) or discard (:e!) changes to " .. params.old_file_path .. " before creating diff",
+        data = "Please save (:w) or discard (:e!) changes to " .. params.old_file_path,
       })
     end
   end
 
-  -- Read old file content
   local old_text = ""
   if not is_new_file then
-    local f, open_err = io.open(params.old_file_path, "r")
+    local f = io.open(params.old_file_path, "r")
     if f then
       old_text = f:read("*a") or ""
       f:close()
     else
-      error({
-        code = -32000,
-        message = "Failed to read original file for diff",
-        data = tostring(open_err or params.old_file_path),
-      })
+      error({ code = -32000, message = "Failed to read original file", data = params.old_file_path })
     end
   end
 
-  -- Compute diff
   local ok_diff, lines, line_types = pcall(M.compute_inline_diff, old_text, params.new_file_contents)
   if not ok_diff then
-    error({
-      code = -32000,
-      message = "Failed to compute inline diff",
-      data = tostring(lines),
-    })
+    error({ code = -32000, message = "Failed to compute inline diff", data = tostring(lines) })
   end
 
-  -- Use the single persistent ClaudeCodeBuffer (cleared + re-rendered per diff).
   buf = guard(get_or_create_claudecode_buffer)
 
-  -- If a previous unified diff is still active in this buffer, tear it down first so
-  -- only one diff owns the shared buffer at a time.
-  local stale_names = {}
+  -- Tear down any prior diff using this buffer
   for name, d in pairs(diff._get_active_diffs()) do
     if d.layout == "unified" and d.new_buffer == buf then
-      stale_names[#stale_names + 1] = name
+      diff._cleanup_diff_state(name, "replaced by new diff")
     end
   end
-  for _, name in ipairs(stale_names) do
-    diff._cleanup_diff_state(name, "replaced by new diff")
-  end
 
-  -- Render content + highlights (static full render).
-  M.render_diff_buffer(buf, lines, line_types)
-  vim.api.nvim_buf_set_option(buf, "modifiable", false)
+  -- Render (streaming or static) - no window opened
+  if config and config.diff_opts and config.diff_opts.stream_reveal then
+    vim.api.nvim_buf_set_option(buf, "modifiable", true)
+    render_diff_buffer_streamed(buf, lines, line_types, {
+      delay_ms = config.diff_opts.stream_reveal_delay_ms or 0,
+      chars_per_tick = config.diff_opts.stream_reveal_chars_per_tick or 1,
+    })
+  else
+    M.render_diff_buffer(buf, lines, line_types)
+    vim.api.nvim_buf_set_option(buf, "modifiable", false)
+  end
   partial_setup.new_buffer = buf
 
-  -- Buffer metadata
   vim.b[buf].claudecode_diff_tab_name = tab_name
   vim.b[buf].claudecode_inline_diff = true
 
-  -- Syntax highlighting via filetype
   local ft = diff._detect_filetype(params.new_file_path)
   if ft and ft ~= "" then
     vim.api.nvim_set_option_value("filetype", ft, { buf = buf })
   end
 
-  -- Handle new-tab mode
-  if config and config.diff_opts and config.diff_opts.open_in_new_tab then
-    original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle = guard(function()
-      return diff._display_terminal_in_new_tab()
-    end)
-    partial_setup.original_tab_number = original_tab_number
-    partial_setup.new_tab_number = new_tab_handle
-    partial_setup.had_terminal_in_original = had_terminal_in_original
-    created_new_tab = true
-  end
-
-  -- Save terminal window width so we can restore it after the diff closes
-  local term_win = diff._find_claudecode_terminal_window()
-  local term_width = nil
-  if term_win and vim.api.nvim_win_is_valid(term_win) then
-    term_width = vim.api.nvim_win_get_width(term_win)
-  end
-
-  local function reuse_or_open_diff_window()
-    local diff_win = diff._get_or_create_editor_win_in_diff_tab()
-    if diff_win and vim.api.nvim_win_is_valid(diff_win) then
-      -- Only reuse a window that lives in the current tabpage, so we never hijack
-      -- or switch away from an unrelated user tab.
-      local in_current_tab = false
-      for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if w == diff_win then
-          in_current_tab = true
-          break
-        end
-      end
-      if in_current_tab then
-        vim.api.nvim_set_current_win(diff_win)
-        return diff_win
-      end
-    end
-    return nil
-  end
-
-  local editor_win
-  local fallback_window
-  local diff_win = reuse_or_open_diff_window()
-
-  if diff_win then
-    vim.api.nvim_set_current_win(diff_win)
-    vim.api.nvim_win_set_buf(diff_win, buf)
-  else
-    if created_new_tab then
-      local tab_wins = vim.api.nvim_tabpage_list_wins(0)
-      for _, w in ipairs(tab_wins) do
-        if w ~= terminal_win_in_new_tab then
-          editor_win = w
-          break
-        end
-      end
-      if not editor_win and #tab_wins > 0 then
-        editor_win = tab_wins[1]
-      end
-    else
-      editor_win = diff._find_main_editor_window()
-      if not editor_win then
-        fallback_window = guard(create_fallback_editor_window)
-        partial_setup.fallback_window = fallback_window
-        editor_win = fallback_window
-      end
-    end
-    guard(function()
-      assert(editor_win and vim.api.nvim_win_is_valid(editor_win), "ClaudeCode unified diff target window must be valid")
-      vim.api.nvim_set_current_win(editor_win)
-      vim.cmd("rightbelow vsplit")
-      diff_win = vim.api.nvim_get_current_win()
-      partial_setup.diff_window = diff_win
-      vim.api.nvim_win_set_buf(diff_win, buf)
-    end)
-  end
-
-  -- Configure window for sign column display
-  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { win = diff_win })
-
-  -- Equalize window widths
-  guard(function()
-    vim.cmd("wincmd =")
-  end)
-
-  -- Scroll to first change
-  for i, lt in ipairs(line_types) do
-    if lt ~= "unchanged" then
-      pcall(vim.api.nvim_win_set_cursor, diff_win, { i, 0 })
-      break
-    end
-  end
-
-  -- Handle terminal focus
-  if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
-    vim.schedule(function()
-      if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
-        vim.api.nvim_set_current_win(terminal_win_in_new_tab)
-        vim.cmd("startinsert")
-        return
-      end
-
-      local terminal_win = diff._find_claudecode_terminal_window()
-      if terminal_win then
-        vim.api.nvim_set_current_win(terminal_win)
-        vim.cmd("startinsert")
-      end
-    end)
-  end
-
-  -- Restore terminal width after opening the split
-  guard(function()
-    if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
-      local terminal_config = config.terminal or {}
-      local split_width = terminal_config.split_width_percentage or 0.30
-      local total_width = vim.o.columns
-      local terminal_width = math.floor(total_width * split_width)
-      vim.api.nvim_win_set_width(terminal_win_in_new_tab, terminal_width)
-    elseif term_win and vim.api.nvim_win_is_valid(term_win) then
-      local win_config = vim.api.nvim_win_get_config(term_win)
-      local is_floating = win_config.relative and win_config.relative ~= ""
-      if not is_floating and term_width then
-        pcall(vim.api.nvim_win_set_width, term_win, term_width)
-      end
-    end
-  end)
-
-  -- Register autocmds and state with layout = "unified"
+  -- Register state (window opened later via open_inline_diff or autocmd)
   guard(function()
     local aug = diff._get_autocmd_group()
-
     autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufWriteCmd", {
       group = aug,
       buffer = buf,
       callback = function()
         diff._resolve_diff_as_saved(tab_name, buf)
-        return true -- prevent actual write
+        return true
       end,
     })
-
     for _, ev in ipairs({ "BufDelete", "BufUnload", "BufWipeout" }) do
       autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd(ev, {
         group = aug,
@@ -532,15 +396,11 @@ function M.setup_inline_diff(params, resolution_callback, config)
         end,
       })
     end
-
     diff._register_diff_state(tab_name, {
       old_file_path = params.old_file_path,
       new_file_path = params.new_file_path,
       new_file_contents = params.new_file_contents,
       new_buffer = buf,
-      new_window = diff_win,
-      target_window = editor_win,
-      fallback_window = fallback_window,
       lines = lines,
       line_types = line_types,
       is_new_file = is_new_file,
@@ -550,74 +410,92 @@ function M.setup_inline_diff(params, resolution_callback, config)
       resolution_callback = resolution_callback,
       result_content = nil,
       layout = "unified",
-      -- Track the originating MCP client so close_diffs_for_client can tear this
-      -- diff down if that client disconnects (parity with the native path, #261).
       client_id = params.client_id,
-      -- Tab/window tracking
-      original_tab_number = original_tab_number,
-      created_new_tab = created_new_tab,
-      new_tab_number = new_tab_handle,
-      had_terminal_in_original = had_terminal_in_original,
-      terminal_win_in_new_tab = terminal_win_in_new_tab,
-      term_win = term_win,
-      term_width = term_width,
     })
   end)
 end
 
--- ── Resolution functions ──────────────────────────────────────────
+-- ── User commands ────────────────────────────────────────────────
+
+---Open ClaudeCodeBuffer in the current tab. Creates a vsplit if not already shown.
+---@param tab_name string|nil Optional tab_name to link the window to
+function M.open_inline_diff(tab_name)
+  local buf = vim.fn.bufnr(CLAUDE_BUFFER_NAME)
+  if buf == -1 or not vim.api.nvim_buf_is_valid(buf) then
+    vim.notify("ClaudeCode: no diff buffer ready", vim.log.levels.INFO)
+    return
+  end
+
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      vim.api.nvim_set_current_win(win)
+      return
+    end
+  end
+
+  vim.cmd("rightbelow vsplit")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_buf(win, buf)
+  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { win = win })
+  vim.cmd("wincmd =")
+
+  if tab_name then
+    local diff = require("claudecode.diff")
+    local diff_data = diff._get_active_diffs()[tab_name]
+    if diff_data and vim.api.nvim_win_is_valid(win) then
+      diff_data.new_window = win
+    end
+  end
+end
+
+---Close ClaudeCodeBuffer window if visible in current tab.
+function M.close_inline_diff()
+  local buf = vim.fn.bufnr(CLAUDE_BUFFER_NAME)
+  if buf == -1 then
+    return
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(win) == buf then
+      pcall(vim.api.nvim_win_close, win, false)
+      return
+    end
+  end
+end
+
+-- ── Resolution & Cleanup ─────────────────────────────────────────
 
 --- Resolve an inline diff as saved (user accepted changes).
 ---@param tab_name string The diff identifier
 ---@param diff_data table The diff state data
 function M.resolve_inline_as_saved(tab_name, diff_data)
   logger.debug("diff", "Accepting inline diff for", tab_name)
-
   local content = M.extract_new_content(diff_data.lines, diff_data.line_types)
-  -- Preserve trailing newline when original new_file_contents had one
   if diff_data.new_file_contents:sub(-1) == "\n" and content:sub(-1) ~= "\n" then
     content = content .. "\n"
   end
-
   local result = {
-    content = {
-      { type = "text", text = "FILE_SAVED" },
-      { type = "text", text = content },
-    },
+    content = { { type = "text", text = "FILE_SAVED" }, { type = "text", text = content } },
   }
-
   diff_data.status = "saved"
   diff_data.result_content = result
-
   if diff_data.resolution_callback then
     diff_data.resolution_callback(result)
-  else
-    logger.debug("diff", "No resolution callback found for saved inline diff", tab_name)
   end
-
-  logger.debug("diff", "Inline diff saved; awaiting close_tab for cleanup")
 end
 
---- Resolve an inline diff as rejected (user closed/rejected).
+--- Resolve an inline diff as rejected.
 ---@param tab_name string The diff identifier
 ---@param diff_data table The diff state data
 function M.resolve_inline_as_rejected(tab_name, diff_data)
   local result = {
-    content = {
-      { type = "text", text = "DIFF_REJECTED" },
-      { type = "text", text = tab_name },
-    },
+    content = { { type = "text", text = "DIFF_REJECTED" }, { type = "text", text = tab_name } },
   }
-
   diff_data.status = "rejected"
   diff_data.result_content = result
-
   if diff_data.resolution_callback then
     diff_data.resolution_callback(result)
   end
 end
-
--- ── Cleanup ───────────────────────────────────────────────────────
 
 --- Clean up an inline diff's state and UI.
 ---@param tab_name string The diff identifier
@@ -625,60 +503,25 @@ end
 function M.cleanup_inline_diff(tab_name, diff_data)
   local diff = require("claudecode.diff")
 
-  -- Clean up autocmds
+  reveal_gen = reveal_gen + 1 -- Stop streaming animation
+
   for _, autocmd_id in ipairs(diff_data.autocmd_ids or {}) do
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
   end
 
-  -- Handle new-tab cleanup
-  if diff_data.created_new_tab then
-    -- Keep tab 2 open: the persistent ClaudeCodeBuffer now shows the reviewed file
-    -- there. Just restore focus to the original tab per the user's workflow.
-    if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
-      pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
-    end
-
-    -- Ensure terminal remains visible in the original tab
-    local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
-    if terminal_ok and diff_data.had_terminal_in_original then
-      pcall(terminal_module.ensure_visible)
-      local terminal_win = diff._find_claudecode_terminal_window()
-      if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-        local win_config = vim.api.nvim_win_get_config(terminal_win)
-        local is_floating = win_config.relative and win_config.relative ~= ""
-        if not is_floating and diff_data.term_width then
-          pcall(vim.api.nvim_win_set_width, terminal_win, diff_data.term_width)
-        end
-      end
-    end
-  else
-    -- Close the diff split window
-    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-      pcall(vim.api.nvim_win_close, diff_data.new_window, true)
-    end
-
-    if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
-      pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
-    end
-
-    -- Restore terminal width
-    if diff_data.term_win and vim.api.nvim_win_is_valid(diff_data.term_win) then
-      local win_config = vim.api.nvim_win_get_config(diff_data.term_win)
-      local is_floating = win_config.relative and win_config.relative ~= ""
-      if not is_floating and diff_data.term_width then
-        pcall(vim.api.nvim_win_set_width, diff_data.term_win, diff_data.term_width)
-      end
+  -- Close any window(s) showing the buffer
+  if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
+    for _, win in ipairs(vim.fn.win_findbuf(diff_data.new_buffer)) do
+      pcall(vim.api.nvim_win_close, win, false)
     end
   end
 
-  -- Keep the fixed ClaudeCodeBuffer open: instead of wiping it, clear the diff
-  -- state and load the file whose changes were reviewed so it stays on screen.
+  -- Keep the ClaudeCodeBuffer open: load the reviewed file content after diff
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
     pcall(function()
       local b = diff_data.new_buffer
       vim.api.nvim_buf_set_option(b, "modifiable", true)
       vim.api.nvim_buf_clear_namespace(b, ns, 0, -1)
-
       local content_lines = {}
       local f = io.open(diff_data.old_file_path, "r")
       if f then
@@ -686,18 +529,15 @@ function M.cleanup_inline_diff(tab_name, diff_data)
         f:close()
         content_lines = vim.split(text, "\n", { plain = true })
         if #content_lines > 0 and content_lines[#content_lines] == "" then
-          table.remove(content_lines, #content_lines)
+          table.remove(content_lines)
         end
       end
       vim.api.nvim_buf_set_lines(b, 0, -1, false, content_lines)
-
-      -- Keep it as a persistent review buffer (no auto-wipe) showing the file.
       vim.api.nvim_buf_set_option(b, "buftype", "nofile")
       vim.api.nvim_buf_set_option(b, "bufhidden", "hide")
       vim.api.nvim_buf_set_option(b, "modifiable", false)
       vim.b[b].claudecode_inline_diff = nil
       vim.b[b].claudecode_diff_tab_name = nil
-
       local ft = diff._detect_filetype(diff_data.old_file_path)
       if ft and ft ~= "" then
         vim.api.nvim_set_option_value("filetype", ft, { buf = b })
