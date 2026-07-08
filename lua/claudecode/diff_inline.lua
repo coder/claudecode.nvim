@@ -756,23 +756,23 @@ function M.cleanup_inline_diff(tab_name, diff_data)
   end
 
   -- Keep the ClaudeCodeBuffer open, showing plain file content (no diff markup).
-  -- On ACCEPT show the proposed content (what gets written — reading old_file_path
-  -- here would be stale since Claude may not have written yet). On REJECT/cancel
-  -- show the ORIGINAL content so the discarded change is not left on screen.
+  -- The buffer must reflect what actually happened to the file:
+  --   * Explicit accept (`:w`, status "saved"): show the proposed content. We
+  --     trust new_file_contents and do NOT read the file — Claude may not have
+  --     written it yet, so a disk read here would be stale.
+  --   * Otherwise (explicit reject, or a Claude-side accept that arrives as a
+  --     pending close and is marked "rejected"): show the original immediately,
+  --     then reconcile from disk once Claude has finished writing. Disk is the
+  --     source of truth — new content if the change was applied, original if not.
   -- (do NOT close the window)
+  local accepted = diff_data.status == "saved"
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
+    local b = diff_data.new_buffer
     pcall(function()
-      local b = diff_data.new_buffer
       vim.api.nvim_buf_set_option(b, "modifiable", true)
       vim.api.nvim_buf_clear_namespace(b, ns, 0, -1)
-      local content
-      if diff_data.status == "saved" then
-        content = diff_data.new_file_contents or ""
-      else
-        content = diff_data.old_file_contents or ""
-      end
-      local content_lines = split_lines(content)
-      vim.api.nvim_buf_set_lines(b, 0, -1, false, content_lines)
+      local content = accepted and (diff_data.new_file_contents or "") or (diff_data.old_file_contents or "")
+      vim.api.nvim_buf_set_lines(b, 0, -1, false, split_lines(content))
       vim.api.nvim_buf_set_option(b, "buftype", "nofile")
       vim.api.nvim_buf_set_option(b, "bufhidden", "hide")
       vim.api.nvim_buf_set_option(b, "modifiable", false)
@@ -783,6 +783,33 @@ function M.cleanup_inline_diff(tab_name, diff_data)
         vim.api.nvim_set_option_value("filetype", ft, { buf = b })
       end
     end)
+
+    -- Non-accept path: reconcile from disk after Claude's async write lands, so a
+    -- Claude-side accept (written file, pending close) ends up showing the new
+    -- content rather than the stale original. A genuine reject leaves the file
+    -- unchanged, so this is a no-op there.
+    if not accepted then
+      local path = diff_data.old_file_path
+      vim.defer_fn(function()
+        if not (path and vim.api.nvim_buf_is_valid(b)) then
+          return
+        end
+        if vim.fn.filereadable(path) ~= 1 then
+          return
+        end
+        local fh = io.open(path, "r")
+        if not fh then
+          return
+        end
+        local disk = fh:read("*a") or ""
+        fh:close()
+        pcall(function()
+          vim.api.nvim_buf_set_option(b, "modifiable", true)
+          vim.api.nvim_buf_set_lines(b, 0, -1, false, split_lines(disk))
+          vim.api.nvim_buf_set_option(b, "modifiable", false)
+        end)
+      end, 150)
+    end
   end
 
   -- Clear current diff marker
