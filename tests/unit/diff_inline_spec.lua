@@ -425,7 +425,7 @@ describe("Inline diff module", function()
       vim.api.nvim_del_autocmd = original_del
     end)
 
-    it("should close diff window in new-tab mode", function()
+    it("should keep the diff window open on cleanup (persistent buffer)", function()
       -- Simulate a new tab (tab 2) with a terminal window and an editor window
       local term_buf = vim.api.nvim_create_buf(false, true)
       local editor_buf = vim.api.nvim_create_buf(false, true)
@@ -453,7 +453,7 @@ describe("Inline diff module", function()
 
       vim._tab_windows[new_tab] = { term_win, editor_win, diff_win }
 
-      -- Also have a window in tab 1 (original tab) to catch wrong-tab bugs
+      -- Also have a window in tab 1 (original tab)
       local old_tab = 1
       local old_win = vim._next_winid
       vim._next_winid = vim._next_winid + 1
@@ -468,17 +468,19 @@ describe("Inline diff module", function()
         original_tab_number = old_tab,
         new_window = diff_win,
         new_buffer = diff_buf,
+        new_file_path = "test.lua",
+        new_file_contents = "a\nb\n",
       }
 
       diff_inline.cleanup_inline_diff("test_tab", diff_data)
 
-      -- Diff window should be closed, original tab window should remain
-      assert.is_nil(vim._windows[diff_win])
+      -- Persistent buffer: the diff window stays open (never auto-closed), and
+      -- the original tab's window is untouched.
+      assert.is_not_nil(vim._windows[diff_win])
       assert.is_not_nil(vim._windows[old_win])
     end)
 
-    it("should close diff window when not in new tab", function()
-      -- Create a window for the diff
+    local function make_diff_window()
       local buf = vim.api.nvim_create_buf(false, true)
       local winid = vim._next_winid
       vim._next_winid = vim._next_winid + 1
@@ -487,18 +489,54 @@ describe("Inline diff module", function()
       local tab_wins = vim._tab_windows[vim._current_tabpage] or {}
       table.insert(tab_wins, winid)
       vim._tab_windows[vim._current_tabpage] = tab_wins
+      return buf, winid
+    end
+
+    it("on accept keeps the window open and shows the proposed content", function()
+      local buf, winid = make_diff_window()
 
       local diff_data = {
         autocmd_ids = {},
         created_new_tab = false,
         new_window = winid,
         new_buffer = buf,
+        new_file_path = "test.lua",
+        status = "saved",
+        new_file_contents = "hello\nworld\n",
+        old_file_contents = "hello\n",
       }
 
       diff_inline.cleanup_inline_diff("test_tab", diff_data)
 
-      -- Window should be closed
-      assert.is_nil(vim._windows[winid])
+      -- Window stays open and shows the accepted (proposed) content.
+      assert.is_not_nil(vim._windows[winid])
+      local lines = vim._buffers[buf].lines
+      assert.are.equal(2, #lines)
+      assert.are.equal("hello", lines[1])
+      assert.are.equal("world", lines[2])
+    end)
+
+    it("on reject keeps the window open and shows the ORIGINAL content", function()
+      local buf, winid = make_diff_window()
+
+      local diff_data = {
+        autocmd_ids = {},
+        created_new_tab = false,
+        new_window = winid,
+        new_buffer = buf,
+        new_file_path = "test.lua",
+        status = "rejected",
+        new_file_contents = "hello\nworld\n",
+        old_file_contents = "hello\n",
+      }
+
+      diff_inline.cleanup_inline_diff("test_tab", diff_data)
+
+      -- Window stays open; the discarded change is gone — original content only.
+      assert.is_not_nil(vim._windows[winid])
+      local lines = vim._buffers[buf].lines
+      assert.are.equal(1, #lines)
+      assert.are.equal("hello", lines[1])
     end)
   end)
 end)
