@@ -313,6 +313,32 @@ local function scroll_to_first_change(buf, win)
   end)
 end
 
+--- Create a scratch editor window when the current tab only has terminal/sidebar
+--- windows, giving the diff split something to anchor to. Returns the new window.
+---@return number win_id
+local function create_fallback_editor_window()
+  vim.cmd("rightbelow vsplit")
+  local fallback_win = vim.api.nvim_get_current_win()
+
+  local ok, err = pcall(function()
+    local scratch_buf = vim.api.nvim_create_buf(false, true)
+    if scratch_buf == 0 then
+      error({ code = -32000, message = "Buffer creation failed", data = "Could not create fallback editor buffer" })
+    end
+    vim.api.nvim_buf_set_option(scratch_buf, "bufhidden", "wipe")
+    vim.api.nvim_win_set_buf(fallback_win, scratch_buf)
+  end)
+
+  if not ok then
+    if fallback_win and vim.api.nvim_win_is_valid(fallback_win) then
+      pcall(vim.api.nvim_win_close, fallback_win, true)
+    end
+    error(err)
+  end
+
+  return fallback_win
+end
+
 --- Clean up inline diff resources if setup fails before state registration.
 ---@param tab_name string Diff identifier
 ---@param partial table Partially created resources
@@ -327,6 +353,13 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
   for _, autocmd_id in ipairs(partial.autocmd_ids or {}) do
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
   end
+  -- Close any windows opened before the failure (diff split + terminal-only fallback).
+  if partial.diff_window and vim.api.nvim_win_is_valid(partial.diff_window) then
+    pcall(vim.api.nvim_win_close, partial.diff_window, true)
+  end
+  if partial.fallback_window and vim.api.nvim_win_is_valid(partial.fallback_window) then
+    pcall(vim.api.nvim_win_close, partial.fallback_window, true)
+  end
   if partial.new_buffer and vim.api.nvim_buf_is_valid(partial.new_buffer) then
     pcall(vim.api.nvim_buf_delete, partial.new_buffer, { force = true })
   end
@@ -334,8 +367,8 @@ end
 
 -- ── Setup ─────────────────────────────────────────────────────────
 
---- Prepare the unified diff in ClaudeCodeBuffer without auto-opening a window.
---- Call `open_inline_diff()` to show the buffer wherever you want.
+--- Prepare the unified diff in ClaudeCodeBuffer and show it in a split in the
+--- current tab (reusing an existing ClaudeCodeBuffer window if one is open).
 ---@param params table Diff parameters (old_file_path, new_file_path, new_file_contents, tab_name)
 ---@param resolution_callback function Callback to call when diff resolves
 ---@param config table Plugin configuration
@@ -346,6 +379,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
   local buf = nil
   local partial_setup = {
     new_buffer = nil,
+    diff_window = nil,
+    fallback_window = nil,
     autocmd_ids = autocmd_ids,
   }
 
@@ -468,7 +503,37 @@ function M.setup_inline_diff(params, resolution_callback, config)
     vim.api.nvim_set_option_value("filetype", ft, { buf = buf })
   end
 
-  -- Register state (window opened later via open_inline_diff or autocmd)
+  -- Show the buffer in a split in the CURRENT tab. Reuse an existing
+  -- ClaudeCodeBuffer window if one is already open (e.g. from a prior diff or a
+  -- queued one); otherwise split off the main editor window. In a terminal-only
+  -- tab (no editor window) create a throwaway scratch window to anchor the split.
+  local editor_win, fallback_window, diff_win
+  for _, w in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.api.nvim_win_get_buf(w) == buf then
+      diff_win = w
+      break
+    end
+  end
+  if not diff_win then
+    editor_win = diff._find_main_editor_window()
+    if not editor_win then
+      fallback_window = guard(create_fallback_editor_window)
+      partial_setup.fallback_window = fallback_window
+      editor_win = fallback_window
+    end
+    guard(function()
+      assert(editor_win and vim.api.nvim_win_is_valid(editor_win), "ClaudeCode unified diff target window must be valid")
+      vim.api.nvim_set_current_win(editor_win)
+      vim.cmd("rightbelow vsplit")
+      diff_win = vim.api.nvim_get_current_win()
+      partial_setup.diff_window = diff_win
+      vim.api.nvim_win_set_buf(diff_win, buf)
+    end)
+  end
+  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { win = diff_win })
+  pcall(vim.cmd, "wincmd =")
+
+  -- Register state
   guard(function()
     local aug = diff._get_autocmd_group()
     autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufWriteCmd", {
@@ -497,7 +562,11 @@ function M.setup_inline_diff(params, resolution_callback, config)
       old_file_path = params.old_file_path,
       new_file_path = params.new_file_path,
       new_file_contents = params.new_file_contents,
+      old_file_contents = old_text,
       new_buffer = buf,
+      new_window = diff_win,
+      target_window = editor_win,
+      fallback_window = fallback_window,
       lines = lines,
       line_types = line_types,
       is_new_file = is_new_file,
@@ -511,14 +580,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
     })
   end)
 
-  -- If the buffer is already visible (e.g. a queued diff whose window was opened
-  -- before this setup ran), jump to the first change now.
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-    if vim.api.nvim_win_get_buf(win) == buf then
-      scroll_to_first_change(buf, win)
-      break
-    end
-  end
+  -- Jump to the first change in the diff window.
+  scroll_to_first_change(buf, diff_win)
 end
 
 -- ── User commands ────────────────────────────────────────────────
@@ -686,17 +749,29 @@ function M.cleanup_inline_diff(tab_name, diff_data)
     pcall(vim.api.nvim_del_autocmd, autocmd_id)
   end
 
-  -- Keep the ClaudeCodeBuffer open showing the UPDATED (proposed) file content —
-  -- never revert to the old file. `new_file_contents` is the change Claude proposed;
-  -- reading old_file_path here would show stale content (on accept Claude may not
-  -- have written the file yet). Applies to both accept and reject so the buffer
-  -- always displays the new version. (do NOT close the window)
+  -- Close the throwaway scratch window created for a terminal-only tab; the diff
+  -- window itself stays open (persistent buffer). No-op when no fallback was made.
+  if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
+    pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
+  end
+
+  -- Keep the ClaudeCodeBuffer open, showing plain file content (no diff markup).
+  -- On ACCEPT show the proposed content (what gets written — reading old_file_path
+  -- here would be stale since Claude may not have written yet). On REJECT/cancel
+  -- show the ORIGINAL content so the discarded change is not left on screen.
+  -- (do NOT close the window)
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
     pcall(function()
       local b = diff_data.new_buffer
       vim.api.nvim_buf_set_option(b, "modifiable", true)
       vim.api.nvim_buf_clear_namespace(b, ns, 0, -1)
-      local content_lines = split_lines(diff_data.new_file_contents or "")
+      local content
+      if diff_data.status == "saved" then
+        content = diff_data.new_file_contents or ""
+      else
+        content = diff_data.old_file_contents or ""
+      end
+      local content_lines = split_lines(content)
       vim.api.nvim_buf_set_lines(b, 0, -1, false, content_lines)
       vim.api.nvim_buf_set_option(b, "buftype", "nofile")
       vim.api.nvim_buf_set_option(b, "bufhidden", "hide")
@@ -724,9 +799,8 @@ function M._process_next_queued_diff()
   local next = table.remove(diff_queue, 1)
   if not next then return end
 
-  -- Open the window first (so the buffer appears immediately when we set up the diff)
-  M.open_inline_diff(next.params.tab_name)
-
+  -- setup_inline_diff shows the buffer itself (reusing an open ClaudeCodeBuffer
+  -- window in the current tab, or splitting a new one), so no separate open here.
   local ok, err = pcall(M.setup_inline_diff, next.params, next.callback, next.config)
   if not ok then
     logger.error("diff", "Failed to set up queued diff:", tostring(err))
