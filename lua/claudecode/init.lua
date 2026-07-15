@@ -989,7 +989,7 @@ function M._create_commands()
       return
     end
 
-    local args = vim.split(opts.args, "%s+")
+    local args = opts.fargs
     local file_path = args[1]
     local start_line = args[2] and tonumber(args[2]) or nil
     local end_line = args[3] and tonumber(args[3]) or nil
