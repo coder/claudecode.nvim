@@ -30,6 +30,42 @@ function M.parse_token(text, col)
   return file, tonumber(line)
 end
 
+---Resolves the file reference under a click. Claude often splits a reference
+---across two tokens on one line -- "apps/.../fileFixEval.ts (locate'd at
+---fileFixEval.ts:848-852)" -- so a missing piece (the line number, or a path
+---that actually resolves) is borrowed from any token sharing the basename.
+---@param text string
+---@param col integer
+---@return string? file
+---@return integer? line
+function M.resolve(text, col)
+  local file, line = M.parse_token(text, col)
+  if not file then
+    return nil
+  end
+  local base = vim.fs.basename(file)
+  if not line then
+    for f2, l2 in text:gmatch("([%w%._/%-]+):(%d+)") do
+      if vim.fs.basename(f2) == base then
+        line = tonumber(l2)
+        break
+      end
+    end
+  end
+  if vim.fn.filereadable(file) == 0 then
+    for f2 in text:gmatch("[%w%._/%-]+") do
+      if f2 ~= file and vim.fs.basename(f2) == base and vim.fn.filereadable(f2) == 1 then
+        file = f2
+        break
+      end
+    end
+    if vim.fn.filereadable(file) == 0 then
+      return nil
+    end
+  end
+  return file, line
+end
+
 ---Jumps to the file reference under the mouse. A floating terminal covers the
 ---editor, so it is hidden first (simple_toggle on a visible terminal, which
 ---routes through the provider's safe hide path -- #240/#183); a split terminal
@@ -38,8 +74,8 @@ end
 local function jump(bufnr)
   local mp = vim.fn.getmousepos()
   local text = (vim.api.nvim_buf_get_lines(bufnr, mp.line - 1, mp.line, false))[1] or ""
-  local file, line = M.parse_token(text, mp.column)
-  if not file or vim.fn.filereadable(file) == 0 then
+  local file, line = M.resolve(text, mp.column)
+  if not file then
     return
   end
   local cfg = mp.winid ~= 0 and vim.api.nvim_win_is_valid(mp.winid) and vim.api.nvim_win_get_config(mp.winid)
