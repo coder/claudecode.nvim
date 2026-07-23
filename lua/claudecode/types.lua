@@ -98,6 +98,7 @@
 ---@field auto_insert boolean -- auto-enter insert/terminal mode when the Claude terminal gains focus (#232); false keeps Normal mode + scroll position
 ---@field env table<string, string>
 ---@field snacks_win_opts snacks.win.Config
+---@field file_jump_keys string|false|nil -- mouse mapping to open the file:line reference under the click (default "<2-LeftMouse>"); false disables
 ---@field cwd string|nil                 -- static working directory for Claude terminal
 ---@field git_repo_cwd boolean|nil      -- use git root of current file/cwd as working directory
 ---@field cwd_provider? ClaudeCodeCwdProvider -- custom function to compute working directory

@@ -21,6 +21,7 @@ local defaults = {
   auto_insert = true,
   env = {},
   snacks_win_opts = {},
+  file_jump_keys = "<2-LeftMouse>", -- mouse mapping to open the file:line reference under the click; false to disable
   fix_streamed_paste = "auto", -- work around Neovim <0.12.2 paste fragmentation (#161): true|false|"auto"
   -- Working directory control
   cwd = nil, -- static cwd override
@@ -533,6 +534,15 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify("claudecode.terminal.setup: Invalid value for snacks_win_opts", vim.log.levels.WARN)
       end
+    elseif k == "file_jump_keys" then
+      if v == false or type(v) == "string" then
+        defaults.file_jump_keys = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for file_jump_keys: " .. tostring(v) .. " (expected string or false)",
+          vim.log.levels.WARN
+        )
+      end
     elseif k == "fix_streamed_paste" then
       if type(v) == "boolean" or v == "auto" then
         defaults.fix_streamed_paste = v
@@ -582,6 +592,22 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
 
   -- Setup providers with config
   get_provider().setup(defaults)
+
+  -- Map file_jump_keys on the managed terminal buffer once it exists. The
+  -- provider registers its buffer after termopen() returns, so the ownership
+  -- check is deferred.
+  if defaults.file_jump_keys then
+    vim.api.nvim_create_autocmd("TermOpen", {
+      group = vim.api.nvim_create_augroup("ClaudeCodeFileJump", { clear = true }),
+      callback = function(ev)
+        vim.schedule(function()
+          if vim.api.nvim_buf_is_valid(ev.buf) and ev.buf == M.get_active_terminal_bufnr() then
+            require("claudecode.terminal.file_jump").attach(ev.buf, defaults.file_jump_keys)
+          end
+        end)
+      end,
+    })
+  end
 
   -- Streamed-paste compatibility shim for #161 (no-op on Neovim >= 0.12.2).
   require("claudecode.terminal.paste_fix").apply(defaults.fix_streamed_paste)
