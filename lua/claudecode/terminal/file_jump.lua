@@ -60,10 +60,36 @@ function M.resolve(text, col)
       end
     end
     if vim.fn.filereadable(file) == 0 then
+      file = M.find_by_basename(base)
+    end
+    if not file then
       return nil
     end
   end
   return file, line
+end
+
+---Finds a project file by basename for bare references like "fileFixEval.ts:97".
+---Loaded buffers are checked first (covers untracked files), then the git
+---index -- an existing, instant filename index that skips node_modules.
+---@param base string
+---@return string? file
+function M.find_by_basename(base)
+  for _, b in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(b) then
+      local n = vim.api.nvim_buf_get_name(b)
+      if vim.fs.basename(n) == base and vim.fn.filereadable(n) == 1 then
+        return n
+      end
+    end
+  end
+  local hits = vim.fn.systemlist({ "git", "ls-files", "--full-name", "--", base, "*/" .. base })
+  if vim.v.shell_error == 0 and hits[1] and hits[1] ~= "" then
+    -- ponytail: ambiguous basenames take git's first (lexical) hit; a picker
+    -- would be the upgrade if that ever chooses wrong.
+    return hits[1]
+  end
+  return nil
 end
 
 ---Jumps to the file reference under the mouse. A floating terminal covers the
