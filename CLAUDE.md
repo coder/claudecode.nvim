@@ -298,7 +298,7 @@ require("claudecode").setup({
 The `diff_opts` configuration allows you to customize diff behavior:
 
 - `layout` ("vertical"|"horizontal", default: `"vertical"`) - Whether the diff panes open in a vertical or horizontal split.
-- `keep_terminal_focus` (boolean, default: `false`) - When enabled, keeps focus in the Claude Code terminal when a diff opens instead of moving focus to the diff buffer. This allows you to continue using terminal keybindings like `<CR>` for accepting/rejecting diffs without accidentally triggering other mappings.
+- `keep_terminal_focus` (boolean, default: `false`) - When enabled, keeps focus in the Claude Code terminal when a diff opens instead of moving focus to the diff buffer. This allows you to continue using terminal keybindings like `<CR>` for accepting/rejecting diffs without accidentally triggering other mappings. Also applies when a same-tab diff is cleaned up (accepted via `:w` or rejected): focus returns to the Claude terminal instead of wherever Neovim's default window selection would otherwise land.
 - `open_in_new_tab` (boolean, default: `false`) - Open diffs in a new tab instead of the current tab.
 - `hide_terminal_in_new_tab` (boolean, default: `false`) - When opening diffs in a new tab, do not show the Claude terminal split in that new tab. The terminal remains in the original tab, giving maximum screen estate for reviewing the diff.
 - `on_new_file_reject` ("keep_empty"|"close_window", default: `"keep_empty"`) - Behavior when rejecting a diff for a new file (where the old file did not exist).

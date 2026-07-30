@@ -1250,10 +1250,13 @@ function M._cleanup_diff_state(tab_name, reason)
 
     -- Closing the diff windows above leaves Neovim to pick whatever window it
     -- considers "next" (often whatever else happens to be adjacent in the
-    -- split tree), not necessarily the Claude terminal. Explicitly refocus it
-    -- so accepting/rejecting a diff always returns you to the terminal.
-    if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
-      pcall(vim.api.nvim_set_current_win, terminal_win)
+    -- split tree), not necessarily the Claude terminal. When keep_terminal_focus
+    -- is set, honor it here too (it otherwise only applies at diff-open time)
+    -- and explicitly refocus the terminal.
+    if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+      if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+        pcall(vim.api.nvim_set_current_win, terminal_win)
+      end
     end
   end
 

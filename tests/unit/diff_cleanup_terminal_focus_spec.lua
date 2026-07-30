@@ -2,8 +2,9 @@ require("tests.busted_setup")
 
 -- Regression test: accepting a same-tab diff via `:w` (BufWriteCmd ->
 -- _resolve_diff_as_saved, then Claude's close_tab tool -> _cleanup_diff_state)
--- should return focus to the Claude terminal window afterward, instead of
--- leaving Neovim's default post-window-close selection to land anywhere.
+-- should return focus to the Claude terminal window afterward when
+-- diff_opts.keep_terminal_focus is enabled, instead of leaving Neovim's
+-- default post-window-close selection to land anywhere.
 
 describe("Diff cleanup terminal focus (same-tab)", function()
   local diff
@@ -61,15 +62,6 @@ describe("Diff cleanup terminal focus (same-tab)", function()
 
     package.loaded["claudecode.diff"] = nil
     diff = require("claudecode.diff")
-
-    diff.setup({
-      diff_opts = {
-        layout = "vertical",
-        open_in_new_tab = false,
-        keep_terminal_focus = false,
-      },
-      terminal = {},
-    })
   end)
 
   after_each(function()
@@ -81,7 +73,16 @@ describe("Diff cleanup terminal focus (same-tab)", function()
     package.loaded["claudecode.diff"] = nil
   end)
 
-  it("refocuses the claude terminal window after accepting a diff via :w + close_tab", function()
+  it("refocuses the claude terminal window when keep_terminal_focus is enabled", function()
+    diff.setup({
+      diff_opts = {
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = true,
+      },
+      terminal = {},
+    })
+
     local params = {
       old_file_path = test_old_file,
       new_file_path = test_old_file,
@@ -105,7 +106,47 @@ describe("Diff cleanup terminal focus (same-tab)", function()
     assert.equal(terminal_win, vim.api.nvim_get_current_win())
   end)
 
+  it("leaves focus untouched when keep_terminal_focus is disabled (default)", function()
+    diff.setup({
+      diff_opts = {
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = false,
+      },
+      terminal = {},
+    })
+
+    local params = {
+      old_file_path = test_old_file,
+      new_file_path = test_old_file,
+      new_file_contents = "new1\nnew2\n",
+      tab_name = tab_name,
+    }
+
+    diff._setup_blocking_diff(params, function() end)
+
+    local state = diff._get_active_diffs()[tab_name]
+    vim.api.nvim_set_current_win(state.new_window)
+
+    local win_before_cleanup = vim.api.nvim_get_current_win()
+    diff._resolve_diff_as_saved(tab_name, state.new_buffer)
+    diff._cleanup_diff_state(tab_name, "accepted via :w")
+
+    -- No explicit refocus should have happened; the current window is whatever
+    -- it was left as (this plugin's existing, unchanged default behavior).
+    assert.equal(win_before_cleanup, vim.api.nvim_get_current_win())
+  end)
+
   it("does not error when no claude terminal window is visible", function()
+    diff.setup({
+      diff_opts = {
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = true,
+      },
+      terminal = {},
+    })
+
     package.loaded["claudecode.terminal"].get_active_terminal_bufnr = function()
       return nil
     end
