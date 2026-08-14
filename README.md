@@ -346,8 +346,8 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
     -- Terminal Configuration
     terminal = {
-      split_side = "right", -- "left" or "right"
-      split_width_percentage = 0.30,
+      split_side = "right", -- "left", "right", "top", or "bottom" (top/bottom = horizontal split)
+      split_width_percentage = 0.30, -- fraction of columns for vertical splits, of lines for horizontal
       -- Optional: shrink (or widen) the terminal while a diff is open. Defaults to
       -- split_width_percentage when unset, preserving today's behavior.
       diff_split_width_percentage = nil, -- e.g. 0.20 to give diffs more room

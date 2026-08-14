@@ -204,7 +204,7 @@ local function build_config(opts_override)
   if type(opts_override) == "table" then
     local validators = {
       split_side = function(val)
-        return val == "left" or val == "right"
+        return val == "left" or val == "right" or val == "top" or val == "bottom"
       end,
       split_width_percentage = function(val)
         return type(val) == "number" and val > 0 and val < 1
@@ -452,7 +452,7 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
 
   for k, v in pairs(user_term_config) do
     if k == "split_side" then
-      if v == "left" or v == "right" then
+      if v == "left" or v == "right" or v == "top" or v == "bottom" then
         defaults.split_side = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for split_side: " .. tostring(v), vim.log.levels.WARN)

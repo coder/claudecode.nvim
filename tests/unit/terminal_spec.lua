@@ -398,6 +398,16 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       vim.notify:was_called_with(spy.matching.string.match("Invalid value for split_side"), vim.log.levels.WARN)
     end)
 
+    it("should accept top and bottom split_side", function()
+      terminal_wrapper.setup({ split_side = "bottom" })
+      terminal_wrapper.open()
+      assert.are.equal("bottom", mock_snacks_provider.open:get_call(1).refs[3].split_side)
+
+      terminal_wrapper.setup({ split_side = "top" })
+      terminal_wrapper.open()
+      assert.are.equal("top", mock_snacks_provider.open:get_call(2).refs[3].split_side)
+    end)
+
     it("should ignore invalid split_width_percentage and use default", function()
       terminal_wrapper.setup({ split_side = "left", split_width_percentage = 2.0 })
       terminal_wrapper.open()

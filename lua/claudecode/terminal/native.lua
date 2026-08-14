@@ -47,6 +47,27 @@ local function is_valid()
   return true
 end
 
+--- Create the terminal split (vertical for left/right, horizontal for top/bottom)
+--- and return the new window id. split_width_percentage is reused as the size
+--- fraction on the split axis (columns for vertical, lines for horizontal).
+local function create_split(effective_config)
+  local side = effective_config.split_side
+  local horizontal = side == "top" or side == "bottom"
+  local lead = (side == "left" or side == "top") and "topleft " or "botright "
+
+  if horizontal then
+    local height = math.floor(vim.o.lines * effective_config.split_width_percentage)
+    vim.cmd(lead .. height .. "split")
+    return vim.api.nvim_get_current_win()
+  end
+
+  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
+  vim.cmd(lead .. width .. "vsplit")
+  local new_winid = vim.api.nvim_get_current_win()
+  vim.api.nvim_win_set_height(new_winid, vim.o.lines) -- keep full-height vertical splits
+  return new_winid
+end
+
 local function open_terminal(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
 
@@ -63,19 +84,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   local original_win = vim.api.nvim_get_current_win()
-  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
-  local full_height = vim.o.lines
-  local placement_modifier
-
-  if effective_config.split_side == "left" then
-    placement_modifier = "topleft "
-  else
-    placement_modifier = "botright "
-  end
-
-  vim.cmd(placement_modifier .. width .. "vsplit")
-  local new_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_height(new_winid, full_height)
+  local new_winid = create_split(effective_config)
 
   vim.api.nvim_win_call(new_winid, function()
     vim.cmd("enew")
@@ -220,19 +229,7 @@ local function show_hidden_terminal(effective_config, focus)
   local original_win = vim.api.nvim_get_current_win()
 
   -- Create a new window for the existing buffer
-  local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
-  local full_height = vim.o.lines
-  local placement_modifier
-
-  if effective_config.split_side == "left" then
-    placement_modifier = "topleft "
-  else
-    placement_modifier = "botright "
-  end
-
-  vim.cmd(placement_modifier .. width .. "vsplit")
-  local new_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_height(new_winid, full_height)
+  local new_winid = create_split(effective_config)
 
   -- Set the existing buffer in the new window
   vim.api.nvim_win_set_buf(new_winid, bufnr)
