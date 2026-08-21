@@ -303,6 +303,55 @@ local function fire_send_complete(file_path, start_line, end_line, context)
   })
 end
 
+---Parse the raw argument string of `:ClaudeCodeAdd` into a file path and up to
+---two line-number tokens. A quoted path (`"my file.lua" 10 20`) is honored
+---verbatim; otherwise trailing tokens that parse as integers (at most two) are
+---treated as line numbers and the remaining tokens are rejoined with spaces as
+---the path, so unquoted paths containing spaces (e.g. `:ClaudeCodeAdd my file.lua`)
+---still resolve correctly instead of being split apart (issue #314).
+---@param raw string Raw `opts.args` string from the user command
+---@return string|nil file_path
+---@return string|nil start_arg
+---@return string|nil end_arg
+---@return string|nil error_msg
+local function parse_add_command_args(raw)
+  raw = vim.trim(raw or "")
+  local file_path, rest
+
+  local quote = raw:sub(1, 1)
+  if quote == '"' or quote == "'" then
+    local close = raw:find(quote, 2, true)
+    if not close then
+      return nil, nil, nil, "Unterminated quote in file path"
+    end
+    file_path = raw:sub(2, close - 1)
+    rest = vim.trim(raw:sub(close + 1))
+  else
+    local tokens = {}
+    for tok in raw:gmatch("%S+") do
+      tokens[#tokens + 1] = tok
+    end
+
+    local line_count = 0
+    while line_count < 2 and #tokens - line_count > 1 and tonumber(tokens[#tokens - line_count]) do
+      line_count = line_count + 1
+    end
+
+    file_path = table.concat(tokens, " ", 1, #tokens - line_count)
+    rest = table.concat(tokens, " ", #tokens - line_count + 1, #tokens)
+  end
+
+  local line_args = {}
+  for tok in rest:gmatch("%S+") do
+    line_args[#line_args + 1] = tok
+  end
+  if #line_args > 2 then
+    return nil, nil, nil, "Too many arguments. Usage: ClaudeCodeAdd <file-path> [start-line] [end-line]"
+  end
+
+  return file_path, line_args[1], line_args[2], nil
+end
+
 ---Send @ mention to Claude Code, handling connection state automatically
 ---@param file_path string The file path to send
 ---@param start_line number|nil Start line (0-indexed for Claude)
@@ -989,26 +1038,26 @@ function M._create_commands()
       return
     end
 
-    local args = vim.split(opts.args, "%s+")
-    local file_path = args[1]
-    local start_line = args[2] and tonumber(args[2]) or nil
-    local end_line = args[3] and tonumber(args[3]) or nil
-
-    if #args > 3 then
-      logger.error(
-        "command",
-        "ClaudeCodeAdd: Too many arguments. Usage: ClaudeCodeAdd <file-path> [start-line] [end-line]"
-      )
+    local file_path, start_arg, end_arg, parse_err = parse_add_command_args(opts.args)
+    if parse_err then
+      logger.error("command", "ClaudeCodeAdd: " .. parse_err)
+      return
+    end
+    if not file_path or file_path == "" then
+      logger.error("command", "ClaudeCodeAdd: No file path provided")
       return
     end
 
-    if args[2] and not start_line then
-      logger.error("command", "ClaudeCodeAdd: Invalid start line number: " .. args[2])
+    local start_line = start_arg and tonumber(start_arg) or nil
+    local end_line = end_arg and tonumber(end_arg) or nil
+
+    if start_arg and not start_line then
+      logger.error("command", "ClaudeCodeAdd: Invalid start line number: " .. start_arg)
       return
     end
 
-    if args[3] and not end_line then
-      logger.error("command", "ClaudeCodeAdd: Invalid end line number: " .. args[3])
+    if end_arg and not end_line then
+      logger.error("command", "ClaudeCodeAdd: Invalid end line number: " .. end_arg)
       return
     end
 
