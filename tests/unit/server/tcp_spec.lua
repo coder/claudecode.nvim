@@ -222,6 +222,68 @@ describe("TCP server disconnect handling", function()
     expect(server.clients[client.id]).to_be_nil()
   end)
 
+  -- A client that dies without a Close frame shows up as a read error, but it is a
+  -- normal disconnect and must not reach on_error (#316). Stream callbacks currently
+  -- pass the bare error name; luv also formats errors as "NAME: message".
+  for _, err in ipairs({
+    "ECONNRESET",
+    "ECONNRESET: connection reset by peer",
+    "ECONNABORTED",
+    "ECONNABORTED: software caused connection abort",
+  }) do
+    it("should disconnect without on_error when the peer resets the connection (" .. err .. ")", function()
+      local callbacks = {
+        on_message = spy.new(function() end),
+        on_connect = spy.new(function() end),
+        on_disconnect = spy.new(function() end),
+        on_error = spy.new(function() end),
+      }
+
+      local config = { port_range = { min = 10000, max = 10000 } }
+      local server, create_err = tcp.create_server(config, callbacks, nil)
+      assert.is_nil(create_err)
+      assert.is_table(server)
+
+      tcp._handle_new_connection(server)
+
+      local client = callbacks.on_connect.calls[1].vals[1]
+      client.tcp_handle._read_cb(err, nil)
+
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, err)
+      expect(server.clients[client.id]).to_be_nil()
+
+      assert.spy(callbacks.on_error).was_not_called()
+    end)
+  end
+
+  -- Codes that are not a peer disconnect must keep being reported, in both formats.
+  for _, err in ipairs({ "EPIPE", "ENOTCONN", "ETIMEDOUT", "EHOSTUNREACH: no route to host" }) do
+    it("should still report a genuine read error (" .. err .. ")", function()
+      local callbacks = {
+        on_message = spy.new(function() end),
+        on_connect = spy.new(function() end),
+        on_disconnect = spy.new(function() end),
+        on_error = spy.new(function() end),
+      }
+
+      local config = { port_range = { min = 10000, max = 10000 } }
+      local server, create_err = tcp.create_server(config, callbacks, nil)
+      assert.is_nil(create_err)
+      assert.is_table(server)
+
+      tcp._handle_new_connection(server)
+
+      local client = callbacks.on_connect.calls[1].vals[1]
+      client.tcp_handle._read_cb(err, nil)
+
+      assert.spy(callbacks.on_error).was_called(1)
+      assert.spy(callbacks.on_error).was_called_with("Client read error: " .. err)
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      expect(server.clients[client.id]).to_be_nil()
+    end)
+  end
+
   it("should call on_disconnect and remove client on TCP read error", function()
     local callbacks = {
       on_message = spy.new(function() end),
