@@ -105,7 +105,11 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           client.state = "closing"
           logger.debug("client", "Closing connection for client due to failed handshake:", client.id)
           vim.schedule(function()
-            client.tcp_handle:close()
+            -- The peer usually hangs up as soon as it reads the error response, and
+            -- tcp.lua's EOF teardown closes the handle before this runs.
+            if not client.tcp_handle:is_closing() then
+              client.tcp_handle:close()
+            end
           end)
         end
       end)
