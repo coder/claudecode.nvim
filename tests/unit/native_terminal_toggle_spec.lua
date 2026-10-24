@@ -107,8 +107,13 @@ describe("claudecode.terminal.native toggle behavior", function()
         end,
       },
       cmd = function(command)
-        -- Handle vsplit and other commands
-        if command:match("^topleft %d+vsplit") or command:match("^botright %d+vsplit") then
+        -- Handle vsplit/split and other commands
+        if
+          command:match("^topleft %d+vsplit")
+          or command:match("^botright %d+vsplit")
+          or command:match("^topleft %d+split")
+          or command:match("^botright %d+split")
+        then
           -- Create new window
           local winid = mock_state.next_winid
           mock_state.next_winid = mock_state.next_winid + 1
@@ -497,6 +502,53 @@ describe("claudecode.terminal.native toggle behavior", function()
       -- Should have focused the terminal window
       assert.is_true(set_current_win_called)
       assert.are.equal(terminal_winid, focused_winid)
+    end)
+
+    it("should open a horizontal split for bottom split_side", function()
+      local cmd_string = "claude"
+      local env_table = { TEST = "value" }
+      local config = { split_side = "bottom", split_width_percentage = 0.3 }
+
+      local captured = {}
+      local original_cmd = mock_vim.cmd
+      mock_vim.cmd = function(command)
+        table.insert(captured, command)
+        return original_cmd(command)
+      end
+
+      native_provider.open(cmd_string, env_table, config)
+
+      local saw_horizontal = false
+      for _, c in ipairs(captured) do
+        if c:match("^botright %d+split$") then
+          saw_horizontal = true
+        end
+        assert.is_nil(c:match("vsplit"), "bottom split_side must not use vsplit")
+      end
+      assert.is_true(saw_horizontal, "expected a botright <n>split command")
+    end)
+
+    it("should open a horizontal split for top split_side", function()
+      local cmd_string = "claude"
+      local env_table = { TEST = "value" }
+      local config = { split_side = "top", split_width_percentage = 0.3 }
+
+      local captured = {}
+      local original_cmd = mock_vim.cmd
+      mock_vim.cmd = function(command)
+        table.insert(captured, command)
+        return original_cmd(command)
+      end
+
+      native_provider.open(cmd_string, env_table, config)
+
+      local saw_horizontal = false
+      for _, c in ipairs(captured) do
+        if c:match("^topleft %d+split$") then
+          saw_horizontal = true
+        end
+      end
+      assert.is_true(saw_horizontal, "expected a topleft <n>split command")
     end)
 
     it("should hide terminal when focused and toggle called", function()

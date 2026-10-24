@@ -37,7 +37,7 @@
 ---@alias ClaudeCodeNewFileRejectBehavior "keep_empty"|"close_window"
 
 -- Terminal split side positioning
----@alias ClaudeCodeSplitSide "left"|"right"
+---@alias ClaudeCodeSplitSide "left"|"right"|"top"|"bottom"
 
 -- In-tree terminal provider names
 ---@alias ClaudeCodeTerminalProviderName "auto"|"snacks"|"native"|"external"|"none"

@@ -4,7 +4,7 @@ describe("Diff/idle terminal split width resolution", function()
   local diff = require("claudecode.diff")
 
   local function resolve(when)
-    return diff._resolve_split_width_percentage(when)
+    return diff._resolve_terminal_split_fraction(when)
   end
 
   it("uses split_width_percentage for both states when diff width is unset", function()
