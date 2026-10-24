@@ -227,7 +227,7 @@ Configure the plugin with the detected path:
 - `:ClaudeCodeSelectModel` - Select Claude model and open terminal with optional arguments
 - `:ClaudeCodeSend` - Send current visual selection to Claude
 - `:ClaudeCodeSendText {text}` - Send text to the open Claude terminal and submit it (`!` to insert without submitting; `native`/`snacks` providers only)
-- `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
+- `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range. Paths with spaces work via `%`/`#` expansion (e.g. `:ClaudeCodeAdd %`) or by escaping the spaces (`:ClaudeCodeAdd my\ notes.md 10 20`)
 - `:ClaudeCodeDiffAccept` - Accept diff changes
 - `:ClaudeCodeDiffDeny` - Reject diff changes
 - `:ClaudeCodeCloseAllDiffs` - Close pending Claude diffs (leaves accepted/saved diffs intact)
