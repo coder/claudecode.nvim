@@ -1245,7 +1245,19 @@ function M._cleanup_diff_state(tab_name, reason)
 
     -- After closing the diff in the same tab, restore the idle terminal width
     -- (unless the user opted out via auto_resize_terminal). Floating terminals are skipped.
-    resize_terminal_for_diff(find_claudecode_terminal_window(), "idle")
+    local terminal_win = find_claudecode_terminal_window()
+    resize_terminal_for_diff(terminal_win, "idle")
+
+    -- Closing the diff windows above leaves Neovim to pick whatever window it
+    -- considers "next" (often whatever else happens to be adjacent in the
+    -- split tree), not necessarily the Claude terminal. When keep_terminal_focus
+    -- is set, honor it here too (it otherwise only applies at diff-open time)
+    -- and explicitly refocus the terminal.
+    if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+      if terminal_win and vim.api.nvim_win_is_valid(terminal_win) then
+        pcall(vim.api.nvim_set_current_win, terminal_win)
+      end
+    end
   end
 
   -- ALWAYS clean up buffers regardless of tab mode (fixes buffer leak)
