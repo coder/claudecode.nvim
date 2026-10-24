@@ -916,7 +916,7 @@ function M.send_at_mention_for_visual_selection(line1, line2)
   -- If range parameters are provided, use them (for :'<,'> commands)
   if line1 and line2 then
     sel_to_send = M.get_range_selection(line1, line2)
-    if not sel_to_send or sel_to_send.selection.isEmpty then
+    if not sel_to_send then
       logger.warn("selection", "Invalid range selection to send as at-mention.")
       return false
     end
