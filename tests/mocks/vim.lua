@@ -491,6 +491,34 @@ local vim = {
       return #vim._buffers[buf].extmarks
     end,
 
+    nvim_buf_del_extmark = function(buf, ns_id, id)
+      local b = vim._buffers[buf]
+      if not b or not b.extmarks then
+        return false
+      end
+      local mark = b.extmarks[id]
+      if mark and mark.ns_id == ns_id then
+        b.extmarks[id] = nil
+        return true
+      end
+      return false
+    end,
+
+    nvim_buf_clear_namespace = function(buf, ns_id, _start, _end)
+      local b = vim._buffers[buf]
+      if not b or not b.extmarks then
+        return
+      end
+      local kept = {}
+      for _, m in pairs(b.extmarks) do
+        -- ns_id == -1 clears all namespaces
+        if not (ns_id == -1 or m.ns_id == ns_id) then
+          kept[#kept + 1] = m
+        end
+      end
+      b.extmarks = kept
+    end,
+
     nvim_set_hl = function(ns_id, name, opts)
       vim._highlights = vim._highlights or {}
       vim._highlights[name] = { ns_id = ns_id, opts = opts }
