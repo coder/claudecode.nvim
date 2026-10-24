@@ -395,6 +395,7 @@ function M.open(cmd_string, env_table, config, focus)
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     terminal = term_instance
+    vim.bo[term_instance.buf].filetype = "claudecode"
   else
     terminal = nil
     local logger = require("claudecode.logger")

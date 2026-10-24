@@ -220,6 +220,20 @@ describe("claudecode.terminal.native toggle behavior", function()
       -- Should have created terminal and have active buffer
       assert.is_not_nil(native_provider.get_active_bufnr())
     end)
+
+    it("should set filetype to claudecode on the terminal buffer", function()
+      local cmd_string = "claude"
+      local env_table = { TEST = "value" }
+      local config = { split_side = "right", split_width_percentage = 0.3 }
+
+      native_provider.open(cmd_string, env_table, config)
+
+      local bufnr = native_provider.get_active_bufnr()
+      assert.is_not_nil(bufnr)
+
+      local mock_state = _G.get_mock_state()
+      assert.are.equal("claudecode", mock_state.buffers[bufnr].options.filetype)
+    end)
   end)
 
   describe("toggle with existing hidden terminal", function()
