@@ -34,7 +34,7 @@ lua = "5.5.0"
 neovim = "0.12.3"
 
 # Node provides the runtime for prettier (installed via the npm backend).
-node = "26.3.0"
+node = "26.12.1"
 
 # treefmt drives every formatter/linter below (replaces `nix fmt`).
 "github:numtide/treefmt" = "2.5.0"
