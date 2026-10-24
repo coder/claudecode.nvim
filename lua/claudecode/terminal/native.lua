@@ -81,6 +81,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.cmd("enew")
   end)
 
+  vim.wo[new_winid].winfixbuf = true
+  vim.wo[new_winid].winfixwidth = true
+
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
   -- "opus[1m]" (see utils.parse_command).
@@ -132,6 +135,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   winid = new_winid
   bufnr = vim.api.nvim_get_current_buf()
   vim.bo[bufnr].bufhidden = "hide"
+  vim.bo[bufnr].spelloptions = "noplainbuffer" -- disable spell check
   -- buftype=terminal is set by termopen
 
   if focus then
@@ -237,6 +241,9 @@ local function show_hidden_terminal(effective_config, focus)
   -- Set the existing buffer in the new window
   vim.api.nvim_win_set_buf(new_winid, bufnr)
   winid = new_winid
+
+  vim.wo[winid].winfixbuf = true
+  vim.wo[winid].winfixwidth = true
 
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
