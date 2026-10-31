@@ -341,17 +341,29 @@ local function show_hidden_terminal(effective_config, focus)
   return true
 end
 
+-- A marked buffer has no job until termopen runs, and keeps its mark after the job exits until the on_exit of the
+-- module copy that started it runs. jobpid raises for a job that exited or was stopped. jobwait({ id }, 0) would
+-- instead block until a stopped job exits.
+local function job_ended(buf)
+  local channel = vim.bo[buf].channel
+  return channel ~= 0 and not pcall(vim.fn.jobpid, channel)
+end
+
 ---Tracks a visible terminal that this provider started but lost track of, for example after a module reload.
 ---@return boolean adopted
 local function adopt_existing_terminal()
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) and vim.b[buf][OWNED_MARK] then
+    if vim.api.nvim_buf_is_valid(buf) and vim.b[buf][OWNED_MARK] and not job_ended(buf) then
       for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == buf then
           bufnr, winid, jobid = buf, win, vim.bo[buf].channel
           local adopted_jobid = jobid
           -- The job's on_exit runs in the module copy that started it, for example the one before a reload.
+          -- Clearing the group first keeps one handler per buffer, however many reloads adopt it.
+          local group = vim.api.nvim_create_augroup("ClaudeCodeNativeAdopted", { clear = false })
+          vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
           vim.api.nvim_create_autocmd("TermClose", {
+            group = group,
             buffer = buf,
             once = true,
             callback = function()
