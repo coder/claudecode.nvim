@@ -34,6 +34,7 @@ const labels: Record<string, string> = {
   ClaudeOpensDiff: "Claude calls openDiff",
   UserHandlerResolves: "a ClaudeCodeDiffOpened handler accepts or denies",
   DiffYields: "setup finishes, the call waits",
+  SetupAnswers: "setup finishes, Claude gets the handler's answer",
   UserAccepts: "you :w",
   UserRejects: "you :q or deny",
   UserClosesAllDiffs: "you run :ClaudeCodeCloseAllDiffs",

@@ -121,6 +121,7 @@ Module map (direct files):
 - A new diff with an existing tab name first rejects the old diff (if pending), then cleans it up [diff.lua:M.open_diff_blocking]
 - When the target buffer is dirty, diff setup raises `-32000` with message "Diff setup failed". Its `data` holds the inner error, which contains "Cannot create diff: file has unsaved changes" [diff.lua:M._setup_blocking_diff]
 - A diff resolves only from status `pending`. Save returns `FILE_SAVED` and the content. Reject returns `DIFF_REJECTED` and the tab name [diff.lua:M._resolve_diff_as_saved]
+- `ClaudeCodeDiffOpened` handlers run before `open_diff_blocking` yields. When one accepts or denies the diff, `open_diff_blocking` returns that answer instead of yielding, so Claude gets exactly one response [diff.lua:M.open_diff_blocking]
 - Saving the proposed buffer (`BufWriteCmd`) never writes the file. It only resolves the diff. Windows stay open until `close_tab` [diff.lua:register_diff_autocmds]
 - `close_pending_diffs` and `close_diffs_for_client` close only `pending` diffs. `close_all_diffs` closes every diff [diff.lua:M.close_pending_diffs]
 

@@ -114,7 +114,8 @@ diff_autocmds=$(block "$DIFF" '^local function register_diff_autocmds\(')
 deny_current=$(block "$DIFF" '^function M\.deny_current_diff\(')
 
 FACTS=(GuardSaved GuardRejected SenderCleared ReplaceRejects CloseTabRejectsPending CloseEachByName StopRejectsPending
-  StopPendingOnly DisconnectRejects DisconnectPendingOnly UserCloseAllPendingOnly ClientTagged OpenedEventInSetup)
+  StopPendingOnly DisconnectRejects DisconnectPendingOnly UserCloseAllPendingOnly ClientTagged OpenedEventInSetup
+  EarlyResultReturned)
 declare -A fact
 
 as_bool() { if "$@"; then echo TRUE; else echo FALSE; fi; }
@@ -151,18 +152,20 @@ client_tagged() {
 }
 fact[ClientTagged]=$(as_bool client_tagged)
 # The ClaudeCodeDiffOpened event runs user handlers synchronously inside setup,
-# the resolution callback resumes the coroutine without checking that it is
-# suspended, and the server stores the response sender only after the yield.
+# and the server stores the response sender only after the yield.
 opened_event_in_setup() {
   grep -qE '^ *pcall\(vim\.api\.nvim_exec_autocmds, "User"' <<<"$fire_event" &&
     ! grep -q 'vim\.schedule\|defer_fn' <<<"$fire_event" &&
     grep -qE '^    fire_diff_event\("ClaudeCodeDiffOpened"' <<<"$setup_blocking" &&
     in_order 'pcall\(M\._setup_blocking_diff' 'coroutine\.resume\(co, result\)' 'coroutine\.yield\(\)' \
       <<<"$open_blocking" &&
-    ! grep -q 'coroutine\.status(co)' <<<"$open_blocking" &&
     in_order 'pcall\(handler, client, params\)' 'M\._setup_deferred_response\(deferred_info\)' <<<"$handle_request"
 }
 fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
+fact[EarlyResultReturned]=$(as_bool in_order 'pcall\(M\._setup_blocking_diff' \
+  '^ *if coroutine\.status\(co\) ~= "suspended" then$' '^ *early_result = result$' '^ *return$' \
+  'coroutine\.resume\(co, result\)' '^  if early_result then$' '^    return early_result$' 'coroutine\.yield\(\)' \
+  <<<"$open_blocking")
 
 echo "== code facts (TRUE = guard present)"
 for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
@@ -228,13 +231,13 @@ fi
 
 cp "$here/model/DiffLifecycle.tla" "$work/"
 
-# run_tlc NAME HANDLER(TRUE/FALSE) "INVARIANTS" "PROPERTIES" [FACT=VALUE ...]
+# run_tlc NAME "INVARIANTS" "PROPERTIES" [FACT=VALUE ...]
 # Leaves TLC output in $work/NAME.out and returns TLC's exit code. Invariants run
 # with three openDiff calls. The liveness property runs with two: its tableau
 # makes three calls cost minutes.
 run_tlc() {
-  local name=$1 handler=$2 invariants=$3 properties=$4
-  shift 4
+  local name=$1 invariants=$2 properties=$3
+  shift 3
   local -A vals
   local f kv
   for f in "${FACTS[@]}"; do vals[$f]=${fact[$f]}; done
@@ -246,7 +249,6 @@ run_tlc() {
     echo "  Tabs = {t1, t2}"
     echo "  Clients = {c1, c2}"
     for f in "${FACTS[@]}"; do echo "  $f = ${vals[$f]}"; done
-    echo "  UserHandlerResolvesDiff = $handler"
     [[ -n $invariants ]] && echo "INVARIANT $invariants"
     [[ -n $properties ]] && echo "PROPERTY $properties"
     echo "CONSTRAINT AnswerBound"
@@ -289,11 +291,12 @@ if [[ $mutants == 1 ]]; then
     [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
+    [EarlyResultReturned]=NoStrandedCall
   )
   status=0
   declare -A rule_hit
   echo "== mutants: each guard removed alone, each rule checked alone"
-  for f in "${!expect[@]}" SenderCleared+GuardRejected; do
+  for f in "${!expect[@]}" SenderCleared+GuardRejected+EarlyResultReturned; do
     hits=()
     assigns=()
     IFS=+ read -ra parts <<<"$f"
@@ -302,9 +305,9 @@ if [[ $mutants == 1 ]]; then
       name="mut-${f//+/-}-$rule"
       rc=0
       if [[ $rule == DisconnectedCallsAnswered ]]; then
-        run_tlc "$name" FALSE "TypeOK" "$rule" "${assigns[@]}" || rc=$?
+        run_tlc "$name" "TypeOK" "$rule" "${assigns[@]}" || rc=$?
       else
-        run_tlc "$name" FALSE "TypeOK $rule" "" "${assigns[@]}" || rc=$?
+        run_tlc "$name" "TypeOK $rule" "" "${assigns[@]}" || rc=$?
       fi
       case "$rc" in
       0) ;;
@@ -339,17 +342,17 @@ if [[ $mutants == 1 ]]; then
       [[ $status == 2 ]] || status=1
     fi
   done
-  echo "  SenderCleared=FALSE alone is caught by nothing: the pending guards also stop a second answer."
-  # OpenedEventInSetup drives only the known finding: with it FALSE, the opened-handler run must pass.
+  echo "  SenderCleared=FALSE alone is caught by nothing: the pending guards and the suspended check also stop a second answer."
+  # OpenedEventInSetup is the exposure, not a guard: without it, EarlyResultReturned is not needed.
   rc=0
-  run_tlc mut-OpenedEventInSetup TRUE "$ALL_INV" "" OpenedEventInSetup=FALSE || rc=$?
+  run_tlc mut-OpenedEventInSetup "$ALL_INV" "" OpenedEventInSetup=FALSE EarlyResultReturned=FALSE || rc=$?
   if [[ $rc == 0 ]]; then
-    printf '  %-30s removes the known finding, as expected\n' "OpenedEventInSetup=FALSE"
+    printf '  %-30s needs no EarlyResultReturned, as expected\n' "OpenedEventInSetup=FALSE"
   elif [[ $rc != 12 && $rc != 13 ]] || [[ $rc == 12 && $(broken_rule "$work/mut-OpenedEventInSetup.out") == TypeOK ]]; then
     echo "  OpenedEventInSetup=FALSE: TLC ERROR or TypeOK broken (exit $rc)"
     status=2
   else
-    printf '  %-30s still breaks the opened-handler run (%s)\n' "OpenedEventInSetup=FALSE" "$(describe mut-OpenedEventInSetup "$rc")"
+    printf '  %-30s still breaks without EarlyResultReturned (%s)\n' "OpenedEventInSetup=FALSE" "$(describe mut-OpenedEventInSetup "$rc")"
     [[ $status == 2 ]] || status=1
   fi
   [[ $status == 0 ]] && echo "== mutants: every guard is caught" || echo "== mutants: FAILED"
@@ -361,13 +364,13 @@ if [[ $mutants == 1 ]]; then
 fi
 
 result=0
-echo "== model: code as written, no user handler on ClaudeCodeDiffOpened"
+echo "== model: code as written, with a ClaudeCodeDiffOpened handler that may accept or deny"
 for run in main live; do
   rc=0
   if [[ $run == main ]]; then
-    run_tlc main FALSE "$ALL_INV" "" || rc=$?
+    run_tlc main "$ALL_INV" "" || rc=$?
   else
-    run_tlc live FALSE "TypeOK" "DisconnectedCallsAnswered" || rc=$?
+    run_tlc live "TypeOK" "DisconnectedCallsAnswered" || rc=$?
   fi
   echo "  $run: $(describe "$run" "$rc")"
   if [[ $rc == 12 && $(broken_rule "$work/$run.out") == TypeOK ]]; then
@@ -382,35 +385,6 @@ for run in main live; do
     exit 2
   fi
 done
-
-echo "== known finding: a ClaudeCodeDiffOpened handler closes or accepts the diff"
-rc=0
-run_tlc opened-handler TRUE "$ALL_INV" "" || rc=$?
-echo "  $(describe opened-handler "$rc")"
-case "$rc" in
-12)
-  if [[ $(broken_rule "$work/opened-handler.out") == TypeOK ]]; then
-    echo "  TypeOK broke: the model itself is wrong, not the code"
-    show_trace opened-handler
-    exit 2
-  elif [[ $(broken_rule "$work/opened-handler.out") == NoStrandedCall ]]; then
-    echo "  still reproduces (expected): Claude's openDiff call is never answered."
-    show_trace opened-handler
-  else
-    echo "  a different rule broke: investigate"
-    show_trace opened-handler
-    result=1
-  fi
-  ;;
-0)
-  echo "  NO LONGER REPRODUCES: the code changed under OpenedEventInSetup. Model the fix, then retire this config."
-  result=1
-  ;;
-*)
-  tail -20 "$work/opened-handler.out" | sed 's/^/  /'
-  exit 2
-  ;;
-esac
 
 if [[ $result == 0 && $stale == 1 ]]; then
   echo "== RESULT: STALE, UNVERIFIED (the model passes, but nobody has checked it against the changed code)"
