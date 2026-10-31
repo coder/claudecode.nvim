@@ -128,8 +128,10 @@ local vim = {
           end
         end
       end
+      -- Neovim runs handlers on its main Lua state, so a coroutine that fires the event reads as
+      -- "normal" inside them, not "running". A fresh coroutine gives the same status here.
       for _, callback in ipairs(callbacks) do
-        callback({ event = "User", match = opts.pattern, data = opts.data })
+        coroutine.wrap(callback)({ event = "User", match = opts.pattern, data = opts.data })
       end
     end,
 
