@@ -41,7 +41,7 @@ Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json
 
 - Seed files in `$WORK` (nvim's cwd and the workspace folder): `hello.txt` is `alpha`, `beta`, `gamma`. `other.txt` is `one`, `two`, `three`, `four`.
 - The terminal is 160 columns by 40 rows.
-- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing or empty. Launch refuses it if it is a symlink, is owned by another user, or is group- or world-writable, or if a dir above it is unsafe (see Evidence).
+- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing or empty, and its path must not contain `..`. Launch refuses it if it is a symlink, is owned by another user, or is group- or world-writable, or if a dir above it is unsafe (see Evidence).
 - `VCN_INIT_JSONRPC=<version>` sets the `jsonrpc` field of the `initialize` request (default `2.0`). Only `scripts/proof-launch-refusals.sh` sets it, to get an error answer from the plugin.
 - `VCN_SETUP='<json>'` is deep-merged into `require("claudecode").setup()` over the base `{ terminal = { provider = "none" } }`. Example: `VCN_SETUP='{"diff_opts":{"layout":"unified"}}' $V launch`.
 
@@ -115,7 +115,7 @@ To confirm, `grep -lzxF "VCN_RUN_TAG=$VCN_STATE" /proc/[0-9]*/environ 2>/dev/nul
 
 - `scripts/vcn.sh` is the harness. `$V help` lists its subcommands.
 - `scripts/init.lua` is the nvim config. It puts this checkout first on `runtimepath`, sets `terminal.provider = "none"` so no `claude` CLI starts, and merges `VCN_SETUP`.
-- `scripts/proof-launch-refusals.sh` proves that launch exits 1 and leaves no run behind when `initialize` fails (it sends `jsonrpc` `1.0` and the plugin answers -32600), and when `VERIFY_OUT` or the default parent dir is unsafe. It prints `PASS <case>` per case or `FAIL: <reason>`, and writes `init-refusal-launch.txt` next to the failed run's evidence. It takes about 20 s.
+- `scripts/proof-launch-refusals.sh` proves that launch exits 1 and leaves no run behind when `initialize` fails (it sends `jsonrpc` `1.0` and the plugin answers -32600), and when `VERIFY_OUT` or the default parent dir is unsafe. It prints `PASS <case>` per case or `FAIL: <reason>`, and writes `init-refusal-launch.txt` next to the failed run's evidence in a fresh `mktemp -d` dir. It takes about 20 s.
 - `scripts/journey-opendiff-accept.sh` proves openDiff accept through `:w` on a fresh launch. It prints `PASS opendiff-accept` or `FAIL: <reason>` and writes `opendiff-accept-*` files to `$OUT`: screen text at each step, PNGs at open, after the edit, and after `:w`, a WebM, and the file's sha256 at each step.
 
 A full run, with the `VCN_STATE` value from launch:

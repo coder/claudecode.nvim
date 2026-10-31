@@ -4,6 +4,7 @@
 #   out-link       VERIFY_OUT is a symlink
 #   out-other      VERIFY_OUT is owned by another user
 #   out-group      VERIFY_OUT is group-writable
+#   out-dotdot     VERIFY_OUT contains ..
 #   parent-link    the default parent dir is a symlink
 #   parent-group   the default parent dir is group-writable
 #   parent-world   the default parent dir is world-writable
@@ -24,7 +25,7 @@ fail() {
 launch() {
   local name=$1 rc=0
   shift
-  err=$(env -u VERIFY_OUT "$@" "$V" launch 2>&1) || rc=$?
+  err=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR "$@" "$V" launch 2>&1) || rc=$?
   if ((rc == 0)); then
     VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$V" cleanup >/dev/null
     fail "$name: launch exited 0, wanted 1: $err"
@@ -55,6 +56,7 @@ fi
 refused out-other "$other is owned by another user" VERIFY_OUT="$other"
 mkdir -m 770 "$TMP/out-group"
 refused out-group "$TMP/out-group is group- or world-writable" VERIFY_OUT="$TMP/out-group"
+refused out-dotdot "$TMP/out-link/../out contains .." VERIFY_OUT="$TMP/out-link/../out"
 ln -s "$TMP/out" "$TMP/link/verify-claudecode-nvim"
 refused parent-link "$TMP/link/verify-claudecode-nvim is a symlink" XUM_SCRATCH_DIR="$TMP/link"
 mkdir -m 770 "$TMP/group/verify-claudecode-nvim"
@@ -66,7 +68,7 @@ refused above-world "$TMP/above, above the evidence dir, is writable by others a
   XUM_SCRATCH_DIR="$TMP/above"
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
-launch init VCN_INIT_JSONRPC=1.0
+launch init VCN_INIT_JSONRPC=1.0 VERIFY_OUT="$(mktemp -d)"
 state=$(sed -n 's/^vcn: launch failed (VCN_STATE=\([^)]*\)).*/\1/p' <<<"$err")
 out=$(sed -n 's/^vcn: cleanup ok, no processes left; evidence kept in //p' <<<"$err")
 [[ -n $state && -n $out ]] || fail "init: launch did not start a run and tear it down: $err"
