@@ -452,22 +452,6 @@ end
 ---@param filename string Base filename for the temporary file
 ---@return string? path, string? error The temporary file path and error message
 local function create_temp_file(content, filename)
-  local base_dir_cache = vim.fn.stdpath("cache") .. "/claudecode_diffs"
-  local mkdir_ok_cache, mkdir_err_cache = pcall(vim.fn.mkdir, base_dir_cache, "p")
-
-  local final_base_dir
-  if mkdir_ok_cache then
-    final_base_dir = base_dir_cache
-  else
-    local base_dir_temp = vim.fn.stdpath("cache") .. "/claudecode_diffs_fallback"
-    local mkdir_ok_temp, mkdir_err_temp = pcall(vim.fn.mkdir, base_dir_temp, "p")
-    if not mkdir_ok_temp then
-      local err_to_report = mkdir_err_temp or mkdir_err_cache or "unknown error creating base temp dir"
-      return nil, "Failed to create base temporary directory: " .. tostring(err_to_report)
-    end
-    final_base_dir = base_dir_temp
-  end
-
   local session_id_base = vim.fn.fnamemodify(vim.fn.tempname(), ":t")
     .. "_"
     .. tostring(os.time())
@@ -478,10 +462,22 @@ local function create_temp_file(content, filename)
     session_id = "claudecode_session"
   end
 
-  local tmp_session_dir = final_base_dir .. "/" .. session_id
-  local mkdir_session_ok, mkdir_session_err = pcall(vim.fn.mkdir, tmp_session_dir, "p")
-  if not mkdir_session_ok then
-    return nil, "Failed to create temporary session directory: " .. tostring(mkdir_session_err)
+  local cache_dir = vim.fn.stdpath("cache")
+  local tmp_session_dir
+  local failures = {}
+  for _, base_dir in ipairs({ cache_dir .. "/claudecode_diffs", cache_dir .. "/claudecode_diffs_fallback" }) do
+    local candidate = base_dir .. "/" .. session_id
+    -- mkdir() raises E739 on failure, but under :silent! it returns 0 instead.
+    local mkdir_ok, mkdir_result = pcall(vim.fn.mkdir, candidate, "p")
+    if mkdir_ok and mkdir_result == 1 then
+      tmp_session_dir = candidate
+      break
+    end
+    local reason = mkdir_ok and ("mkdir() returned " .. tostring(mkdir_result)) or tostring(mkdir_result)
+    table.insert(failures, base_dir .. " (" .. reason .. ")")
+  end
+  if not tmp_session_dir then
+    return nil, "Failed to create a temporary diff directory in " .. table.concat(failures, " or ")
   end
 
   local tmp_file = tmp_session_dir .. "/" .. filename
