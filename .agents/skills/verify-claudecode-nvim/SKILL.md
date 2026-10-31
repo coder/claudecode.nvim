@@ -70,6 +70,7 @@ The user acts through keys. Claude acts through tool calls. Read state only to o
   So `$V keys ':3' Enter cc` types `:3`, presses Enter, and types `cc`. Key names match case-sensitively: `Enter` is a key, `enter` is text. tmux names such as `C-w` or `BSpace` are typed as text, so write `Ctrl+W` and `Backspace`.
 
 - **Claude.** `$V tool <id> <toolName> '<arguments json>'` sends `tools/call`. `$V rpc <id> <method> '<params json>'` sends any request, for example `$V rpc t1 tools/list`. `$V await <id> [secs]` prints that response line or exits 1 after the timeout (default 10 s). Build arguments with `jq -nc --arg ...` so paths and newlines stay valid JSON.
+- **A second Claude.** `VCN_CLIENT=b $V connect` starts one more client, named `b`, and finishes its handshake. Put `VCN_CLIENT=b` before `rpc`, `tool`, or `await` to act as `b`. Its messages land in `$OUT/ws-out-b.jsonl` and `$OUT/ws-in-b.jsonl`, and request ids are per client. `$V disconnect` kills the launch client by its recorded PID, the way an exiting Claude CLI drops its socket. `VCN_CLIENT=b $V disconnect` kills `b`.
 - **Notifications.** The plugin pushes `selection_changed` and `at_mentioned` to the client. They land in `$OUT/ws-in.jsonl`: `jq -c 'select(.method == "at_mentioned")' "$OUT/ws-in.jsonl"`.
 - **Observe.** `$V expr '<vimscript>'` evaluates over RPC. `$V until '<expr>' '<want>' [secs]` waits for a state instead of sleeping. Examples: `$V until "bufname() =~# ' (proposed)$'" 1`, `$V expr "join(getline(1, '\$'), '|')"`, `$V expr 'luaeval("vim.json.encode(require(\"claudecode.server.init\").get_status())")'`.
 - **Capture.** `$V capture <name>` writes the screen text to `$OUT/<name>.screen.txt` and prints it. `$V screenshot <name>` writes `$OUT/<name>.png`. `$V record <name>` writes `$OUT/<name>.webm`, a video of the whole session from launch to now, sped up. All three first wait up to 5 s for the screen to stay unchanged for 300 ms.
@@ -87,7 +88,7 @@ Rules:
 
 Everything lands in `$OUT`, which cleanup never deletes. The default is `${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/<UTC time>-<id>`. The harness runs with `umask 077`, so `$OUT` is `0700` and its files are `0600`: they hold buffer text and accepted diffs.
 
-- `ws-out.jsonl` holds every JSON-RPC message the client sent. `ws-in.jsonl` holds every message it received, responses and notifications.
+- `ws-out.jsonl` holds every JSON-RPC message the client sent. `ws-in.jsonl` holds every message it received, responses and notifications. A client from `connect` writes `ws-out-<name>.jsonl`, `ws-in-<name>.jsonl`, and `ws-client-<name>.log`.
 - `<name>.screen.txt`, `<name>.png`, and `<name>.webm` come from `$V capture`, `$V screenshot`, and `$V record`.
 - `run.env` records paths, PIDs, port, session id, and the nvim and agent-tty versions. It holds no auth token. `agent-tty-doctor.json` and `ws-client.log` sit next to it.
 - Cleanup adds `final.screen.txt`, `final.png`, `messages.txt` (`:messages`), and `session.webm`.
