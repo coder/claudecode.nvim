@@ -156,7 +156,8 @@ function M._handle_message(client, message)
   end
 
   if type(parsed) ~= "table" or parsed.jsonrpc ~= "2.0" then
-    M.send_response(client, parsed.id, nil, {
+    local request_id = type(parsed) == "table" and parsed.id or nil
+    M.send_response(client, request_id, nil, {
       code = -32600,
       message = "Invalid Request",
       data = "Not a valid JSON-RPC 2.0 request",
@@ -377,7 +378,8 @@ function M.send_response(client, id, result, error_data)
 
   local response = {
     jsonrpc = "2.0",
-    id = id,
+    -- JSON-RPC requires "id": null when the request id is unknown. A Lua nil would drop the field.
+    id = id == nil and vim.NIL or id,
   }
 
   if error_data then
