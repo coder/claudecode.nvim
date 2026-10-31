@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Proves what vcn.sh launch refuses and accepts, with real launches. Refused: an initialize call that answers
-# an error, and a VERIFY_OUT that is a symlink, not a directory, not owned by you, or not empty. Accepted: a
-# missing VERIFY_OUT and an empty directory you own, both left at mode 0700. Prints PASS, FAIL, or SKIP per case
-# and exits 1 on any FAIL. Takes about a minute. Run it from the repo root.
+# an error, and a VERIFY_OUT that is a symlink (also with a trailing slash), not a directory, not owned by you,
+# or not empty. Accepted: a missing VERIFY_OUT (also a relative one that starts with "-") and an empty
+# directory you own, all left at mode 0700. Prints PASS, FAIL, or SKIP per case and exits 1 on any FAIL.
+# Takes about a minute. Run it from the repo root.
 set -euo pipefail
 umask 077
 
@@ -32,14 +33,16 @@ refused() {
   fi
 }
 
-# An accepted launch prints OUT, the dir is ours at 0700, and cleanup succeeds.
+# An accepted launch prints OUT, the dir is ours at 0700, and cleanup succeeds. A relative VERIFY_OUT is
+# resolved from the directory in $3.
 accepted() {
-  local name=$1 out=$2 log state rc=0
-  log=$(VERIFY_OUT=$out "$V" launch 2>&1) || rc=$?
+  local name=$1 out=$2 cwd=${3-.} log state rc=0
+  log=$(cd "$cwd" && VERIFY_OUT=$out "$V" launch 2>&1) || rc=$?
   state=$(sed -n 's/^VCN_STATE=//p' <<<"$log")
   if [[ -n $state ]]; then VCN_STATE=$state "$V" cleanup >/dev/null 2>&1 || rc=$?; fi
+  [[ $out == /* ]] || out=$cwd/$out
   if ((rc != 0)) || [[ -z $state ]]; then
-    result FAIL "$name" "exit $rc: $log"
+    result FAIL "$name" "exit $rc: $(tr '\n' ' ' <<<"$log")"
   elif [[ $(stat -c '%a %u' "$out") != "700 $(id -u)" ]]; then
     result FAIL "$name" "$out is $(stat -c '%a %U' "$out"), wanted 700 $(id -un)"
   else
@@ -57,6 +60,7 @@ fi
 mkdir "$base/target"
 ln -s target "$base/link"
 refused out-symlink 'is a symlink' VERIFY_OUT="$base/link"
+refused out-symlink-slash 'is a symlink' VERIFY_OUT="$base/link/"
 [[ -z $(ls -A "$base/target") ]] || result FAIL out-symlink "the launch wrote into the symlink target"
 
 : >"$base/file"
@@ -80,6 +84,7 @@ mkdir "$base/full"
 refused out-not-empty 'is not empty' VERIFY_OUT="$base/full"
 
 accepted out-missing "$base/new/out"
+accepted out-dash-relative -dash "$base"
 mkdir "$base/empty"
 chmod 755 "$base/empty"
 accepted out-empty-own "$base/empty"
