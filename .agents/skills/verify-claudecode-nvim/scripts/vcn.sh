@@ -224,7 +224,7 @@ launch_failed() {
 }
 
 cmd_launch() {
-  local nvim_exe att_exe node_exe setsid_exe state out sid tui sock init lock="" f i
+  local nvim_exe att_exe node_exe setsid_exe state out sid tui sock init lock="" f i why="" init_method=initialize
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
@@ -234,9 +234,19 @@ cmd_launch() {
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
   out=${VERIFY_OUT:-${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
-  if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
+  # On a shared host another user can create the evidence dir, or a symlink in its place, before the run.
+  if [[ -L $out ]]; then
+    why="is a symlink"
+  elif [[ -e $out && ! -d $out ]]; then
+    why="is not a directory"
+  elif [[ -d $out && ! -O $out ]]; then
+    why="is not owned by $(id -un)"
+  elif [[ -d $out && -n $(ls -A "$out") ]]; then
+    why="is not empty"
+  fi
+  if [[ -n $why ]]; then
     rmdir "$state"
-    die "$out is not empty; pick a fresh VERIFY_OUT"
+    die "$out $why; pick a fresh VERIFY_OUT"
   fi
   mkdir -p "$out" "$state"/{home,claude,work}
   chmod 700 "$out"
@@ -298,7 +308,10 @@ cmd_launch() {
     "$OUT/ws-in.jsonl" </dev/null >/dev/null 2>>"$OUT/ws-client.log" &
   env_line CLIENT_PID "$!" >>"$state/run.env"
   load
-  cmd_rpc init initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"vcn","version":"0"}}'
+  # VCN_BREAK_INIT=1 sends the request under a method the plugin does not know, so it answers an error. It exists
+  # to prove the refusal below (selftest-launch-refusals.sh).
+  [[ ${VCN_BREAK_INIT-} != 1 ]] || init_method=vcn/no-such-method
+  cmd_rpc init "$init_method" '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"vcn","version":"0"}}'
   init=$(cmd_await init 10)
   jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
   send '{jsonrpc:"2.0",method:"notifications/initialized"}'
