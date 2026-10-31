@@ -64,6 +64,43 @@ local function is_valid()
   return true
 end
 
+---Forgets the tracked terminal when its job exits. With auto_close, also closes the tracked window.
+---@param job_id number
+---@param auto_close boolean|nil
+local function forget_exited_job(job_id, auto_close)
+  if job_id ~= jobid then
+    return
+  end
+  logger.debug("terminal", "Terminal process exited, cleaning up")
+
+  -- Ensure we are operating on the correct window and buffer before closing
+  local current_winid_for_job = winid
+  local current_bufnr_for_job = bufnr
+
+  cleanup_state() -- Clear our managed state first
+
+  if not auto_close then
+    return
+  end
+
+  if
+    current_winid_for_job
+    and vim.api.nvim_win_is_valid(current_winid_for_job)
+    and not is_last_window(current_winid_for_job)
+  then
+    if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
+      -- Optional: Check if the window still holds the same terminal buffer
+      if vim.api.nvim_win_get_buf(current_winid_for_job) == current_bufnr_for_job then
+        vim.api.nvim_win_close(current_winid_for_job, true)
+      end
+    else
+      -- Buffer is invalid, but window might still be there (e.g. if user changed buffer in term window)
+      -- Still try to close the window we tracked.
+      vim.api.nvim_win_close(current_winid_for_job, true)
+    end
+  end
+end
+
 local function open_terminal(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
 
@@ -114,36 +151,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
         if vim.api.nvim_buf_is_valid(new_bufnr) then
           vim.b[new_bufnr][OWNED_MARK] = nil
         end
-        if job_id == jobid then
-          logger.debug("terminal", "Terminal process exited, cleaning up")
-
-          -- Ensure we are operating on the correct window and buffer before closing
-          local current_winid_for_job = winid
-          local current_bufnr_for_job = bufnr
-
-          cleanup_state() -- Clear our managed state first
-
-          if not effective_config.auto_close then
-            return
-          end
-
-          if
-            current_winid_for_job
-            and vim.api.nvim_win_is_valid(current_winid_for_job)
-            and not is_last_window(current_winid_for_job)
-          then
-            if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
-              -- Optional: Check if the window still holds the same terminal buffer
-              if vim.api.nvim_win_get_buf(current_winid_for_job) == current_bufnr_for_job then
-                vim.api.nvim_win_close(current_winid_for_job, true)
-              end
-            else
-              -- Buffer is invalid, but window might still be there (e.g. if user changed buffer in term window)
-              -- Still try to close the window we tracked.
-              vim.api.nvim_win_close(current_winid_for_job, true)
-            end
-          end
-        end
+        forget_exited_job(job_id, effective_config.auto_close)
       end)
     end,
   }
@@ -215,8 +223,8 @@ local function close_terminal()
   -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not adopt this one.
   vim.b[closing_bufnr][OWNED_MARK] = nil
 
-  -- bufhidden=hide keeps the job running when only the window closes, so stop the job and delete the buffer,
-  -- which also closes its windows. Deleting a terminal buffer while a write to its job is pending hangs
+  -- bufhidden=hide keeps the job running when only the window closes, so stop the job and delete the buffer.
+  -- That closes its windows except the last one. Deleting a terminal buffer while a write to its job is pending hangs
   -- Neovim (neovim/neovim#42508). The wait runs the event loop, which ends those writes. For a job that
   -- ignores SIGHUP, the buffer is deleted after the timeout and Neovim kills the job later.
   local exited = false
@@ -338,6 +346,17 @@ local function adopt_existing_terminal()
       for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == buf then
           bufnr, winid, jobid = buf, win, vim.bo[buf].channel
+          local adopted_jobid = jobid
+          -- The job's on_exit runs in the module copy that started it, for example the one before a reload.
+          vim.api.nvim_create_autocmd("TermClose", {
+            buffer = buf,
+            once = true,
+            callback = function()
+              vim.schedule(function()
+                forget_exited_job(adopted_jobid, config.auto_close)
+              end)
+            end,
+          })
           logger.debug("terminal", "Recovered existing Claude terminal in buffer", buf, "window", win)
           return true
         end
