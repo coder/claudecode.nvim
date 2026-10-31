@@ -29,7 +29,7 @@ Optional fields (the dispatcher does not require them):
 
 - `toggle(...)`: a legacy alias of `simple_toggle`. All four providers define it. The dispatcher adds a default when it is missing [terminal/native.lua:M.toggle]
 - `ensure_visible()`: defined as a no-op only in `external` and `none`. The dispatcher calls it only when present [terminal/external.lua:M.ensure_visible]
-- `_get_terminal_for_test()`: defined in `snacks`, `external`, and `none`. `native` does not define it, and the dispatcher adds a default that returns `nil` [terminal/snacks.lua:M._get_terminal_for_test]
+- `_get_terminal_for_test()`: defined in `snacks`, `external`, and `none`. `native` does not define it. `validate_and_enhance_provider` adds a default that returns `nil`, but only for a custom table provider. For a built-in provider, `M._get_managed_terminal_for_test` checks that the field exists and returns `nil` when it is missing [terminal/snacks.lua:M._get_terminal_for_test] [terminal.lua:M._get_managed_terminal_for_test]
 - The provider type is declared as `ClaudeCodeTerminalProvider`. It declares `toggle` and `_get_terminal_for_test` as required (no `?`), so the type and the dispatcher disagree [types.lua:ClaudeCodeTerminalProvider]
 
 ### `paste_fix.lua`
@@ -44,10 +44,10 @@ Optional fields (the dispatcher does not require them):
 
 - `external` tracks one job. It counts as running only when `jobid > 0`. `open` does nothing while a job is running [terminal/external.lua:is_valid]
 - `external.open` refuses (ERROR notify) when `provider_opts.external_terminal_cmd` is unset. A string command must not be empty and must contain 1 or 2 `%s` placeholders. A function command must return a string or a table [terminal/external.lua:M.open]
-- `external.open` runs the job in `vim.fn.getcwd()`. It calls `jobstart` through `pcall`. When `jobstart` raises (for example `E475` for a command that is not executable) or returns `0` or `-1`, it logs the error, sends an ERROR notification, and clears `jobid` [terminal/external.lua:M.open]
+- `external.open` runs the job in `vim.fn.getcwd()`. It calls `jobstart` through `pcall`. When `jobstart` raises (for example `E475` for a command that is not executable) or returns `0` or `-1`, it sends one ERROR notification, which includes the error text when `jobstart` raised, and clears `jobid` [terminal/external.lua:M.open]
 - `native` clears `bufnr`, `winid`, and `jobid` when its buffer is invalid. It recovers `winid` by scanning windows that show the buffer [terminal/native.lua:is_valid]
 - `native` sets `bufhidden=hide`, so the Claude job survives when its window closes [terminal/native.lua:open_terminal]. Hide closes the window without force, and the buffer stays alive [terminal/native.lua:hide_terminal]
-- `native` calls `termopen` through `pcall`. Neovim raises `E475` for a command that is not executable, and returns `0` or `-1` instead when errors are silenced. On any of these failures `native` closes the new window, restores the original window, clears its state, and returns `false` [terminal/native.lua:open_terminal]
+- `native` calls `termopen` through `pcall`. Neovim raises `E475` for a command that is not executable, and returns `0` or `-1` instead when errors are silenced. On any of these failures `native` sends one ERROR notification (with the error text when `termopen` raised), closes the new window, restores the original window, deletes the buffer in the new split when it has no name and no changes (an autocmd can put a user buffer there), clears its state, and returns `false` [terminal/native.lua:open_terminal]
 - `native` shows the exit tip once per session when `show_native_term_exit_tip` is set [terminal/native.lua:open_terminal]
 - `native` can adopt an existing terminal buffer whose name matches `claude` and that a window displays [terminal/native.lua:find_existing_claude_terminal]
 - `snacks.is_available` requires snacks.nvim to load and `Snacks.terminal` to exist [terminal/snacks.lua:M.is_available]

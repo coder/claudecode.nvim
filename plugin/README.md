@@ -71,6 +71,7 @@ when `require("claudecode").setup()` runs. The main module lives in
 - Run: `mise run test`
 - No spec under `tests/` exercises `plugin/claudecode.lua` directly. The test
   bootstrap `tests/minimal_init.lua` reads `vim.g.loaded_claudecode` but calls
-  `require("claudecode").setup()` itself.
+  `require("claudecode").setup({ auto_start = false, log_level = "trace" })`
+  itself.
 - Manual check: `fixtures/repro/init.lua` puts this repository on the
   `runtimepath` so that `plugin/claudecode.lua` loads.

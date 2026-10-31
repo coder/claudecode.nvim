@@ -19,7 +19,7 @@ CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scr
 ### Shell libraries (source them)
 
 - `lib_claude.sh` sets `CLAUDE_LOCKFILE_DIR` to `$CLAUDE_CONFIG_DIR/ide`, or to `$HOME/.claude/ide` when `CLAUDE_CONFIG_DIR` is unset. It also exports `CLAUDE_LOG_DIR=mcp_test_logs` and `CLAUDE_WS_TIMEOUT=10` [lib_claude.sh:CLAUDE_LOCKFILE_DIR].
-- `find_claude_lockfile` prints the port of the newest `*.lock` file by mtime and returns 1 when none exists [lib_claude.sh:find_claude_lockfile].
+- `find_claude_lockfile` prints the port of the newest `*.lock` file by mtime and returns 1 when none exists. It reads the mtime with GNU `stat -c "%Y"`. BSD `stat` on macOS rejects that option, so there the function finds no lock file [lib_claude.sh:find_claude_lockfile].
 - `get_claude_ws_url` prints `ws://localhost:PORT` [lib_claude.sh:get_claude_ws_url].
 - `get_claude_auth_token PORT` reads `authToken` from `PORT.lock`, with `jq` or a `grep`/`sed` fallback [lib_claude.sh:get_claude_auth_token].
 - `create_message`, `create_notification`, and `create_init_message` print JSON-RPC requests, notifications, and an `initialize` request (protocolVersion `2025-03-26`) [lib_claude.sh:create_message, create_notification, create_init_message].
@@ -77,7 +77,7 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 
 ## Invariants
 
-- Clients find the server port from the lock file name (`PORT.lock`) in `CLAUDE_LOCKFILE_DIR`. They send the lock file's `authToken` in the `x-claude-code-ide-authorization` header [lib_claude.sh:get_claude_auth_token, send_claude_message] [lib_ws_persistent.sh:ws_connect].
+- Clients find the server port from the lock file name (`PORT.lock`) in `CLAUDE_LOCKFILE_DIR`. `send_claude_message`, the first `ws_connect` in `claude_interactive.sh`, and `repro_issue_238.sh`, `repro_issue_248.sh`, and `repro_issue_277.sh` send the lock file's `authToken` in the `x-claude-code-ide-authorization` header [lib_claude.sh:get_claude_auth_token, send_claude_message] [lib_ws_persistent.sh:ws_connect]. `mcp_test.sh`, `test_neovim_websocket.sh`, `research_messages.sh`, `websocat.sh`, `test_opendiff.lua`, and `test_opendiff_simple.sh` send no token. The plugin server rejects their upgrade request when it has an auth token, which `start` always sets [mcp_test.sh:ws_connect] [websocat.sh:websocat].
 - `lib_claude.sh` checks only `websocat` and `jq`, and does not exit when they are missing. `send_claude_message` also needs `timeout` [lib_claude.sh:check_required_tools, send_claude_message].
 - `send_claude_message` builds a single-quoted `bash -c` string, so a single quote in the message or token breaks the command [lib_claude.sh:send_claude_message].
 - `lib_ws_persistent.sh` assumes single-line compact JSON. `ws_request` needs a non-empty `.id`, and `ws_start_listener` matches the exact text `"method":"NAME"` [lib_ws_persistent.sh:ws_request, ws_start_listener].
@@ -88,7 +88,7 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - `run_integration_tests_individually.sh` must run from the repo root. It adds a file to `FAILED_FILES` when it parses failures or errors, or when nvim exits nonzero with a code other than 124 or 143 (timeouts). This includes an nvim crash that prints no `Failed :` line. It exits 1 when `FAILED_FILES` is non-empty or the parsed failure or error totals are non-zero, else 0 [run_integration_tests_individually.sh:FAILED_FILES, TOTAL_FAILED].
 - `test_opendiff.lua`, `test_opendiff_simple.sh`, and `repro_issue_238.sh` take the first lock file found, not the newest [test_opendiff.lua:discover_port] [test_opendiff_simple.sh:LOCK_FILE] [repro_issue_238.sh:LOCK_FILE].
 - `test_opendiff.lua` and `test_opendiff_simple.sh` hardcode `~/.claude/ide` and ignore `CLAUDE_CONFIG_DIR` [test_opendiff.lua:discover_port] [test_opendiff_simple.sh:LOCK_DIR].
-- `manual_test_helper.lua` hardcodes `/Users/thomask33/GitHub/claudecode.nvim/README.md` and returns early when that file is not readable [manual_test_helper.lua:readme_path].
+- `manual_test_helper.lua` hardcodes an absolute path to `README.md` in one developer's checkout, and returns early when that file is not readable [manual_test_helper.lua:readme_path].
 - `repro_issue_70_probe.lua` resolves the lock directory from `CLAUDE_CONFIG_DIR/ide`, else `$HOME/.claude/ide` [repro_issue_70_probe.lua:config_dir].
 - `release-please-runner.js` requires `GITHUB_TOKEN` and `GITHUB_REPOSITORY` in `owner/repo` form [release-please-runner.js:requireEnv, main].
 - `assertLlmCredentials` throws when both `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are empty, or when `ANTHROPIC_API_KEY` is empty and `COMMUNIQUE_MODEL` is unset [release-please-runner.js:assertLlmCredentials].

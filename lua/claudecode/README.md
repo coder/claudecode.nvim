@@ -99,7 +99,7 @@ Module map (direct files):
 
 ### Configuration and terminal
 
-- `config.validate` asserts the top-level fields. Examples: `0 < port_range.min <= max <= 65535`, `log_level` in `trace|debug|info|warn|error`, `env` values are strings, `models` is a non-empty list of `{ name, value }`, and `diff_opts.layout` is `vertical|horizontal|unified`. For `terminal` it asserts only that it is a table and checks `provider_opts`. It does not assert `terminal.provider` or other `terminal.*` keys [config.lua:M.validate]
+- `config.validate` asserts most top-level fields. It does not assert `disable_broadcast_debouncing` or `enable_broadcast_debouncing_in_tests`. Examples: `0 < port_range.min <= max <= 65535`, `log_level` in `trace|debug|info|warn|error`, `env` values are strings, `models` is a non-empty list of `{ name, value }`, and `diff_opts.layout` is `vertical|horizontal|unified`. For `terminal` it asserts only that it is a table and checks `provider_opts`. It does not assert `terminal.provider` or other `terminal.*` keys [config.lua:M.validate]
 - `config.apply` deep-copies the defaults. It maps the legacy `vertical_split` option to `layout`, and legacy `open_in_current_tab` to `open_in_new_tab` [config.lua:M.apply]
 - Provider selection: `auto` uses snacks if available, else native. `external` requires `external_terminal_cmd` as a function or as a string containing `%s`. Every other failure falls back to `native` [terminal.lua:get_provider]
 - The Claude command is `terminal_cmd`, or `claude` when it is unset. `no_proxy` and `NO_PROXY` always include `localhost`, `127.0.0.1`, and `::1` [terminal.lua:get_claude_command_and_env]
@@ -119,7 +119,7 @@ Module map (direct files):
 
 - `open_diff_blocking` must run inside a non-main coroutine. Otherwise it raises `-32000` [diff.lua:M.open_diff_blocking]
 - A new diff with an existing tab name first rejects the old diff (if pending), then cleans it up [diff.lua:M.open_diff_blocking]
-- Diff setup raises `-32000` "Cannot create diff: file has unsaved changes" when the target buffer is dirty [diff.lua:M._setup_blocking_diff]
+- When the target buffer is dirty, diff setup raises `-32000` with message "Diff setup failed". Its `data` holds the inner error, which contains "Cannot create diff: file has unsaved changes" [diff.lua:M._setup_blocking_diff]
 - A diff resolves only from status `pending`. Save returns `FILE_SAVED` and the content. Reject returns `DIFF_REJECTED` and the tab name [diff.lua:M._resolve_diff_as_saved]
 - Saving the proposed buffer (`BufWriteCmd`) never writes the file. It only resolves the diff. Windows stay open until `close_tab` [diff.lua:register_diff_autocmds]
 - `close_pending_diffs` and `close_diffs_for_client` close only `pending` diffs. `close_all_diffs` closes every diff [diff.lua:M.close_pending_diffs]
