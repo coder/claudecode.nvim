@@ -362,6 +362,15 @@ describe("Tool: open_file", function()
       assert.are.same({ 5, 9 }, marks[">"])
     end)
 
+    it("ends on an endText match after startText, not one earlier on the same line", function()
+      buffer_lines = { "end -- start of block", "  body", "end" }
+      expect(open({ startText = "start", endText = "end" })).to_be(
+        'Opened file and selected text from "start" to "end"'
+      )
+      assert.are.same({ 1, 7 }, marks["<"])
+      assert.are.same({ 3, 2 }, marks[">"])
+    end)
+
     it("selects only the startText match when there is no endText", function()
       expect(open({ startText = "three" })).to_be('Opened file and selected text "three"')
       assert.are.same({ 3, 0 }, marks["<"])
