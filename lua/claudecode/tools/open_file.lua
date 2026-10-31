@@ -16,10 +16,12 @@ local schema = {
       },
       startLine = {
         type = "integer",
+        minimum = 1,
         description = "Optional: Line number to start selection",
       },
       endLine = {
         type = "integer",
+        minimum = 1,
         description = "Optional: Line number to end selection",
       },
       startText = {
@@ -105,6 +107,40 @@ local function find_main_editor_window()
   return nil
 end
 
+---Selects from `start_col` on `start_row` through `last_col` on `end_row` in charwise visual mode, both ends included.
+---With 'selection' set to "exclusive", gv leaves out the character under `'>`, so `'>` goes one byte past
+---`last_col`. The marks use setpos() because nvim_buf_set_mark on Neovim 0.8 also sets the mark's coladd,
+---and gv then selects one more character.
+---@param start_row integer 1-based row of the first character
+---@param start_col integer 0-based byte column of the first character
+---@param end_row integer 1-based row of the last character
+---@param last_col integer 0-based byte column of the last byte to select
+local function select_range(start_row, start_col, end_row, last_col)
+  local end_col = last_col
+  if vim.o.selection == "exclusive" then
+    end_col = last_col + 1
+  end
+  vim.fn.setpos("'<", { 0, start_row, start_col + 1, 0 })
+  vim.fn.setpos("'>", { 0, end_row, end_col + 1, 0 })
+  vim.cmd("normal! gv")
+end
+
+---Returns how many lines `file_path` will show once opened, counting at most `max` lines of the file on disk.
+---A loaded buffer for the file can hold unsaved lines, and `:edit` shows that buffer, so its count wins.
+---@param file_path string Path of the file to open
+---@param max integer Lines to read from disk at most
+---@return integer count
+local function line_count_before_open(file_path, max)
+  local full_path = vim.fn.fnamemodify(file_path, ":p")
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_name(buf) == full_path then
+      return vim.api.nvim_buf_line_count(buf)
+    end
+  end
+  -- readfile() returns no lines for an empty file, which opens as one empty line.
+  return math.max(#vim.fn.readfile(file_path, "", max), 1)
+end
+
 --- Handles the openFile tool invocation.
 --- Opens a file in the editor with optional selection.
 ---@param params table The input parameters for the tool
@@ -112,6 +148,25 @@ end
 local function handler(params)
   if not params.filePath then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
+  end
+
+  local start_line, end_line
+  if params.startLine or params.endLine then
+    start_line = params.startLine or 1
+    end_line = params.endLine or start_line
+    local valid = type(start_line) == "number"
+      and type(end_line) == "number"
+      and start_line % 1 == 0
+      and end_line % 1 == 0
+      and start_line >= 1
+      and end_line >= start_line
+    if not valid then
+      error({
+        code = -32602,
+        message = "Invalid params",
+        data = "startLine and endLine must be integers with 1 <= startLine <= endLine",
+      })
+    end
   end
 
   -- Expand a leading `~` only. `vim.fn.expand` would treat `$name` as an
@@ -122,6 +177,17 @@ local function handler(params)
   if vim.fn.filereadable(file_path) == 0 then
     -- Using a generic error code for tool-specific operational errors
     error({ code = -32000, message = "File operation error", data = "File not found: " .. file_path })
+  end
+
+  if start_line then
+    local file_line_count = line_count_before_open(file_path, start_line)
+    if start_line > file_line_count then
+      error({
+        code = -32602,
+        message = "Invalid params",
+        data = "startLine " .. start_line .. " is past the end of the file (" .. file_line_count .. " lines)",
+      })
+    end
   end
 
   -- Set default values for optional parameters
@@ -187,18 +253,14 @@ local function handler(params)
   end
 
   -- Handle text selection by line numbers
-  if params.startLine or params.endLine then
+  if start_line then
     run_in_target_window(function()
-      local start_line = params.startLine or 1
-      local end_line = params.endLine or start_line
-
-      -- Convert to 0-based indexing for vim API
-      local start_pos = { start_line - 1, 0 }
-      local end_pos = { end_line - 1, -1 } -- -1 means end of line
-
-      vim.api.nvim_buf_set_mark(0, "<", start_pos[1], start_pos[2], {})
-      vim.api.nvim_buf_set_mark(0, ">", end_pos[1], end_pos[2], {})
-      vim.cmd("normal! gv")
+      -- endLine can run past the last line. The buffer can also be shorter than the count checked before
+      -- opening, when :edit reuses a buffer under another name for the same file, such as a symlink.
+      end_line = math.min(end_line, vim.api.nvim_buf_line_count(0))
+      start_line = math.min(start_line, end_line)
+      local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1]
+      select_range(start_line, 0, end_line, math.max(#end_line_text - 1, 0))
 
       message = "Opened file and selected lines " .. start_line .. " to " .. end_line
     end)
@@ -216,7 +278,7 @@ local function handler(params)
       for line_idx, line in ipairs(lines) do
         local col_idx = string.find(line, start_text, 1, true) -- plain text search
         if col_idx then
-          start_line_idx = line_idx - 1 -- Convert to 0-based
+          start_line_idx = line_idx
           start_col_idx = col_idx - 1 -- Convert to 0-based
           break
         end
@@ -225,15 +287,16 @@ local function handler(params)
       if start_line_idx then
         -- Find end text if provided
         if end_text then
-          for line_idx = start_line_idx + 1, #lines do
+          for line_idx = start_line_idx, #lines do
             local line = lines[line_idx] -- Access current line directly
             if line then
-              local col_idx = string.find(line, end_text, 1, true)
+              local search_from = line_idx == start_line_idx and start_col_idx + string.len(start_text) + 1 or 1
+              local col_idx = string.find(line, end_text, search_from, true)
               if col_idx then
                 end_line_idx = line_idx
-                end_col_idx = col_idx + string.len(end_text) - 1
+                end_col_idx = col_idx - 1 + string.len(end_text) - 1
                 if select_to_end_of_line then
-                  end_col_idx = string.len(line)
+                  end_col_idx = math.max(string.len(line) - 1, 0)
                 end
                 break
               end
@@ -256,10 +319,8 @@ local function handler(params)
         end
 
         -- Apply the selection
-        vim.api.nvim_win_set_cursor(0, { start_line_idx + 1, start_col_idx })
-        vim.api.nvim_buf_set_mark(0, "<", start_line_idx, start_col_idx, {})
-        vim.api.nvim_buf_set_mark(0, ">", end_line_idx, end_col_idx, {})
-        vim.cmd("normal! gv")
+        vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+        select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
         vim.cmd("normal! zz") -- Center the selection in the window
       else
         message = 'Opened file, but text "' .. start_text .. '" not found'
