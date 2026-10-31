@@ -1108,7 +1108,7 @@ function M._create_commands()
     vim.api.nvim_create_user_command("ClaudeCodeClose", function()
       terminal.close()
     end, {
-      desc = "Close the Claude Code terminal window",
+      desc = "Stop the Claude Code session and close its terminal",
     })
 
     vim.api.nvim_create_user_command("ClaudeCodeSendText", function(opts)
