@@ -202,8 +202,10 @@ describe("claudecode.terminal.native toggle behavior", function()
           for bufnr, buf in pairs(mock_state.buffers) do
             if buf.jobid == id then
               for _, autocmd in ipairs(mock_state.autocmds) do
-                if autocmd.event == "TermClose" and autocmd.buffer == bufnr then
-                  autocmd.callback()
+                -- A buffer-local autocmd is gone once an earlier handler deleted its buffer.
+                local applies = autocmd.buffer == nil or (autocmd.buffer == bufnr and mock_state.buffers[bufnr])
+                if autocmd.event == "TermClose" and applies then
+                  autocmd.callback({ buf = bufnr })
                 end
               end
             end
@@ -560,6 +562,23 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.is_nil(mock_state.running_jobs[terminal_jobid])
       assert.is_nil(mock_state.buffers[terminal_bufnr])
       assert.are.equal(0, windows_showing(terminal_bufnr))
+    end)
+
+    it("should close cleanly when a user TermClose autocmd already deleted the buffer", function()
+      local mock_state = _G.get_mock_state()
+      mock_vim.api.nvim_create_autocmd("TermClose", {
+        callback = function(args)
+          mock_vim.api.nvim_buf_delete(args.buf, { force = true })
+        end,
+      })
+      native_provider.open("claude", {}, config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      local terminal_jobid = mock_state.buffers[terminal_bufnr].jobid
+
+      native_provider.close()
+      assert.is_nil(mock_state.running_jobs[terminal_jobid])
+      assert.is_nil(mock_state.buffers[terminal_bufnr])
+      assert.is_nil(native_provider.get_active_bufnr())
     end)
 
     it("should close only the window of an adopted terminal and leave its process running", function()
