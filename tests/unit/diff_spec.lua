@@ -201,9 +201,18 @@ describe("Diff Module", function()
         return path:match("^(.*)/[^/]*$")
       end
 
-      local function fire_cleanup_autocmd()
+      -- :bwipeout fires BufDelete and then BufWipeout. An autocmd for both events runs once per event, once = true too.
+      local function wipe_proposed_buffer()
         local events = vim._autocmds["ClaudeCodeDiffCleanup"].events
-        events[#events].opts.callback()
+        local autocmd = events[#events]
+        local registered = type(autocmd.events) == "table" and autocmd.events or { autocmd.events }
+        for _, event in ipairs({ "BufDelete", "BufWipeout" }) do
+          for _, name in ipairs(registered) do
+            if name == event then
+              autocmd.opts.callback({ event = event })
+            end
+          end
+        end
       end
 
       -- Models real Neovim on POSIX: mkdir and delete act on disk, and delete(path, "d") removes only an empty directory.
@@ -250,10 +259,31 @@ describe("Diff Module", function()
         expect(exists(result.temp_file)).to_be_true()
 
         vim._last_notify = nil
-        fire_cleanup_autocmd()
+        wipe_proposed_buffer()
 
         expect(exists(parent(result.temp_file))).to_be_false()
         expect(vim._last_notify).to_be_nil()
+      end)
+
+      it("warns once when the folder is not empty after the proposed buffer closes", function()
+        local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Cleanup")
+        expect(result.success).to_be_true()
+        local stray = io.open(parent(result.temp_file) .. "/stray.txt", "w")
+        stray:write("x")
+        stray:close()
+        local warnings = {}
+        original_vim_functions["notify"] = vim.notify
+        vim.notify = function(msg, level)
+          if level == vim.log.levels.WARN then
+            table.insert(warnings, msg)
+          end
+        end
+
+        wipe_proposed_buffer()
+
+        expect(exists(result.temp_file)).to_be_false()
+        expect(#warnings).to_be(1)
+        expect(warnings[1]:find("Error removing temp directory", 1, true) ~= nil).to_be_true()
       end)
 
       it("gives two Neovim processes different folders even with the same tempname, time and RNG state", function()

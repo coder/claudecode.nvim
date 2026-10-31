@@ -765,11 +765,16 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   vim.cmd("diffthis")
 
   local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
+  local cleaned_up = false
   vim.api.nvim_create_autocmd({ "BufDelete", "BufWipeout" }, {
     group = cleanup_group,
     buffer = new_buf,
     callback = function()
-      cleanup_temp_file(tmp_file)
+      -- Wiping the buffer fires both events, and once = true applies to each event separately.
+      if not cleaned_up then
+        cleaned_up = true
+        cleanup_temp_file(tmp_file)
+      end
     end,
     once = true,
   })
