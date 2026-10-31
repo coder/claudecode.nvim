@@ -25,6 +25,7 @@ CONSTANTS
   ReplaceRejects,          \* diff.lua open_diff_blocking rejects a pending diff before replacing it
   CloseTabRejectsPending,  \* diff.lua close_diff_by_tab_name rejects a pending diff before cleanup
   CloseEachByName,         \* diff.lua close_active_diffs closes each match through close_diff_by_tab_name
+  CloseRechecksFilter,     \* diff.lua close_active_diffs rechecks each entry's filter right before it closes it
   StopRejectsPending,      \* server/init.lua M.stop closes pending diffs before clearing senders
   StopPendingOnly,         \* diff.lua close_pending_diffs filters status == "pending"
   DisconnectRejects,       \* server/init.lua on_disconnect schedules close_diffs_for_client
@@ -104,18 +105,42 @@ CloseByName(w, t, byClaude) ==
   ELSE Remove(IF w.active[t].status = "pending" /\ CloseTabRejectsPending
               THEN Resolve(w, t, "rejected") ELSE w, t, byClaude)
 
-(* diff.lua close_active_diffs: snapshot the matching tab names, then close each. *)
-RECURSIVE CloseEach(_, _, _)
-CloseEach(w, S, byClaude) ==
-  IF S = {} THEN w
-  ELSE LET t == CHOOSE x \in S : TRUE
-       IN CloseEach(IF CloseEachByName THEN CloseByName(w, t, byClaude) ELSE Remove(w, t, byClaude),
-                    S \ {t}, byClaude)
+(* The filter_fn a bulk close passes to close_active_diffs: pendingOnly keeps   *)
+(* status == "pending", and owner (a client or None) keeps that client's diffs. *)
+Filter(pendingOnly, owner) == [pendingOnly |-> pendingOnly, owner |-> owner]
+
+Matches(w, t, f) ==
+  /\ w.active[t] # NoDiff
+  /\ (w.active[t].status = "pending" \/ ~f.pendingOnly)
+  /\ (f.owner = None \/ (ClientTagged /\ reqClient[w.active[t].req] = f.owner))
+
+(* Assumption, not a code fact: the user has a ClaudeCodeDiffClosed handler    *)
+(* (README "Diff Lifecycle Events") that accepts or denies another open diff,  *)
+(* for example with :ClaudeCodeDiffAccept in that diff's window.               *)
+CONSTANT ClosedHandlerResolvesOther
+
+(* _cleanup_diff_state fires ClaudeCodeDiffClosed synchronously after the      *)
+(* entry leaves active_diffs. The handler resolves at most one other diff.     *)
+AfterClosedEvent(w) ==
+  {w} \cup IF ClosedHandlerResolvesOther THEN {Resolve(w, t, o) : t \in Tabs, o \in Outcomes} ELSE {}
+
+(* diff.lua close_active_diffs: snapshot the matching tab names, then close each *)
+(* in pairs() order, which is unspecified. The result is the set of states the  *)
+(* user's ClaudeCodeDiffClosed handler can leave behind.                       *)
+RECURSIVE CloseEach(_, _, _, _)
+CloseEach(w, S, f, byClaude) ==
+  IF S = {} THEN {w}
+  ELSE UNION {
+         LET skip == IF CloseRechecksFilter THEN ~Matches(w, t, f) ELSE w.active[t] = NoDiff
+             closed == IF CloseEachByName THEN CloseByName(w, t, byClaude) ELSE Remove(w, t, byClaude)
+         IN UNION {CloseEach(v, S \ {t}, f, byClaude) : v \in IF skip THEN {w} ELSE AfterClosedEvent(closed)}
+       : t \in S}
+
+CloseAll(f, byClaude) == CloseEach(W, {t \in Tabs : Matches(W, t, f)}, f, byClaude)
 
 Idle == \A r \in Reqs : phase[r] # "setup"
 ClaudeConnected == serverUp /\ \E c \in Clients : clientUp[c]
 Open(t) == active[t] # NoDiff
-PendingOr(t, keepOthers) == Open(t) /\ (active[t].status = "pending" \/ ~keepOthers)
 
 TypeOK ==
   /\ phase \in [Reqs -> {"unsent", "setup", "waiting", "done"}]
@@ -186,9 +211,8 @@ UserRejects(t) ==
 (* :ClaudeCodeCloseAllDiffs *)
 UserClosesAllDiffs ==
   /\ Idle
-  /\ LET S == {t \in Tabs : PendingOr(t, UserCloseAllPendingOnly)}
-     IN /\ S # {}
-        /\ SetW(CloseEach(W, S, FALSE))
+  /\ \E t \in Tabs : Matches(W, t, Filter(UserCloseAllPendingOnly, None))
+  /\ \E v \in CloseAll(Filter(UserCloseAllPendingOnly, None), FALSE) : SetW(v)
   /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
 
 (* tools/close_tab.lua *)
@@ -200,9 +224,8 @@ ClaudeClosesTab(t) ==
 (* tools/close_all_diff_tabs.lua -> close_all_diffs (any status) *)
 ClaudeClosesAllDiffTabs ==
   /\ Idle /\ ClaudeConnected
-  /\ LET S == {t \in Tabs : Open(t)}
-     IN /\ S # {}
-        /\ SetW(CloseEach(W, S, TRUE))
+  /\ \E t \in Tabs : Open(t)
+  /\ \E v \in CloseAll(Filter(FALSE, None), TRUE) : SetW(v)
   /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
 
 (* server/tcp.lua -> on_disconnect; the diff cleanup is vim.schedule'd. *)
@@ -216,8 +239,7 @@ ClientDisconnects(c) ==
 DisconnectCleanupRuns(c) ==
   /\ Idle /\ c \in scheduled
   /\ scheduled' = scheduled \ {c}
-  /\ LET S == {t \in Tabs : PendingOr(t, DisconnectPendingOnly) /\ ClientTagged /\ reqClient[active[t].req] = c}
-     IN SetW(CloseEach(W, S, FALSE))
+  /\ \E v \in CloseAll(Filter(DisconnectPendingOnly, c), FALSE) : SetW(v)
   /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp>>
 
 (* server/init.lua M.stop: close pending diffs, stop the server (bypasses *)
@@ -226,9 +248,8 @@ ServerStops ==
   /\ Idle /\ serverUp
   /\ serverUp' = FALSE
   /\ clientUp' = [c \in Clients |-> FALSE]
-  /\ LET S == IF StopRejectsPending THEN {t \in Tabs : PendingOr(t, StopPendingOnly)} ELSE {}
-         closed == CloseEach(W, S, FALSE)
-     IN SetW([closed EXCEPT !.sender = [q \in Reqs |-> FALSE]])
+  /\ \E v \in IF StopRejectsPending THEN CloseAll(Filter(StopPendingOnly, None), FALSE) ELSE {W} :
+       SetW([v EXCEPT !.sender = [q \in Reqs |-> FALSE]])
   /\ UNCHANGED <<reqTab, reqClient, scheduled>>
 
 Next ==

@@ -62,6 +62,7 @@ A changed file with no changed block or call site still needs a look. A wrapper 
 | `ReplaceRejects`                           | in `open_diff_blocking`, before `coroutine.running()`: a pending diff with the same `tab_name` is rejected, then cleaned up                                                                                    |
 | `CloseTabRejectsPending`                   | `close_diff_by_tab_name` rejects a pending diff before cleanup                                                                                                                                                 |
 | `CloseEachByName`                          | `close_active_diffs` closes each match through `close_diff_by_tab_name`                                                                                                                                        |
+| `CloseRechecksFilter`                      | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                                                           |
 | `StopRejectsPending`                       | `M.stop` calls `close_pending_diffs`, then `stop_server`, then clears the senders                                                                                                                              |
 | `StopPendingOnly`, `DisconnectPendingOnly` | the `status == "pending"` filters in `close_pending_diffs` and `close_diffs_for_client`                                                                                                                        |
 | `DisconnectRejects`                        | `on_disconnect` schedules `close_diffs_for_client`                                                                                                                                                             |
@@ -109,8 +110,9 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
 - `SenderCleared` alone is caught by no rule, because the pending guards also stop a second answer. `--mutants` shows that `AtMostOneAnswer` breaks when both `SenderCleared` and `GuardRejected` are removed.
 - `SavedDiffKept` counts a close by any connected Claude client as Claude's. The model does not track which client owns a diff. So it does not check the case where a second client's `closeAllDiffTabs` or `close_tab` tears down a saved diff whose own client died before writing the file.
 - The split and unified layouts share the pending guards only because `resolve_inline_as_*` is reached through `_resolve_diff_as_*`. The inline functions have no guard of their own.
+- Every run assumes that the user has a `ClaudeCodeDiffClosed` handler (`ClosedHandlerResolvesOther`). Each time a bulk close closes a diff, the handler can accept or deny one other open diff, in any order of the snapshot. After a single close (`close_tab`, a replacing openDiff) the handler can touch only other diffs, the same as a later user action, so only the bulk-close loop models it.
 - These are not modeled:
-  - user `ClaudeCodeDiffClosed` handlers that act on another diff while `close_active_diffs` is still looping over its snapshot (each close fires the event synchronously, and the loop does not recheck the next entry's status)
+  - a `ClaudeCodeDiffClosed` handler that starts another bulk close
   - window and tab layout
   - the `keep_empty` new-file cleanup inside `_resolve_diff_as_rejected` (it runs after the answer)
   - setup errors, which answer at once

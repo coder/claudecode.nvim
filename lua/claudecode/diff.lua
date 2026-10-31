@@ -1679,17 +1679,22 @@ end
 ---@param reason string Human-readable reason (for logging)
 ---@return number count Number of diffs closed
 local function close_active_diffs(filter_fn, reason)
+  local function matches(diff_data)
+    return diff_data ~= nil and (not filter_fn or filter_fn(diff_data))
+  end
   local count = 0
   -- Snapshot the tab names first: close_diff_by_tab_name nils out entries as it
   -- goes, and mutating a table while iterating it with pairs() is undefined.
   local tab_names = {}
   for tab_name, diff_data in pairs(active_diffs) do
-    if not filter_fn or filter_fn(diff_data) then
+    if matches(diff_data) then
       tab_names[#tab_names + 1] = tab_name
     end
   end
   for _, tab_name in ipairs(tab_names) do
-    if M.close_diff_by_tab_name(tab_name) then
+    -- Each close fires ClaudeCodeDiffClosed synchronously, and a user handler can
+    -- accept a later entry, so recheck the filter against the entry as it is now.
+    if matches(active_diffs[tab_name]) and M.close_diff_by_tab_name(tab_name) then
       count = count + 1
     end
   end

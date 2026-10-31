@@ -131,7 +131,14 @@ fact[ReplaceRejects]=$(as_bool in_order 'if active_diffs\[tab_name\] then' 'exis
 fact[CloseTabRejectsPending]=$(as_bool in_order 'if diff_data\.status == "pending" then' \
   'M\._resolve_diff_as_rejected\(tab_name\)' 'M\._cleanup_diff_state\(tab_name' <<<"$close_by_name")
 fact[CloseEachByName]=$(as_bool in_order 'for _, tab_name in ipairs\(tab_names\) do' \
-  'if M\.close_diff_by_tab_name\(tab_name\) then' <<<"$close_active")
+  'if (.* and )?M\.close_diff_by_tab_name\(tab_name\) then' <<<"$close_active")
+# A ClaudeCodeDiffClosed handler runs inside each close, so the loop must re-read the entry
+# and rerun the snapshot's filter on it.
+FACTS+=(CloseRechecksFilter)
+fact[CloseRechecksFilter]=$(as_bool in_order 'local function matches\(diff_data\)' \
+  'return diff_data ~= nil and \(not filter_fn or filter_fn\(diff_data\)\)' 'if matches\(diff_data\) then' \
+  'for _, tab_name in ipairs\(tab_names\) do' \
+  'if matches\(active_diffs\[tab_name\]\) and M\.close_diff_by_tab_name\(tab_name\) then' <<<"$close_active")
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \
   '_G\.claude_deferred_responses = \{\}' <<<"$server_stop")
 fact[StopPendingOnly]=$(as_bool grep -qE '^ *return diff_data\.status == "pending"$' <<<"$close_pending")
@@ -245,6 +252,7 @@ run_tlc() {
     if [[ -n $properties ]]; then echo "  Reqs = {r1, r2}"; else echo "  Reqs = {r1, r2, r3}"; fi
     echo "  Tabs = {t1, t2}"
     echo "  Clients = {c1, c2}"
+    echo "  ClosedHandlerResolvesOther = TRUE"
     for f in "${FACTS[@]}"; do echo "  $f = ${vals[$f]}"; done
     echo "  UserHandlerResolvesDiff = $handler"
     [[ -n $invariants ]] && echo "INVARIANT $invariants"
@@ -288,6 +296,7 @@ if [[ $mutants == 1 ]]; then
     [GuardSaved]=AnswerMatchesDiff [GuardRejected]=AnswerMatchesDiff
     [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
+    [CloseRechecksFilter]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
   )
   status=0
