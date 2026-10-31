@@ -148,13 +148,24 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
       started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts)
     end)
   end
-  jobid = started and termopen_result or nil
 
   -- termopen raises for a command that is not executable, and returns 0 or -1 instead when errors are silenced.
-  if not jobid or jobid <= 0 then
-    local reason = started and "" or (" " .. tostring(termopen_result))
-    vim.notify("Failed to open native terminal." .. reason, vim.log.levels.ERROR)
-    vim.api.nvim_win_close(new_winid, true)
+  local failure = nil
+  if not started then
+    failure = " " .. tostring(termopen_result)
+  elseif termopen_result <= 0 then
+    failure = ""
+  elseif not vim.api.nvim_buf_is_valid(new_bufnr) then
+    -- A TermOpen autocmd wiped the buffer. The wipe also stopped the job.
+    failure = " Its buffer was deleted after termopen started."
+  end
+
+  if failure then
+    vim.notify("Failed to open native terminal." .. failure, vim.log.levels.ERROR)
+    -- Wiping the buffer closes the split, unless an autocmd swapped another buffer into it first.
+    if vim.api.nvim_win_is_valid(new_winid) then
+      vim.api.nvim_win_close(new_winid, true)
+    end
     vim.api.nvim_set_current_win(original_win)
     if vim.api.nvim_buf_is_valid(new_bufnr) then
       vim.api.nvim_buf_delete(new_bufnr, { force = true })
@@ -163,6 +174,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     return
   end
 
+  jobid = termopen_result
   if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
