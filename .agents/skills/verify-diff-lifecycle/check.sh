@@ -166,7 +166,7 @@ fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 echo "== code facts (TRUE = guard present)"
 for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
 
-# The coverage record: a hash of every file under lua/, so any change to the plugin's Lua makes
+# The coverage record: a hash of every Lua file under lua/ and plugin/, so any change to the plugin's Lua makes
 # the run STALE until someone confirms the model still fits. The block hashes and call sites
 # below point the reader at what changed.
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
@@ -184,10 +184,10 @@ coverage() {
   local file
   while IFS= read -r file; do
     printf 'file %s %s\n' "$file" "$(sha256 <"$file" | cut -c1-16)"
-  done < <(find lua -name '*.lua' | sort)
+  done < <(find lua plugin -name '*.lua' | sort)
   # Each site also names its enclosing top-level statement, so moving a call into another
   # function or autocmd changes the record.
-  find lua -name '*.lua' -print0 | sort -z | RE=$SITE_RE xargs -0 awk '
+  find lua plugin -name '*.lua' -print0 | sort -z | RE=$SITE_RE xargs -0 awk '
     BEGIN { re = ENVIRON["RE"] }
     FNR == 1 { top = "" }
     /^[^[:space:]-]/ && !/^(end|else|elseif|return|[})])/ { top = $0 }
@@ -197,7 +197,7 @@ coverage() {
 current=$(coverage)
 if [[ $record == 1 ]]; then
   sync=$(git rev-parse HEAD)
-  if base=$(git merge-base HEAD origin/main 2>/dev/null) && git diff --quiet "$base" HEAD -- lua/; then sync=$base; fi
+  if base=$(git merge-base HEAD origin/main 2>/dev/null) && git diff --quiet "$base" HEAD -- lua/ plugin/; then sync=$base; fi
   printf 'sync %s\n%s\n' "$sync" "$current" >"$LOCK"
   echo "recorded $LOCK at sync commit $sync"
   exit 0
@@ -208,7 +208,7 @@ if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >
   echo "== STALE: the covered code changed since commit $(head -1 "$LOCK" 2>/dev/null | cut -c6-17)."
   echo "   UNVERIFIED: no result below covers these changes until you read them and update the model."
   { diff <(sed 1d "$LOCK" 2>/dev/null) <(printf '%s\n' "$current") || true; } | grep -E '^[<>]' |
-    sed -e 's/^</   was:/' -e 's/^>/   now:/'
+    sed -e 's/^</   was:/' -e 's/^>/   now:/' -e 's/[^[:print:]]/?/g'
 fi
 
 cp "$here/model/DiffLifecycle.tla" "$work/"

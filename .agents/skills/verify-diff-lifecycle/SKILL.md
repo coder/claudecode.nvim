@@ -23,7 +23,7 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 .agents/skills/verify-diff-lifecycle/check.sh            # about 10 s
 .agents/skills/verify-diff-lifecycle/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
 .agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 5 min, after you edit the model or a fact
-.agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change"
+.agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change" (refused together with --mutants)
 ```
 
 Needs bash 4 or newer, Java 11 or newer (`JAVA=/path/to/java` overrides), `sha256sum` or `shasum`, and curl for the first run. The first run downloads TLC 1.7.4 to `~/.cache/claudecode-nvim-tla/` and refuses a jar whose sha256 differs. Run one copy at a time on a shared host. TLC is CPU heavy.
@@ -37,9 +37,9 @@ Exit codes:
 
 ## Does the change touch the verified code?
 
-Run the check. `covered.lock` records a hash of every file under `lua/`, so any change to the plugin's Lua code reads `STALE` (exit 3) until someone confirms that the model still describes the code. The model was written against the whole lifecycle: diff state, the tool and server layers, the transport that reports disconnects, and the user commands. Its facts cannot tell which other edits matter, so the record does not try to.
+Run the check. `covered.lock` records a hash of every Lua file under `lua/` and `plugin/`, so any change to the plugin's Lua code reads `STALE` (exit 3) until someone confirms that the model still describes the code. The model was written against the whole lifecycle: diff state, the tool and server layers, the transport that reports disconnects, and the user commands. Its facts cannot tell which other edits matter, so the record does not try to.
 
-To show where to look, the record also hashes each block the model describes and lists every non-comment line that resolves, closes, registers or answers a diff, names the diff table (`active_diffs`, `_get_active_diffs`), or assigns a `.status`, with its enclosing top-level statement. The STALE output prints one `was:`/`now:` line per changed file, block or call site.
+To show where to look, the record also hashes each block the model describes and lists every non-comment line that resolves, closes, registers or answers a diff, names the diff table (`active_diffs`, `_get_active_diffs`), or assigns a `.status`, with its enclosing top-level statement. The STALE output prints a `was:`/`now:` pair per changed file, block or call site. A new one prints only `now:`, and a removed one only `was:`. Control bytes in those lines print as `?`, so a source line cannot rewrite the terminal.
 
 Covered blocks:
 
@@ -117,4 +117,4 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
   - Neovim exit (`VimLeavePre`) and the plugin's own `M.stop` in `init.lua`, beyond the server stop it calls
   - whether a sent response reaches a live socket
   - two servers in one Neovim
-- A pass covers this model at these bounds, for the facts `check.sh` reads, on `lua/` exactly as recorded in `covered.lock`. Any other `lua/` tree reads STALE.
+- A pass covers this model at these bounds, for the facts `check.sh` reads, on `lua/` and `plugin/` exactly as recorded in `covered.lock`. Any other tree reads STALE.
