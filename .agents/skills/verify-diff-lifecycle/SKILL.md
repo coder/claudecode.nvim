@@ -22,7 +22,7 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 ```bash
 .agents/skills/verify-diff-lifecycle/check.sh            # about 10 s
 .agents/skills/verify-diff-lifecycle/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
-.agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 11 min, after you edit the model or a fact
+.agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 14 min, after you edit the model or a fact
 .agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change" (refused together with --mutants, and refused when covered.lock is a symlink)
 ```
 
