@@ -385,6 +385,14 @@ describe("Tool: open_file", function()
       expect(selected_text()).to_be("three/four")
     end)
 
+    it("stops a line range that runs past the last line at the last line", function()
+      local success, result = pcall(open_file_handler, { filePath = "other.txt", startLine = 3, endLine = 5 })
+
+      expect(success).to_be_true()
+      expect(result.content[1].text).to_be("Opened file and selected lines 3 to 4")
+      expect(selected_text()).to_be("three/four")
+    end)
+
     it("selects from the startText match through the endText match", function()
       local success, result = pcall(open_file_handler, { filePath = "other.txt", startText = "two", endText = "three" })
 
