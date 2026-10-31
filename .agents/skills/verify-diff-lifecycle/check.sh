@@ -88,6 +88,7 @@ TOOLS=lua/claudecode/tools/init.lua
 OPEN_DIFF_TOOL=lua/claudecode/tools/open_diff.lua
 CLOSE_TAB_TOOL=lua/claudecode/tools/close_tab.lua
 CLOSE_ALL_TOOL=lua/claudecode/tools/close_all_diff_tabs.lua
+CLIENT=lua/claudecode/server/client.lua
 
 resolve_saved=$(block "$DIFF" '^function M\._resolve_diff_as_saved\(')
 resolve_rejected=$(block "$DIFF" '^function M\._resolve_diff_as_rejected\(')
@@ -100,6 +101,7 @@ close_all=$(block "$DIFF" '^function M\.close_all_diffs\(')
 held_for_other=$(block "$DIFF" '^local function holds_edits_for_other_client\(')
 close_tab_tool=$(block "$CLOSE_TAB_TOOL" '^local function handler\(params, client\)')
 close_all_tool=$(block "$CLOSE_ALL_TOOL" '^local function handler\(params, client\)')
+create_client=$(block "$CLIENT" '^function M\.create_client\(')
 server_stop=$(block "$SERVER" '^function M\.stop\(\)')
 on_disconnect=$(block "$SERVER" '^ *on_disconnect = function\(')
 handle_request=$(block "$SERVER" '^function M\._handle_request\(')
@@ -170,6 +172,14 @@ fact[CloseRechecksFilter]=$(as_bool in_order 'local function matches\(diff_data\
   'return diff_data ~= nil and \(not filter_fn or filter_fn\(diff_data\)\)' 'if matches\(diff_data\) then' \
   'for _, tab_name in ipairs\(tab_names\) do' \
   'if matches\(active_diffs\[tab_name\]\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
+# A saved diff outlives its client's connection, so a later connection must never get that client's id.
+FACTS+=(ClientIdsUnique)
+client_ids_unique() {
+  grep -qE '^local clients_created = 0$' "$CLIENT" &&
+    in_order '^  clients_created = clients_created \+ 1$' '^  local client_id = "client_" \.\. clients_created$' \
+      '^    id = client_id,$' <<<"$create_client"
+}
+fact[ClientIdsUnique]=$(as_bool client_ids_unique)
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \
   '_G\.claude_deferred_responses = \{\}' <<<"$server_stop")
 fact[StopPendingOnly]=$(as_bool grep -qE '^ *return diff_data\.status == "pending"$' <<<"$close_pending")
@@ -212,7 +222,7 @@ SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
-    close_all held_for_other close_tab_tool close_all_tool \
+    close_all held_for_other close_tab_tool close_all_tool create_client \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
     handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
@@ -329,6 +339,7 @@ if [[ $mutants == 1 ]]; then
     [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
     [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
+    [ClientIdsUnique]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
   )
   status=0

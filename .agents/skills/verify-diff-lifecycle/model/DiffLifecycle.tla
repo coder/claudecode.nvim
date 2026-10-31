@@ -16,7 +16,7 @@ EXTENDS Naturals, Sequences, FiniteSets
 CONSTANTS
   Reqs,      \* openDiff calls (model values)
   Tabs,      \* tab_name values Claude can use
-  Clients,   \* WebSocket client ids (server/tcp.lua); an id never reconnects
+  Clients,   \* WebSocket client ids (server/client.lua create_client)
 
   \* Code facts, see check.sh for the source line each one reads.
   GuardSaved,              \* diff.lua _resolve_diff_as_saved returns unless status == "pending"
@@ -35,6 +35,7 @@ CONSTANTS
   DisconnectPendingOnly,   \* diff.lua close_diffs_for_client filters status == "pending"
   UserCloseAllPendingOnly, \* init.lua :ClaudeCodeCloseAllDiffs calls close_pending_diffs
   ClientTagged,            \* tools/init.lua passes the client to openDiff, which records client.id
+  ClientIdsUnique,         \* server/client.lua numbers client ids, so a new connection never reuses one
   OpenedEventInSetup,      \* diff.lua fires ClaudeCodeDiffOpened synchronously before the yield,
                            \* and the resolution callback resumes the coroutine without a status check
 
@@ -64,9 +65,10 @@ VARIABLES
   clientUp,   \* per client: connected
   serverUp,   \* the WebSocket server runs
   scheduled,  \* clients whose vim.schedule'd disconnect cleanup has not run yet
-  savedLost   \* ghost: a saved diff was torn down while no connected owner could write it
+  savedLost,  \* ghost: a saved diff was torn down while no connected owner could write it
+  staleOwner  \* ghost: calls whose client id now names a later connection
 
-vars == <<phase, reqTab, reqClient, active, sender, answers, clientUp, serverUp, scheduled, savedLost>>
+vars == <<phase, reqTab, reqClient, active, sender, answers, clientUp, serverUp, scheduled, savedLost, staleOwner>>
 
 (* The parts of the state that one diff operation touches, as a record, so   *)
 (* that a step that closes several diffs can chain the same operators.       *)
@@ -103,8 +105,10 @@ Resolve(w, t, outcome) ==
 (* it, or another client does while the owner is still connected to write it.  *)
 Remove(w, t, closer) ==
   LET e == w.active[t]
-      lost == /\ e # NoDiff /\ e.status = "saved" /\ closer # reqClient[e.req]
-              /\ (closer = None \/ ~clientUp[reqClient[e.req]])
+      fresh == e # NoDiff /\ e.req \notin staleOwner
+      lost == /\ e # NoDiff /\ e.status = "saved"
+              /\ ~(fresh /\ closer = reqClient[e.req])
+              /\ (closer = None \/ ~(fresh /\ clientUp[reqClient[e.req]]))
   IN [w EXCEPT !.active[t] = NoDiff, !.savedLost = @ \/ lost]
 
 (* diff.lua holds_edits_for_other_client: the user accepted the diff for a     *)
@@ -166,6 +170,7 @@ TypeOK ==
   /\ serverUp \in BOOLEAN
   /\ scheduled \subseteq Clients
   /\ savedLost \in BOOLEAN
+  /\ staleOwner \subseteq Reqs
 
 Init ==
   /\ phase = [r \in Reqs |-> "unsent"]
@@ -178,6 +183,7 @@ Init ==
   /\ serverUp = TRUE
   /\ scheduled = {}
   /\ savedLost = FALSE
+  /\ staleOwner = {}
 
 (* tools/call openDiff -> open_diff_blocking up to the ClaudeCodeDiffOpened event. *)
 (* When the tab_name holds another client's saved diff, open_diff_blocking     *)
@@ -193,7 +199,7 @@ ClaudeOpensDiff(r, c, t) ==
                                   !.phase[r] = "setup"])
   /\ reqTab' = [reqTab EXCEPT ![r] = t]
   /\ reqClient' = [reqClient EXCEPT ![r] = c]
-  /\ UNCHANGED <<clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<clientUp, serverUp, scheduled, staleOwner>>
 
 (* A user ClaudeCodeDiffOpened handler closes the diff window or accepts it, *)
 (* while open_diff_blocking has not yielded yet.                            *)
@@ -202,62 +208,70 @@ UserHandlerResolves(r, o) ==
   /\ phase[r] = "setup"
   /\ Resolve(W, reqTab[r], o) # W
   /\ SetW(Resolve(W, reqTab[r], o))
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
 (* coroutine.yield(); tools/init.lua returns _deferred; server/init.lua stores the sender. *)
 DiffYields(r) ==
   /\ phase[r] = "setup"
   /\ phase' = [phase EXCEPT ![r] = "waiting"]
   /\ sender' = [sender EXCEPT ![r] = TRUE]
-  /\ UNCHANGED <<reqTab, reqClient, active, answers, clientUp, serverUp, scheduled, savedLost>>
+  /\ UNCHANGED <<reqTab, reqClient, active, answers, clientUp, serverUp, scheduled, savedLost, staleOwner>>
 
 (* :w or :ClaudeCodeDiffAccept (BufWriteCmd / accept_current_diff). *)
 UserAccepts(t) ==
   /\ Idle /\ Open(t)
   /\ Resolve(W, t, "saved") # W
   /\ SetW(Resolve(W, t, "saved"))
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
 (* :q, :bdelete, :ClaudeCodeDiffDeny (WinClosed / BufDelete / deny_current_diff). *)
 UserRejects(t) ==
   /\ Idle /\ Open(t)
   /\ Resolve(W, t, "rejected") # W
   /\ SetW(Resolve(W, t, "rejected"))
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
 (* :ClaudeCodeCloseAllDiffs *)
 UserClosesAllDiffs ==
   /\ Idle
   /\ \E t \in Tabs : Matches(W, t, Filter(UserCloseAllPendingOnly, None))
   /\ \E v \in CloseAll(Filter(UserCloseAllPendingOnly, None), None) : SetW(v)
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
 (* tools/close_tab.lua, called by client c *)
 ClaudeClosesTab(c, t) ==
   /\ Idle /\ serverUp /\ clientUp[c] /\ Open(t)
   /\ SetW(CloseByName(W, t, c))
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
 (* tools/close_all_diff_tabs.lua -> close_all_diffs (any status), called by client c *)
 ClaudeClosesAllDiffTabs(c) ==
   /\ Idle /\ serverUp /\ clientUp[c]
   /\ \E t \in Tabs : Open(t)
   /\ \E v \in CloseAll(Filter(FALSE, None), c) : SetW(v)
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
 (* server/tcp.lua -> on_disconnect; the diff cleanup is vim.schedule'd. *)
 ClientDisconnects(c) ==
   /\ Idle /\ serverUp /\ clientUp[c]
   /\ clientUp' = [clientUp EXCEPT ![c] = FALSE]
   /\ scheduled' = IF DisconnectRejects THEN scheduled \cup {c} ELSE scheduled
-  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, serverUp, savedLost>>
+  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, serverUp, savedLost, staleOwner>>
+
+(* Without ClientIdsUnique, a new connection can get the id of a client that  *)
+(* disconnected, and the plugin takes it for the owner of that client's diffs. *)
+ClientIdReused(c) ==
+  /\ ~ClientIdsUnique /\ Idle /\ serverUp /\ ~clientUp[c]
+  /\ clientUp' = [clientUp EXCEPT ![c] = TRUE]
+  /\ staleOwner' = staleOwner \cup {r \in Reqs : reqClient[r] = c}
+  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, serverUp, scheduled, savedLost>>
 
 (* The scheduled close_diffs_for_client runs; its filter reads the table now. *)
 DisconnectCleanupRuns(c) ==
   /\ Idle /\ c \in scheduled
   /\ scheduled' = scheduled \ {c}
   /\ \E v \in CloseAll(Filter(DisconnectPendingOnly, c), None) : SetW(v)
-  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp>>
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, staleOwner>>
 
 (* server/init.lua M.stop: close pending diffs, stop the server (bypasses *)
 (* on_disconnect), clear _G.claude_deferred_responses.                    *)
@@ -267,7 +281,7 @@ ServerStops ==
   /\ clientUp' = [c \in Clients |-> FALSE]
   /\ \E v \in IF StopRejectsPending THEN CloseAll(Filter(StopPendingOnly, None), None) ELSE {W} :
        SetW([v EXCEPT !.sender = [q \in Reqs |-> FALSE]])
-  /\ UNCHANGED <<reqTab, reqClient, scheduled>>
+  /\ UNCHANGED <<reqTab, reqClient, scheduled, staleOwner>>
 
 Next ==
   \/ \E r \in Reqs, c \in Clients, t \in Tabs : ClaudeOpensDiff(r, c, t)
@@ -279,6 +293,7 @@ Next ==
   \/ \E c \in Clients, t \in Tabs : ClaudeClosesTab(c, t)
   \/ \E c \in Clients : ClaudeClosesAllDiffTabs(c)
   \/ \E c \in Clients : ClientDisconnects(c)
+  \/ \E c \in Clients : ClientIdReused(c)
   \/ \E c \in Clients : DisconnectCleanupRuns(c)
   \/ ServerStops
 

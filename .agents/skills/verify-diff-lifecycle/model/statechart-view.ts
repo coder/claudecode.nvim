@@ -40,6 +40,7 @@ const labels: Record<string, string> = {
   ClaudeClosesTab: "Claude calls close_tab",
   ClaudeClosesAllDiffTabs: "Claude calls closeAllDiffTabs",
   ClientDisconnects: "Claude disconnects",
+  ClientIdReused: "a new Claude connection gets the old client id",
   DisconnectCleanupRuns: "the disconnect cleanup runs",
   ServerStops: "the server stops",
 };
