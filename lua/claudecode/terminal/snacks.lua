@@ -18,6 +18,13 @@ end
 local function setup_terminal_events(term_instance, config)
   local logger = require("claudecode.logger")
 
+  -- A terminal opened while this one was closing is the tracked one now, so keep tracking it.
+  local function forget()
+    if terminal == term_instance then
+      terminal = nil
+    end
+  end
+
   -- Handle command completion/exit - only if auto_close is enabled
   if config.auto_close then
     term_instance:on("TermClose", function()
@@ -26,7 +33,7 @@ local function setup_terminal_events(term_instance, config)
       end
 
       -- Clean up
-      terminal = nil
+      forget()
       vim.schedule(function()
         term_instance:close({ buf = true })
         vim.cmd.checktime()
@@ -37,7 +44,7 @@ local function setup_terminal_events(term_instance, config)
   -- Handle buffer deletion
   term_instance:on("BufWipeout", function()
     logger.debug("terminal", "Terminal buffer wiped")
-    terminal = nil
+    forget()
   end, { buf = true })
 end
 
@@ -460,10 +467,15 @@ function M.close()
   local closing = terminal
   local closing_bufnr = closing.buf
   local jobid = vim.bo[closing_bufnr].channel
+  -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not reuse this one.
+  terminal = nil
 
   -- Snacks wipes the buffer on close. Deleting a terminal buffer while a write to its job is pending hangs
-  -- Neovim (neovim/neovim#42508), so stop the job first and wait for TermClose: the wait runs the event loop,
-  -- which ends those writes. An exited Claude (auto_close = false) has nothing to wait for.
+  -- Neovim (neovim/neovim#42508), so stop the job first and wait for TermClose. The wait runs the event loop.
+  -- A job that reads its input, like Claude, takes the pending writes there and exits. A job that stopped
+  -- reading (for example `yes`, or `cat` after a large multi-line send) keeps them pending, the wait times
+  -- out, and Neovim can still hang once the buffer is wiped. This code does not prevent that.
+  -- An exited Claude (auto_close = false) has nothing to wait for.
   if jobid > 0 and vim.fn.jobwait({ jobid }, 0)[1] == -1 then
     closing._cc.closing = true
     local exited = false
