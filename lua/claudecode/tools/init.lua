@@ -100,7 +100,6 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
   -- 2. Return (false, "error message string" or {code=..., message=...}) for pcall-style errors
   -- 3. Return the result directly for success.
   -- Check if this tool requires coroutine context for blocking behavior
-  local pcall_results
   if tool_data.requires_coroutine then
     -- Wrap in coroutine for blocking behavior
     require("claudecode.logger").debug("tools", "Wrapping " .. tool_name .. " in coroutine for blocking behavior")
@@ -109,7 +108,7 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
     end)
 
     require("claudecode.logger").debug("tools", "About to resume coroutine for " .. tool_name)
-    local success, result = coroutine.resume(co)
+    local success, result, err = coroutine.resume(co)
     require("claudecode.logger").debug(
       "tools",
       "Coroutine resume returned - success:",
@@ -129,14 +128,17 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
       "tools",
       "Coroutine completed for " .. tool_name .. ", success: " .. tostring(success)
     )
-    pcall_results = { success, result }
-  else
-    pcall_results = { pcall(tool_data.handler, input) }
+    return M.build_response(success, result, err)
   end
-  local pcall_success = pcall_results[1]
-  local handler_return_val1 = pcall_results[2]
-  local handler_return_val2 = pcall_results[3]
+  return M.build_response(pcall(tool_data.handler, input))
+end
 
+---Map a tool handler's outcome to `{ result = ... }` or `{ error = { code, message, data } }`
+---@param pcall_success boolean The first value from `pcall` or `coroutine.resume`: false when the handler raised
+---@param handler_return_val1 any The raised error, or the handler's first return value
+---@param handler_return_val2 any The handler's second return value
+---@return table
+function M.build_response(pcall_success, handler_return_val1, handler_return_val2)
   if not pcall_success then
     -- Case 1: Handler itself raised a Lua error (e.g. error("foo") or error({...}))
     -- handler_return_val1 contains the error object/string from the pcall
