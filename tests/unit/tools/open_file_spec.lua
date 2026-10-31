@@ -81,7 +81,7 @@ describe("Tool: open_file", function()
     -- Like Neovim, marks and the cursor take a 1-based row and a 0-based column.
     _G.vim.api.nvim_buf_set_mark = spy.new(function(buf, name, line, col, opts)
       if line > #buffer_lines then
-        error("Line value outside range")
+        error("Invalid 'line': out of range")
       end
       marks[name] = { line, col }
       return true
@@ -98,7 +98,7 @@ describe("Tool: open_file", function()
     end)
     _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
       if pos[1] < 1 or pos[1] > #buffer_lines then
-        error("Cursor position outside buffer")
+        error("Invalid cursor line: out of range")
       end
     end)
   end)

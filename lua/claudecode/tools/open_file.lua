@@ -226,7 +226,8 @@ local function handler(params)
           for line_idx = start_line_idx, #lines do
             local line = lines[line_idx] -- Access current line directly
             if line then
-              local col_idx = string.find(line, end_text, 1, true)
+              local search_from = line_idx == start_line_idx and start_col_idx + string.len(start_text) + 1 or 1
+              local col_idx = string.find(line, end_text, search_from, true)
               if col_idx then
                 end_line_idx = line_idx
                 end_col_idx = col_idx - 1 + string.len(end_text) - 1
