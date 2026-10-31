@@ -32,7 +32,7 @@ Exit codes:
 
 - `0` is PASS.
 - `1` means a rule broke, or the known finding changed.
-- `2` is a tool or script error.
+- `2` is a tool or script error, or a model whose `TypeOK` breaks.
 - `3` is STALE. The covered code changed since the model was last confirmed, so the change is unverified.
 
 ## Does the change touch the verified code?
@@ -58,7 +58,7 @@ A changed file with no changed block or call site still needs a look. A wrapper 
 | Fact                                       | Code it reads                                                                                                                                                                                                  |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GuardSaved`, `GuardRejected`              | `if not diff_data or diff_data.status ~= "pending" then return` in each `_resolve_diff_as_*`                                                                                                                   |
-| `SenderCleared`                            | both `_G.claude_deferred_responses[co_key] = nil` lines in the resolution callback                                                                                                                             |
+| `SenderCleared`                            | the resolution callback sets `_G.claude_deferred_responses[co_key] = nil` after it calls that sender                                                                                                           |
 | `ReplaceRejects`                           | in `open_diff_blocking`, before `coroutine.running()`: a pending diff with the same `tab_name` is rejected, then cleaned up                                                                                    |
 | `CloseTabRejectsPending`                   | `close_diff_by_tab_name` rejects a pending diff before cleanup                                                                                                                                                 |
 | `CloseEachByName`                          | `close_active_diffs` closes each match through `close_diff_by_tab_name`                                                                                                                                        |

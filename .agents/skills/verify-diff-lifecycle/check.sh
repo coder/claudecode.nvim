@@ -123,7 +123,8 @@ fact[GuardSaved]=$(as_bool in_order 'if not diff_data or diff_data\.status ~= "p
   'diff_data\.status = "saved"' <<<"$resolve_saved")
 fact[GuardRejected]=$(as_bool in_order 'if not diff_data or diff_data\.status ~= "pending" then' '^ *return$' \
   'diff_data\.status = "rejected"' <<<"$resolve_rejected")
-fact[SenderCleared]=$(as_bool test "$(grep -c '_G\.claude_deferred_responses\[co_key\] = nil' <<<"$open_blocking" || true)" -eq 2)
+fact[SenderCleared]=$(as_bool in_order '_G\.claude_deferred_responses\[co_key\]\(' \
+  '_G\.claude_deferred_responses\[co_key\] = nil' <<<"$open_blocking")
 fact[ReplaceRejects]=$(as_bool in_order 'if active_diffs\[tab_name\] then' 'existing_diff\.status == "pending"' \
   'M\._resolve_diff_as_rejected\(tab_name\)' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' \
   'coroutine\.running\(\)' <<<"$open_blocking")
@@ -216,7 +217,10 @@ if [[ -L $LOCK ]]; then
 fi
 if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >/dev/null; then
   stale=1
-  echo "== STALE: the covered code changed since commit $(head -1 "$LOCK" 2>/dev/null | cut -c6-17)."
+  sync_id=$(head -1 "$LOCK" 2>/dev/null | sed -n 's/^sync \([0-9a-f]\{40\}\)$/\1/p')
+  label=${sync_id:0:12}
+  [[ -n $label ]] || label="<no valid sync line in covered.lock>"
+  echo "== STALE: the covered code changed since commit $label."
   echo "   UNVERIFIED: no result below covers these changes until you read them and update the model."
   { diff <(sed 1d "$LOCK" 2>/dev/null) <(printf '%s\n' "$current") || true; } | grep -E '^[<>]' |
     sed -e 's/^</   was:/' -e 's/^>/   now:/' -e 's/[^[:print:]]/?/g'
@@ -366,7 +370,11 @@ for run in main live; do
     run_tlc live FALSE "TypeOK" "DisconnectedCallsAnswered" || rc=$?
   fi
   echo "  $run: $(describe "$run" "$rc")"
-  if [[ $rc == 12 || $rc == 13 ]]; then
+  if [[ $rc == 12 && $(broken_rule "$work/$run.out") == TypeOK ]]; then
+    echo "  TypeOK broke: the model itself is wrong, not the code"
+    show_trace "$run"
+    exit 2
+  elif [[ $rc == 12 || $rc == 13 ]]; then
     show_trace "$run"
     result=1
   elif [[ $rc != 0 ]]; then
