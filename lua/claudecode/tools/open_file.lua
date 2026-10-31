@@ -105,6 +105,17 @@ local function find_main_editor_window()
   return nil
 end
 
+---Returns the `'>` mark column that makes `normal! gv` end the selection on byte `last_col`.
+---With 'selection' set to "exclusive", gv leaves out the character under `'>`.
+---@param last_col integer 0-based column of the last character to select
+---@return integer col 0-based column for the `'>` mark
+local function visual_end_col(last_col)
+  if vim.o.selection == "exclusive" then
+    return last_col + 1
+  end
+  return last_col
+end
+
 --- Handles the openFile tool invocation.
 --- Opens a file in the editor with optional selection.
 ---@param params table The input parameters for the tool
@@ -195,7 +206,7 @@ local function handler(params)
 
       -- nvim_buf_set_mark takes a 1-based row and a 0-based column.
       vim.api.nvim_buf_set_mark(0, "<", start_line, 0, {})
-      vim.api.nvim_buf_set_mark(0, ">", end_line, math.max(#end_line_text - 1, 0), {})
+      vim.api.nvim_buf_set_mark(0, ">", end_line, visual_end_col(math.max(#end_line_text - 1, 0)), {})
       vim.cmd("normal! gv")
 
       message = "Opened file and selected lines " .. start_line .. " to " .. end_line
@@ -232,7 +243,7 @@ local function handler(params)
                 end_line_idx = line_idx
                 end_col_idx = col_idx - 1 + string.len(end_text) - 1
                 if select_to_end_of_line then
-                  end_col_idx = string.len(line)
+                  end_col_idx = math.max(string.len(line) - 1, 0)
                 end
                 break
               end
@@ -257,7 +268,7 @@ local function handler(params)
         -- Apply the selection
         vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
         vim.api.nvim_buf_set_mark(0, "<", start_line_idx, start_col_idx, {})
-        vim.api.nvim_buf_set_mark(0, ">", end_line_idx, end_col_idx, {})
+        vim.api.nvim_buf_set_mark(0, ">", end_line_idx, visual_end_col(end_col_idx), {})
         vim.cmd("normal! gv")
         vim.cmd("normal! zz") -- Center the selection in the window
       else
