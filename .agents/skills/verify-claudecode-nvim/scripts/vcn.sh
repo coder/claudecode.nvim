@@ -223,7 +223,32 @@ unsafe_dir() {
     echo "$1 is owned by another user"
   elif [[ -e $1 ]] && (((8#$(stat -c %a "$1") & 8#022) != 0)); then
     echo "$1 is group- or world-writable"
+  else
+    unsafe_above "$1"
   fi
+}
+
+# Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the
+# dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing.
+unsafe_above() {
+  local dir mode uid
+  for dir in "$(realpath -sm -- "$1/..")" "$(realpath -m -- "$1/..")"; do
+    while :; do
+      if [[ -e $dir || -L $dir ]]; then
+        read -r mode uid < <(stat -c '%a %u' -- "$dir")
+        if ((uid != 0 && uid != EUID)); then
+          echo "$dir, above the evidence dir, is owned by another user"
+          return
+        fi
+        if [[ ! -L $dir ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
+          echo "$dir, above the evidence dir, is writable by others and not sticky"
+          return
+        fi
+      fi
+      [[ $dir != / ]] || break
+      dir=$(dirname -- "$dir")
+    done
+  done
 }
 
 launch_failed() {

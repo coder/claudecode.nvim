@@ -7,6 +7,7 @@
 #   parent-link    the default parent dir is a symlink
 #   parent-group   the default parent dir is group-writable
 #   parent-world   the default parent dir is world-writable
+#   above-world    a dir above the default parent dir is world-writable and not sticky
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
@@ -60,6 +61,9 @@ mkdir -m 770 "$TMP/group/verify-claudecode-nvim"
 refused parent-group "$TMP/group/verify-claudecode-nvim is group- or world-writable" XUM_SCRATCH_DIR="$TMP/group"
 mkdir -m 707 "$TMP/world/verify-claudecode-nvim"
 refused parent-world "$TMP/world/verify-claudecode-nvim is group- or world-writable" XUM_SCRATCH_DIR="$TMP/world"
+mkdir -m 777 "$TMP/above"
+refused above-world "$TMP/above, above the evidence dir, is writable by others and not sticky" \
+  XUM_SCRATCH_DIR="$TMP/above"
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
 launch init VCN_INIT_JSONRPC=1.0
