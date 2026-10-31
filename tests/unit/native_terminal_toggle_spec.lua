@@ -1035,6 +1035,53 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal(1, #remaining)
       assert.is_nil(native_provider.get_active_bufnr())
     end)
+
+    -- The reloaded module gets the same terminal config from setup that the plugin passes in.
+    local function start_then_reload_and_adopt(term_config)
+      native_provider.open("claude", {}, term_config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      package.loaded["claudecode.terminal.native"] = nil
+      native_provider = require("claudecode.terminal.native")
+      native_provider.setup({ auto_close = term_config.auto_close })
+      native_provider.open("claude", {}, term_config)
+      assert.are.equal(terminal_bufnr, native_provider.get_active_bufnr())
+      return terminal_bufnr
+    end
+
+    for _, auto_close in ipairs({ true, false }) do
+      it(
+        "should start a new terminal after a terminal it adopted after a module reload exits (auto_close="
+          .. tostring(auto_close)
+          .. ")",
+        function()
+          local mock_state = _G.get_mock_state()
+          local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = auto_close }
+          local exited_bufnr = start_then_reload_and_adopt(term_config)
+
+          mock_state.exit_job(exited_bufnr)
+          native_provider.simple_toggle("claude", {}, term_config)
+
+          local active = native_provider.get_active_bufnr()
+          assert.are_not.equal(exited_bufnr, active)
+          assert.are.equal(1, windows_showing(active))
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+        end
+      )
+    end
+
+    it("should close the window of an adopted terminal it showed again when the job exits with auto_close", function()
+      local mock_state = _G.get_mock_state()
+      local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = true }
+      local exited_bufnr = start_then_reload_and_adopt(term_config)
+      native_provider.simple_toggle("claude", {}, term_config)
+      native_provider.simple_toggle("claude", {}, term_config)
+      assert.are.equal(1, windows_showing(exited_bufnr))
+
+      mock_state.exit_job(exited_bufnr)
+
+      assert.are.equal(0, windows_showing(exited_bufnr))
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
   end)
 
   describe("simple_toggle behavior", function()
