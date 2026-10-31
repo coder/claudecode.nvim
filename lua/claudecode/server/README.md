@@ -27,7 +27,7 @@ Layers, top to bottom:
 - `M.send(client, method, params) -> boolean`: sends a JSON-RPC notification to one client [server/init.lua:M.send]
 - `M.send_response(client, id, result, error_data) -> boolean`: a `nil` id is sent as JSON `null` (`vim.NIL`) [server/init.lua:M.send_response]
 - `M.broadcast(method, params) -> boolean`: sends a notification to all clients [server/init.lua:M.broadcast]
-- `M.get_status() -> { running, port, client_count, clients }` [server/init.lua:M.get_status]
+- `M.get_status() -> { running, port, client_count, clients }`. `clients` is present only while the server runs [server/init.lua:M.get_status]
 - Internal dispatch: `M._handle_message`, `M._handle_request`, `M._handle_notification`, and `M._setup_deferred_response` [server/init.lua:M._handle_message]
 
 ### TCP server (`tcp.lua`)
@@ -35,7 +35,7 @@ Layers, top to bottom:
 - `M.create_server(config, callbacks, auth_token) -> server|nil, err`: tries ports in the configured range until one binds and listens [server/tcp.lua:M.create_server]
 - `M.find_available_port(min_port, max_port)`: probe-only port check [server/tcp.lua:M.find_available_port]
 - `M.send_to_client`, `M.broadcast`, `M.close_client`, `M.get_client_count`, and `M.get_clients_info` [server/tcp.lua:M.send_to_client]
-- `M.stop_server(server)`: closes every client with code 1001 "Server shutting down", then closes the listener [server/tcp.lua:M.stop_server]
+- `M.stop_server(server)`: sends a Close frame with code 1001 "Server shutting down" to clients that finished the handshake, closes the TCP handle of the others, then closes the listener [server/tcp.lua:M.stop_server] [server/client.lua:M.close_client]
 - `M.start_ping_timer(server, interval)`: default interval is 30000 ms [server/tcp.lua:M.start_ping_timer]
 - Internal: `M._bind_and_listen`, `M._handle_new_connection`, `M._disconnect_client`, and `M._remove_client` [server/tcp.lua:M._bind_and_listen]
 

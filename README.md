@@ -993,7 +993,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   loopback `no_proxy`/`NO_PROXY`, and, while the server runs, `CLAUDE_CODE_SSE_PORT`
   [lua/claudecode/terminal.lua:get_claude_command_and_env].
 - Disk: diff temp files under `stdpath("cache")/claudecode_diffs`, or `stdpath("cache")/claudecode_diffs_fallback` if
-  that `mkdir` fails [lua/claudecode/diff.lua:create_temp_file].
+  that `mkdir` raises. A `mkdir` that returns 0 does not trigger the fallback (#334) [lua/claudecode/diff.lua:create_temp_file].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
   `ClaudeCodeDiffCleanup`), `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
   and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2
