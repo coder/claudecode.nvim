@@ -156,7 +156,8 @@ function M._handle_message(client, message)
   end
 
   if type(parsed) ~= "table" or parsed.jsonrpc ~= "2.0" then
-    M.send_response(client, parsed.id, nil, {
+    local request_id = type(parsed) == "table" and parsed.id or nil
+    M.send_response(client, request_id, nil, {
       code = -32600,
       message = "Invalid Request",
       data = "Not a valid JSON-RPC 2.0 request",

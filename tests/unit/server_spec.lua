@@ -187,6 +187,41 @@ describe("WebSocket Server", function()
     server.stop()
   end)
 
+  describe("invalid JSON-RPC messages", function()
+    local original_send_response
+    local original_decode
+
+    before_each(function()
+      original_send_response = server.send_response
+      original_decode = vim.json.decode
+      vim.json.decode = _G.json_decode
+    end)
+
+    after_each(function()
+      server.send_response = original_send_response
+      vim.json.decode = original_decode
+    end)
+
+    for _, payload in ipairs({ "5", "true", "false", '"text"' }) do
+      it("answers -32600 with a null id for payload " .. payload, function()
+        local sent = {}
+        server.send_response = function(client, id, result, error_data)
+          table.insert(sent, { client = client, id = id, result = result, error_data = error_data })
+          return true
+        end
+        local client = { id = "test_client" }
+
+        local ok, err = pcall(server._handle_message, client, payload)
+
+        assert.is_true(ok, tostring(err))
+        expect(#sent).to_be(1)
+        expect(sent[1].client).to_be(client)
+        expect(sent[1].id).to_be_nil()
+        expect(sent[1].error_data.code).to_be(-32600)
+      end)
+    end
+  end)
+
   describe("authentication integration", function()
     it("should start server with authentication token", function()
       local config = {
