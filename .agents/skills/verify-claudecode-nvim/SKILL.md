@@ -37,12 +37,12 @@ OUT=/home/coder/.xum/sessions/<ws>/scratch/verify-claudecode-nvim/20261031T12000
 
 Every bash call is a fresh shell. Start each later call with the `VCN_STATE` value launch printed. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used: `export VCN_STATE=/tmp/vcn.AbC123; source "$VCN_STATE/run.env"`. That also sets `OUT`, `WORK`, `PORT`, `SID` (the agent-tty session), and `NVIM_PID`.
 
-Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. A failed check, such as the Node version or the Chromium launch, stops the launch and names the check. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, the client finished the handshake, and the MCP `initialize` call answered with a string `result.protocolVersion`. If a step misses its 10 s deadline, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1. An `initialize` answer without that field, such as a JSON-RPC error, does the same and prints `vcn: initialize failed: <answer>`.
+Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. A failed check, such as the Node version or the Chromium launch, stops the launch and names the check. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, the client finished the handshake, and the MCP `initialize` call answered with a result. If a step misses its 10 s deadline, or `initialize` answers without a string `result.protocolVersion`, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1.
 
 - Seed files in `$WORK` (nvim's cwd and the workspace folder): `hello.txt` is `alpha`, `beta`, `gamma`. `other.txt` is `one`, `two`, `three`, `four`.
 - The terminal is 160 columns by 40 rows.
-- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing, or an empty directory that you own. Launch makes the path absolute without resolving symlinks, then refuses a symlink (a trailing `/` does not hide one), a file, a directory that another user owns, a directory that is not empty, and a path it cannot create. It then exits 1 without starting the run. It checks the path itself, not its parent directories.
-- `VCN_BREAK_INIT=1` sends the launch's `initialize` request under a method name the plugin does not know, so the plugin answers an error and launch refuses. Use it only to prove that refusal.
+- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing or empty, and its path must not have a `.` or `..` part. Launch refuses it if it is a symlink, is owned by another user, or is group- or world-writable, or if a dir above it is unsafe (see Evidence).
+- `VCN_INIT_JSONRPC=<version>` sets the `jsonrpc` field of the `initialize` request (default `2.0`). Only `scripts/proof-launch-refusals.sh` sets it, to get an error answer from the plugin.
 - `VCN_SETUP='<json>'` is deep-merged into `require("claudecode").setup()` over the base `{ terminal = { provider = "none" } }`. Example: `VCN_SETUP='{"diff_opts":{"layout":"unified"}}' $V launch`.
 
 ## Doctor
@@ -86,7 +86,7 @@ Rules:
 
 ## Evidence
 
-Everything lands in `$OUT`, which cleanup never deletes. The default is `${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/<UTC time>-<id>`. The harness runs with `umask 077`, so `$OUT` is `0700` and its files are `0600`: they hold buffer text and accepted diffs.
+Everything lands in `$OUT`, which cleanup never deletes. The default is `${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/<UTC time>-<id>`. The harness runs with `umask 077`, so `$OUT` is `0700` and its files are `0600`: they hold buffer text and accepted diffs. Launch refuses a default parent dir (`${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim`) that is a symlink, is owned by another user, or is group- or world-writable. It also refuses either dir when a dir above it, as given or as resolved, is owned by a user other than you or root, or is writable by others without the sticky bit. On a shared host, set `VERIFY_OUT` to a dir you own.
 
 - `ws-out.jsonl` holds every JSON-RPC message the client sent. `ws-in.jsonl` holds every message it received, responses and notifications.
 - `<name>.screen.txt`, `<name>.png`, and `<name>.webm` come from `$V capture`, `$V screenshot`, and `$V record`.
@@ -115,7 +115,7 @@ To confirm, `grep -lzxF "VCN_RUN_TAG=$VCN_STATE" /proc/[0-9]*/environ 2>/dev/nul
 
 - `scripts/vcn.sh` is the harness. `$V help` lists its subcommands.
 - `scripts/init.lua` is the nvim config. It puts this checkout first on `runtimepath`, sets `terminal.provider = "none"` so no `claude` CLI starts, and merges `VCN_SETUP`.
-- `scripts/selftest-launch-refusals.sh` proves the launch refusals with real launches. It covers a failed `initialize` (`VCN_BREAK_INIT=1`) and a `VERIFY_OUT` that is a symlink (with and without a trailing `/`), a file, owned by another user, or not empty. For the other-user case it uses an empty directory such as `/srv` and prints `SKIP` when it finds none. It also proves that launch accepts a missing path, a relative path that starts with `-`, and an empty directory you own, and leaves each at mode `0700`. It prints `PASS`, `FAIL`, or `SKIP` per case, exits 1 on any `FAIL`, and takes about a minute.
+- `scripts/proof-launch-refusals.sh` proves that launch exits 1 and leaves no run behind when `initialize` fails (it sends `jsonrpc` `1.0` and the plugin answers -32600), and when `VERIFY_OUT` or the default parent dir is unsafe. It prints `PASS <case>` per case or `FAIL: <reason>`, and writes `init-refusal-launch.txt` next to the failed run's evidence in a fresh `mktemp -d` dir. It takes about 20 s.
 - `scripts/journey-opendiff-accept.sh` proves openDiff accept through `:w` on a fresh launch. It prints `PASS opendiff-accept` or `FAIL: <reason>` and writes `opendiff-accept-*` files to `$OUT`: screen text at each step, PNGs at open, after the edit, and after `:w`, a WebM, and the file's sha256 at each step.
 
 A full run, with the `VCN_STATE` value from launch:

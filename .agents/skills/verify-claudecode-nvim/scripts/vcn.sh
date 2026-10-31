@@ -214,46 +214,86 @@ cmd_doctor() {
   ((fails == 0))
 }
 
+# On a shared host another user can read or swap evidence in a dir they own or can write.
+# Prints why <dir> is unsafe, or nothing.
+unsafe_dir() {
+  # A . or .. after a symlink would hide that symlink from unsafe_above.
+  if [[ /$1/ == */./* || /$1/ == */../* ]]; then
+    echo "$1 has a . or .. part"
+  elif [[ -L $1 ]]; then
+    echo "$1 is a symlink"
+  elif [[ -e $1 && ! -O $1 ]]; then
+    echo "$1 is owned by another user"
+  elif [[ -e $1 ]] && (((8#$(stat -c %a "$1") & 8#022) != 0)); then
+    echo "$1 is group- or world-writable"
+  else
+    unsafe_above "$1"
+  fi
+}
+
+# Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the
+# dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing.
+unsafe_above() {
+  local dir mode uid
+  for dir in "$(realpath -sm -- "$1/..")" "$(realpath -m -- "$1/..")"; do
+    while :; do
+      if [[ -e $dir || -L $dir ]]; then
+        read -r mode uid < <(stat -c '%a %u' -- "$dir")
+        if ((uid != 0 && uid != EUID)); then
+          echo "$dir, above the evidence dir, is owned by another user"
+          return
+        fi
+        if [[ ! -L $dir ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
+          echo "$dir, above the evidence dir, is writable by others and not sticky"
+          return
+        fi
+      fi
+      [[ $dir != / ]] || break
+      dir=$(dirname -- "$dir")
+    done
+  done
+}
+
 launch_failed() {
   local rc=$?
   ((rc == 0)) && return 0
-  echo "vcn: launch failed; screen saved to $OUT/launch-failure.screen.txt; tearing the run down" >&2
+  echo "vcn: launch failed (VCN_STATE=$VCN_STATE); screen saved to $OUT/launch-failure.screen.txt; tearing the run down" >&2
   (cmd_capture launch-failure) >/dev/null 2>&1 || true
   cmd_cleanup >&2 || true
   exit "$rc"
 }
 
 cmd_launch() {
-  local nvim_exe att_exe node_exe setsid_exe state out sid tui sock init lock="" f i why="" init_method=initialize
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock init lock="" f i
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
   setsid_exe=$(bin setsid)
   bin jq >/dev/null
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
+  if [[ -n ${VERIFY_OUT-} ]]; then
+    # A trailing slash would make -L test the symlink's target.
+    guard=$VERIFY_OUT
+    while [[ $guard == ?*/ ]]; do guard=${guard%/}; done
+    out=$guard
+  else
+    guard=${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim
+  fi
+  why=$(unsafe_dir "$guard")
+  [[ -z $why ]] || die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
-  out=${VERIFY_OUT:-${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
-  # Absolute and lexical, symlinks kept: with a trailing "/" -L would test a link's target, and a leading "-"
-  # would read as an option.
-  out=$(realpath -ms -- "$out")
-  # On a shared host another user can create the evidence dir, or a symlink in its place, before the run.
-  if [[ -L $out ]]; then
-    why="is a symlink"
-  elif [[ -e $out && ! -d $out ]]; then
-    why="is not a directory"
-  elif [[ -d $out && ! -O $out ]]; then
-    why="is not owned by $(id -un)"
-  elif [[ -d $out && -n $(ls -A "$out") ]]; then
-    why="is not empty"
+  out=${out:-$guard/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
+  if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
+    rmdir "$state"
+    die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
+  mkdir -p "$out"
+  # Check again: another user could have made the dir between the first check and mkdir.
+  why=$(unsafe_dir "$guard")
   if [[ -n $why ]]; then
     rmdir "$state"
-    die "$out $why; pick a fresh VERIFY_OUT"
-  fi
-  if ! mkdir -p "$out"; then
-    rmdir "$state"
-    die "cannot create $out; pick a fresh VERIFY_OUT"
+    die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   fi
   mkdir -p "$state"/{home,claude,work}
   chmod 700 "$out"
@@ -315,10 +355,9 @@ cmd_launch() {
     "$OUT/ws-in.jsonl" </dev/null >/dev/null 2>>"$OUT/ws-client.log" &
   env_line CLIENT_PID "$!" >>"$state/run.env"
   load
-  # VCN_BREAK_INIT=1 sends the request under a method the plugin does not know, so it answers an error. It exists
-  # to prove the refusal below (selftest-launch-refusals.sh).
-  [[ ${VCN_BREAK_INIT-} != 1 ]] || init_method=vcn/no-such-method
-  cmd_rpc init "$init_method" '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"vcn","version":"0"}}'
+  # VCN_INIT_JSONRPC lets scripts/proof-launch-refusals.sh get a real error answer from the plugin.
+  send --arg v "${VCN_INIT_JSONRPC:-2.0}" \
+    '{jsonrpc:$v,id:"init",method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"vcn",version:"0"}}}'
   init=$(cmd_await init 10)
   jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
   send '{jsonrpc:"2.0",method:"notifications/initialized"}'
