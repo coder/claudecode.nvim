@@ -492,6 +492,18 @@ local function get_selection_coordinates()
   end
 end
 
+---Returns the byte index of the last byte of the character that starts at byte `col` of `line`.
+---Marks and the cursor point at a character's first byte, but a visual selection includes the whole
+---character. Cutting inside a multibyte character would put invalid UTF-8 into selection_changed.
+---@param line string
+---@param col integer 1-based byte index
+---@return integer
+local function last_byte_of_char(line, col)
+  -- In a pattern, `.` matches a character together with its composing characters.
+  local char = vim.fn.matchstr(line, "\\%" .. col .. "c.")
+  return col + math.max(#char, 1) - 1
+end
+
 ---Extracts text for linewise visual selection
 ---@param lines_content table - array of line strings
 ---@param start_coords table - start coordinates
@@ -594,6 +606,7 @@ function M.get_visual_selection()
     -- Blockwise ("\22") is approximated as the contiguous charwise span: selection_changed
     -- carries a single start/end range and cannot represent a rectangular block. Proper
     -- per-column block extraction is a follow-up.
+    end_coords.col = last_byte_of_char(lines_content[#lines_content], end_coords.col)
     final_text = extract_characterwise_text(lines_content, start_coords, end_coords)
     if not final_text then
       return nil
@@ -668,6 +681,7 @@ function M.get_visual_selection_from_marks()
     -- Blockwise ("\22") is approximated as the contiguous charwise span (matching
     -- get_visual_selection), since selection_changed carries a single start/end range and
     -- cannot represent a rectangular block. Proper per-column block extraction is a follow-up.
+    end_coords.col = last_byte_of_char(last_line, end_coords.col)
     final_text = extract_characterwise_text(lines_content, start_coords, end_coords)
     if not final_text then
       return nil
