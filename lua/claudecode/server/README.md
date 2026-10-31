@@ -89,7 +89,7 @@ Layers, top to bottom:
 - `client.process_data` writes handshake, PONG, and Close frames to the socket. It runs `on_message` and `on_close` through `vim.schedule`. It calls `on_error` directly after a failed handshake write, and after it writes the Close frame for a protocol error [server/client.lua:M.process_data] [server/client.lua:M.close_client]
 - The ping timer writes ping frames and closes timed-out clients [server/tcp.lua:M.start_ping_timer]
 - `handshake.lua`, `frame.lua`, and `utils.lua` do no I/O [server/handshake.lua:M]
-- `mock.lua` changes only its own `M.state` tables [server/mock.lua:M.state]
+- `mock.lua` opens no sockets and keeps its clients and messages in its own `M.state` tables. Its `mcp.tool.invoke` handler calls the real `tools.handle_invoke`, so a simulated tool call has that tool's real side effects (for example `saveDocument` writes the file) [server/mock.lua:M.register_handlers] [server/mock.lua:M.state]
 
 ## Verification
 

@@ -92,7 +92,7 @@ Module map (direct files):
 - `setup` runs `config.apply` before logger, terminal, and diff setup. The auto-start runs only after `diff.setup` [init.lua:M.setup]
 - `start` refuses with "Already running". The auth token must be a string of length 10 or more. If `server.start` fails, `start` returns the error at once. If the lock file fails, `start` stops the server and clears its state [init.lua:M.start]
 - `start` requires the token returned by `lockfile.create` to equal the generated token. Otherwise it stops the server [init.lua:M.start]
-- `stop` returns "Not running" without a server. A lock file removal failure only logs a warning [init.lua:M.stop]
+- `stop` returns "Not running" without a server. When `lockfile.remove` returns an error, `stop` only logs a warning. `lockfile.remove` returns `true` even when `os.remove` fails without raising (for example in a read-only directory), so that failure is silent and the lock file stays [init.lua:M.stop] [lockfile.lua:M.remove]
 - The auth token is 32 lowercase hex characters from `vim.loop.random` or `/dev/urandom`. It never comes from `math.random` [lockfile.lua:get_random_bytes]
 - The lock directory is `$CLAUDE_CONFIG_DIR/ide` when that variable is set, else `~/.claude/ide`. It is resolved once when the module loads [lockfile.lua:M.lock_dir]
 - `lockfile.create` requires a port in 1..65535 and a caller token of 10..500 characters. It writes JSON `{ pid, workspaceFolders, ideName = "Neovim", transport = "ws", authToken }` [lockfile.lua:M.create]
@@ -127,7 +127,7 @@ Module map (direct files):
 ## Side Effects
 
 - `start` binds a `127.0.0.1` TCP port and writes the lock file. It enables selection tracking only when `track_selection` is true. `stop` removes the lock file and stops the server [init.lua:M.start]
-- `lockfile.create` creates the lock directory with mode 0700 and chmods it to 0700. It writes a temp file opened `wx` with mode 0600, then renames it to `<port>.lock` [lockfile.lua:M.create]
+- `lockfile.create` creates the lock directory with mode 0700. It then tries to chmod an existing directory to 0700 through `pcall` and ignores the result, so on platforms without `fs_chmod` the old mode stays. It writes a temp file opened `wx` with mode 0600, then renames it to `<port>.lock` [lockfile.lua:M.create]
 - The terminal env gets `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`, `CLAUDE_CODE_SSE_PORT=<port>`, the user `env`, and the merged `no_proxy`/`NO_PROXY` [terminal.lua:get_claude_command_and_env]
 - `terminal.setup` can replace the global `vim.paste` through `paste_fix.apply` [terminal.lua:M.setup]
 - The plugin broadcasts `at_mentioned` (`filePath`, `lineStart`, `lineEnd`) [init.lua:M._broadcast_at_mention] and `selection_changed` [selection.lua:M.send_selection_update] to every connected client
