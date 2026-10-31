@@ -1616,29 +1616,20 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     client_id = client_id,
   }, function(result)
     -- Resume the coroutine with the result
-    local resume_success, resume_result = coroutine.resume(co, result)
-    if resume_success then
-      -- Use the global response sender to avoid module reloading issues
-      local co_key = tostring(co)
-      if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then
-        _G.claude_deferred_responses[co_key](resume_result)
-        _G.claude_deferred_responses[co_key] = nil
-      else
-        logger.error("diff", "No global response sender found for coroutine:", co_key)
-      end
-    else
+    local resume_success, resume_result, resume_err = coroutine.resume(co, result)
+    if not resume_success then
       logger.error("diff", "Coroutine failed:", tostring(resume_result))
-      local co_key = tostring(co)
-      if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then
-        _G.claude_deferred_responses[co_key]({
-          error = {
-            code = -32603,
-            message = "Internal error",
-            data = "Coroutine failed: " .. tostring(resume_result),
-          },
-        })
-        _G.claude_deferred_responses[co_key] = nil
-      end
+    end
+    -- The coroutine runs the tool handler, so its outcome maps like an immediate reply.
+    -- The sender takes the MCP result itself or `{ error = ... }`.
+    local response = require("claudecode.tools.init").build_response(resume_success, resume_result, resume_err)
+    -- Use the global response sender to avoid module reloading issues
+    local co_key = tostring(co)
+    if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then
+      _G.claude_deferred_responses[co_key](response.error and response or response.result)
+      _G.claude_deferred_responses[co_key] = nil
+    else
+      logger.error("diff", "No global response sender found for coroutine:", co_key)
     end
   end)
 
