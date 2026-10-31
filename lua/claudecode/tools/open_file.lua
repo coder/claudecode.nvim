@@ -325,12 +325,8 @@ local function handler(params)
           vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
           select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
         else
-          -- Like the VS Code extension, only place the cursor on the startText match. Leave the visual mode
-          -- an earlier openFile may have left, or the cursor move would stretch that selection.
-          local mode = vim.api.nvim_get_mode().mode
-          if mode == "v" or mode == "V" or mode == "\22" then
-            vim.cmd("normal! \27")
-          end
+          -- Like the VS Code extension, only place the cursor on the startText match. The :edit above already
+          -- ended any Visual or Select mode in this window.
           vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
         end
         vim.cmd("normal! zz") -- Center the selection in the window
