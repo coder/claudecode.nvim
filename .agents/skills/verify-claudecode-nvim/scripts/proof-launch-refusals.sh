@@ -10,6 +10,9 @@
 #   parent-group   the default parent dir is group-writable
 #   parent-world   the default parent dir is world-writable
 #   above-world    a dir above the default parent dir is world-writable and not sticky
+#   out-uncreatable  mkdir cannot create VERIFY_OUT
+# and that it accepts:
+#   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
@@ -68,7 +71,16 @@ refused parent-world "$TMP/world/verify-claudecode-nvim is group- or world-writa
 mkdir -m 777 "$TMP/above"
 refused above-world "$TMP/above, above the evidence dir, is writable by others and not sticky" \
   XUM_SCRATCH_DIR="$TMP/above"
+refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
+
+vcn=$(cd "$(dirname "$V")" && pwd)/vcn.sh
+mkdir "$TMP/cwd"
+err=$(cd "$TMP/cwd" && env -u XUM_SCRATCH_DIR VERIFY_OUT=-dash "$vcn" launch 2>&1) || fail "out-dash: launch failed: $err"
+VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
+[[ $(stat -c %a -- "$TMP/cwd/-dash") == 700 ]] || fail "out-dash: $TMP/cwd/-dash is not a 0700 dir"
+[[ -e $TMP/cwd/-dash/session.webm ]] || fail "out-dash: cleanup from another directory did not save session.webm there"
+echo "PASS out-dash: launched with VERIFY_OUT=-dash from $TMP/cwd; cleanup from $PWD saved its evidence there"
 
 launch init VCN_INIT_JSONRPC=1.0 VERIFY_OUT="$(mktemp -d)"
 state=$(sed -n 's/^vcn: launch failed (VCN_STATE=\([^)]*\)).*/\1/p' <<<"$err")
