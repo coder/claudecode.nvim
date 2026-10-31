@@ -225,8 +225,11 @@ local function close_terminal()
 
   -- bufhidden=hide keeps the job running when only the window closes, so stop the job and delete the buffer.
   -- That closes its windows except the last one. Deleting a terminal buffer while a write to its job is pending hangs
-  -- Neovim (neovim/neovim#42508). The wait runs the event loop, which ends those writes. For a job that
-  -- ignores SIGHUP, the buffer is deleted after the timeout and Neovim kills the job later.
+  -- Neovim (neovim/neovim#42508), so the delete waits for TermClose. The wait runs the event loop. A job that reads
+  -- its input, like Claude, takes the pending writes there and exits. A job that stopped reading (for example `yes`,
+  -- or `cat` after a large multi-line send) keeps them pending, the wait times out, and Neovim can still hang. This
+  -- code does not prevent that. For a job that ignores SIGHUP, the buffer is deleted after the timeout and Neovim
+  -- kills the job later.
   local exited = false
   vim.api.nvim_create_autocmd("TermClose", {
     buffer = closing_bufnr,
