@@ -101,6 +101,8 @@ describe("Tool: open_file", function()
         error("Invalid cursor line: out of range")
       end
     end)
+    _G.vim.o = _G.vim.o or {}
+    _G.vim.o.selection = "inclusive"
   end)
 
   after_each(function()
@@ -110,6 +112,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = nil
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
+    _G.vim.o.selection = nil
   end)
 
   it("should error if filePath parameter is missing", function()
@@ -369,6 +372,22 @@ describe("Tool: open_file", function()
       )
       assert.are.same({ 1, 7 }, marks["<"])
       assert.are.same({ 3, 2 }, marks[">"])
+    end)
+
+    it("ends a selectToEndOfLine selection on the last character, not on the line break", function()
+      open({ startText = "two", endText = "three", selectToEndOfLine = true })
+      assert.are.same({ 2, 0 }, marks["<"])
+      assert.are.same({ 3, 4 }, marks[">"])
+    end)
+
+    it("puts the end mark one past the last character when 'selection' is exclusive", function()
+      _G.vim.o.selection = "exclusive"
+      open({ startLine = 3, endLine = 4 })
+      assert.are.same({ 4, 4 }, marks[">"])
+      open({ startText = "alpha", endText = "beta" })
+      assert.are.same({ 5, 10 }, marks[">"])
+      open({ startText = "three" })
+      assert.are.same({ 3, 5 }, marks[">"])
     end)
 
     it("selects only the startText match when there is no endText", function()
