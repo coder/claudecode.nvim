@@ -2,6 +2,8 @@ require("tests.busted_setup") -- Ensure test helpers are loaded
 
 describe("Tool: open_file", function()
   local open_file_handler
+  local buffer_lines
+  local marks
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -69,20 +71,35 @@ describe("Tool: open_file", function()
     _G.vim.api.nvim_buf_line_count = spy.new(function(buf)
       return 10 -- Mock line count
     end)
+    buffer_lines = {
+      "local function test()",
+      "  print('hello')",
+      "  return true",
+      "end",
+    }
+    marks = {}
+    -- Like Neovim, marks and the cursor take a 1-based row and a 0-based column.
     _G.vim.api.nvim_buf_set_mark = spy.new(function(buf, name, line, col, opts)
-      -- Mock mark setting
+      if line > #buffer_lines then
+        error("Line value outside range")
+      end
+      marks[name] = { line, col }
+      return true
     end)
     _G.vim.api.nvim_buf_get_lines = spy.new(function(buf, start, end_line, strict)
-      -- Mock buffer lines for search
-      return {
-        "local function test()",
-        "  print('hello')",
-        "  return true",
-        "end",
-      }
+      if end_line < 0 then
+        end_line = #buffer_lines + end_line + 1
+      end
+      local slice = {}
+      for line_nr = start + 1, math.min(end_line, #buffer_lines) do
+        slice[#slice + 1] = buffer_lines[line_nr]
+      end
+      return slice
     end)
     _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
-      -- Mock cursor setting
+      if pos[1] < 1 or pos[1] > #buffer_lines then
+        error("Cursor position outside buffer")
+      end
     end)
   end)
 
@@ -304,22 +321,58 @@ describe("Tool: open_file", function()
     -- Preview mode affects window behavior but basic functionality should work
   end)
 
-  it("should handle line selection parameters", function()
-    -- Mock additional functions needed for line selection
-    _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
-      -- Mock cursor setting
-    end)
-    _G.vim.fn.setpos = spy.new(function(mark, pos)
-      -- Mock position setting
+  describe("selection marks", function()
+    before_each(function()
+      buffer_lines = { "one", "two", "three", "four", "alpha beta gamma" }
     end)
 
-    local params = { filePath = "test.txt", startLine = 5, endLine = 10 }
-    local success, result = pcall(open_file_handler, params)
+    local function open(params)
+      params.filePath = "test.txt"
+      local success, result = pcall(open_file_handler, params)
+      expect(success).to_be_true()
+      return result.content[1].text
+    end
 
-    expect(success).to_be_true()
-    expect(result.content).to_be_table()
-    expect(result.content[1].type).to_be("text")
-    expect(result.content[1].text).to_be("Opened file and selected lines 5 to 10")
+    it("selects startLine through endLine as 1-based line numbers", function()
+      expect(open({ startLine = 3, endLine = 4 })).to_be("Opened file and selected lines 3 to 4")
+      assert.are.same({ 3, 0 }, marks["<"])
+      assert.are.same({ 4, 3 }, marks[">"])
+      expect(_G.vim.cmd_history[#_G.vim.cmd_history]).to_be("normal! gv")
+    end)
+
+    it("selects the whole first line for startLine = 1", function()
+      expect(open({ startLine = 1 })).to_be("Opened file and selected lines 1 to 1")
+      assert.are.same({ 1, 0 }, marks["<"])
+      assert.are.same({ 1, 2 }, marks[">"])
+    end)
+
+    it("selects from the startText match through the last character of the endText match", function()
+      expect(open({ startText = "two", endText = "three" })).to_be(
+        'Opened file and selected text from "two" to "three"'
+      )
+      assert.are.same({ 2, 0 }, marks["<"])
+      assert.are.same({ 3, 4 }, marks[">"])
+    end)
+
+    it("ends a mid-line endText selection on the match, not the character after it", function()
+      expect(open({ startText = "alpha", endText = "beta" })).to_be(
+        'Opened file and selected text from "alpha" to "beta"'
+      )
+      assert.are.same({ 5, 0 }, marks["<"])
+      assert.are.same({ 5, 9 }, marks[">"])
+    end)
+
+    it("selects only the startText match when there is no endText", function()
+      expect(open({ startText = "three" })).to_be('Opened file and selected text "three"')
+      assert.are.same({ 3, 0 }, marks["<"])
+      assert.are.same({ 3, 4 }, marks[">"])
+    end)
+
+    it("selects the startText match when endText is not found", function()
+      assert_contains(open({ startText = "two", endText = "zzz" }), 'end text "zzz" not found')
+      assert.are.same({ 2, 0 }, marks["<"])
+      assert.are.same({ 2, 2 }, marks[">"])
+    end)
   end)
 
   it("should handle text pattern selection when pattern found", function()
