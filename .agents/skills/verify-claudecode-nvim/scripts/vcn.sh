@@ -214,31 +214,59 @@ cmd_doctor() {
   ((fails == 0))
 }
 
+# On a shared host another user can read or swap evidence in a dir they own or can write.
+# Prints why <dir> is unsafe, or nothing. "shared" also refuses group- or world-write.
+unsafe_dir() {
+  if [[ -L $1 ]]; then
+    echo "$1 is a symlink"
+  elif [[ -e $1 && ! -O $1 ]]; then
+    echo "$1 is owned by another user"
+  elif [[ $2 == shared && -e $1 ]] && (((8#$(stat -c %a "$1") & 8#022) != 0)); then
+    echo "$1 is group- or world-writable"
+  fi
+}
+
 launch_failed() {
   local rc=$?
   ((rc == 0)) && return 0
-  echo "vcn: launch failed; screen saved to $OUT/launch-failure.screen.txt; tearing the run down" >&2
+  echo "vcn: launch failed (VCN_STATE=$VCN_STATE); screen saved to $OUT/launch-failure.screen.txt; tearing the run down" >&2
   (cmd_capture launch-failure) >/dev/null 2>&1 || true
   cmd_cleanup >&2 || true
   exit "$rc"
 }
 
 cmd_launch() {
-  local nvim_exe att_exe node_exe setsid_exe state out sid tui sock init lock="" f i
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard shared="" why sid tui sock init lock="" f i
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
   setsid_exe=$(bin setsid)
   bin jq >/dev/null
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
+  if [[ -n ${VERIFY_OUT-} ]]; then
+    guard=$(realpath -sm -- "$VERIFY_OUT")
+    out=$guard
+  else
+    guard=${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim
+    shared=shared
+  fi
+  why=$(unsafe_dir "$guard" "$shared")
+  [[ -z $why ]] || die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
-  out=${VERIFY_OUT:-${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
+  out=${out:-$guard/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
   if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
     rmdir "$state"
     die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
-  mkdir -p "$out" "$state"/{home,claude,work}
+  mkdir -p "$out"
+  # Check again: another user could have made the dir between the first check and mkdir.
+  why=$(unsafe_dir "$guard" "$shared")
+  if [[ -n $why ]]; then
+    rmdir "$state"
+    die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
+  fi
+  mkdir -p "$state"/{home,claude,work}
   chmod 700 "$out"
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"
@@ -298,7 +326,9 @@ cmd_launch() {
     "$OUT/ws-in.jsonl" </dev/null >/dev/null 2>>"$OUT/ws-client.log" &
   env_line CLIENT_PID "$!" >>"$state/run.env"
   load
-  cmd_rpc init initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"vcn","version":"0"}}'
+  # VCN_INIT_JSONRPC lets scripts/proof-launch-refusals.sh get a real error answer from the plugin.
+  send --arg v "${VCN_INIT_JSONRPC:-2.0}" \
+    '{jsonrpc:$v,id:"init",method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"vcn",version:"0"}}}'
   init=$(cmd_await init 10)
   jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
   send '{jsonrpc:"2.0",method:"notifications/initialized"}'
