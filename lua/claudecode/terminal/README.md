@@ -63,7 +63,7 @@ Optional fields (the dispatcher does not require them):
 
 - `native` runs `vsplit`, shows a new listed buffer from `nvim_create_buf` in the split, then runs `vim.fn.termopen` in that buffer with the command, env, and cwd. This spawns the Claude process. When an autocmd swapped another buffer into the split, `native` shows its terminal buffer there after the start. It runs `startinsert` when focused and `auto_insert` is not `false` [terminal/native.lua:open_terminal]
 - `native` on exit clears its state. With `auto_close` it closes the tracked window only if the window still shows the terminal buffer. When the buffer is invalid, it closes the tracked window without that check [terminal/native.lua:open_terminal]
-- `native.close` force-closes the window. After a hide, `winid` is `nil`, so `close` raises in `nvim_win_close` (#334) [terminal/native.lua:close_terminal]
+- `native.close` clears its state, stops the job it started, and waits up to 1 s for the job to exit. It then force-deletes the terminal buffer, which closes every window that shows it. This works for a visible or a hidden terminal. For an adopted terminal (no job id), `close` only closes the window and leaves the process running [terminal/native.lua:close_terminal]
 - `snacks` calls `Snacks.terminal.open`, which spawns the Claude process [terminal/snacks.lua:M.open]
 - `snacks` always registers a buffer-local `BufWipeout` handler. It registers a buffer-local `TermClose` handler only when `auto_close` is true. `TermClose` runs `checktime` and logs an ERROR on a nonzero exit [terminal/snacks.lua:setup_terminal_events]
 - `snacks` maps terminal-mode `<S-CR>` to send a backslash and then a carriage return after 10 ms [terminal/snacks.lua:build_opts]

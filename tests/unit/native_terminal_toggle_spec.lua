@@ -21,6 +21,10 @@ describe("claudecode.terminal.native toggle behavior", function()
       next_jobid = 10000,
       buffer_options = {},
       bufenter_autocmd = nil,
+      running_jobs = {},
+      pending_writes = {},
+      exiting_jobs = {},
+      autocmds = {},
     }
 
     local function enter_buf(winid, bufnr)
@@ -79,10 +83,37 @@ describe("claudecode.terminal.native toggle behavior", function()
           return win and win.bufnr or 0
         end,
         nvim_win_close = function(winid, force)
-          -- Remove window from state (simulates window closing)
-          if winid and mock_state.windows[winid] then
-            mock_state.windows[winid] = nil
+          if type(winid) ~= "number" then
+            error("Invalid 'win': Expected Lua number")
           end
+          if not mock_state.windows[winid] then
+            error("Invalid window id: " .. winid)
+          end
+          mock_state.windows[winid] = nil
+        end,
+        nvim_buf_delete = function(bufnr, opts)
+          local buf = mock_state.buffers[bufnr]
+          if not buf then
+            error("Invalid buffer id: " .. tostring(bufnr))
+          end
+          if mock_state.running_jobs[buf.jobid] and not (opts and opts.force) then
+            error("Failed to unload buffer.")
+          end
+          if mock_state.pending_writes[buf.jobid] then
+            error("Neovim hangs: terminal buffer deleted with a pending write (neovim/neovim#42508)")
+          end
+          for winid, win in pairs(mock_state.windows) do
+            if win.bufnr == bufnr then
+              mock_state.windows[winid] = nil
+            end
+          end
+          if buf.jobid then
+            mock_state.running_jobs[buf.jobid] = nil
+          end
+          mock_state.buffers[bufnr] = nil
+        end,
+        nvim_create_autocmd = function(event, opts)
+          table.insert(mock_state.autocmds, { event = event, buffer = opts.buffer, callback = opts.callback })
         end,
         nvim_get_current_win = function()
           return mock_state.current_win
@@ -189,10 +220,42 @@ describe("claudecode.terminal.native toggle behavior", function()
           buf.options.buftype = "terminal"
           buf.jobid = jobid
           buf.on_exit = opts.on_exit
+          mock_state.running_jobs[jobid] = true
 
           return jobid
         end,
+        chansend = function(id, data)
+          mock_state.pending_writes[id] = true
+          return #data
+        end,
+        jobstop = function(id)
+          if not mock_state.running_jobs[id] then
+            return 0
+          end
+          mock_state.running_jobs[id] = nil
+          table.insert(mock_state.exiting_jobs, id)
+          return 1
+        end,
       },
+      -- A stopped job exits only when the event loop runs. Its pending writes end first, then TermClose fires.
+      wait = function(_, condition)
+        for _, id in ipairs(mock_state.exiting_jobs) do
+          mock_state.pending_writes[id] = nil
+          for bufnr, buf in pairs(mock_state.buffers) do
+            if buf.jobid == id then
+              for _, autocmd in ipairs(mock_state.autocmds) do
+                -- A buffer-local autocmd is gone once an earlier handler deleted its buffer.
+                local applies = autocmd.buffer == nil or (autocmd.buffer == bufnr and mock_state.buffers[bufnr])
+                if autocmd.event == "TermClose" and applies then
+                  autocmd.callback({ buf = bufnr })
+                end
+              end
+            end
+          end
+        end
+        mock_state.exiting_jobs = {}
+        return condition()
+      end,
       schedule = function(callback)
         callback() -- Execute immediately in tests
       end,
@@ -577,36 +640,96 @@ describe("claudecode.terminal.native toggle behavior", function()
   end)
 
   describe("close vs toggle behavior", function()
-    it("should preserve process on toggle but kill on close", function()
-      local cmd_string = "claude"
-      local env_table = { TEST = "value" }
-      local config = { split_side = "right", split_width_percentage = 0.3 }
+    local config = { split_side = "right", split_width_percentage = 0.3 }
 
-      -- Create a terminal
-      native_provider.open(cmd_string, env_table, config)
-      local initial_bufnr = native_provider.get_active_bufnr()
-      assert.is_not_nil(initial_bufnr)
-
-      local mock_state = _G.get_mock_state()
-
-      -- Find the terminal window
-      local terminal_winid = nil
-      for winid, win in pairs(mock_state.windows) do
-        if win.bufnr == initial_bufnr then
-          terminal_winid = winid
-          break
+    local function windows_showing(bufnr)
+      local count = 0
+      for _, win in pairs(_G.get_mock_state().windows) do
+        if win.bufnr == bufnr then
+          count = count + 1
         end
       end
+      return count
+    end
 
-      -- Mock being in terminal window
-      mock_state.current_win = terminal_winid
+    it("should preserve process on toggle but kill on close", function()
+      local mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      local terminal_jobid = mock_state.buffers[terminal_bufnr].jobid
 
-      -- Toggle should hide but preserve process
-      native_provider.toggle(cmd_string, env_table, config)
-      assert.are.equal(initial_bufnr, native_provider.get_active_bufnr())
+      native_provider.toggle("claude", {}, config)
+      assert.are.equal(0, windows_showing(terminal_bufnr))
+      assert.is_true(mock_state.running_jobs[terminal_jobid])
 
-      -- Close should kill the process (cleanup_state called)
       native_provider.close()
+      assert.is_nil(mock_state.running_jobs[terminal_jobid])
+      assert.is_nil(mock_state.buffers[terminal_bufnr])
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+
+    it("should kill the process and close its window when closing a visible terminal", function()
+      local mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      local terminal_jobid = mock_state.buffers[terminal_bufnr].jobid
+      assert.are.equal(1, windows_showing(terminal_bufnr))
+
+      native_provider.close()
+      assert.is_nil(mock_state.running_jobs[terminal_jobid])
+      assert.is_nil(mock_state.buffers[terminal_bufnr])
+      assert.are.equal(0, windows_showing(terminal_bufnr))
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+
+    it("should not delete the buffer while text sent to the process is still pending", function()
+      local mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      local terminal_jobid = mock_state.buffers[terminal_bufnr].jobid
+
+      mock_vim.fn.chansend(terminal_jobid, "hello")
+      native_provider.close()
+      assert.is_nil(mock_state.running_jobs[terminal_jobid])
+      assert.is_nil(mock_state.buffers[terminal_bufnr])
+      assert.are.equal(0, windows_showing(terminal_bufnr))
+    end)
+
+    it("should close cleanly when a user TermClose autocmd already deleted the buffer", function()
+      local mock_state = _G.get_mock_state()
+      mock_vim.api.nvim_create_autocmd("TermClose", {
+        callback = function(args)
+          mock_vim.api.nvim_buf_delete(args.buf, { force = true })
+        end,
+      })
+      native_provider.open("claude", {}, config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      local terminal_jobid = mock_state.buffers[terminal_bufnr].jobid
+
+      native_provider.close()
+      assert.is_nil(mock_state.running_jobs[terminal_jobid])
+      assert.is_nil(mock_state.buffers[terminal_bufnr])
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+
+    it("should close only the window of an adopted terminal and leave its process running", function()
+      local mock_state = _G.get_mock_state()
+      local shell_bufnr, shell_winid, shell_jobid = 50, 500, 5000
+      mock_state.buffers[shell_bufnr] = {
+        name = "term://~/src/claudecode.nvim//4242:/bin/zsh",
+        options = { buftype = "terminal" },
+        jobid = shell_jobid,
+      }
+      mock_state.windows[shell_winid] = { bufnr = shell_bufnr }
+      mock_state.running_jobs[shell_jobid] = true
+
+      native_provider.open("claude", {}, config)
+      assert.are.equal(shell_bufnr, native_provider.get_active_bufnr())
+
+      native_provider.close()
+      assert.is_true(mock_state.running_jobs[shell_jobid])
+      assert.is_not_nil(mock_state.buffers[shell_bufnr])
+      assert.are.equal(0, windows_showing(shell_bufnr))
       assert.is_nil(native_provider.get_active_bufnr())
     end)
   end)

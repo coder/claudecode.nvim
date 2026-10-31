@@ -168,13 +168,40 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 end
 
 local function close_terminal()
-  if is_valid() then
-    -- Closing the window should trigger on_exit of the job if the process is still running,
-    -- which then calls cleanup_state.
-    -- If the job already exited, on_exit would have cleaned up.
-    -- This direct close is for user-initiated close.
-    vim.api.nvim_win_close(winid, true)
-    cleanup_state() -- Cleanup after explicit close
+  if not is_valid() then
+    return
+  end
+  local closing_bufnr, closing_jobid, closing_winid = bufnr, jobid, winid
+  cleanup_state()
+
+  if not closing_jobid then
+    -- An adopted terminal has no jobid and can be an unrelated shell whose name contains "claude", so its
+    -- process keeps running.
+    if closing_winid and vim.api.nvim_win_is_valid(closing_winid) then
+      vim.api.nvim_win_close(closing_winid, true)
+    end
+    return
+  end
+
+  -- bufhidden=hide keeps the job running when only the window closes, so stop the job and delete the buffer,
+  -- which also closes its windows. Deleting a terminal buffer while a write to its job is pending hangs
+  -- Neovim (neovim/neovim#42508). The wait runs the event loop, which ends those writes. For a job that
+  -- ignores SIGHUP, the buffer is deleted after the timeout and Neovim kills the job later.
+  local exited = false
+  vim.api.nvim_create_autocmd("TermClose", {
+    buffer = closing_bufnr,
+    once = true,
+    callback = function()
+      exited = true
+    end,
+  })
+  vim.fn.jobstop(closing_jobid)
+  -- A user's TermClose autocmd can delete the buffer first, and that also removes this buffer-local autocmd.
+  vim.wait(1000, function()
+    return exited or not vim.api.nvim_buf_is_valid(closing_bufnr)
+  end, 10)
+  if vim.api.nvim_buf_is_valid(closing_bufnr) then
+    vim.api.nvim_buf_delete(closing_bufnr, { force = true })
   end
 end
 
