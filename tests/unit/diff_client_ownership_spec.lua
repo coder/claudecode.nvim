@@ -3,9 +3,7 @@
 --- down: if the owner died before writing, nothing else holds those edits (issue #342).
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
-local close_tab = require("claudecode.tools.close_tab").handler
-local close_all_diff_tabs = require("claudecode.tools.close_all_diff_tabs").handler
-local open_diff = require("claudecode.tools.open_diff").handler
+local tools = require("claudecode.tools.init")
 
 describe("a diff the user accepted for one Claude client", function()
   local file = "/tmp/issue342_owned.txt"
@@ -14,6 +12,8 @@ describe("a diff the user accepted for one Claude client", function()
   local other = { id = "clientB" }
 
   before_each(function()
+    tools.register_all()
+    _G.claude_deferred_responses = {}
     local f = assert(io.open(file, "w"))
     f:write("line 1\nline 2\n")
     f:close()
@@ -21,30 +21,28 @@ describe("a diff the user accepted for one Claude client", function()
 
   after_each(function()
     diff._cleanup_all_active_diffs("test_cleanup")
+    _G.claude_deferred_responses = nil
     os.remove(file)
   end)
 
-  -- Claude's openDiff call as `client`, run the way handle_invoke runs it: in a coroutine.
-  local function call_open_diff(client, contents)
-    local call = {}
-    call.co = coroutine.create(function()
-      call.ok, call.result = pcall(open_diff, {
-        old_file_path = file,
-        new_file_path = file,
-        new_file_contents = contents,
-        tab_name = tab,
-      }, client)
-    end)
-    assert(coroutine.resume(call.co))
-    return call
+  -- A tools/call from `client`, through the entry point the server uses.
+  local function call_tool(client, name, arguments)
+    return tools.handle_invoke(client, { name = name, arguments = arguments })
+  end
+
+  local function open_diff_args(contents)
+    return { old_file_path = file, new_file_path = file, new_file_contents = contents, tab_name = tab }
   end
 
   local function open_and_accept()
-    local call = call_open_diff(owner, "line 1\nline 2\naccepted line\n")
-    assert.equal("suspended", coroutine.status(call.co), "openDiff should wait for the user")
+    local deferred = call_tool(owner, "openDiff", open_diff_args("line 1\nline 2\naccepted line\n"))
+    assert.is_true(deferred._deferred, "openDiff should wait for the user")
+    local answer
+    _G.claude_deferred_responses[tostring(deferred.coroutine)] = function(response)
+      answer = response
+    end
     diff._resolve_diff_as_saved(tab, diff._get_active_diffs()[tab].new_buffer)
-    assert.equal("FILE_SAVED", call.result.content[1].text)
-    return call
+    assert.equal("FILE_SAVED", answer.content[1].text)
   end
 
   local function assert_kept()
@@ -57,16 +55,16 @@ describe("a diff the user accepted for one Claude client", function()
   it("survives closeAllDiffTabs from another client", function()
     open_and_accept()
 
-    local result = close_all_diff_tabs({}, other)
+    local response = call_tool(other, "closeAllDiffTabs", {})
 
-    assert.equal("CLOSED_0_DIFF_TABS", result.content[1].text)
+    assert.equal("CLOSED_0_DIFF_TABS", response.result.content[1].text)
     assert_kept()
   end)
 
   it("survives close_tab from another client", function()
     open_and_accept()
 
-    close_tab({ tab_name = tab }, other)
+    call_tool(other, "close_tab", { tab_name = tab })
 
     assert_kept()
   end)
@@ -74,27 +72,26 @@ describe("a diff the user accepted for one Claude client", function()
   it("is not replaced by another client's openDiff on the same tab_name", function()
     open_and_accept()
 
-    local call = call_open_diff(other, "line 1\nfrom another session\n")
+    local response = call_tool(other, "openDiff", open_diff_args("line 1\nfrom another session\n"))
 
-    assert.equal("dead", coroutine.status(call.co), "the call must be answered at once")
-    assert.is_false(call.ok)
-    assert.equal(-32000, call.result.code)
+    assert.is_nil(response._deferred, "the call must be answered at once")
+    assert.equal(-32000, response.error.code)
     assert_kept()
   end)
 
   it("is torn down by closeAllDiffTabs from its own client", function()
     open_and_accept()
 
-    local result = close_all_diff_tabs({}, owner)
+    local response = call_tool(owner, "closeAllDiffTabs", {})
 
-    assert.equal("CLOSED_1_DIFF_TABS", result.content[1].text)
+    assert.equal("CLOSED_1_DIFF_TABS", response.result.content[1].text)
     assert.is_nil(diff._get_active_diffs()[tab])
   end)
 
   it("is torn down by close_tab from its own client", function()
     open_and_accept()
 
-    close_tab({ tab_name = tab }, owner)
+    call_tool(owner, "close_tab", { tab_name = tab })
 
     assert.is_nil(diff._get_active_diffs()[tab])
   end)
