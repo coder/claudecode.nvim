@@ -31,7 +31,7 @@ Steps:
 
 ## Gotchas
 
-- A line range ends after the end of `endLine`. `getpos("'>")` reads column 2147483647 (`v:maxcol`), and `y` on lines 2 to 3 yanks `two\nthree\n` (observed 2026-10-31). A range past the last line stops there: `startLine 3, endLine 5` answers `selected lines 3 to 4`.
+- A line range ends after the last character of `endLine`. `getpos("'>")` reads the line's length plus one (5 for `four`), and `y` on lines 2 to 3 yanks `two\nthree\n` (observed 2026-10-31). A range past the last line stops there: `startLine 3, endLine 5` answers `selected lines 3 to 4`.
 - openFile selects with `gv`, which reuses the buffer's last visual mode. After a linewise `V` selection in that buffer, `mode()` prints `V`, not `v`.
 - The selection is a live visual mode. Send `Escape` before the next step, or the next keys extend the selection.
 - With one window, `makeFrontmost: false` still swaps the visible buffer, because the main window is the current one. Focus behavior with several windows is not mapped yet.
