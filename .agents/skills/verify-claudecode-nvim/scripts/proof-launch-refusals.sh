@@ -4,7 +4,8 @@
 #   out-link       VERIFY_OUT is a symlink
 #   out-other      VERIFY_OUT is owned by another user
 #   out-group      VERIFY_OUT is group-writable
-#   out-dotdot     VERIFY_OUT contains ..
+#   out-dot        VERIFY_OUT has a . part
+#   out-dotdot     VERIFY_OUT has a .. part
 #   parent-link    the default parent dir is a symlink
 #   parent-group   the default parent dir is group-writable
 #   parent-world   the default parent dir is world-writable
@@ -56,7 +57,8 @@ fi
 refused out-other "$other is owned by another user" VERIFY_OUT="$other"
 mkdir -m 770 "$TMP/out-group"
 refused out-group "$TMP/out-group is group- or world-writable" VERIFY_OUT="$TMP/out-group"
-refused out-dotdot "$TMP/out-link/../out contains .." VERIFY_OUT="$TMP/out-link/../out"
+refused out-dot "$TMP/out-link/. has a . or .. part" VERIFY_OUT="$TMP/out-link/."
+refused out-dotdot "$TMP/out-link/../out has a . or .. part" VERIFY_OUT="$TMP/out-link/../out"
 ln -s "$TMP/out" "$TMP/link/verify-claudecode-nvim"
 refused parent-link "$TMP/link/verify-claudecode-nvim is a symlink" XUM_SCRATCH_DIR="$TMP/link"
 mkdir -m 770 "$TMP/group/verify-claudecode-nvim"

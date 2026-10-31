@@ -217,9 +217,9 @@ cmd_doctor() {
 # On a shared host another user can read or swap evidence in a dir they own or can write.
 # Prints why <dir> is unsafe, or nothing.
 unsafe_dir() {
-  # A .. after a symlink would hide that symlink from unsafe_above.
-  if [[ /$1/ == */../* ]]; then
-    echo "$1 contains .."
+  # A . or .. after a symlink would hide that symlink from unsafe_above.
+  if [[ /$1/ == */./* || /$1/ == */../* ]]; then
+    echo "$1 has a . or .. part"
   elif [[ -L $1 ]]; then
     echo "$1 is a symlink"
   elif [[ -e $1 && ! -O $1 ]]; then
