@@ -121,6 +121,68 @@ describe("Diff Module", function()
 
       rawset(io, "open", old_io_open)
     end)
+
+    describe("when a temp directory cannot be created", function()
+      local cache = "/tmp/nvim_mock_cache"
+      local primary = cache .. "/claudecode_diffs"
+      local fallback = cache .. "/claudecode_diffs_fallback"
+      local old_io_open
+
+      -- Models real Neovim: mkdir(path, "p") on a path under a read-only directory raises E739,
+      -- except under :silent!, where it returns 0 instead. Files open only in directories mkdir created.
+      local function stub_filesystem(unwritable_dir, failure)
+        local created = {}
+        original_vim_functions["fn.mkdir"] = vim.fn.mkdir
+        vim.fn.mkdir = function(path, flags)
+          assert(flags == "p", "create_temp_file must create parent directories")
+          if path:sub(1, #unwritable_dir + 1) == unwritable_dir .. "/" then
+            if failure == "raises" then
+              error("Vim:E739: Cannot create directory " .. path .. ": permission denied", 0)
+            end
+            return 0
+          end
+          created[path] = true
+          return 1
+        end
+        rawset(io, "open", function(path)
+          if not created[path:match("^(.*)/[^/]*$")] then
+            return nil, path .. ": No such file or directory"
+          end
+          return { write = function() end, close = function() end }
+        end)
+      end
+
+      before_each(function()
+        old_io_open = io.open
+      end)
+
+      after_each(function()
+        rawset(io, "open", old_io_open)
+      end)
+
+      for _, failure in ipairs({ "raises", "returns 0" }) do
+        it("uses the fallback directory when mkdir " .. failure .. " inside the primary one", function()
+          stub_filesystem(primary, failure)
+
+          local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Fallback")
+
+          expect(result.success).to_be_true()
+          expect(result.temp_file:sub(1, #fallback + 1)).to_be(fallback .. "/")
+        end)
+
+        it("names both directories in the error when mkdir " .. failure .. " for both", function()
+          stub_filesystem(cache, failure)
+
+          local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "No dir")
+
+          expect(result.success).to_be_false()
+          expect(result.temp_file).to_be_nil()
+          expect(result.error:find(fallback, 1, true)).not_to_be_nil()
+          local without_fallback = result.error:gsub(fallback, "")
+          expect(without_fallback:find(primary, 1, true)).not_to_be_nil()
+        end)
+      end
+    end)
   end)
 
   describe("Native Diff Implementation", function()
