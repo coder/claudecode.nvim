@@ -1570,6 +1570,12 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
 
   logger.debug("diff", "Starting diff setup for", tab_name)
 
+  -- A ClaudeCodeDiffOpened handler can accept or deny the diff before this coroutine yields
+  -- (issue #325). The coroutine cannot be resumed then, and the server has no response sender
+  -- for it yet, so keep that result and return it as the immediate reply instead of yielding.
+  local waiting = false
+  local setup_result = nil
+
   -- Use native diff implementation
   local success, err = pcall(M._setup_blocking_diff, {
     old_file_path = old_file_path,
@@ -1578,6 +1584,10 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     tab_name = tab_name,
     client_id = client_id,
   }, function(result)
+    if not waiting then
+      setup_result = result
+      return
+    end
     -- Resume the coroutine with the result
     local resume_success, resume_result, resume_err = coroutine.resume(co, result)
     if not resume_success then
@@ -1619,7 +1629,12 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     end
   end
 
+  if setup_result then
+    return setup_result
+  end
+
   -- Yield and wait indefinitely for user interaction - the resolve functions will resume us
+  waiting = true
   local user_action_result = coroutine.yield()
   -- Return the result directly - this will be sent by the deferred response system
   return user_action_result
