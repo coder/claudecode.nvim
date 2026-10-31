@@ -165,12 +165,11 @@ end
 
 local function close_terminal()
   if is_valid() then
-    -- Closing the window should trigger on_exit of the job if the process is still running,
-    -- which then calls cleanup_state.
-    -- If the job already exited, on_exit would have cleaned up.
-    -- This direct close is for user-initiated close.
-    vim.api.nvim_win_close(winid, true)
-    cleanup_state() -- Cleanup after explicit close
+    local terminal_bufnr = bufnr
+    cleanup_state()
+    -- bufhidden=hide keeps the job running when only the window closes. Deleting the buffer
+    -- stops the job and closes every window that shows it, so a hidden terminal closes too.
+    vim.api.nvim_buf_delete(terminal_bufnr, { force = true })
   end
 end
 
