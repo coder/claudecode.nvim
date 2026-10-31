@@ -1107,6 +1107,44 @@ describe("Range Selection Tests", function()
         assert.are.equal("naïve café\n日本", sel.text)
       end)
 
+      describe("with 'selection' set to exclusive", function()
+        before_each(function()
+          _G.vim.o.selection = "exclusive"
+        end)
+
+        after_each(function()
+          _G.vim.o.selection = nil
+        end)
+
+        it("leaves out the multibyte character at the end of a backward live selection", function()
+          -- `$vb` on `naïve café`: the anchor stays on é (byte 11), and the cursor moves to the c (byte 8).
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "naïve café" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 11, 0 } }
+          _G.vim.test.set_cursor(0, 1, 7)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.are.equal("caf", sent.text)
+          assert.are.same({ line = 0, character = 7 }, sent.selection.start)
+          assert.are.same({ line = 0, character = 10 }, sent.selection["end"])
+        end)
+
+        it("leaves out the multibyte character at the '> mark of a multi-line selection", function()
+          local sel = from_marks({ "naïve café", "日本語 テキスト" }, "v", 1, 11, 2, 4)
+          assert.are.equal("é\n日", sel.text)
+          assert.are.equal(#"日", sel.selection["end"].character)
+        end)
+
+        it("keeps the one character of a selection that starts and ends at the same position", function()
+          local sel = from_marks({ "日本語" }, "v", 1, 1, 1, 1)
+          assert.are.equal("日", sel.text)
+          assert.are.equal(#"日", sel.selection["end"].character)
+        end)
+      end)
+
       it("sends whole lines for a linewise selection", function()
         local sel = from_marks({ "naïve café", "日本語 テキスト" }, "V", 1, 1, 2, 2147483647)
         assert.are.equal("naïve café\n日本語 テキスト", sel.text)
