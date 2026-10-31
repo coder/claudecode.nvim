@@ -59,7 +59,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
       end
     end
     -- If focus=false, preserve user context by staying in current window
-    return true
+    return
   end
 
   local original_win = vim.api.nvim_get_current_win()
@@ -77,17 +77,16 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
 
-  vim.api.nvim_win_call(new_winid, function()
-    vim.cmd("enew")
-  end)
-  local new_bufnr = vim.api.nvim_win_get_buf(new_winid)
+  -- Another plugin's autocmd can swap a different buffer into the split, so the code below uses this number.
+  local new_bufnr = vim.api.nvim_create_buf(true, false)
+  vim.api.nvim_win_set_buf(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
   -- "opus[1m]" (see utils.parse_command).
   local term_cmd_arg = utils.parse_command(cmd_string)
 
-  local started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, {
+  local termopen_opts = {
     env = env_table,
     cwd = effective_config.cwd,
     on_exit = function(job_id, _, _)
@@ -120,7 +119,12 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
         end
       end)
     end,
-  })
+  }
+  -- pcall runs inside the callback because nvim_buf_call rewraps a raised error with a stack traceback.
+  local started, termopen_result
+  vim.api.nvim_buf_call(new_bufnr, function()
+    started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts)
+  end)
   jobid = started and termopen_result or nil
 
   -- termopen raises for a command that is not executable, and returns 0 or -1 instead when errors are silenced.
@@ -129,19 +133,18 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.notify("Failed to open native terminal." .. reason, vim.log.levels.ERROR)
     vim.api.nvim_win_close(new_winid, true)
     vim.api.nvim_set_current_win(original_win)
-    -- An autocmd can put a user buffer into the split, so only an empty scratch buffer is deleted.
-    local is_scratch = vim.api.nvim_buf_is_valid(new_bufnr)
-      and vim.api.nvim_buf_get_name(new_bufnr) == ""
-      and not vim.bo[new_bufnr].modified
-    if is_scratch then
+    if vim.api.nvim_buf_is_valid(new_bufnr) then
       vim.api.nvim_buf_delete(new_bufnr, { force = true })
     end
     cleanup_state()
-    return false
+    return
   end
 
+  if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+    vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+  end
   winid = new_winid
-  bufnr = vim.api.nvim_get_current_buf()
+  bufnr = new_bufnr
   vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
 
@@ -160,7 +163,6 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.notify("Native terminal opened. Press Ctrl-\\ Ctrl-N to return to Normal mode.", vim.log.levels.INFO)
     tip_shown = true
   end
-  return true
 end
 
 local function close_terminal()
@@ -324,9 +326,7 @@ function M.open(cmd_string, env_table, effective_config, focus)
       end
       -- If focus=false, preserve user context by staying in current window
     else
-      if not open_terminal(cmd_string, env_table, effective_config, focus) then
-        vim.notify("Failed to open Claude terminal using native fallback.", vim.log.levels.ERROR)
-      end
+      open_terminal(cmd_string, env_table, effective_config, focus)
     end
   end
 end
@@ -367,9 +367,7 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
         focus_terminal()
       else
         -- No existing terminal found, create a new one
-        if not open_terminal(cmd_string, env_table, effective_config) then
-          vim.notify("Failed to open Claude terminal using native fallback (simple_toggle).", vim.log.levels.ERROR)
-        end
+        open_terminal(cmd_string, env_table, effective_config)
       end
     end
   end
@@ -424,9 +422,7 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- No existing terminal found, create a new one
-      if not open_terminal(cmd_string, env_table, effective_config) then
-        vim.notify("Failed to open Claude terminal using native fallback (focus_toggle).", vim.log.levels.ERROR)
-      end
+      open_terminal(cmd_string, env_table, effective_config)
     end
   end
 end
