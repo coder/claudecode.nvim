@@ -129,7 +129,11 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.notify("Failed to open native terminal." .. reason, vim.log.levels.ERROR)
     vim.api.nvim_win_close(new_winid, true)
     vim.api.nvim_set_current_win(original_win)
-    if vim.api.nvim_buf_is_valid(new_bufnr) then
+    -- An autocmd can put a user buffer into the split, so only an empty scratch buffer is deleted.
+    local is_scratch = vim.api.nvim_buf_is_valid(new_bufnr)
+      and vim.api.nvim_buf_get_name(new_bufnr) == ""
+      and not vim.bo[new_bufnr].modified
+    if is_scratch then
       vim.api.nvim_buf_delete(new_bufnr, { force = true })
     end
     cleanup_state()

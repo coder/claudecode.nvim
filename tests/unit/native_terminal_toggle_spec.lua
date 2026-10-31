@@ -118,7 +118,7 @@ describe("claudecode.terminal.native toggle behavior", function()
           -- Create new buffer in current window
           local bufnr = mock_state.next_bufnr
           mock_state.next_bufnr = mock_state.next_bufnr + 1
-          mock_state.buffers[bufnr] = { name = "", options = {} }
+          mock_state.buffers[bufnr] = { name = "", options = { modified = false } }
           if mock_state.windows[mock_state.current_win] then
             mock_state.windows[mock_state.current_win].bufnr = bufnr
           end
@@ -167,7 +167,11 @@ describe("claudecode.terminal.native toggle behavior", function()
             end,
             __index = function(_, option)
               local buf = mock_state.buffers[bufnr]
-              return buf and buf.options and buf.options[option] or ""
+              local value = buf and buf.options and buf.options[option]
+              if value == nil then
+                return ""
+              end
+              return value
             end,
           })
         end,
@@ -278,6 +282,37 @@ describe("claudecode.terminal.native toggle behavior", function()
         }, notified)
       end)
     end
+  end)
+
+  describe("termopen failure after an autocmd swaps the buffer", function()
+    it("keeps a named, modified user buffer that an autocmd put in the new split", function()
+      local mock_state = _G.get_mock_state()
+      mock_state.windows[1] = { bufnr = 0 }
+      mock_state.current_win = 1
+      local user_bufnr = 99
+      mock_state.buffers[user_bufnr] = { name = "/tmp/notes.txt", options = { modified = true } }
+      local original_win_call = mock_vim.api.nvim_win_call
+      mock_vim.api.nvim_win_call = function(winid, fn)
+        local result = original_win_call(winid, fn)
+        mock_state.windows[winid].bufnr = user_bufnr
+        return result
+      end
+      local deleted = {}
+      mock_vim.api.nvim_buf_delete = function(bufnr)
+        table.insert(deleted, bufnr)
+        mock_state.buffers[bufnr] = nil
+      end
+      mock_vim.notify = function() end
+      mock_vim.log = { levels = { ERROR = 4 } }
+      mock_vim.fn.termopen = function()
+        error("Vim:E475: Invalid value for argument cmd: 'claude' is not executable", 0)
+      end
+
+      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+      assert.are.same({}, deleted)
+      assert.is_not_nil(mock_state.buffers[user_bufnr])
+    end)
   end)
 
   describe("toggle with existing hidden terminal", function()
