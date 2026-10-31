@@ -8,6 +8,12 @@ describe("claudecode.terminal.snacks close", function()
   local state
   local logged_errors
 
+  local function run_scheduled()
+    while #state.scheduled > 0 do
+      table.remove(state.scheduled, 1)()
+    end
+  end
+
   local function fire(event, bufnr)
     for i = #state.autocmds, 1, -1 do
       local autocmd = state.autocmds[i]
@@ -66,6 +72,7 @@ describe("claudecode.terminal.snacks close", function()
       running_jobs = {},
       exiting_jobs = {},
       pending_writes = {},
+      scheduled = {},
       next_bufnr = 1,
       next_jobid = 7,
       next_win = 1000,
@@ -76,7 +83,7 @@ describe("claudecode.terminal.snacks close", function()
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = function() end,
       schedule = function(fn)
-        fn()
+        table.insert(state.scheduled, fn)
       end,
       cmd = setmetatable({ checktime = function() end }, {
         __call = function() end,
@@ -124,8 +131,10 @@ describe("claudecode.terminal.snacks close", function()
           return 1
         end,
       },
-      -- A stopped job exits only when the event loop runs. Its pending writes end first, then TermClose fires.
+      -- vim.wait runs the event loop. Callbacks scheduled earlier run first. Then a stopped job exits, its
+      -- pending writes end, and TermClose fires.
       wait = function(timeout, condition)
+        run_scheduled()
         local exiting = state.exiting_jobs
         state.exiting_jobs = {}
         for _, id in ipairs(exiting) do
@@ -136,6 +145,7 @@ describe("claudecode.terminal.snacks close", function()
             end
           end
         end
+        run_scheduled()
         if condition() then
           return true
         end
@@ -241,6 +251,28 @@ describe("claudecode.terminal.snacks close", function()
       assert.is_nil(next(state.windows))
       assert.is_nil(snacks_provider.get_active_bufnr())
       assert.are.same({}, logged_errors)
+    end)
+  end
+
+  for _, auto_close in ipairs({ false, true }) do
+    it(("starts a new Claude for an open scheduled before close, auto_close=%s"):format(auto_close), function()
+      local old_bufnr, old_jobid = open_claude(auto_close)
+      vim.schedule(function()
+        snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = auto_close }, true)
+      end)
+
+      snacks_provider.close()
+
+      assert.is_nil(state.running_jobs[old_jobid])
+      assert.is_false(vim.api.nvim_buf_is_valid(old_bufnr))
+      local new_bufnr = snacks_provider.get_active_bufnr()
+      assert.is_not_nil(new_bufnr)
+      assert.is_true(state.running_jobs[state.buffers[new_bufnr].jobid])
+      local shown = false
+      for _, w in pairs(state.windows) do
+        shown = shown or w.buf == new_bufnr
+      end
+      assert.is_true(shown)
     end)
   end
 
