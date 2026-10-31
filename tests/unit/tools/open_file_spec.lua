@@ -5,6 +5,9 @@ describe("Tool: open_file", function()
   local buffer_lines
   local marks
   local coladds
+  local loaded_bufs
+  local original_list_bufs
+  local original_buf_is_loaded
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -98,6 +101,15 @@ describe("Tool: open_file", function()
       coladds[expr:sub(2)] = pos[4]
       return 0
     end)
+    loaded_bufs = {}
+    original_list_bufs = _G.vim.api.nvim_list_bufs
+    original_buf_is_loaded = _G.vim.api.nvim_buf_is_loaded
+    _G.vim.api.nvim_list_bufs = spy.new(function()
+      return loaded_bufs
+    end)
+    _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
+      return true
+    end)
     _G.vim.fn.readfile = spy.new(function(path, flags, max)
       local read = {}
       for line_nr = 1, math.min(max or #buffer_lines, #buffer_lines) do
@@ -133,6 +145,8 @@ describe("Tool: open_file", function()
     _G.vim.cmd_history = nil
     _G.vim.fn.setpos = nil
     _G.vim.fn.readfile = nil
+    _G.vim.api.nvim_list_bufs = original_list_bufs
+    _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
     _G.vim.o.selection = nil
   end)
 
@@ -392,6 +406,14 @@ describe("Tool: open_file", function()
       expect(success).to_be_false()
       expect(err.code).to_be(-32602)
       expect(#_G.vim.cmd_history).to_be(0)
+    end)
+
+    it("accepts a startLine that exists only in the unsaved lines of the loaded buffer", function()
+      loaded_bufs = { 1 }
+      _G.vim.fn.readfile = spy.new(function(path, flags, max)
+        return { "one", "two" }
+      end)
+      expect(open({ startLine = 4, endLine = 5 })).to_be("Opened file and selected lines 4 to 5")
     end)
 
     it("sets both marks with no column offset on every path", function()
