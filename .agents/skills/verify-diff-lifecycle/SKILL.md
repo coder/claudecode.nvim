@@ -37,15 +37,17 @@ Exit codes:
 
 ## Does the change touch the verified code?
 
-Run the check. It hashes every block the model describes and lists every non-comment line under `lua/` that resolves, closes, registers, or answers a diff, or assigns a `.status`, together with its enclosing top-level statement, so moving a call into another function or autocmd counts as a change. `covered.lock` records both, with the sync commit on its first line. When either differs, the run prints `STALE` with one `was:`/`now:` line per changed block or call site, and exits 3 even if every rule holds.
+Run the check. It hashes every block the model describes and lists every non-comment line under `lua/` that resolves, closes, registers, or answers a diff, names the diff table (`active_diffs`, `_get_active_diffs`), or assigns a `.status`, together with its enclosing top-level statement, so moving a call into another top-level function or autocmd counts as a change. A move inside one function is caught only when that function is a covered block. `covered.lock` records both, with the sync commit on its first line. When either differs, the run prints `STALE` with one `was:`/`now:` line per changed block or call site, and exits 3 even if every rule holds.
 
 Covered blocks:
 
-- In `diff.lua`: `_resolve_diff_as_saved`, `_resolve_diff_as_rejected`, `open_diff_blocking`, `_setup_blocking_diff`, `close_diff_by_tab_name`, `close_pending_diffs`, `close_diffs_for_client`, `close_active_diffs`, `_cleanup_all_active_diffs`, `_register_diff_state`, `_cleanup_diff_state`, `fire_diff_event`, `accept_current_diff`, `deny_current_diff`.
+- In `diff.lua`: `_resolve_diff_as_saved`, `_resolve_diff_as_rejected`, `open_diff_blocking`, `_setup_blocking_diff`, `close_diff_by_tab_name`, `close_pending_diffs`, `close_diffs_for_client`, `close_active_diffs`, `_cleanup_all_active_diffs`, `_register_diff_state`, `_cleanup_diff_state`, `register_diff_autocmds` (the `:w`, `:q` and buffer-delete paths), `fire_diff_event`, `accept_current_diff`, `deny_current_diff`.
 - In `diff_inline.lua`: `setup_inline_diff`, `resolve_inline_as_saved`, `resolve_inline_as_rejected`.
 - In `server/init.lua`: `M.stop`, `on_disconnect`, `M._handle_request`, `M._setup_deferred_response`.
 - In `tools/init.lua` and `tools/open_diff.lua`: `M.handle_invoke`, and the openDiff `handler`.
 - In `init.lua`: the `ClaudeCodeCloseAllDiffs` user command.
+
+STALE is a tripwire, not a proof of coverage. It matches names, so it cannot see diff state reached through a reference held under another name (a local alias passed around, a captured `diff_data`), through `rawset`, or through a generic key setter on such a reference. A PASS therefore says the model holds for the guards the facts read. It does not say the change is safe. For any change that touches diff state, also read the diff for new writers of a diff's status or of the table, and model them before you trust the PASS.
 
 STALE never means "probably fine". A new direct caller of `resolve_inline_as_*` or `_cleanup_all_active_diffs` shows up only as STALE, because no fact reads it, and both can strand a call or drop a saved diff. Read every `was:`/`now:` line before you go on.
 
@@ -107,10 +109,11 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
 - `SavedDiffKept` counts a close by any connected Claude client as Claude's. The model does not track which client owns a diff. So it does not check the case where a second client's `closeAllDiffTabs` or `close_tab` tears down a saved diff whose own client died before writing the file.
 - The split and unified layouts share the pending guards only because `resolve_inline_as_*` is reached through `_resolve_diff_as_*`. The inline functions have no guard of their own.
 - These are not modeled:
+  - user `ClaudeCodeDiffClosed` handlers that act on another diff while `close_active_diffs` is still looping over its snapshot (each close fires the event synchronously, and the loop does not recheck the next entry's status)
   - window and tab layout
   - the `keep_empty` new-file cleanup inside `_resolve_diff_as_rejected` (it runs after the answer)
   - setup errors, which answer at once
   - Neovim exit (`VimLeavePre`) and the plugin's own `M.stop` in `init.lua`, beyond the server stop it calls
   - whether a sent response reaches a live socket
   - two servers in one Neovim
-- A pass covers this model at these bounds, for the facts `check.sh` reads. It proves nothing about code the facts do not read. STALE marks that code.
+- A pass covers this model at these bounds, for the facts `check.sh` reads. It proves nothing about code the facts do not read. STALE marks changes to the covered blocks and to lines that use the names above, and nothing else.

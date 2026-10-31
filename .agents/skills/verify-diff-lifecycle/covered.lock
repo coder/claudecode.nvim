@@ -17,6 +17,7 @@ block setup_deferred     f9381caaae0fe517
 block fire_event         ef778bb39419d91a
 block register_state     dd8024e262a26c38
 block cleanup_state      032ae25f4d7ce499
+block diff_autocmds      675566664a1546fb
 block handle_invoke      4333fbdb0507c7db
 block open_diff_tool     f4bee70e46ded9af
 block setup_inline       404a7166f827b172
@@ -54,8 +55,11 @@ site lua/claudecode/diff.lua: diff_data.resolution_callback(result) @ function M
 site lua/claudecode/diff.lua: diff_data.resolution_callback(result) @ function M._resolve_diff_as_saved(tab_name, buffer_id)
 site lua/claudecode/diff.lua: diff_data.status = "rejected" @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: diff_data.status = "saved" @ function M._resolve_diff_as_saved(tab_name, buffer_id)
+site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
+site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function close_active_diffs(filter_fn, reason)
 site lua/claudecode/diff.lua: function M._cleanup_all_active_diffs(reason) @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: function M._cleanup_diff_state(tab_name, reason) @ function M._cleanup_diff_state(tab_name, reason)
+site lua/claudecode/diff.lua: function M._get_active_diffs() @ function M._get_active_diffs()
 site lua/claudecode/diff.lua: function M._register_diff_state(tab_name, diff_data) @ function M._register_diff_state(tab_name, diff_data)
 site lua/claudecode/diff.lua: function M._resolve_diff_as_rejected(tab_name) @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: function M._resolve_diff_as_saved(tab_name, buffer_id) @ function M._resolve_diff_as_saved(tab_name, buffer_id)
@@ -67,13 +71,23 @@ site lua/claudecode/diff.lua: function M.close_pending_diffs(reason) @ function 
 site lua/claudecode/diff.lua: if M.close_diff_by_tab_name(tab_name) then @ local function close_active_diffs(filter_fn, reason)
 site lua/claudecode/diff.lua: if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
+site lua/claudecode/diff.lua: if active_diffs[tab_name] then @ function M._setup_blocking_diff(params, resolution_callback)
+site lua/claudecode/diff.lua: if active_diffs[tab_name] then @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: if diff_data.resolution_callback then @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: if diff_data.resolution_callback then @ function M._resolve_diff_as_saved(tab_name, buffer_id)
 site lua/claudecode/diff.lua: inline.resolve_inline_as_rejected(tab_name, diff_data) @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: inline.resolve_inline_as_saved(tab_name, diff_data) @ function M._resolve_diff_as_saved(tab_name, buffer_id)
 site lua/claudecode/diff.lua: inline.setup_inline_diff(params, resolution_callback, config) @ function M._setup_blocking_diff(params, resolution_callback)
+site lua/claudecode/diff.lua: local active_diffs = {} @ local active_diffs = {}
+site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M._cleanup_diff_state(tab_name, reason)
+site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M._resolve_diff_as_rejected(tab_name)
+site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M._resolve_diff_as_saved(tab_name, buffer_id)
+site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M.close_diff_by_tab_name(tab_name)
+site lua/claudecode/diff.lua: local existing_diff = active_diffs[tab_name] @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: local function close_active_diffs(filter_fn, reason) @ local function close_active_diffs(filter_fn, reason)
+site lua/claudecode/diff.lua: local state = active_diffs[tab_name] @ function M._setup_blocking_diff(params, resolution_callback)
 site lua/claudecode/diff.lua: resolution_callback = resolution_callback, @ function M._setup_blocking_diff(params, resolution_callback)
+site lua/claudecode/diff.lua: return active_diffs @ function M._get_active_diffs()
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_diffs_for_client(client_id, reason)
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_pending_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs") @ function M.close_all_diffs(reason)
@@ -88,6 +102,7 @@ site lua/claudecode/diff_inline.lua: diff_data.status = "saved" @ function M.res
 site lua/claudecode/diff_inline.lua: function M.resolve_inline_as_rejected(tab_name, diff_data) @ function M.resolve_inline_as_rejected(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: function M.resolve_inline_as_saved(tab_name, diff_data) @ function M.resolve_inline_as_saved(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: function M.setup_inline_diff(params, resolution_callback, config) @ function M.setup_inline_diff(params, resolution_callback, config)
+site lua/claudecode/diff_inline.lua: if diff._get_active_diffs()[tab_name] then @ local function cleanup_unregistered_inline_setup(tab_name, partial)
 site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ function M.resolve_inline_as_rejected(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ function M.resolve_inline_as_saved(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, @ function M.setup_inline_diff(params, resolution_callback, config)

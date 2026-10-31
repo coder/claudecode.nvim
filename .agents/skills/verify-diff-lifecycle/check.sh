@@ -103,6 +103,7 @@ accept_current=$(block "$DIFF" '^function M\.accept_current_diff\(')
 fire_event=$(block "$DIFF" '^local function fire_diff_event\(')
 register_state=$(block "$DIFF" '^function M\._register_diff_state\(')
 cleanup_state=$(block "$DIFF" '^function M\._cleanup_diff_state\(')
+diff_autocmds=$(block "$DIFF" '^local function register_diff_autocmds\(')
 deny_current=$(block "$DIFF" '^function M\.deny_current_diff\(')
 
 FACTS=(GuardSaved GuardRejected SenderCleared ReplaceRejects CloseTabRejectsPending CloseEachByName StopRejectsPending
@@ -159,14 +160,14 @@ echo "== code facts (TRUE = guard present)"
 for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
 
 # The coverage record: a hash of every block the model describes, plus every line
-# under lua/ that resolves, closes, registers, or answers a diff, or writes a status. A changed block or
+# under lua/ that resolves, closes, registers, or answers a diff, names the diff table, or writes a status. A changed block or
 # a new caller makes the run STALE until someone confirms the model still fits.
-SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs\[[^]]*\] *=[^=]|\.status *= *[^=])'
+SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
-    handle_request setup_deferred fire_event register_state cleanup_state handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
+    handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
       echo "ERROR: covered block $name not found; update its start regex in check.sh" >&2
       exit 2
