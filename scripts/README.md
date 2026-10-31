@@ -10,7 +10,7 @@
 4. Standalone reproductions of GitHub issues (`repro_issue_*.lua`, `repro_issue_*.sh`).
 5. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`.
 
-CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh`, `nvim --headless -u NONE -l scripts/repro_issue_238.lua`, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
+CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh` and `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"` on Neovim stable and v0.8.0, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
 
 `mise.toml` provisions `websocat` and `jq` for the WebSocket scripts.
 
