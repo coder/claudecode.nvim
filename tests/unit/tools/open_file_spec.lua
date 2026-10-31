@@ -4,6 +4,7 @@ describe("Tool: open_file", function()
   local open_file_handler
   local buffer_lines
   local marks
+  local coladds
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -69,7 +70,7 @@ describe("Tool: open_file", function()
       return "test.txt" -- Mock buffer name
     end)
     _G.vim.api.nvim_buf_line_count = spy.new(function(buf)
-      return 10 -- Mock line count
+      return #buffer_lines
     end)
     buffer_lines = {
       "local function test()",
@@ -78,13 +79,31 @@ describe("Tool: open_file", function()
       "end",
     }
     marks = {}
-    -- Like Neovim, marks and the cursor take a 1-based row and a 0-based column.
+    coladds = {}
+    -- Like Neovim, marks and the cursor take a 1-based row and a 0-based column. Like Neovim 0.8,
+    -- nvim_buf_set_mark also sets the mark's coladd to the column.
     _G.vim.api.nvim_buf_set_mark = spy.new(function(buf, name, line, col, opts)
       if line > #buffer_lines then
         error("Invalid 'line': out of range")
       end
       marks[name] = { line, col }
+      coladds[name] = col
       return true
+    end)
+    _G.vim.fn.setpos = spy.new(function(expr, pos)
+      if pos[2] < 1 or pos[2] > #buffer_lines then
+        return -1
+      end
+      marks[expr:sub(2)] = { pos[2], pos[3] - 1 }
+      coladds[expr:sub(2)] = pos[4]
+      return 0
+    end)
+    _G.vim.fn.readfile = spy.new(function(path, flags, max)
+      local read = {}
+      for line_nr = 1, math.min(max or #buffer_lines, #buffer_lines) do
+        read[line_nr] = buffer_lines[line_nr]
+      end
+      return read
     end)
     _G.vim.api.nvim_buf_get_lines = spy.new(function(buf, start, end_line, strict)
       if end_line < 0 then
@@ -112,6 +131,8 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = nil
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
+    _G.vim.fn.setpos = nil
+    _G.vim.fn.readfile = nil
     _G.vim.o.selection = nil
   end)
 
@@ -356,6 +377,32 @@ describe("Tool: open_file", function()
         expect(success).to_be_false()
         expect(err.code).to_be(-32602)
         expect(#_G.vim.cmd_history).to_be(0)
+      end
+    end)
+
+    it("clamps an endLine past the end of the file to the last line and reports the clamped range", function()
+      expect(open({ startLine = 4, endLine = 9 })).to_be("Opened file and selected lines 4 to 5")
+      assert.are.same({ 4, 0 }, marks["<"])
+      assert.are.same({ 5, 15 }, marks[">"])
+    end)
+
+    it("rejects a startLine past the end of the file before opening it", function()
+      _G.vim.cmd_history = {}
+      local success, err = pcall(open_file_handler, { filePath = "test.txt", startLine = 6 })
+      expect(success).to_be_false()
+      expect(err.code).to_be(-32602)
+      expect(#_G.vim.cmd_history).to_be(0)
+    end)
+
+    it("sets both marks with no column offset on every path", function()
+      for _, params in ipairs({
+        { startLine = 3, endLine = 4 },
+        { startText = "two", endText = "three" },
+        { startText = "three" },
+      }) do
+        coladds = {}
+        open(params)
+        assert.are.same({ ["<"] = 0, [">"] = 0 }, coladds)
       end
     end)
 
