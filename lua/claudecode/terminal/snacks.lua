@@ -440,9 +440,11 @@ function M.open(cmd_string, env_table, config, focus)
       table.concat(error_details, ", "),
       cmd_string
     )
-    -- opts holds the env table, which can carry user secrets, so it stays out of the notice.
     vim.notify(error_msg, vim.log.levels.ERROR)
-    logger.debug("terminal", error_msg .. ", opts=" .. vim.inspect(opts))
+    -- env values can be user secrets, so the log names only the env keys.
+    local env_keys = vim.tbl_keys(opts.env or {})
+    table.sort(env_keys)
+    logger.debug("terminal", error_msg .. ", opts=" .. vim.inspect(vim.tbl_extend("force", opts, { env = env_keys })))
   end
 end
 

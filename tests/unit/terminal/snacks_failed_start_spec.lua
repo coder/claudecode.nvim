@@ -16,6 +16,8 @@ describe("claudecode.terminal.snacks failed start", function()
   local original_win
   local opened
   local opened_buf
+  local opened_opts
+  local debug_lines
 
   local function new_buf()
     next_id = next_id + 1
@@ -63,6 +65,7 @@ describe("claudecode.terminal.snacks failed start", function()
     term.win = new_win(term.buf)
     opened = term
     opened_buf = term.buf
+    opened_opts = opts
 
     if start_mode == "raise" then
       error(
@@ -84,14 +87,30 @@ describe("claudecode.terminal.snacks failed start", function()
     next_id = 0
     opened = nil
     opened_buf = nil
+    opened_opts = nil
+    debug_lines = {}
     original_win = new_win(new_buf())
     buffers[windows[original_win].buf].buftype = ""
 
     _G.vim = {
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = spy.new(function() end),
-      inspect = function(v)
-        return tostring(v)
+      inspect = require("tests.mocks.vim").inspect,
+      tbl_keys = function(t)
+        local keys = {}
+        for k in pairs(t) do
+          table.insert(keys, k)
+        end
+        return keys
+      end,
+      tbl_extend = function(_, ...)
+        local res = {}
+        for _, t in ipairs({ ... }) do
+          for k, v in pairs(t) do
+            res[k] = v
+          end
+        end
+        return res
       end,
       tbl_deep_extend = function(_, ...)
         local res = {}
@@ -133,7 +152,9 @@ describe("claudecode.terminal.snacks failed start", function()
 
     package.loaded["snacks"] = { terminal = { open = spy.new(snacks_open) } }
     package.loaded["claudecode.logger"] = {
-      debug = function() end,
+      debug = function(_, ...)
+        table.insert(debug_lines, table.concat({ ... }, " "))
+      end,
       info = function() end,
       warn = function() end,
       error = function() end,
@@ -189,6 +210,19 @@ describe("claudecode.terminal.snacks failed start", function()
     snacks_provider.open("/nonexistent-claude", {}, config(), true)
 
     assert_failed_cleanly()
+  end)
+
+  it("keeps env values out of the failure notice and debug log", function()
+    start_mode = "raise"
+
+    snacks_provider.open("/nonexistent-claude", { SECRET_TEST = "s3cr3t" }, config(), true)
+
+    assert.are.equal("s3cr3t", opened_opts.env.SECRET_TEST)
+    local message = assert_failed_cleanly()
+    assert.is_nil(message:find("s3cr3t", 1, true))
+    assert.are.equal(1, #debug_lines)
+    assert.is_nil(debug_lines[1]:find("s3cr3t", 1, true))
+    assert.is_not_nil(debug_lines[1]:find("SECRET_TEST", 1, true))
   end)
 
   it("keeps a started terminal and still runs the user's on_buf", function()
