@@ -85,6 +85,7 @@ Layers, top to bottom:
 - On disconnect, the server schedules `diff.close_diffs_for_client(client.id, "client disconnected")`, only when `package.loaded["claudecode.diff"]` is set [server/init.lua:M.start]
 - `M.stop` calls `diff.close_pending_diffs("server stopping")` when `package.loaded["claudecode.diff"]` is set, resets `_G.claude_deferred_responses`, and clears `M.state.auth_token` [server/init.lua:M.stop]
 - `M.start` logs only the auth token length, not the token [server/init.lua:M.start]
+- `tools/call` debug lines name the tool and list the argument and result keys with their sizes (string bytes, table entry counts), never their values, so file contents and selected text stay out of `:messages`. An error result logs its code and message [server/init.lua:M.register_handlers]
 - `tcp.lua` seeds `math.randomseed` once per process. `init.lua` calls `math.random` at load. Both change the global PRNG [server/tcp.lua:ensure_rng_seeded]
 - `client.process_data` writes handshake, PONG, and Close frames to the socket. It runs `on_message` and `on_close` through `vim.schedule`. It calls `on_error` directly after a failed handshake write, and after it writes the Close frame for a protocol error [server/client.lua:M.process_data] [server/client.lua:M.close_client]
 - The ping timer writes ping frames and closes timed-out clients [server/tcp.lua:M.start_ping_timer]
