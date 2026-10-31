@@ -123,6 +123,7 @@ TypeOK ==
   /\ reqClient \in [Reqs -> Clients \cup {None}]
   /\ active \in [Tabs -> {NoDiff} \cup [req : Reqs, status : {"pending"} \cup Outcomes]]
   /\ sender \in [Reqs -> BOOLEAN]
+  /\ answers \in [Reqs -> Seq({"FILE_SAVED", "DIFF_REJECTED", "ERROR"})]
   /\ clientUp \in [Clients -> BOOLEAN]
   /\ serverUp \in BOOLEAN
   /\ scheduled \subseteq Clients

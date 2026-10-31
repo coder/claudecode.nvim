@@ -32,6 +32,11 @@ for arg in "$@"; do
   esac
 done
 
+if [[ $record == 1 && $mutants == 1 ]]; then
+  echo "usage: --record cannot be combined with --mutants; run --mutants first, then --record" >&2
+  exit 2
+fi
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-diff-lifecycle.XXXXXX")
 if [[ $keep == 1 ]]; then
   echo "work dir: $work"
@@ -58,7 +63,9 @@ fi
 # Print the block that starts at the first line matching $2 in file $1, up to the
 # `end` at the same indentation.
 block() {
-  awk -v re="$2" '
+  # Patterns go through ENVIRON: gawk processes backslash escapes in -v values, which breaks \(.
+  RE=$2 awk '
+    BEGIN { re = ENVIRON["RE"] }
     !found && $0 ~ re { found = 1; match($0, /^ */); indent = RLENGTH; print; next }
     found { print; if ($0 ~ "^" sprintf("%" indent "s", "") "end([ ,)]|$)") exit }
   ' "$1"
@@ -66,8 +73,8 @@ block() {
 
 # True when the regexes match lines of stdin in this order.
 in_order() {
-  awk -v pats="$(printf '%s\n' "$@")" '
-    BEGIN { n = split(pats, p, "\n"); i = 1 }
+  PATS=$(printf '%s\n' "$@") awk '
+    BEGIN { n = split(ENVIRON["PATS"], p, "\n"); i = 1 }
     i <= n && $0 ~ p[i] { i++ }
     END { exit !(i > n) }
   '
@@ -159,9 +166,9 @@ fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 echo "== code facts (TRUE = guard present)"
 for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
 
-# The coverage record: a hash of every block the model describes, plus every line
-# under lua/ that resolves, closes, registers, or answers a diff, names the diff table, or writes a status. A changed block or
-# a new caller makes the run STALE until someone confirms the model still fits.
+# The coverage record: a hash of every file under lua/, so any change to the plugin's Lua makes
+# the run STALE until someone confirms the model still fits. The block hashes and call sites
+# below point the reader at what changed.
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 coverage() {
   local name
@@ -174,9 +181,14 @@ coverage() {
     }
     printf 'block %-18s %s\n' "$name" "$(printf '%s\n' "${!name}" | sha256 | cut -c1-16)"
   done
+  local file
+  while IFS= read -r file; do
+    printf 'file %s %s\n' "$file" "$(sha256 <"$file" | cut -c1-16)"
+  done < <(find lua -name '*.lua' | sort)
   # Each site also names its enclosing top-level statement, so moving a call into another
   # function or autocmd changes the record.
-  find lua -name '*.lua' -print0 | sort -z | xargs -0 awk -v re="$SITE_RE" '
+  find lua -name '*.lua' -print0 | sort -z | RE=$SITE_RE xargs -0 awk '
+    BEGIN { re = ENVIRON["RE"] }
     FNR == 1 { top = "" }
     /^[^[:space:]-]/ && !/^(end|else|elseif|return|[})])/ { top = $0 }
     $0 ~ re && $0 !~ /^[[:space:]]*--/ { line = $0; sub(/^[[:space:]]+/, "", line); print "site " FILENAME ": " line " @ " top }
@@ -318,6 +330,9 @@ if [[ $mutants == 1 ]]; then
   run_tlc mut-OpenedEventInSetup TRUE "$ALL_INV" "" OpenedEventInSetup=FALSE || rc=$?
   if [[ $rc == 0 ]]; then
     printf '  %-30s removes the known finding, as expected\n' "OpenedEventInSetup=FALSE"
+  elif [[ $rc != 12 && $rc != 13 ]]; then
+    echo "  OpenedEventInSetup=FALSE: TLC ERROR (exit $rc)"
+    status=2
   else
     printf '  %-30s still breaks the opened-handler run (%s)\n' "OpenedEventInSetup=FALSE" "$(describe mut-OpenedEventInSetup "$rc")"
     [[ $status == 2 ]] || status=1

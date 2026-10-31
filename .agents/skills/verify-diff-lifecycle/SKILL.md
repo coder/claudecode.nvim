@@ -37,7 +37,9 @@ Exit codes:
 
 ## Does the change touch the verified code?
 
-Run the check. It hashes every block the model describes and lists every non-comment line under `lua/` that resolves, closes, registers, or answers a diff, names the diff table (`active_diffs`, `_get_active_diffs`), or assigns a `.status`, together with its enclosing top-level statement, so moving a call into another top-level function or autocmd counts as a change. A move inside one function is caught only when that function is a covered block. `covered.lock` records both, with the sync commit on its first line. When either differs, the run prints `STALE` with one `was:`/`now:` line per changed block or call site, and exits 3 even if every rule holds.
+Run the check. `covered.lock` records a hash of every file under `lua/`, so any change to the plugin's Lua code reads `STALE` (exit 3) until someone confirms that the model still describes the code. The model was written against the whole lifecycle: diff state, the tool and server layers, the transport that reports disconnects, and the user commands. Its facts cannot tell which other edits matter, so the record does not try to.
+
+To show where to look, the record also hashes each block the model describes and lists every non-comment line that resolves, closes, registers or answers a diff, names the diff table (`active_diffs`, `_get_active_diffs`), or assigns a `.status`, with its enclosing top-level statement. The STALE output prints one `was:`/`now:` line per changed file, block or call site.
 
 Covered blocks:
 
@@ -47,9 +49,7 @@ Covered blocks:
 - In `tools/init.lua` and `tools/open_diff.lua`: `M.handle_invoke`, and the openDiff `handler`.
 - In `init.lua`: the `ClaudeCodeCloseAllDiffs` user command.
 
-STALE is a tripwire, not a proof of coverage. It matches names, so it cannot see diff state reached through a reference held under another name (a local alias passed around, a captured `diff_data`), through `rawset`, or through a generic key setter on such a reference. A PASS therefore says the model holds for the guards the facts read. It does not say the change is safe. For any change that touches diff state, also read the diff for new writers of a diff's status or of the table, and model them before you trust the PASS.
-
-STALE never means "probably fine". A new direct caller of `resolve_inline_as_*` or `_cleanup_all_active_diffs` shows up only as STALE, because no fact reads it, and both can strand a call or drop a saved diff. Read every `was:`/`now:` line before you go on.
+A changed file with no changed block or call site still needs a look. A wrapper with another name, an alias of the diff table, or a transport path that skips `on_disconnect` (`server/tcp.lua`) shows only as a changed file. A PASS says the model holds for the guards the facts read, on code that matches the record. It does not review a change. STALE never means "probably fine".
 
 ## Read the result
 
@@ -97,6 +97,7 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
 ## Update after an intended change
 
 1. Read every `was:`/`now:` line of the STALE output and the code behind it.
+   - If only `file` lines changed, and the change cannot reach diff state, an openDiff answer, a disconnect or a diff command (for example a terminal or selection change), say so in the PR. Then skip to step 4.
 2. If the behavior changed, change the action in `model/DiffLifecycle.tla` that cites that code. If a guard moved, change its fact regex in `check.sh`. If a new caller resolves or closes diffs, model it as an action or add a fact for its guard.
 3. Run `check.sh --mutants`. Every fact must be caught by its rule, and every rule must break at least once.
 4. Run `check.sh` and read the result.
@@ -116,4 +117,4 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
   - Neovim exit (`VimLeavePre`) and the plugin's own `M.stop` in `init.lua`, beyond the server stop it calls
   - whether a sent response reaches a live socket
   - two servers in one Neovim
-- A pass covers this model at these bounds, for the facts `check.sh` reads. It proves nothing about code the facts do not read. STALE marks changes to the covered blocks and to lines that use the names above, and nothing else.
+- A pass covers this model at these bounds, for the facts `check.sh` reads, on `lua/` exactly as recorded in `covered.lock`. Any other `lua/` tree reads STALE.
