@@ -31,6 +31,6 @@ Steps:
 
 ## Gotchas
 
-- Both selection steps fail on commit `c0deb41` (observed 2026-10-31). The text span selects `one/two/three` and the line range selects `two/t`. Each selection starts one line early. Report the failure, and do not loosen the expected region to match it.
+- A selection that starts one line early is a regression: the text span selects `one/two/three` and the line range selects `two/t`. Report it, and do not loosen the expected region to match it.
 - The selection is a live visual mode. Send `Escape` before the next step, or the next keys extend the selection.
 - With one window, `makeFrontmost: false` still swaps the visible buffer, because the main window is the current one. Focus behavior with several windows is not mapped yet.

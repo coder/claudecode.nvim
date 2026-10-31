@@ -191,13 +191,11 @@ local function handler(params)
     run_in_target_window(function()
       local start_line = params.startLine or 1
       local end_line = params.endLine or start_line
+      local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1] or ""
 
-      -- Convert to 0-based indexing for vim API
-      local start_pos = { start_line - 1, 0 }
-      local end_pos = { end_line - 1, -1 } -- -1 means end of line
-
-      vim.api.nvim_buf_set_mark(0, "<", start_pos[1], start_pos[2], {})
-      vim.api.nvim_buf_set_mark(0, ">", end_pos[1], end_pos[2], {})
+      -- nvim_buf_set_mark takes a 1-based row and a 0-based column.
+      vim.api.nvim_buf_set_mark(0, "<", start_line, 0, {})
+      vim.api.nvim_buf_set_mark(0, ">", end_line, math.max(#end_line_text - 1, 0), {})
       vim.cmd("normal! gv")
 
       message = "Opened file and selected lines " .. start_line .. " to " .. end_line
@@ -216,7 +214,7 @@ local function handler(params)
       for line_idx, line in ipairs(lines) do
         local col_idx = string.find(line, start_text, 1, true) -- plain text search
         if col_idx then
-          start_line_idx = line_idx - 1 -- Convert to 0-based
+          start_line_idx = line_idx
           start_col_idx = col_idx - 1 -- Convert to 0-based
           break
         end
@@ -225,13 +223,13 @@ local function handler(params)
       if start_line_idx then
         -- Find end text if provided
         if end_text then
-          for line_idx = start_line_idx + 1, #lines do
+          for line_idx = start_line_idx, #lines do
             local line = lines[line_idx] -- Access current line directly
             if line then
               local col_idx = string.find(line, end_text, 1, true)
               if col_idx then
                 end_line_idx = line_idx
-                end_col_idx = col_idx + string.len(end_text) - 1
+                end_col_idx = col_idx - 1 + string.len(end_text) - 1
                 if select_to_end_of_line then
                   end_col_idx = string.len(line)
                 end
@@ -256,7 +254,7 @@ local function handler(params)
         end
 
         -- Apply the selection
-        vim.api.nvim_win_set_cursor(0, { start_line_idx + 1, start_col_idx })
+        vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
         vim.api.nvim_buf_set_mark(0, "<", start_line_idx, start_col_idx, {})
         vim.api.nvim_buf_set_mark(0, ">", end_line_idx, end_col_idx, {})
         vim.cmd("normal! gv")
