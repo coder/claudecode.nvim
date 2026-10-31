@@ -1,4 +1,4 @@
-sync e75fe82dd2df6f0ff5e0f4696e5679e04688b72a
+sync 27b6ad082785d97fe58dc3418feb4226fcad831e
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      529d3963f6e8ab48
@@ -46,7 +46,7 @@ file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 file lua/claudecode/terminal/native.lua e7efabd5d02aa55d
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
-file lua/claudecode/terminal/snacks.lua 7341322309cf7c25
+file lua/claudecode/terminal/snacks.lua a344d2429a5550ca
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 file lua/claudecode/tools/close_all_diff_tabs.lua b9e18c97dcad82f6
 file lua/claudecode/tools/close_tab.lua f0cd84fc19722736
