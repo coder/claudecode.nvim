@@ -21,6 +21,8 @@ describe("claudecode.terminal.native toggle behavior", function()
       next_jobid = 10000,
       buffer_options = {},
       running_jobs = {},
+      pending_writes = {},
+      autocmds = {},
     }
 
     -- Mock vim API with stateful behavior
@@ -88,6 +90,9 @@ describe("claudecode.terminal.native toggle behavior", function()
           if mock_state.running_jobs[buf.jobid] and not (opts and opts.force) then
             error("Failed to unload buffer.")
           end
+          if mock_state.pending_writes[buf.jobid] then
+            error("Neovim hangs: terminal buffer deleted with a pending write (neovim/neovim#42508)")
+          end
           for winid, win in pairs(mock_state.windows) do
             if win.bufnr == bufnr then
               mock_state.windows[winid] = nil
@@ -97,6 +102,9 @@ describe("claudecode.terminal.native toggle behavior", function()
             mock_state.running_jobs[buf.jobid] = nil
           end
           mock_state.buffers[bufnr] = nil
+        end,
+        nvim_create_autocmd = function(event, opts)
+          table.insert(mock_state.autocmds, { event = event, buffer = opts.buffer, callback = opts.callback })
         end,
         nvim_get_current_win = function()
           return mock_state.current_win
@@ -172,6 +180,28 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
 
           return jobid
+        end,
+        chansend = function(id, data)
+          mock_state.pending_writes[id] = true
+          return #data
+        end,
+        -- The job exits at once. Its pending writes end before TermClose fires.
+        jobstop = function(id)
+          if not mock_state.running_jobs[id] then
+            return 0
+          end
+          mock_state.running_jobs[id] = nil
+          mock_state.pending_writes[id] = nil
+          for bufnr, buf in pairs(mock_state.buffers) do
+            if buf.jobid == id then
+              for _, autocmd in ipairs(mock_state.autocmds) do
+                if autocmd.event == "TermClose" and autocmd.buffer == bufnr then
+                  autocmd.callback()
+                end
+              end
+            end
+          end
+          return 1
         end,
       },
       schedule = function(callback)
@@ -508,6 +538,40 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.is_nil(mock_state.running_jobs[terminal_jobid])
       assert.is_nil(mock_state.buffers[terminal_bufnr])
       assert.are.equal(0, windows_showing(terminal_bufnr))
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+
+    it("should not delete the buffer while text sent to the process is still pending", function()
+      local mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config)
+      local terminal_bufnr = native_provider.get_active_bufnr()
+      local terminal_jobid = mock_state.buffers[terminal_bufnr].jobid
+
+      mock_vim.fn.chansend(terminal_jobid, "hello")
+      native_provider.close()
+      assert.is_nil(mock_state.running_jobs[terminal_jobid])
+      assert.is_nil(mock_state.buffers[terminal_bufnr])
+      assert.are.equal(0, windows_showing(terminal_bufnr))
+    end)
+
+    it("should close only the window of an adopted terminal and leave its process running", function()
+      local mock_state = _G.get_mock_state()
+      local shell_bufnr, shell_winid, shell_jobid = 50, 500, 5000
+      mock_state.buffers[shell_bufnr] = {
+        name = "term://~/src/claudecode.nvim//4242:/bin/zsh",
+        options = { buftype = "terminal" },
+        jobid = shell_jobid,
+      }
+      mock_state.windows[shell_winid] = { bufnr = shell_bufnr }
+      mock_state.running_jobs[shell_jobid] = true
+
+      native_provider.open("claude", {}, config)
+      assert.are.equal(shell_bufnr, native_provider.get_active_bufnr())
+
+      native_provider.close()
+      assert.is_true(mock_state.running_jobs[shell_jobid])
+      assert.is_not_nil(mock_state.buffers[shell_bufnr])
+      assert.are.equal(0, windows_showing(shell_bufnr))
       assert.is_nil(native_provider.get_active_bufnr())
     end)
   end)
