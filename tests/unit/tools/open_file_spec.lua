@@ -8,6 +8,9 @@ describe("Tool: open_file", function()
   local original_buf_is_loaded
   local edit_buffers
   local cursor
+  local editor_mode
+  local gv_mode
+  local original_get_mode
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -31,8 +34,20 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = spy.new(function(path)
       return path -- Simple pass-through
     end)
+    -- Like Neovim, gv enters Visual mode (Select mode when 'selectmode' has "cmd"), and :edit or <Esc> ends it.
+    editor_mode = "n"
+    gv_mode = "v"
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
+      if command == "normal! gv" then
+        editor_mode = gv_mode
+      elseif command == "normal! \27" or command:match("^p?edit ") then
+        editor_mode = "n"
+      end
+    end)
+    original_get_mode = _G.vim.api.nvim_get_mode
+    _G.vim.api.nvim_get_mode = spy.new(function()
+      return { mode = editor_mode, blocking = false }
     end)
 
     -- Mock vim.json.encode
@@ -153,6 +168,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.bufexists = nil
     _G.vim.fn.bufadd = nil
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
+    _G.vim.api.nvim_get_mode = original_get_mode
     _G.vim.o.selection = nil
   end)
 
@@ -498,6 +514,16 @@ describe("Tool: open_file", function()
       assert.are.same({ 5, 10 }, marks[">"])
       open({ startText = "three" })
       assert.are.same({ 3, 5 }, marks[">"])
+    end)
+
+    it("only places the cursor when one call selects lines and then misses endText", function()
+      for _, mode in ipairs({ "v", "s" }) do
+        gv_mode = mode
+        local text = open({ startLine = 3, endLine = 4, startText = "two", endText = "zzz" })
+        assert_contains(text, 'Opened file and positioned at "two"')
+        expect(editor_mode).to_be("n")
+        assert.are.same({ 2, 0 }, cursor)
+      end
     end)
 
     it("selects only the startText match when there is no endText", function()
