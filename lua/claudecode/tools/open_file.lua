@@ -107,15 +107,22 @@ local function find_main_editor_window()
   return nil
 end
 
----Returns the `'>` mark column that makes `normal! gv` end the selection on byte `last_col`.
----With 'selection' set to "exclusive", gv leaves out the character under `'>`.
----@param last_col integer 0-based column of the last character to select
----@return integer col 0-based column for the `'>` mark
-local function visual_end_col(last_col)
+---Selects from `start_col` on `start_row` through `last_col` on `end_row` in charwise visual mode, both ends included.
+---With 'selection' set to "exclusive", gv leaves out the character under `'>`, so `'>` goes one byte past
+---`last_col`. The marks use setpos() because nvim_buf_set_mark on Neovim 0.8 also sets the mark's coladd,
+---and gv then selects one more character.
+---@param start_row integer 1-based row of the first character
+---@param start_col integer 0-based byte column of the first character
+---@param end_row integer 1-based row of the last character
+---@param last_col integer 0-based byte column of the last byte to select
+local function select_range(start_row, start_col, end_row, last_col)
+  local end_col = last_col
   if vim.o.selection == "exclusive" then
-    return last_col + 1
+    end_col = last_col + 1
   end
-  return last_col
+  vim.fn.setpos("'<", { 0, start_row, start_col + 1, 0 })
+  vim.fn.setpos("'>", { 0, end_row, end_col + 1, 0 })
+  vim.cmd("normal! gv")
 end
 
 --- Handles the openFile tool invocation.
@@ -154,6 +161,18 @@ local function handler(params)
   if vim.fn.filereadable(file_path) == 0 then
     -- Using a generic error code for tool-specific operational errors
     error({ code = -32000, message = "File operation error", data = "File not found: " .. file_path })
+  end
+
+  if start_line then
+    -- readfile() returns no lines for an empty file, which opens as one empty line.
+    local file_line_count = math.max(#vim.fn.readfile(file_path, "", start_line), 1)
+    if start_line > file_line_count then
+      error({
+        code = -32602,
+        message = "Invalid params",
+        data = "startLine " .. start_line .. " is past the end of the file (" .. file_line_count .. " lines)",
+      })
+    end
   end
 
   -- Set default values for optional parameters
@@ -221,12 +240,11 @@ local function handler(params)
   -- Handle text selection by line numbers
   if start_line then
     run_in_target_window(function()
-      local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1] or ""
-
-      -- nvim_buf_set_mark takes a 1-based row and a 0-based column.
-      vim.api.nvim_buf_set_mark(0, "<", start_line, 0, {})
-      vim.api.nvim_buf_set_mark(0, ">", end_line, visual_end_col(math.max(#end_line_text - 1, 0)), {})
-      vim.cmd("normal! gv")
+      -- endLine can run past the last line, and a buffer with unsaved changes can be shorter than the file.
+      end_line = math.min(end_line, vim.api.nvim_buf_line_count(0))
+      start_line = math.min(start_line, end_line)
+      local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1]
+      select_range(start_line, 0, end_line, math.max(#end_line_text - 1, 0))
 
       message = "Opened file and selected lines " .. start_line .. " to " .. end_line
     end)
@@ -286,9 +304,7 @@ local function handler(params)
 
         -- Apply the selection
         vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
-        vim.api.nvim_buf_set_mark(0, "<", start_line_idx, start_col_idx, {})
-        vim.api.nvim_buf_set_mark(0, ">", end_line_idx, visual_end_col(end_col_idx), {})
-        vim.cmd("normal! gv")
+        select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
         vim.cmd("normal! zz") -- Center the selection in the window
       else
         message = 'Opened file, but text "' .. start_text .. '" not found'
