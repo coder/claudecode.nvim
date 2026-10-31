@@ -22,7 +22,7 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 ```bash
 .agents/skills/verify-diff-lifecycle/check.sh            # about 10 s
 .agents/skills/verify-diff-lifecycle/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
-.agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 4 min, after you edit the model or a fact
+.agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 5 min, after you edit the model or a fact
 .agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change"
 ```
 
@@ -37,12 +37,12 @@ Exit codes:
 
 ## Does the change touch the verified code?
 
-Run the check. It hashes every block the model describes and lists every non-comment line under `lua/` that resolves, closes, registers, or answers a diff. `covered.lock` records both, with the sync commit on its first line. When either differs, the run prints `STALE` with one `was:`/`now:` line per changed block or call site, and exits 3 even if every rule holds.
+Run the check. It hashes every block the model describes and lists every non-comment line under `lua/` that resolves, closes, registers, or answers a diff, or assigns a `.status`, together with its enclosing top-level statement, so moving a call into another function or autocmd counts as a change. `covered.lock` records both, with the sync commit on its first line. When either differs, the run prints `STALE` with one `was:`/`now:` line per changed block or call site, and exits 3 even if every rule holds.
 
 Covered blocks:
 
-- In `diff.lua`: `_resolve_diff_as_saved`, `_resolve_diff_as_rejected`, `open_diff_blocking`, `_setup_blocking_diff`, `close_diff_by_tab_name`, `close_pending_diffs`, `close_diffs_for_client`, `close_active_diffs`, `_cleanup_all_active_diffs`.
-- In `diff_inline.lua`: `resolve_inline_as_saved`, `resolve_inline_as_rejected`.
+- In `diff.lua`: `_resolve_diff_as_saved`, `_resolve_diff_as_rejected`, `open_diff_blocking`, `_setup_blocking_diff`, `close_diff_by_tab_name`, `close_pending_diffs`, `close_diffs_for_client`, `close_active_diffs`, `_cleanup_all_active_diffs`, `accept_current_diff`, `deny_current_diff`.
+- In `diff_inline.lua`: `setup_inline_diff`, `resolve_inline_as_saved`, `resolve_inline_as_rejected`.
 - In `server/init.lua`: `M.stop`, `on_disconnect`, `M._handle_request`.
 - In `tools/init.lua` and `tools/open_diff.lua`: `M.handle_invoke`, and the openDiff `handler`.
 - In `init.lua`: the `ClaudeCodeCloseAllDiffs` user command.
@@ -53,19 +53,19 @@ STALE never means "probably fine". A new direct caller of `resolve_inline_as_*` 
 
 `check.sh` prints the code facts first. Each fact is a guard that a regex reads from the source. `TRUE` means the regex found the guard. `FALSE` means the model runs without that guard. A `FALSE` you did not expect is either a removed guard (a bug) or a guard reworded past the regex (a modeling error). See below for how to tell them apart.
 
-| Fact                                       | Code it reads                                                                                                                                            |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GuardSaved`, `GuardRejected`              | `if not diff_data or diff_data.status ~= "pending" then return` in each `_resolve_diff_as_*`                                                             |
-| `SenderCleared`                            | both `_G.claude_deferred_responses[co_key] = nil` lines in the resolution callback                                                                       |
-| `ReplaceRejects`                           | in `open_diff_blocking`, before `coroutine.running()`: a pending diff with the same `tab_name` is rejected, then cleaned up                              |
-| `CloseTabRejectsPending`                   | `close_diff_by_tab_name` rejects a pending diff before cleanup                                                                                           |
-| `CloseEachByName`                          | `close_active_diffs` closes each match through `close_diff_by_tab_name`                                                                                  |
-| `StopRejectsPending`                       | `M.stop` calls `close_pending_diffs`, then `stop_server`, then clears the senders                                                                        |
-| `StopPendingOnly`, `DisconnectPendingOnly` | the `status == "pending"` filters in `close_pending_diffs` and `close_diffs_for_client`                                                                  |
-| `DisconnectRejects`                        | `on_disconnect` schedules `close_diffs_for_client`                                                                                                       |
-| `UserCloseAllPendingOnly`                  | `:ClaudeCodeCloseAllDiffs` calls `close_pending_diffs`, never `close_all_diffs`                                                                          |
-| `ClientTagged`                             | `handle_invoke` passes `client` to the tool, and the openDiff handler passes `client.id` on                                                              |
-| `OpenedEventInSetup`                       | `ClaudeCodeDiffOpened` fires inside setup, the callback resumes the coroutine without a status check, and the sender is stored after the handler returns |
+| Fact                                       | Code it reads                                                                                                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GuardSaved`, `GuardRejected`              | `if not diff_data or diff_data.status ~= "pending" then return` in each `_resolve_diff_as_*`                                                                  |
+| `SenderCleared`                            | both `_G.claude_deferred_responses[co_key] = nil` lines in the resolution callback                                                                            |
+| `ReplaceRejects`                           | in `open_diff_blocking`, before `coroutine.running()`: a pending diff with the same `tab_name` is rejected, then cleaned up                                   |
+| `CloseTabRejectsPending`                   | `close_diff_by_tab_name` rejects a pending diff before cleanup                                                                                                |
+| `CloseEachByName`                          | `close_active_diffs` closes each match through `close_diff_by_tab_name`                                                                                       |
+| `StopRejectsPending`                       | `M.stop` calls `close_pending_diffs`, then `stop_server`, then clears the senders                                                                             |
+| `StopPendingOnly`, `DisconnectPendingOnly` | the `status == "pending"` filters in `close_pending_diffs` and `close_diffs_for_client`                                                                       |
+| `DisconnectRejects`                        | `on_disconnect` schedules `close_diffs_for_client`                                                                                                            |
+| `UserCloseAllPendingOnly`                  | `:ClaudeCodeCloseAllDiffs` calls `close_pending_diffs`, never `close_all_diffs`                                                                               |
+| `ClientTagged`                             | `handle_invoke` passes `client` to the tool, the openDiff handler passes `client.id` on, and both layouts store it as `client_id` when they register the diff |
+| `OpenedEventInSetup`                       | `ClaudeCodeDiffOpened` fires inside setup, the callback resumes the coroutine without a status check, and the sender is stored after the handler returns      |
 
 On `BROKEN`, the script prints the TLC trace as action names. Read it with the pstack `/statechart` skill:
 
@@ -104,6 +104,7 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
 
 - The invariants run with 3 openDiff calls, 2 tab names and 2 clients, about 65,000 states. `DisconnectedCallsAnswered` runs with 2 calls, 2 tabs and 2 clients. It assumes weak fairness only on setup and on the scheduled disconnect cleanup. The user is never assumed to act.
 - `SenderCleared` alone is caught by no rule, because the pending guards also stop a second answer. `--mutants` shows that `AtMostOneAnswer` breaks when both `SenderCleared` and `GuardRejected` are removed.
+- `SavedDiffKept` counts a close by any connected Claude client as Claude's. The model does not track which client owns a diff. So it does not check the case where a second client's `closeAllDiffTabs` or `close_tab` tears down a saved diff whose own client died before writing the file.
 - The split and unified layouts share the pending guards only because `resolve_inline_as_*` is reached through `_resolve_diff_as_*`. The inline functions have no guard of their own.
 - These are not modeled:
   - window and tab layout

@@ -94,6 +94,9 @@ inline_saved=$(block "$INLINE" '^function M\.resolve_inline_as_saved\(')
 inline_rejected=$(block "$INLINE" '^function M\.resolve_inline_as_rejected\(')
 handle_invoke=$(block "$TOOLS" '^function M\.handle_invoke\(')
 open_diff_tool=$(block "$OPEN_DIFF_TOOL" '^local function handler\(params, client\)')
+setup_inline=$(block "$INLINE" '^function M\.setup_inline_diff\(')
+accept_current=$(block "$DIFF" '^function M\.accept_current_diff\(')
+deny_current=$(block "$DIFF" '^function M\.deny_current_diff\(')
 
 FACTS=(GuardSaved GuardRejected SenderCleared ReplaceRejects CloseTabRejectsPending CloseEachByName StopRejectsPending
   StopPendingOnly DisconnectRejects DisconnectPendingOnly UserCloseAllPendingOnly ClientTagged OpenedEventInSetup)
@@ -126,7 +129,9 @@ user_close_all_pending_only() {
 fact[UserCloseAllPendingOnly]=$(as_bool user_close_all_pending_only)
 client_tagged() {
   grep -q 'return tool_data\.handler(input, client)' <<<"$handle_invoke" &&
-    grep -q 'client and client\.id or nil' <<<"$open_diff_tool"
+    grep -q 'client and client\.id or nil' <<<"$open_diff_tool" &&
+    grep -qE '^ *client_id = params\.client_id,$' <<<"$setup_blocking" &&
+    grep -qE '^ *client_id = params\.client_id,$' <<<"$setup_inline"
 }
 fact[ClientTagged]=$(as_bool client_tagged)
 # The ClaudeCodeDiffOpened event runs user handlers synchronously inside setup,
@@ -145,21 +150,27 @@ echo "== code facts (TRUE = guard present)"
 for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
 
 # The coverage record: a hash of every block the model describes, plus every line
-# under lua/ that resolves, closes, registers, or answers a diff. A changed block or
+# under lua/ that resolves, closes, registers, or answers a diff, or writes a status. A changed block or
 # a new caller makes the run STALE until someone confirms the model still fits.
+SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs\[[^]]*\] *=[^=]|\.status *= *[^=])'
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
-    handle_request handle_invoke open_diff_tool user_close_all; do
+    handle_request handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
       echo "ERROR: covered block $name not found; update its start regex in check.sh" >&2
       exit 2
     }
     printf 'block %-18s %s\n' "$name" "$(printf '%s\n' "${!name}" | sha256 | cut -c1-16)"
   done
-  grep -rHE '(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs\[[^]]*\] *=[^=])' lua/ |
-    sed -E 's/^([^:]*):[[:space:]]*/site \1: /' | grep -v '^site [^:]*: --' | sort
+  # Each site also names its enclosing top-level statement, so moving a call into another
+  # function or autocmd changes the record.
+  find lua -name '*.lua' -print0 | sort -z | xargs -0 awk -v re="$SITE_RE" '
+    FNR == 1 { top = "" }
+    /^[^[:space:]-]/ && !/^(end|else|elseif|return|[})])/ { top = $0 }
+    $0 ~ re && $0 !~ /^[[:space:]]*--/ { line = $0; sub(/^[[:space:]]+/, "", line); print "site " FILENAME ": " line " @ " top }
+  ' | sort
 }
 current=$(coverage)
 if [[ $record == 1 ]]; then
@@ -276,13 +287,13 @@ if [[ $mutants == 1 ]]; then
       printf '  %-30s caught by: %s\n' "$f=FALSE" "${hits[*]}"
     else
       printf '  %-30s NOT CAUGHT as expected (%s); broke: %s\n' "$f=FALSE" "$want" "${hits[*]:-nothing}"
-      status=1
+      [[ $status == 2 ]] || status=1
     fi
   done
   for rule in "${RULES_INV[@]}" DisconnectedCallsAnswered; do
     if [[ -z ${rule_hit[$rule]:-} ]]; then
       echo "  rule $rule never broke: it is vacuous"
-      status=1
+      [[ $status == 2 ]] || status=1
     fi
   done
   echo "  SenderCleared=FALSE alone is caught by nothing: the pending guards also stop a second answer."
