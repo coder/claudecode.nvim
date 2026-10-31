@@ -80,13 +80,14 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   vim.api.nvim_win_call(new_winid, function()
     vim.cmd("enew")
   end)
+  local new_bufnr = vim.api.nvim_win_get_buf(new_winid)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
   -- "opus[1m]" (see utils.parse_command).
   local term_cmd_arg = utils.parse_command(cmd_string)
 
-  jobid = vim.fn.termopen(term_cmd_arg, {
+  local started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, {
     env = env_table,
     cwd = effective_config.cwd,
     on_exit = function(job_id, _, _)
@@ -120,11 +121,21 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
       end)
     end,
   })
+  jobid = started and termopen_result or nil
 
-  if not jobid or jobid == 0 then
-    vim.notify("Failed to open native terminal.", vim.log.levels.ERROR)
+  -- termopen raises for a command that is not executable, and returns 0 or -1 instead when errors are silenced.
+  if not jobid or jobid <= 0 then
+    local reason = started and "" or (" " .. tostring(termopen_result))
+    vim.notify("Failed to open native terminal." .. reason, vim.log.levels.ERROR)
     vim.api.nvim_win_close(new_winid, true)
     vim.api.nvim_set_current_win(original_win)
+    -- An autocmd can put a user buffer into the split, so only an empty scratch buffer is deleted.
+    local is_scratch = vim.api.nvim_buf_is_valid(new_bufnr)
+      and vim.api.nvim_buf_get_name(new_bufnr) == ""
+      and not vim.bo[new_bufnr].modified
+    if is_scratch then
+      vim.api.nvim_buf_delete(new_bufnr, { force = true })
+    end
     cleanup_state()
     return false
   end

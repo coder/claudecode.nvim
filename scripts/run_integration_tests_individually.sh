@@ -94,7 +94,7 @@ if [[ ${#FAILED_FILES[@]} -gt 0 ]]; then
 fi
 
 # Exit with appropriate code
-if [[ $TOTAL_FAILED -eq 0 ]] && [[ $TOTAL_ERRORS -eq 0 ]]; then
+if [[ ${#FAILED_FILES[@]} -eq 0 ]]; then
   echo ""
   echo "✅ All integration tests passed!"
   exit 0
