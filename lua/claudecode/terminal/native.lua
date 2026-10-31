@@ -192,10 +192,13 @@ local function close_terminal()
     end,
   })
   vim.fn.jobstop(closing_jobid)
+  -- A user's TermClose autocmd can delete the buffer first, and that also removes this buffer-local autocmd.
   vim.wait(1000, function()
-    return exited
+    return exited or not vim.api.nvim_buf_is_valid(closing_bufnr)
   end, 10)
-  vim.api.nvim_buf_delete(closing_bufnr, { force = true })
+  if vim.api.nvim_buf_is_valid(closing_bufnr) then
+    vim.api.nvim_buf_delete(closing_bufnr, { force = true })
+  end
 end
 
 local function focus_terminal()
