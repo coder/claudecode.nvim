@@ -86,7 +86,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   -- "opus[1m]" (see utils.parse_command).
   local term_cmd_arg = utils.parse_command(cmd_string)
 
-  jobid = vim.fn.termopen(term_cmd_arg, {
+  local started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, {
     env = env_table,
     cwd = effective_config.cwd,
     on_exit = function(job_id, _, _)
@@ -120,8 +120,13 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
       end)
     end,
   })
+  jobid = started and termopen_result or nil
 
-  if not jobid or jobid == 0 then
+  -- termopen raises for a command that is not executable, and returns 0 or -1 instead when errors are silenced.
+  if not jobid or jobid <= 0 then
+    if not started then
+      logger.error("terminal", "termopen failed: " .. tostring(termopen_result))
+    end
     vim.notify("Failed to open native terminal.", vim.log.levels.ERROR)
     vim.api.nvim_win_close(new_winid, true)
     vim.api.nvim_set_current_win(original_win)

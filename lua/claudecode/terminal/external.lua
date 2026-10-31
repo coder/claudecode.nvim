@@ -121,7 +121,7 @@ function M.open(cmd_string, env_table)
   -- Set cwd for jobstart when available to improve robustness even if the terminal ignores it
   cwd_for_jobstart = cwd_for_jobstart or (vim.fn.getcwd and vim.fn.getcwd() or nil)
 
-  jobid = vim.fn.jobstart(cmd_parts, {
+  local started, jobstart_result = pcall(vim.fn.jobstart, cmd_parts, {
     detach = true,
     env = env_table,
     cwd = cwd_for_jobstart,
@@ -133,8 +133,12 @@ function M.open(cmd_string, env_table)
       end)
     end,
   })
+  jobid = started and jobstart_result or nil
 
   if not jobid or jobid <= 0 then
+    if not started then
+      logger.error("terminal", "jobstart failed: " .. tostring(jobstart_result))
+    end
     vim.notify("Failed to start external terminal with command: " .. full_command, vim.log.levels.ERROR)
     cleanup_state()
     return

@@ -222,6 +222,47 @@ describe("claudecode.terminal.native toggle behavior", function()
     end)
   end)
 
+  describe("termopen failure", function()
+    local failures = {
+      ["returns 0"] = function()
+        return 0
+      end,
+      ["returns -1"] = function()
+        return -1
+      end,
+      ["raises E475 for a command that is not executable"] = function()
+        error("Vim:E475: Invalid value for argument cmd: 'claude' is not executable")
+      end,
+    }
+    for failure_name, failing_termopen in pairs(failures) do
+      it("closes the new split and restores the original window when termopen " .. failure_name, function()
+        local mock_state = _G.get_mock_state()
+        mock_state.windows[1] = { bufnr = 0 }
+        mock_state.current_win = 1
+        local notified = {}
+        mock_vim.notify = function(msg, level)
+          table.insert(notified, { msg = msg, level = level })
+        end
+        mock_vim.log = { levels = { ERROR = 4 } }
+        mock_vim.fn.termopen = failing_termopen
+
+        native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+        assert.is_nil(native_provider.get_active_bufnr())
+        assert.are.equal(1, mock_state.current_win)
+        local open_windows = {}
+        for winid in pairs(mock_state.windows) do
+          table.insert(open_windows, winid)
+        end
+        assert.are.same({ 1 }, open_windows)
+        assert.are.same({
+          { msg = "Failed to open native terminal.", level = 4 },
+          { msg = "Failed to open Claude terminal using native fallback.", level = 4 },
+        }, notified)
+      end)
+    end
+  end)
+
   describe("toggle with existing hidden terminal", function()
     it("should show hidden terminal instead of creating new one", function()
       local cmd_string = "claude"
