@@ -61,17 +61,22 @@ A changed file with no changed block or call site still needs a look. A wrapper 
 | `GuardSaved`, `GuardRejected`              | `if not diff_data or diff_data.status ~= "pending" then return` in each `_resolve_diff_as_*`                                                                                                                   |
 | `SenderCleared`                            | the resolution callback sets `_G.claude_deferred_responses[co_key] = nil` after it calls that sender                                                                                                           |
 | `ReplaceRejects`                           | in `open_diff_blocking`, before `coroutine.running()`: a pending diff with the same `tab_name` is rejected, then cleaned up                                                                                    |
-| `ReplaceKeepsOthersSaved`                  | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                                                          |
 | `CloseTabRejectsPending`                   | `close_diff_by_tab_name` rejects a pending diff before cleanup                                                                                                                                                 |
-| `CloseKeepsOthersSaved`                    | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on                                      |
 | `CloseEachByName`                          | `close_active_diffs` closes each match through `close_diff_by_tab_name`                                                                                                                                        |
-| `CloseRechecksFilter`                      | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                                                           |
 | `StopRejectsPending`                       | `M.stop` calls `close_pending_diffs`, then `stop_server`, then clears the senders                                                                                                                              |
 | `StopPendingOnly`, `DisconnectPendingOnly` | the `status == "pending"` filters in `close_pending_diffs` and `close_diffs_for_client`                                                                                                                        |
 | `DisconnectRejects`                        | `on_disconnect` schedules `close_diffs_for_client`                                                                                                                                                             |
 | `UserCloseAllPendingOnly`                  | `:ClaudeCodeCloseAllDiffs` calls `close_pending_diffs`, never `close_all_diffs`                                                                                                                                |
 | `ClientTagged`                             | `handle_invoke` passes `client` to the tool, the openDiff handler passes `client.id` on, and both layouts store it as `client_id` when they register the diff                                                  |
 | `OpenedEventInSetup`                       | `fire_diff_event` runs `nvim_exec_autocmds` directly, `ClaudeCodeDiffOpened` fires inside setup, the callback resumes the coroutine without a status check, and the sender is stored after the handler returns |
+
+The bulk closes and the Claude close tools add three facts:
+
+| Fact                      | Code it reads                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CloseRechecksFilter`     | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                      |
+| `CloseKeepsOthersSaved`   | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on |
+| `ReplaceKeepsOthersSaved` | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                     |
 
 On `BROKEN`, the script prints the TLC trace as action names. Read it with the pstack `/statechart` skill:
 
