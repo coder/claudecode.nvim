@@ -697,8 +697,8 @@ function M.send_to_terminal(text, opts)
     return false
   end
 
-  -- termopen() sets both b:terminal_job_id and the 'channel' option to the job id.
-  -- 'channel' is the fallback because b:terminal_job_id is deprecated.
+  -- termopen() sets both b:terminal_job_id and the 'channel' option to the job id. The 'channel'
+  -- fallback covers a Neovim that stops setting b:terminal_job_id, which is deprecated.
   local chan = vim.b[bufnr] and vim.b[bufnr].terminal_job_id
   if not chan or chan == 0 then
     chan = vim.bo[bufnr].channel
