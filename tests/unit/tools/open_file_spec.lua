@@ -343,6 +343,22 @@ describe("Tool: open_file", function()
       expect(_G.vim.cmd_history[#_G.vim.cmd_history]).to_be("normal! gv")
     end)
 
+    it("rejects a line below 1, a fractional line, or endLine below startLine before opening the file", function()
+      for _, lines in ipairs({
+        { startLine = 0 },
+        { startLine = 2, endLine = 0 },
+        { startLine = 1.5 },
+        { startLine = 4, endLine = 3 },
+      }) do
+        _G.vim.cmd_history = {}
+        lines.filePath = "test.txt"
+        local success, err = pcall(open_file_handler, lines)
+        expect(success).to_be_false()
+        expect(err.code).to_be(-32602)
+        expect(#_G.vim.cmd_history).to_be(0)
+      end
+    end)
+
     it("selects the whole first line for startLine = 1", function()
       expect(open({ startLine = 1 })).to_be("Opened file and selected lines 1 to 1")
       assert.are.same({ 1, 0 }, marks["<"])
