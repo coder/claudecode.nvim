@@ -47,7 +47,7 @@ CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scr
 
 ### Issue reproductions
 
-The Lua repros run from the repository root with `nvim --headless -u NONE -l scripts/<file>`. They prepend the repo root to `runtimepath` [repro_issue_208.lua:rtp:prepend]. `repro_issue_70_probe.lua` is the exception: it prepends `<repo_root>/lua` to `package.path` instead [repro_issue_70_probe.lua:package.path].
+The Lua repros run from the repository root with `nvim --headless -u NONE -l scripts/<file>`, which needs Neovim 0.9 or later. They prepend the repo root to `runtimepath` [repro_issue_208.lua:rtp:prepend]. `repro_issue_70_probe.lua` is the exception: it prepends `<repo_root>/lua` to `package.path` instead [repro_issue_70_probe.lua:package.path]. `repro_issue_238.lua` runs with the `:luafile` command in its entry below, which also works on Neovim 0.8.
 
 - `repro_issue_70.sh` (#70) checks whether the `claude` CLI connects back to the plugin when an HTTP proxy has no localhost exclusion. It prints `PASS issue #70 reproduced` (exit 0) or `INCONCLUSIVE` (exit 1). It drives `repro_issue_70_probe.lua` [repro_issue_70.sh:run_scenario].
 - `repro_issue_70_probe.lua <repo_root> <status_file> <stop_file> <wait_ms>` is a helper, not a standalone repro. It starts the real server with `terminal.provider = "none"` and writes `phase`/`connected` JSON to the status file. Exit 0 means a connection was seen, 2 means none, and 1 means no port [repro_issue_70_probe.lua:write_status].
