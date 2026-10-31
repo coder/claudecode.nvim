@@ -28,6 +28,7 @@ describe("Tool: open_file", function()
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
     end)
+    _G.vim.v = { maxcol = 2147483647 }
 
     -- Mock vim.json.encode
     _G.vim.json = _G.vim.json or {}
@@ -93,6 +94,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = nil
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
+    _G.vim.v = nil
   end)
 
   it("should error if filePath parameter is missing", function()
@@ -337,6 +339,73 @@ describe("Tool: open_file", function()
     expect(result.content[1].type).to_be("text")
     -- Since the mock buffer contains "function" and "end", selection should work
     expect(result.content[1].text).to_be('Opened file and selected text from "function" to "end"')
+  end)
+
+  describe("selection on one/two/three/four (issue #326)", function()
+    local buffer_lines = { "one", "two", "three", "four" }
+    local marks
+
+    -- Follows nvim_buf_set_mark: rows are 1-based, columns 0-based, and a row past the last line errors.
+    before_each(function()
+      marks = {}
+      _G.vim.api.nvim_buf_get_lines = spy.new(function()
+        return buffer_lines
+      end)
+      _G.vim.api.nvim_buf_line_count = spy.new(function()
+        return #buffer_lines
+      end)
+      _G.vim.api.nvim_buf_set_mark = spy.new(function(_, name, line, col)
+        if line < 0 or line > #buffer_lines then
+          error("Invalid 'line': out of range")
+        end
+        marks[name] = { line = line, col = col }
+        return true
+      end)
+    end)
+
+    -- The text `normal! gv` selects between '< and '>, charwise and inclusive, with columns clamped to the line.
+    local function selected_text()
+      assert_contains(table.concat(_G.vim.cmd_history, "\n"), "normal! gv")
+      local first, last = marks["<"], marks[">"]
+      local selected = {}
+      for row = first.line, last.line do
+        local text = buffer_lines[row]
+        local from = row == first.line and first.col + 1 or 1
+        local to = row == last.line and math.min(math.max(last.col, 0) + 1, #text) or #text
+        table.insert(selected, text:sub(from, to))
+      end
+      return table.concat(selected, "/")
+    end
+
+    it("selects lines startLine through endLine, ending on the last line", function()
+      local success, result = pcall(open_file_handler, { filePath = "other.txt", startLine = 3, endLine = 4 })
+
+      expect(success).to_be_true()
+      expect(result.content[1].text).to_be("Opened file and selected lines 3 to 4")
+      expect(selected_text()).to_be("three/four")
+    end)
+
+    it("selects from the startText match through the endText match", function()
+      local success, result = pcall(open_file_handler, { filePath = "other.txt", startText = "two", endText = "three" })
+
+      expect(success).to_be_true()
+      expect(result.content[1].text).to_be('Opened file and selected text from "two" to "three"')
+      expect(selected_text()).to_be("two/three")
+    end)
+
+    it("ends the selection on the last character of the endText match", function()
+      local success = pcall(open_file_handler, { filePath = "other.txt", startText = "tw", endText = "thr" })
+
+      expect(success).to_be_true()
+      expect(selected_text()).to_be("two/thr")
+    end)
+
+    it("selects only the startText match when no endText is given", function()
+      local success = pcall(open_file_handler, { filePath = "other.txt", startText = "hre" })
+
+      expect(success).to_be_true()
+      expect(selected_text()).to_be("hre")
+    end)
   end)
 
   it("should handle text pattern selection when pattern not found", function()
