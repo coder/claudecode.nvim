@@ -13,6 +13,7 @@ block inline_rejected    3a098216eef4b774
 block server_stop        4dae0bf675cf2cc1
 block on_disconnect      9110ffdfd72d4ea6
 block handle_request     b74ff7dc2e55a2b8
+block setup_deferred     f9381caaae0fe517
 block handle_invoke      4333fbdb0507c7db
 block open_diff_tool     f4bee70e46ded9af
 block setup_inline       404a7166f827b172

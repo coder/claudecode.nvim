@@ -40,8 +40,11 @@ else
 fi
 
 if [[ ! -f $TLC_JAR ]]; then
-  mkdir -p "$(dirname "$TLC_JAR")"
-  curl -fsSL -o "$TLC_JAR.tmp" "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar"
+  mkdir -p "$(dirname "$TLC_JAR")" || exit 2
+  curl -fsSL -o "$TLC_JAR.tmp" "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar" || {
+    echo "ERROR: could not download TLC $TLC_VERSION to $TLC_JAR" >&2
+    exit 2
+  }
   mv "$TLC_JAR.tmp" "$TLC_JAR"
 fi
 sha256() {
@@ -87,6 +90,7 @@ close_for_client=$(block "$DIFF" '^function M\.close_diffs_for_client\(')
 server_stop=$(block "$SERVER" '^function M\.stop\(\)')
 on_disconnect=$(block "$SERVER" '^ *on_disconnect = function\(')
 handle_request=$(block "$SERVER" '^function M\._handle_request\(')
+setup_deferred=$(block "$SERVER" '^function M\._setup_deferred_response\(')
 user_close_all=$(block "$MAIN" 'nvim_create_user_command\("ClaudeCodeCloseAllDiffs"')
 close_active=$(block "$DIFF" '^local function close_active_diffs\(')
 cleanup_all=$(block "$DIFF" '^function M\._cleanup_all_active_diffs\(')
@@ -157,7 +161,7 @@ coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
-    handle_request handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
+    handle_request setup_deferred handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
       echo "ERROR: covered block $name not found; update its start regex in check.sh" >&2
       exit 2
@@ -272,8 +276,14 @@ if [[ $mutants == 1 ]]; then
       case "$rc" in
       0) ;;
       12 | 13)
-        hits+=("$rule")
-        rule_hit[$rule]=1
+        # Exit 12 counts only when TLC names this rule: a TypeOK break means the model is wrong.
+        if [[ $rc == 13 || $(broken_rule "$work/$name.out") == "$rule" ]]; then
+          hits+=("$rule")
+          rule_hit[$rule]=1
+        else
+          echo "  $f / $rule: TLC broke $(broken_rule "$work/$name.out") instead"
+          status=2
+        fi
         ;;
       *)
         echo "  $f / $rule: TLC ERROR (exit $rc)"
