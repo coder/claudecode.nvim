@@ -41,7 +41,7 @@ Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json
 
 - Seed files in `$WORK` (nvim's cwd and the workspace folder): `hello.txt` is `alpha`, `beta`, `gamma`. `other.txt` is `one`, `two`, `three`, `four`.
 - The terminal is 160 columns by 40 rows.
-- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing or empty, and its path must not have a `.` or `..` part. Launch refuses it if it is a symlink, is owned by another user, or is group- or world-writable, or if a dir above it is unsafe (see Evidence). It also refuses a path that `mkdir` cannot create. A relative path is taken from the current directory and recorded as an absolute `OUT`.
+- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing or an empty directory, and its path must not have a `.` or `..` part. Launch refuses it if it is a symlink, is not a directory, is owned by another user, or is group- or world-writable, or if a dir above it is unsafe (see Evidence). It also refuses a path that `mkdir` cannot create. A relative path is taken from the current directory and recorded as an absolute `OUT`.
 - `VCN_INIT_JSONRPC=<version>` sets the `jsonrpc` field of the `initialize` request (default `2.0`). Only `scripts/proof-launch-refusals.sh` sets it, to get an error answer from the plugin.
 - `VCN_SETUP='<json>'` is deep-merged into `require("claudecode").setup()` over the base `{ terminal = { provider = "none" } }`. Example: `VCN_SETUP='{"diff_opts":{"layout":"unified"}}' $V launch`.
 
