@@ -977,8 +977,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
 - The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
 - Lock files live in `$CLAUDE_CONFIG_DIR/ide` or else `~/.claude/ide`, named `<port>.lock`
-  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients in `scripts/` read the port from that basename
-  [scripts/lib_claude.sh:find_claude_lockfile].
+  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients that use `find_claude_lockfile` read the port from that basename
+  [scripts/lib_claude.sh:find_claude_lockfile]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
 - `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
   none [plugin/claudecode.lua].
 - `openDiff` must run in a non-main coroutine. Its response is deferred until the user accepts or rejects the diff
@@ -986,7 +986,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 
 ### Global Side Effects
 
-- Lock file: `start` writes `<port>.lock` (dir `0700`, file `0600`, atomic rename) [lua/claudecode/lockfile.lua:M.create].
+- Lock file: `start` writes `<port>.lock` (file `0600`, atomic rename). A new lock directory gets `0700`, and the chmod of an existing one is best-effort [lua/claudecode/lockfile.lua:M.create].
 - Network: one loopback TCP listener plus WebSocket frames and JSON-RPC broadcasts (`selection_changed`, `at_mentioned`)
   [lua/claudecode/server/init.lua:M.start] [lua/claudecode/selection.lua:M.send_selection_update].
 - Processes: the terminal provider spawns the Claude CLI with `ENABLE_IDE_INTEGRATION`, `FORCE_CODE_TERMINAL`,

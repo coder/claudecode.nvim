@@ -128,7 +128,7 @@ Module map (direct files):
 
 - `start` binds a `127.0.0.1` TCP port and writes the lock file. It enables selection tracking only when `track_selection` is true. `stop` removes the lock file and stops the server [init.lua:M.start]
 - `lockfile.create` creates the lock directory with mode 0700. It then tries to chmod an existing directory to 0700 through `pcall` and ignores the result, so on platforms without `fs_chmod` the old mode stays. It writes a temp file opened `wx` with mode 0600, then renames it to `<port>.lock` [lockfile.lua:M.create]
-- The terminal env gets `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`, `CLAUDE_CODE_SSE_PORT=<port>`, the user `env`, and the merged `no_proxy`/`NO_PROXY` [terminal.lua:get_claude_command_and_env]
+- The terminal env gets `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`, `CLAUDE_CODE_SSE_PORT=<port>` only while the server runs, the user `env` (merged last, so it can override these), and the merged `no_proxy`/`NO_PROXY` [terminal.lua:get_claude_command_and_env]
 - `terminal.setup` can replace the global `vim.paste` through `paste_fix.apply` [terminal.lua:M.setup]
 - The plugin broadcasts `at_mentioned` (`filePath`, `lineStart`, `lineEnd`) [init.lua:M._broadcast_at_mention] and `selection_changed` [selection.lua:M.send_selection_update] to every connected client
 - Augroups: `ClaudeCodeShutdown`, which holds the `VimLeavePre` autocmd that stops on exit [init.lua:M.setup], `ClaudeCodeSelection` [selection.lua:M._create_autocommands], `ClaudeCodeMCPDiff` [diff.lua:get_autocmd_group], `ClaudeCodeDiffCleanup` [diff.lua:M._open_native_diff], and a module-level `VimLeavePre` autocmd in `diff.lua` that calls `M._cleanup_all_active_diffs("shutdown")` [diff.lua:M._cleanup_all_active_diffs]
