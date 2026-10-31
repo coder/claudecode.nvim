@@ -378,7 +378,8 @@ function M.send_response(client, id, result, error_data)
 
   local response = {
     jsonrpc = "2.0",
-    id = id,
+    -- JSON-RPC requires "id": null when the request id is unknown. A Lua nil would drop the field.
+    id = id == nil and vim.NIL or id,
   }
 
   if error_data then
