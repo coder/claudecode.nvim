@@ -275,6 +275,8 @@ cmd_launch() {
     # A trailing slash would make -L test the symlink's target.
     guard=$VERIFY_OUT
     while [[ $guard == ?*/ ]]; do guard=${guard%/}; done
+    # Absolute, so a leading "-" is not read as an option and later commands can run from any directory.
+    [[ $guard == /* ]] || guard=$PWD/$guard
     out=$guard
   else
     guard=${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim
@@ -288,7 +290,10 @@ cmd_launch() {
     rmdir "$state"
     die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
-  mkdir -p "$out"
+  if ! mkdir -p "$out"; then
+    rmdir "$state"
+    die "cannot create $out; set VERIFY_OUT to a fresh dir you own"
+  fi
   # Check again: another user could have made the dir between the first check and mkdir.
   why=$(unsafe_dir "$guard")
   if [[ -n $why ]]; then
