@@ -22,6 +22,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       buffer_options = {},
       running_jobs = {},
       pending_writes = {},
+      exiting_jobs = {},
       autocmds = {},
     }
 
@@ -185,12 +186,18 @@ describe("claudecode.terminal.native toggle behavior", function()
           mock_state.pending_writes[id] = true
           return #data
         end,
-        -- The job exits at once. Its pending writes end before TermClose fires.
         jobstop = function(id)
           if not mock_state.running_jobs[id] then
             return 0
           end
           mock_state.running_jobs[id] = nil
+          table.insert(mock_state.exiting_jobs, id)
+          return 1
+        end,
+      },
+      -- A stopped job exits only when the event loop runs. Its pending writes end first, then TermClose fires.
+      wait = function(_, condition)
+        for _, id in ipairs(mock_state.exiting_jobs) do
           mock_state.pending_writes[id] = nil
           for bufnr, buf in pairs(mock_state.buffers) do
             if buf.jobid == id then
@@ -201,9 +208,10 @@ describe("claudecode.terminal.native toggle behavior", function()
               end
             end
           end
-          return 1
-        end,
-      },
+        end
+        mock_state.exiting_jobs = {}
+        return condition()
+      end,
       schedule = function(callback)
         callback() -- Execute immediately in tests
       end,
