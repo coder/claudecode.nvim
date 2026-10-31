@@ -11,6 +11,8 @@
 #   parent-world   the default parent dir is world-writable
 #   above-world    a dir above the default parent dir is world-writable and not sticky
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
+#   out-file       VERIFY_OUT is a file
+#   parent-uncreatable  mkdir cannot create the default parent dir
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1.
@@ -72,6 +74,9 @@ mkdir -m 777 "$TMP/above"
 refused above-world "$TMP/above, above the evidence dir, is writable by others and not sticky" \
   XUM_SCRATCH_DIR="$TMP/above"
 refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
+: >"$TMP/out-file"
+refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
+refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCRATCH_DIR=/proc
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
 vcn=$(cd "$(dirname "$V")" && pwd)/vcn.sh
