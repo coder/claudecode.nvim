@@ -390,8 +390,23 @@ function M.open(cmd_string, env_table, config, focus)
   -- "opus[1m]" (e.g. zsh aborts with "no matches found"). parse_command keeps
   -- quoted arguments intact and expands a leading "~". Mirrors native.
   local cmd = utils.parse_command(cmd_string)
-  local term_instance = Snacks.terminal.open(cmd, opts)
-  if term_instance and term_instance:buf_valid() then
+  -- Snacks shows its window before it calls termopen, and termopen raises for a
+  -- command that is not executable. Capture the instance so that window can be closed.
+  local shown_instance
+  local user_on_buf = opts.win.on_buf
+  opts.win.on_buf = function(instance)
+    shown_instance = instance
+    if user_on_buf then
+      user_on_buf(instance)
+    end
+  end
+  local opened, open_result = pcall(Snacks.terminal.open, cmd, opts)
+  local term_instance = opened and open_result or nil
+  -- When errors are silenced, termopen returns -1 instead of raising and leaves a plain buffer.
+  local started = term_instance
+    and term_instance:buf_valid()
+    and vim.api.nvim_buf_get_option(term_instance.buf, "buftype") == "terminal"
+  if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     terminal = term_instance
@@ -399,7 +414,9 @@ function M.open(cmd_string, env_table, config, focus)
     terminal = nil
     local logger = require("claudecode.logger")
     local error_details = {}
-    if not term_instance then
+    if not opened then
+      table.insert(error_details, tostring(open_result):match("^[^\n]*"))
+    elseif not term_instance then
       table.insert(error_details, "Snacks.terminal.open() returned nil")
     elseif not term_instance:buf_valid() then
       table.insert(error_details, "terminal instance is invalid")
@@ -409,16 +426,23 @@ function M.open(cmd_string, env_table, config, focus)
       if term_instance.win and not vim.api.nvim_win_is_valid(term_instance.win) then
         table.insert(error_details, "window is invalid")
       end
+    else
+      table.insert(error_details, "no terminal job started")
     end
 
-    local context = string.format("cmd='%s', opts=%s", cmd_string, vim.inspect(opts))
+    local leftover = term_instance or shown_instance
+    if leftover then
+      leftover:close({ buf = true })
+    end
+
     local error_msg = string.format(
-      "Failed to open Claude terminal using Snacks. Details: %s. Context: %s",
+      "Failed to open Claude terminal using Snacks. Details: %s. Context: cmd='%s'",
       table.concat(error_details, ", "),
-      context
+      cmd_string
     )
+    -- opts holds the env table, which can carry user secrets, so it stays out of the notice.
     vim.notify(error_msg, vim.log.levels.ERROR)
-    logger.debug("terminal", error_msg)
+    logger.debug("terminal", error_msg .. ", opts=" .. vim.inspect(opts))
   end
 end
 

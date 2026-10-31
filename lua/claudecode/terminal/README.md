@@ -52,6 +52,7 @@ Optional fields (the dispatcher does not require them):
 - `native` can adopt an existing terminal buffer whose name matches `claude` and that a window displays [terminal/native.lua:find_existing_claude_terminal]
 - `snacks.is_available` requires snacks.nvim to load and `Snacks.terminal` to exist [terminal/snacks.lua:M.is_available]
 - `snacks` reuses the tracked instance while `terminal:buf_valid()` is true. It passes an argv list from `utils.parse_command`, so no shell expands bracketed model aliases [terminal/snacks.lua:M.open]
+- `snacks` calls `Snacks.terminal.open` through `pcall`. Snacks shows its window before it calls `termopen`, so `snacks` wraps `on_buf` to capture the instance and then calls any `on_buf` from `snacks_win_opts`. A start fails when `termopen` raises (for example `E475` for a command that is not executable) or when the buffer is not a terminal afterwards (`termopen` returns `-1` when errors are silenced). On a failed start `snacks` closes the Snacks window, deletes its scratch buffer, clears its state, and sends one ERROR notification with the first line of the error. The notification shows the command but not the env table [terminal/snacks.lua:M.open]
 - `snacks` forces `auto_close = false` on the Snacks instance. It sets `start_insert` and `auto_insert` only when focusing and `auto_insert ~= false` [terminal/snacks.lua:build_opts]
 - `snacks` overrides the instance's `hide`, `show`, and `toggle` methods and keeps the originals in `term._cc` [terminal/snacks.lua:patch_instance]
 - `snacks` hides floats with `nvim_win_set_config({hide=true})` only on Neovim 0.10 and later. It closes split windows and re-creates them on show [terminal/snacks.lua:cc_hide]
@@ -74,4 +75,4 @@ Optional fields (the dispatcher does not require them):
 ## Verification
 
 - Run: `mise run test`
-- Targeted: `busted -v tests/unit/terminal/external_spec.lua`, `busted -v tests/unit/terminal/none_provider_spec.lua`, `busted -v tests/unit/terminal/paste_fix_spec.lua`, `busted -v tests/unit/terminal/snacks_spec.lua`, `busted -v tests/unit/terminal/snacks_toggle_spec.lua`, `busted -v tests/unit/terminal/send_text_spec.lua`, `busted -v tests/unit/native_terminal_toggle_spec.lua`
+- Targeted: `busted -v tests/unit/terminal/external_spec.lua`, `busted -v tests/unit/terminal/none_provider_spec.lua`, `busted -v tests/unit/terminal/paste_fix_spec.lua`, `busted -v tests/unit/terminal/snacks_spec.lua`, `busted -v tests/unit/terminal/snacks_toggle_spec.lua`, `busted -v tests/unit/terminal/snacks_failed_start_spec.lua`, `busted -v tests/unit/terminal/send_text_spec.lua`, `busted -v tests/unit/native_terminal_toggle_spec.lua`
