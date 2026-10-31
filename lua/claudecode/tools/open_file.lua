@@ -194,11 +194,10 @@ local function handler(params)
       local start_line = math.min(math.max(params.startLine or 1, 1), line_count)
       local end_line = math.min(math.max(params.endLine or start_line, 1), line_count)
 
-      -- Mark rows are 1-based like startLine/endLine. '> at the line's length selects the whole line
-      -- (Neovim 0.8 has no v:maxcol).
+      -- '> one past the line's last byte selects the whole line (Neovim 0.8 has no v:maxcol).
       local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, true)[1]
-      vim.api.nvim_buf_set_mark(0, "<", start_line, 0, {})
-      vim.api.nvim_buf_set_mark(0, ">", end_line, #end_line_text, {})
+      vim.fn.setpos("'<", { 0, start_line, 1, 0 })
+      vim.fn.setpos("'>", { 0, end_line, #end_line_text + 1, 0 })
       vim.cmd("normal! gv")
 
       message = "Opened file and selected lines " .. start_line .. " to " .. end_line
@@ -256,10 +255,16 @@ local function handler(params)
           message = 'Opened file and selected text "' .. start_text .. '"'
         end
 
+        -- With 'selection' set to exclusive, gv leaves out the character under '>. The marks use setpos()
+        -- because on Neovim 0.8 nvim_buf_set_mark also sets coladd, and gv then keeps that character.
+        if vim.o.selection == "exclusive" then
+          end_col = end_col + 1
+        end
+
         -- Apply the selection
         vim.api.nvim_win_set_cursor(0, { start_row, start_col })
-        vim.api.nvim_buf_set_mark(0, "<", start_row, start_col, {})
-        vim.api.nvim_buf_set_mark(0, ">", end_row, end_col, {})
+        vim.fn.setpos("'<", { 0, start_row, start_col + 1, 0 })
+        vim.fn.setpos("'>", { 0, end_row, end_col + 1, 0 })
         vim.cmd("normal! gv")
         vim.cmd("normal! zz") -- Center the selection in the window
       else

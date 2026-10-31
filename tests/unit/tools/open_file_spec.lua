@@ -29,6 +29,9 @@ describe("Tool: open_file", function()
       table.insert(_G.vim.cmd_history, command)
     end)
     _G.vim.o = { selection = "inclusive" }
+    _G.vim.fn.setpos = spy.new(function()
+      return 0
+    end)
 
     -- Mock vim.json.encode
     _G.vim.json = _G.vim.json or {}
@@ -92,6 +95,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.expand = nil
     _G.vim.fn.filereadable = nil
     _G.vim.fn.fnameescape = nil
+    _G.vim.fn.setpos = nil
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
     _G.vim.v = nil
@@ -346,7 +350,8 @@ describe("Tool: open_file", function()
     local buffer_lines = { "one", "two", "three", "four" }
     local marks
 
-    -- Follows nvim_buf_set_mark: rows are 1-based, columns are 0-based numbers, and a row past the last line errors.
+    -- Marks set with nvim_buf_set_mark (0-based column, a row past the last line errors) or with setpos()
+    -- (1-based column) land in `marks` with a 0-based column.
     before_each(function()
       marks = {}
       _G.vim.api.nvim_buf_get_lines = spy.new(function(_, first, last)
@@ -365,6 +370,13 @@ describe("Tool: open_file", function()
         end
         marks[name] = { line = line, col = col }
         return true
+      end)
+      _G.vim.fn.setpos = spy.new(function(name, pos)
+        if type(pos[3]) ~= "number" then
+          error("Expected a number column")
+        end
+        marks[name:sub(2)] = { line = pos[2], col = pos[3] - 1 }
+        return 0
       end)
     end)
 
