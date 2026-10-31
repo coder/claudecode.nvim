@@ -223,28 +223,44 @@ describe("claudecode.terminal.native toggle behavior", function()
   end)
 
   describe("termopen failure", function()
+    local e475 = "Vim:E475: Invalid value for argument cmd: 'claude' is not executable"
     local failures = {
-      ["returns 0"] = function()
-        return 0
-      end,
-      ["returns -1"] = function()
-        return -1
-      end,
-      ["raises E475 for a command that is not executable"] = function()
-        error("Vim:E475: Invalid value for argument cmd: 'claude' is not executable")
-      end,
+      {
+        name = "returns 0",
+        termopen = function()
+          return 0
+        end,
+        message = "Failed to open native terminal.",
+      },
+      {
+        name = "returns -1",
+        termopen = function()
+          return -1
+        end,
+        message = "Failed to open native terminal.",
+      },
+      {
+        name = "raises E475 for a command that is not executable",
+        termopen = function()
+          error(e475, 0)
+        end,
+        message = "Failed to open native terminal. " .. e475,
+      },
     }
-    for failure_name, failing_termopen in pairs(failures) do
-      it("closes the new split and restores the original window when termopen " .. failure_name, function()
+    for _, failure in ipairs(failures) do
+      it("closes the split, deletes its buffer, and notifies once when termopen " .. failure.name, function()
         local mock_state = _G.get_mock_state()
         mock_state.windows[1] = { bufnr = 0 }
         mock_state.current_win = 1
+        mock_vim.api.nvim_buf_delete = function(bufnr)
+          mock_state.buffers[bufnr] = nil
+        end
         local notified = {}
         mock_vim.notify = function(msg, level)
           table.insert(notified, { msg = msg, level = level })
         end
         mock_vim.log = { levels = { ERROR = 4 } }
-        mock_vim.fn.termopen = failing_termopen
+        mock_vim.fn.termopen = failure.termopen
 
         native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
 
@@ -255,8 +271,9 @@ describe("claudecode.terminal.native toggle behavior", function()
           table.insert(open_windows, winid)
         end
         assert.are.same({ 1 }, open_windows)
+        assert.are.same({}, mock_state.buffers)
         assert.are.same({
-          { msg = "Failed to open native terminal.", level = 4 },
+          { msg = failure.message, level = 4 },
           { msg = "Failed to open Claude terminal using native fallback.", level = 4 },
         }, notified)
       end)

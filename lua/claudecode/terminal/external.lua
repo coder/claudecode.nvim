@@ -136,10 +136,8 @@ function M.open(cmd_string, env_table)
   jobid = started and jobstart_result or nil
 
   if not jobid or jobid <= 0 then
-    if not started then
-      logger.error("terminal", "jobstart failed: " .. tostring(jobstart_result))
-    end
-    vim.notify("Failed to start external terminal with command: " .. full_command, vim.log.levels.ERROR)
+    local reason = started and "" or (". " .. tostring(jobstart_result))
+    vim.notify("Failed to start external terminal with command: " .. full_command .. reason, vim.log.levels.ERROR)
     cleanup_state()
     return
   end
