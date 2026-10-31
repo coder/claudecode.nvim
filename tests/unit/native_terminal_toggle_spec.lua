@@ -46,7 +46,7 @@ describe("claudecode.terminal.native toggle behavior", function()
     local function new_buffer(listed)
       local bufnr = mock_state.next_bufnr
       mock_state.next_bufnr = mock_state.next_bufnr + 1
-      mock_state.buffers[bufnr] = { name = "", options = { modified = false, buflisted = listed } }
+      mock_state.buffers[bufnr] = { name = "", options = { modified = false, buflisted = listed, channel = 0 } }
       return bufnr
     end
 
@@ -1134,6 +1134,27 @@ describe("claudecode.terminal.native toggle behavior", function()
         end
       )
     end
+
+    it("should not start a second terminal when a BufEnter autocmd calls open before termopen runs", function()
+      local mock_state = _G.get_mock_state()
+      local reentered = false
+      mock_state.bufenter_autocmd = function(_, bufnr)
+        if not reentered and bufnr ~= 0 then
+          reentered = true
+          native_provider.open("claude", {}, config)
+        end
+      end
+
+      native_provider.open("claude", {}, config)
+
+      local running = {}
+      for id in pairs(mock_state.running_jobs) do
+        table.insert(running, id)
+      end
+      assert.is_true(reentered)
+      assert.are.equal(1, #running)
+      assert.are.equal(running[1], mock_state.buffers[native_provider.get_active_bufnr()].jobid)
+    end)
 
     it("should keep one exit handler on a terminal it adopts again after each reload", function()
       local mock_state = _G.get_mock_state()
