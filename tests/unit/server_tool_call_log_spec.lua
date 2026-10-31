@@ -72,4 +72,42 @@ describe("tools/call debug log", function()
     assert.is_nil(log:find(secret, 1, true), "tool result text reached :messages:\n" .. log)
     assert_contains(log, "Response - tools/call readEnvFile")
   end)
+
+  it("logs an error's code and message but not its data", function()
+    tools.register({
+      name = "failsWithData",
+      handler = function()
+        error({ code = -32000, message = "File operation error", data = secret })
+      end,
+    })
+
+    local _, err = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "failsWithData", arguments = {} })
+
+    assert.same({ code = -32000, message = "File operation error", data = secret }, err)
+    local log = message_history()
+    assert.is_nil(log:find(secret, 1, true), "error data reached :messages:\n" .. log)
+    assert_contains(log, "error -32000 File operation error")
+  end)
+
+  it("keeps argument values out of the close_tab and getDiagnostics handler logs", function()
+    local original_lsp, original_diagnostic = vim.lsp, vim.diagnostic
+    vim.lsp = vim.lsp or {}
+    vim.diagnostic = {
+      get = function()
+        return {}
+      end,
+    }
+    tools.register(require("claudecode.tools.close_tab"))
+    tools.register(require("claudecode.tools.get_diagnostics"))
+
+    for _, name in ipairs({ "close_tab", "getDiagnostics" }) do
+      server.state.handlers["tools/call"]({ id = "client-1" }, { name = name, arguments = { note = secret } })
+    end
+    vim.lsp, vim.diagnostic = original_lsp, original_diagnostic
+
+    local log = message_history()
+    assert.is_nil(log:find(secret, 1, true), "an argument value reached :messages:\n" .. log)
+    assert_contains(log, "Response - tools/call close_tab")
+    assert_contains(log, "Response - tools/call getDiagnostics")
+  end)
 end)
