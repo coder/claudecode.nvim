@@ -20,8 +20,9 @@
 ---Handles the close_tab tool invocation.
 ---Closes a tab/buffer by its tab name.
 ---@param params {tab_name: string} The input parameters for the tool
+---@param client table|nil The calling WebSocket client (handle_invoke passes it)
 ---@return table success A result message indicating success
-local function handler(params)
+local function handler(params, client)
   local log_module_ok, log = pcall(require, "claudecode.logger")
   if not log_module_ok then
     return {
@@ -55,7 +56,7 @@ local function handler(params)
     -- Try to close the diff
     local diff_module_ok, diff = pcall(require, "claudecode.diff")
     if diff_module_ok and diff.close_diff_by_tab_name then
-      local closed = diff.close_diff_by_tab_name(tab_name)
+      local closed = diff.close_diff_by_tab_name(tab_name, client and client.id or nil)
       if closed then
         log.debug("Successfully closed diff for tab: " .. tab_name)
         return {

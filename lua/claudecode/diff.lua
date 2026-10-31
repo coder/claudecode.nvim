@@ -1539,6 +1539,16 @@ function M._setup_blocking_diff(params, resolution_callback)
   end
 end
 
+---True when the user accepted this diff for a different Claude client. The accepted edits live
+---only in the proposed buffer until that client writes the file, so no other client may tear the
+---diff down: if the owner died first, nothing else holds the edits.
+---@param diff_data table An active_diffs entry
+---@param client_id string|nil The client that asks to close or replace the diff
+---@return boolean
+local function holds_edits_for_other_client(diff_data, client_id)
+  return diff_data.status == "saved" and diff_data.client_id ~= nil and diff_data.client_id ~= client_id
+end
+
 ---Blocking diff operation for MCP compliance
 ---@param old_file_path string Path to the original file
 ---@param new_file_path string Path to the new file (used for naming)
@@ -1550,6 +1560,13 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
   -- Check for existing diff with same tab_name
   if active_diffs[tab_name] then
     local existing_diff = active_diffs[tab_name]
+    if holds_edits_for_other_client(existing_diff, client_id) then
+      error({
+        code = -32000,
+        message = "Diff tab in use",
+        data = "tab_name " .. tab_name .. " holds edits the user accepted for another Claude session",
+      })
+    end
     -- Resolve the existing diff as rejected before replacing, but only if it was still pending.
     if existing_diff.status == "pending" then
       M._resolve_diff_as_rejected(tab_name)
@@ -1635,10 +1652,17 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 
 ---Close diff by tab name (used by close_tab tool)
 ---@param tab_name string The diff identifier
+---@param client_id string|nil The Claude client that asks for the close (close_tab, closeAllDiffTabs).
+---  The plugin's own bulk closes pass nil, and their filters decide.
 ---@return boolean success True if diff was found and closed
-function M.close_diff_by_tab_name(tab_name)
+function M.close_diff_by_tab_name(tab_name, client_id)
   local diff_data = active_diffs[tab_name]
   if not diff_data then
+    return false
+  end
+
+  if client_id and holds_edits_for_other_client(diff_data, client_id) then
+    logger.debug("diff", "Keeping", tab_name, "for the client that owns it:", diff_data.client_id)
     return false
   end
 
@@ -1677,8 +1701,9 @@ end
 ---(resuming their coroutine) before tearing down the UI.
 ---@param filter_fn (fun(diff_data: table): boolean)|nil Only close diffs for which this returns true (nil = all)
 ---@param reason string Human-readable reason (for logging)
+---@param client_id string|nil The Claude client that asks for the close, passed to close_diff_by_tab_name
 ---@return number count Number of diffs closed
-local function close_active_diffs(filter_fn, reason)
+local function close_active_diffs(filter_fn, reason, client_id)
   local function matches(diff_data)
     return diff_data ~= nil and (not filter_fn or filter_fn(diff_data))
   end
@@ -1694,7 +1719,7 @@ local function close_active_diffs(filter_fn, reason)
   for _, tab_name in ipairs(tab_names) do
     -- Each close fires ClaudeCodeDiffClosed synchronously, and a user handler can
     -- accept a later entry, so recheck the filter against the entry as it is now.
-    if matches(active_diffs[tab_name]) and M.close_diff_by_tab_name(tab_name) then
+    if matches(active_diffs[tab_name]) and M.close_diff_by_tab_name(tab_name, client_id) then
       count = count + 1
     end
   end
@@ -1707,13 +1732,16 @@ end
 ---Close all active diffs, resolving any still pending as rejected.
 ---Closes diffs in ANY state (including saved), so its only caller is the
 ---closeAllDiffTabs tool, where Claude is the connected client and has written
----accepted files. Automatic cleanup and the :ClaudeCodeCloseAllDiffs command
----deliberately use close_pending_diffs / close_diffs_for_client instead, to
----leave already-saved diffs alone -- see close_pending_diffs for why.
+---its accepted files. A saved diff that belongs to another client stays open:
+---that client has not written it yet. Automatic cleanup and the
+---:ClaudeCodeCloseAllDiffs command deliberately use close_pending_diffs /
+---close_diffs_for_client instead, to leave already-saved diffs alone -- see
+---close_pending_diffs for why.
 ---@param reason string Human-readable reason (for logging)
+---@param client_id string|nil The Claude client that called closeAllDiffTabs
 ---@return number count Number of diffs closed
-function M.close_all_diffs(reason)
-  return close_active_diffs(nil, reason or "close all diffs")
+function M.close_all_diffs(reason, client_id)
+  return close_active_diffs(nil, reason or "close all diffs", client_id)
 end
 
 -- Automatic teardown (client disconnect, server stop) must only touch *pending*

@@ -130,7 +130,8 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
     )
     return M.build_response(success, result, err)
   end
-  return M.build_response(pcall(tool_data.handler, input))
+  -- close_tab and closeAllDiffTabs need the caller to keep another client's accepted diff.
+  return M.build_response(pcall(tool_data.handler, input, client))
 end
 
 ---Map a tool handler's outcome to `{ result = ... }` or `{ error = { code, message, data } }`

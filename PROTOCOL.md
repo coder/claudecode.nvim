@@ -215,6 +215,8 @@ When `makeFrontmost=false`, returns detailed JSON:
 - `new_file_contents` (string): Contents of the new file
 - `tab_name` (string): Tab name for the diff view
 
+A new call with the `tab_name` of an open diff replaces that diff. One exception: if the user already accepted that diff for another client, the call fails at once with error `-32000`, and the accepted diff stays open.
+
 **Output**: Returns MCP-formatted response:
 
 ```json
@@ -444,6 +446,8 @@ Or when document not open:
 
 **Output**: Returns `{content: [{type: "text", text: "TAB_CLOSED"}]}`
 
+A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file.
+
 ### 11. closeAllDiffTabs
 
 **Description**: Close all diff tabs in the editor
@@ -451,6 +455,8 @@ Or when document not open:
 **Input**: None
 
 **Output**: Returns `{content: [{type: "text", text: "CLOSED_${count}_DIFF_TABS"}]}`
+
+A diff that the user accepted for another client stays open and is not counted, the same as with `close_tab`.
 
 ### 12. executeCode
 

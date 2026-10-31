@@ -1,6 +1,6 @@
 ---
 name: verify-diff-lifecycle
-description: Model-check the claudecode.nvim openDiff answer lifecycle (TLA+/TLC) against guards read from the current Lua code. Use after a change to how diffs are resolved, replaced, closed, or answered, or to how openDiff is called (lua/claudecode/diff.lua, diff_inline.lua, server/init.lua, tools/init.lua, tools/open_diff.lua, the :ClaudeCodeCloseAllDiffs command in init.lua), and before trusting such a change.
+description: Model-check the claudecode.nvim openDiff answer lifecycle (TLA+/TLC) against guards read from the current Lua code. Use after a change to how diffs are resolved, replaced, closed, or answered, or to how openDiff is called (lua/claudecode/diff.lua, diff_inline.lua, server/init.lua, tools/init.lua, tools/open_diff.lua, tools/close_tab.lua, tools/close_all_diff_tabs.lua, the :ClaudeCodeCloseAllDiffs command in init.lua), and before trusting such a change.
 ---
 
 # Verify the openDiff answer lifecycle
@@ -9,20 +9,20 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 
 ## Rules
 
-| Rule                        | Plain sentence                                                        | Harm when broken                                                           |
-| --------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `AtMostOneAnswer`           | Claude gets at most one response per openDiff call.                   | Claude acts on a second, contradicting answer.                             |
-| `AnswerMatchesDiff`         | While a diff stays open, its status agrees with what Claude was told. | The user sees "accepted" while Claude was told "rejected", or the reverse. |
-| `NoStrandedCall`            | A waiting call still has a pending diff and a response sender.        | Claude waits forever. No user action or close_tab can answer it.           |
-| `SavedDiffKept`             | Only Claude tears down a diff the user accepted with `:w`.            | The user's accepted edits vanish before Claude writes them.                |
-| `DisconnectedCallsAnswered` | A disconnected client's waiting calls get answered without the user.  | Orphaned diff windows linger (issue #248).                                 |
+| Rule                        | Plain sentence                                                                                     | Harm when broken                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `AtMostOneAnswer`           | Claude gets at most one response per openDiff call.                                                | Claude acts on a second, contradicting answer.                             |
+| `AnswerMatchesDiff`         | While a diff stays open, its status agrees with what Claude was told.                              | The user sees "accepted" while Claude was told "rejected", or the reverse. |
+| `NoStrandedCall`            | A waiting call still has a pending diff and a response sender.                                     | Claude waits forever. No user action or close_tab can answer it.           |
+| `SavedDiffKept`             | Only Claude tears down a diff the user accepted with `:w`, and never after its own client is gone. | The user's accepted edits vanish before Claude writes them.                |
+| `DisconnectedCallsAnswered` | A disconnected client's waiting calls get answered without the user.                               | Orphaned diff windows linger (issue #248).                                 |
 
 ## Run
 
 ```bash
 .agents/skills/verify-diff-lifecycle/check.sh            # about 10 s
 .agents/skills/verify-diff-lifecycle/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
-.agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 5 min, after you edit the model or a fact
+.agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 7 min, after you edit the model or a fact
 .agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change" (refused together with --mutants, and refused when covered.lock is a symlink)
 ```
 
@@ -48,6 +48,7 @@ Covered blocks:
 - In `server/init.lua`: `M.stop`, `on_disconnect`, `M._handle_request`, `M._setup_deferred_response`.
 - In `tools/init.lua` and `tools/open_diff.lua`: `M.handle_invoke`, and the openDiff `handler`.
 - In `init.lua`: the `ClaudeCodeCloseAllDiffs` user command.
+- For client ownership: `holds_edits_for_other_client` and `close_all_diffs` in `diff.lua`, and the `handler` in `tools/close_tab.lua` and `tools/close_all_diff_tabs.lua`.
 
 A changed file with no changed block or call site still needs a look. A wrapper with another name, an alias of the diff table, or a transport path that skips `on_disconnect` (`server/tcp.lua`) shows only as a changed file. A PASS says the model holds for the guards the facts read, on code that matches the record. It does not review a change. STALE never means "probably fine".
 
@@ -60,7 +61,9 @@ A changed file with no changed block or call site still needs a look. A wrapper 
 | `GuardSaved`, `GuardRejected`              | `if not diff_data or diff_data.status ~= "pending" then return` in each `_resolve_diff_as_*`                                                                                                                   |
 | `SenderCleared`                            | the resolution callback sets `_G.claude_deferred_responses[co_key] = nil` after it calls that sender                                                                                                           |
 | `ReplaceRejects`                           | in `open_diff_blocking`, before `coroutine.running()`: a pending diff with the same `tab_name` is rejected, then cleaned up                                                                                    |
+| `ReplaceKeepsOthersSaved`                  | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                                                          |
 | `CloseTabRejectsPending`                   | `close_diff_by_tab_name` rejects a pending diff before cleanup                                                                                                                                                 |
+| `CloseKeepsOthersSaved`                    | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on                                      |
 | `CloseEachByName`                          | `close_active_diffs` closes each match through `close_diff_by_tab_name`                                                                                                                                        |
 | `CloseRechecksFilter`                      | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                                                           |
 | `StopRejectsPending`                       | `M.stop` calls `close_pending_diffs`, then `stop_server`, then clears the senders                                                                                                                              |
@@ -106,9 +109,9 @@ If a fix lands, `OpenedEventInSetup` turns `FALSE` and the script reports `NO LO
 
 ## Scope and bounds
 
-- The invariants run with 3 openDiff calls, 2 tab names and 2 clients, about 65,000 states. `DisconnectedCallsAnswered` runs with 2 calls, 2 tabs and 2 clients. It assumes weak fairness only on setup and on the scheduled disconnect cleanup. The user is never assumed to act.
+- The invariants run with 3 openDiff calls, 2 tab names and 2 clients, about 75,000 states. `DisconnectedCallsAnswered` runs with 2 calls, 2 tabs and 2 clients. It assumes weak fairness only on setup and on the scheduled disconnect cleanup. The user is never assumed to act.
 - `SenderCleared` alone is caught by no rule, because the pending guards also stop a second answer. `--mutants` shows that `AtMostOneAnswer` breaks when both `SenderCleared` and `GuardRejected` are removed.
-- `SavedDiffKept` counts a close by any connected Claude client as Claude's. The model does not track which client owns a diff. So it does not check the case where a second client's `closeAllDiffTabs` or `close_tab` tears down a saved diff whose own client died before writing the file.
+- `SavedDiffKept` knows which client owns each diff. A saved diff counts as lost when the user, a disconnect cleanup or a server stop tears it down, or when a client that does not own it does so while the owner is disconnected. A close by another client while the owner is connected counts as safe, because the owner got `FILE_SAVED` and can still write the file. The code is stricter than the rule: it keeps another client's saved diff in both cases.
 - The split and unified layouts share the pending guards only because `resolve_inline_as_*` is reached through `_resolve_diff_as_*`. The inline functions have no guard of their own.
 - Every run assumes that the user has a `ClaudeCodeDiffClosed` handler (`ClosedHandlerResolvesOther`). Each time a bulk close closes a diff, the handler can accept or deny one other open diff, in any order of the snapshot. After a single close (`close_tab`, a replacing openDiff) the handler can touch only other diffs, the same as a later user action, so only the bulk-close loop models it.
 - These are not modeled:

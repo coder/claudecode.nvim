@@ -39,7 +39,7 @@ Steps:
 ## Gotchas
 
 - `close_tab` finds the diff only when `tab_name` contains `✻` and `⧉`. Other names are matched as buffer names instead. `{"tab_name":"hello.txt (z1)"}` answered a `result` holding `Failed to close buffer ... Failed to unload buffer.`, left the diff pending, and stopped nvim at `Press ENTER` (observed 2026-10-31).
-- A reused `tab_name` replaces the open diff. Use a new name per call.
+- A reused `tab_name` replaces the open diff. Use a new name per call. If the user accepted that diff for another client, the call fails with error `-32000` instead.
 - After `:w` the proposal still shows `[+]` and the file is unchanged. That is correct. Only Claude writes the file.
 - After `:w` the plugin turns diff mode off in the proposal window, so a screenshot taken then shows no diff highlight. Take the highlight proof before the user accepts.
 - `$(...)` drops the trailing newline of the answer text. Compare with `jq -e --arg want "$text" '... == $want'` or write the text with `jq -j`.
