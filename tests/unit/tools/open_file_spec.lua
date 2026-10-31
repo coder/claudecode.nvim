@@ -363,7 +363,7 @@ describe("Tool: open_file", function()
       end)
     end)
 
-    -- The text `normal! gv` selects between '< and '>, charwise and inclusive, with columns clamped to the line.
+    -- The getregion() text of the charwise `normal! gv` selection, joined with "/". Line breaks do not show.
     local function selected_text()
       assert_contains(table.concat(_G.vim.cmd_history, "\n"), "normal! gv")
       local first, last = marks["<"], marks[">"]

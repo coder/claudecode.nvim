@@ -208,56 +208,56 @@ local function handler(params)
     run_in_target_window(function()
       local buf = vim.api.nvim_get_current_buf()
       local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-      local start_line_idx, start_col_idx
-      local end_line_idx, end_col_idx
+      local start_row, start_col
+      local end_row, end_col
 
       -- Find start text
       for line_idx, line in ipairs(lines) do
         local col_idx = string.find(line, start_text, 1, true) -- plain text search
         if col_idx then
-          start_line_idx = line_idx -- 1-based row, as nvim_buf_set_mark takes
-          start_col_idx = col_idx - 1 -- 0-based column
+          start_row = line_idx
+          start_col = col_idx - 1
           break
         end
       end
 
-      if start_line_idx then
+      if start_row then
         -- Find end text if provided
         if end_text then
-          for line_idx = start_line_idx, #lines do
+          for line_idx = start_row, #lines do
             local line = lines[line_idx] -- Access current line directly
             if line then
               local col_idx = string.find(line, end_text, 1, true)
               if col_idx then
-                end_line_idx = line_idx
-                end_col_idx = col_idx + string.len(end_text) - 2 -- 0-based column of the match's last byte
+                end_row = line_idx
+                end_col = (col_idx - 1) + string.len(end_text) - 1
                 if select_to_end_of_line then
-                  end_col_idx = string.len(line)
+                  end_col = string.len(line)
                 end
                 break
               end
             end
           end
 
-          if end_line_idx then
+          if end_row then
             message = 'Opened file and selected text from "' .. start_text .. '" to "' .. end_text .. '"'
           else
             -- End text not found, select only start text
-            end_line_idx = start_line_idx
-            end_col_idx = start_col_idx + string.len(start_text) - 1
+            end_row = start_row
+            end_col = start_col + string.len(start_text) - 1
             message = 'Opened file and positioned at "' .. start_text .. '" (end text "' .. end_text .. '" not found)'
           end
         else
           -- Only start text provided
-          end_line_idx = start_line_idx
-          end_col_idx = start_col_idx + string.len(start_text) - 1
+          end_row = start_row
+          end_col = start_col + string.len(start_text) - 1
           message = 'Opened file and selected text "' .. start_text .. '"'
         end
 
         -- Apply the selection
-        vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
-        vim.api.nvim_buf_set_mark(0, "<", start_line_idx, start_col_idx, {})
-        vim.api.nvim_buf_set_mark(0, ">", end_line_idx, end_col_idx, {})
+        vim.api.nvim_win_set_cursor(0, { start_row, start_col })
+        vim.api.nvim_buf_set_mark(0, "<", start_row, start_col, {})
+        vim.api.nvim_buf_set_mark(0, ">", end_row, end_col, {})
         vim.cmd("normal! gv")
         vim.cmd("normal! zz") -- Center the selection in the window
       else
