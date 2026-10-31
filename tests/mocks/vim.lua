@@ -116,6 +116,21 @@ local vim = {
     nvim_exec_autocmds = function(event, opts)
       vim._exec_autocmds = vim._exec_autocmds or {}
       table.insert(vim._exec_autocmds, { event = event, opts = opts })
+      -- Like Neovim, run the matching User handlers before returning.
+      if event ~= "User" then
+        return
+      end
+      local callbacks = {}
+      for _, group in pairs(vim._autocmds) do
+        for _, autocmd in pairs(group.events or {}) do
+          if autocmd.events == "User" and autocmd.opts.pattern == opts.pattern and autocmd.opts.callback then
+            callbacks[#callbacks + 1] = autocmd.opts.callback
+          end
+        end
+      end
+      for _, callback in ipairs(callbacks) do
+        callback({ event = "User", match = opts.pattern, data = opts.data })
+      end
     end,
 
     nvim_get_current_buf = function()
