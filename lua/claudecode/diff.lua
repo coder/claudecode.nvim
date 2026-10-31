@@ -39,14 +39,16 @@ local function get_autocmd_group()
   return autocmd_group
 end
 
----Resolve the terminal split-width percentage for the current context.
+---Resolve the terminal split-size fraction for the current context. The value
+---is applied to `vim.o.columns` for left/right splits and to `vim.o.lines` for
+---top/bottom splits (the config keys keep the historical "width" label).
 ---While a diff is active, an optional `terminal.diff_split_width_percentage`
 ---(a number in the open interval (0, 1)) takes precedence so the Claude
 ---terminal can shrink to give the diff more room. It falls back to the idle
 ---`terminal.split_width_percentage`, then to the 0.30 default.
 ---@param when "diff"|"idle" Whether a diff is currently active or being torn down
----@return number percentage A width fraction in (0, 1)
-local function resolve_split_width_percentage(when)
+---@return number fraction A size fraction in (0, 1)
+local function resolve_terminal_split_fraction(when)
   local terminal_config = (config and config.terminal) or {}
 
   local idle = terminal_config.split_width_percentage
@@ -58,17 +60,17 @@ local function resolve_split_width_percentage(when)
     -- Defensively validate here too: config.apply does not validate terminal
     -- sub-keys, so this is the authoritative guard for the value we consume.
     -- (terminal.setup additionally warns the user on a bad value at setup time.)
-    local diff_pct = terminal_config.diff_split_width_percentage
-    if type(diff_pct) == "number" and diff_pct > 0 and diff_pct < 1 then
-      return diff_pct
+    local diff_fraction = terminal_config.diff_split_width_percentage
+    if type(diff_fraction) == "number" and diff_fraction > 0 and diff_fraction < 1 then
+      return diff_fraction
     end
   end
 
   return idle
 end
 
--- Exposed for testing the diff/idle width resolution logic.
-M._resolve_split_width_percentage = resolve_split_width_percentage
+-- Exposed for testing the diff/idle size fraction resolution logic.
+M._resolve_terminal_split_fraction = resolve_terminal_split_fraction
 
 ---Whether the plugin should manage (resize) the Claude terminal width across the
 ---diff lifecycle. Controlled by `diff_opts.auto_resize_terminal` (default true).
@@ -102,8 +104,13 @@ local function resize_terminal_for_diff(win, when)
   if win_config.relative and win_config.relative ~= "" then
     return -- floating terminals control their own sizing
   end
-  local split_width = resolve_split_width_percentage(when)
-  pcall(vim.api.nvim_win_set_width, win, math.floor(vim.o.columns * split_width))
+  local fraction = resolve_terminal_split_fraction(when)
+  local split_side = (config and config.terminal and config.terminal.split_side) or "right"
+  if split_side == "top" or split_side == "bottom" then
+    pcall(vim.api.nvim_win_set_height, win, math.floor(vim.o.lines * fraction))
+  else
+    pcall(vim.api.nvim_win_set_width, win, math.floor(vim.o.columns * fraction))
+  end
 end
 
 -- Exposed for testing the gate + floating-skip + resize behavior.
@@ -377,15 +384,13 @@ local function display_terminal_in_new_tab()
     return original_tab, nil, had_terminal_in_original, new_tab
   end
 
-  vim.cmd("vsplit")
+  local horizontal = split_side == "top" or split_side == "bottom"
+  vim.cmd(horizontal and "split" or "vsplit")
 
   local terminal_win = vim.api.nvim_get_current_win()
 
-  if split_side == "left" then
-    vim.cmd("wincmd H")
-  else
-    vim.cmd("wincmd L")
-  end
+  local move_cmd = ({ left = "H", right = "L", top = "K", bottom = "J" })[split_side] or "L"
+  vim.cmd("wincmd " .. move_cmd)
 
   vim.api.nvim_win_set_buf(terminal_win, terminal_bufnr)
 
@@ -410,7 +415,8 @@ local function display_terminal_in_new_tab()
   -- Size the terminal for the diff (unless the user opted out via auto_resize_terminal).
   resize_terminal_for_diff(terminal_win, "diff")
 
-  vim.cmd("wincmd " .. (split_side == "right" and "h" or "l"))
+  local jump_cmd = ({ left = "l", right = "h", top = "j", bottom = "k" })[split_side] or "h"
+  vim.cmd("wincmd " .. jump_cmd)
 
   return original_tab, terminal_win, had_terminal_in_original, new_tab
 end
