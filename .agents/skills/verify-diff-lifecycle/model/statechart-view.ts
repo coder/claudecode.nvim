@@ -33,7 +33,7 @@ export const colors = { stuck: "pink", answered: "teal", open: "blue" };
 const labels: Record<string, string> = {
   ClaudeOpensDiff: "Claude calls openDiff",
   UserHandlerResolves: "a ClaudeCodeDiffOpened handler accepts or denies",
-  DiffYields: "setup finishes, the call waits",
+  SetupEnds: "setup ends",
   UserAccepts: "you :w",
   UserRejects: "you :q or deny",
   UserClosesAllDiffs: "you run :ClaudeCodeCloseAllDiffs",

@@ -55,7 +55,7 @@ Sources: [tools/init.lua:M.register_all], [tools/close_tab.lua:schema], [tools/o
 ## Side Effects
 
 - `openFile` runs `edit` (or `pedit` for preview) in the main editor window. It can split or move windows when no suitable window exists, and it sets visual marks and the cursor for line or text ranges [tools/open_file.lua:handler]
-- `openDiff` opens a blocking diff through `claudecode.diff`. The response stays deferred until the user accepts or rejects the diff [tools/open_diff.lua:handler]
+- `openDiff` opens a blocking diff through `claudecode.diff`. The response stays deferred until the user accepts or rejects the diff [tools/open_diff.lua:handler]. A diff that resolves before `openDiff` yields, for example from a `ClaudeCodeDiffOpened` handler, is answered at once [diff.lua:M.open_diff_blocking]
 - `saveDocument` runs `write` in the matching buffer with `nvim_buf_call` [tools/save_document.lua:handler]
 - `closeAllDiffTabs` calls `diff.close_all_diffs` and returns `CLOSED_<n>_DIFF_TABS` [tools/close_all_diff_tabs.lua:handler]
 - `close_tab` calls `diff.close_diff_by_tab_name` for diff tabs. Otherwise it calls `nvim_buf_delete` with `force=false` [tools/close_tab.lua:handler]

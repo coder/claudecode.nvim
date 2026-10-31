@@ -31,7 +31,7 @@ local function handler(params)
     }
   end
 
-  log.debug("close_tab handler called with params: " .. vim.inspect(params))
+  log.debug("close_tab handler called")
 
   if not params.tab_name then
     log.error("Missing required parameter: tab_name")

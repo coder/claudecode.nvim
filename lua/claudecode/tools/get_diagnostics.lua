@@ -99,7 +99,7 @@ local function handler(params)
 
   local logger = require("claudecode.logger")
 
-  logger.debug("getDiagnostics handler called with params: " .. vim.inspect(params))
+  logger.debug("getDiagnostics handler called")
 
   local diagnostics
   local fallback_path
