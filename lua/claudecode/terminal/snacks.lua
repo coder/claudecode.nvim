@@ -21,7 +21,7 @@ local function setup_terminal_events(term_instance, config)
   -- Handle command completion/exit - only if auto_close is enabled
   if config.auto_close then
     term_instance:on("TermClose", function()
-      if vim.v.event.status ~= 0 then
+      if vim.v.event.status ~= 0 and not term_instance._cc.closing then
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
@@ -330,6 +330,7 @@ end
 ---@field orig_toggle fun(self: table) Snacks' original Win:toggle
 ---@field config table Effective terminal config captured at open time
 ---@field kind? "float"|"split" Window kind recorded at hide time
+---@field closing? boolean Set by close(), so the job's exit status is not reported as a failure
 
 -- Monkeypatch the Snacks terminal instance so hide/show/toggle -- including any
 -- the user wires to Snacks keymaps (e.g. self:hide() in snacks_win_opts.keys) --
@@ -451,8 +452,34 @@ function M.close()
   if not is_available() then
     return
   end
-  if terminal and terminal:buf_valid() then
-    terminal:close()
+  if not (terminal and terminal:buf_valid()) then
+    return
+  end
+  local closing = terminal
+  local closing_bufnr = closing.buf
+  local jobid = vim.bo[closing_bufnr].channel
+
+  -- Snacks wipes the buffer on close. Deleting a terminal buffer while a write to its job is pending hangs
+  -- Neovim (neovim/neovim#42508), so stop the job first and wait for TermClose: the wait runs the event loop,
+  -- which ends those writes. An exited Claude (auto_close = false) has nothing to wait for.
+  if jobid > 0 and vim.fn.jobwait({ jobid }, 0)[1] == -1 then
+    closing._cc.closing = true
+    local exited = false
+    vim.api.nvim_create_autocmd("TermClose", {
+      buffer = closing_bufnr,
+      once = true,
+      callback = function()
+        exited = true
+      end,
+    })
+    vim.fn.jobstop(jobid)
+    -- The auto_close handler or a user's TermClose autocmd can wipe the buffer first.
+    vim.wait(1000, function()
+      return exited or not vim.api.nvim_buf_is_valid(closing_bufnr)
+    end, 10)
+  end
+  if closing:buf_valid() then
+    closing:close()
   end
 end
 

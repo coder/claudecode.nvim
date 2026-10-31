@@ -65,7 +65,8 @@ Optional fields (the dispatcher does not require them):
 - `native` on exit clears its state. With `auto_close` it closes the tracked window only if the window still shows the terminal buffer. When the buffer is invalid, it closes the tracked window without that check [terminal/native.lua:open_terminal]
 - `native.close` clears its state, stops the job it started, and waits up to 1 s for the job to exit. It then force-deletes the terminal buffer, which closes every window that shows it. This works for a visible or a hidden terminal. For an adopted terminal (no job id), `close` only closes the window and leaves the process running [terminal/native.lua:close_terminal]
 - `snacks` calls `Snacks.terminal.open`, which spawns the Claude process [terminal/snacks.lua:M.open]
-- `snacks` always registers a buffer-local `BufWipeout` handler. It registers a buffer-local `TermClose` handler only when `auto_close` is true. `TermClose` runs `checktime` and logs an ERROR on a nonzero exit [terminal/snacks.lua:setup_terminal_events]
+- `snacks` always registers a buffer-local `BufWipeout` handler. It registers a buffer-local `TermClose` handler only when `auto_close` is true. `TermClose` runs `checktime` and logs an ERROR on a nonzero exit, except when `close` stopped the job [terminal/snacks.lua:setup_terminal_events]
+- `snacks.close` stops a running job and waits up to 1 s for it to exit, then closes the Snacks window, which wipes the terminal buffer. Deleting the buffer before the job exits can hang Neovim when text sent to the job is still pending (neovim/neovim#42508). An exited job is not waited for. Hide keeps the job running [terminal/snacks.lua:M.close]
 - `snacks` maps terminal-mode `<S-CR>` to send a backslash and then a carriage return after 10 ms [terminal/snacks.lua:build_opts]
 - `snacks` sets window options and `vim.w[win].snacks_win` on re-created splits [terminal/snacks.lua:reapply_snacks_window_state]
 - `external` spawns a detached process with `vim.fn.jobstart`. `close` calls `vim.fn.jobstop` [terminal/external.lua:M.close]
@@ -75,4 +76,4 @@ Optional fields (the dispatcher does not require them):
 ## Verification
 
 - Run: `mise run test`
-- Targeted: `busted -v tests/unit/terminal/external_spec.lua`, `busted -v tests/unit/terminal/none_provider_spec.lua`, `busted -v tests/unit/terminal/paste_fix_spec.lua`, `busted -v tests/unit/terminal/snacks_spec.lua`, `busted -v tests/unit/terminal/snacks_toggle_spec.lua`, `busted -v tests/unit/terminal/snacks_failed_start_spec.lua`, `busted -v tests/unit/terminal/send_text_spec.lua`, `busted -v tests/unit/native_terminal_toggle_spec.lua`
+- Targeted: `busted -v tests/unit/terminal/external_spec.lua`, `busted -v tests/unit/terminal/none_provider_spec.lua`, `busted -v tests/unit/terminal/paste_fix_spec.lua`, `busted -v tests/unit/terminal/snacks_spec.lua`, `busted -v tests/unit/terminal/snacks_toggle_spec.lua`, `busted -v tests/unit/terminal/snacks_failed_start_spec.lua`, `busted -v tests/unit/terminal/snacks_close_spec.lua`, `busted -v tests/unit/terminal/send_text_spec.lua`, `busted -v tests/unit/native_terminal_toggle_spec.lua`
