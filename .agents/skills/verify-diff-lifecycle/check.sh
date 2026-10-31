@@ -86,6 +86,9 @@ MAIN=lua/claudecode/init.lua
 INLINE=lua/claudecode/diff_inline.lua
 TOOLS=lua/claudecode/tools/init.lua
 OPEN_DIFF_TOOL=lua/claudecode/tools/open_diff.lua
+CLOSE_TAB_TOOL=lua/claudecode/tools/close_tab.lua
+CLOSE_ALL_TOOL=lua/claudecode/tools/close_all_diff_tabs.lua
+CLIENT=lua/claudecode/server/client.lua
 
 resolve_saved=$(block "$DIFF" '^function M\._resolve_diff_as_saved\(')
 resolve_rejected=$(block "$DIFF" '^function M\._resolve_diff_as_rejected\(')
@@ -94,6 +97,11 @@ setup_blocking=$(block "$DIFF" '^function M\._setup_blocking_diff\(')
 close_by_name=$(block "$DIFF" '^function M\.close_diff_by_tab_name\(')
 close_pending=$(block "$DIFF" '^function M\.close_pending_diffs\(')
 close_for_client=$(block "$DIFF" '^function M\.close_diffs_for_client\(')
+close_all=$(block "$DIFF" '^function M\.close_all_diffs\(')
+held_for_other=$(block "$DIFF" '^local function holds_edits_for_other_client\(')
+close_tab_tool=$(block "$CLOSE_TAB_TOOL" '^local function handler\(params, client\)')
+close_all_tool=$(block "$CLOSE_ALL_TOOL" '^local function handler\(params, client\)')
+create_client=$(block "$CLIENT" '^function M\.create_client\(')
 server_stop=$(block "$SERVER" '^function M\.stop\(\)')
 on_disconnect=$(block "$SERVER" '^ *on_disconnect = function\(')
 handle_request=$(block "$SERVER" '^function M\._handle_request\(')
@@ -131,8 +139,48 @@ fact[ReplaceRejects]=$(as_bool in_order 'if active_diffs\[tab_name\] then' 'exis
   'coroutine\.running\(\)' <<<"$open_blocking")
 fact[CloseTabRejectsPending]=$(as_bool in_order 'if diff_data\.status == "pending" then' \
   'M\._resolve_diff_as_rejected\(tab_name\)' 'M\._cleanup_diff_state\(tab_name' <<<"$close_by_name")
+# A saved diff stays with the client it was accepted for: a replacing openDiff from another
+# client errors, and close_tab and closeAllDiffTabs hand their caller to close_diff_by_tab_name.
+FACTS+=(ReplaceKeepsOthersSaved CloseKeepsOthersSaved)
+held_for_other_reads_owner() {
+  grep -qE '^  return diff_data\.status == "saved" and diff_data\.client_id ~= nil and diff_data\.client_id ~= client_id$' \
+    <<<"$held_for_other"
+}
+replace_keeps_others_saved() {
+  held_for_other_reads_owner &&
+    in_order 'if active_diffs\[tab_name\] then' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
+      '^ *error\(\{$' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' <<<"$open_blocking"
+}
+fact[ReplaceKeepsOthersSaved]=$(as_bool replace_keeps_others_saved)
+close_keeps_others_saved() {
+  held_for_other_reads_owner &&
+    in_order '^function M\.close_diff_by_tab_name\(tab_name, client_id\)$' \
+      'if client_id and holds_edits_for_other_client\(diff_data, client_id\) then' '^ *return false$' \
+      'M\._cleanup_diff_state\(tab_name' <<<"$close_by_name" &&
+    grep -q 'M\.close_diff_by_tab_name(tab_name, client_id)' <<<"$close_active" &&
+    grep -q 'return M\.build_response(pcall(tool_data\.handler, input, client))' <<<"$handle_invoke" &&
+    grep -qE '^  return close_active_diffs\(nil, .*, client_id\)$' <<<"$close_all" &&
+    grep -q 'diff\.close_all_diffs(".*", client and client\.id or nil)' <<<"$close_all_tool" &&
+    grep -q 'diff\.close_diff_by_tab_name(tab_name, client and client\.id or nil)' <<<"$close_tab_tool"
+}
+fact[CloseKeepsOthersSaved]=$(as_bool close_keeps_others_saved)
 fact[CloseEachByName]=$(as_bool in_order 'for _, tab_name in ipairs\(tab_names\) do' \
-  'if M\.close_diff_by_tab_name\(tab_name\) then' <<<"$close_active")
+  'if (.* and )?M\.close_diff_by_tab_name\(tab_name(, client_id)?\) then' <<<"$close_active")
+# A ClaudeCodeDiffClosed handler runs inside each close, so the loop must re-read the entry
+# and rerun the snapshot's filter on it.
+FACTS+=(CloseRechecksFilter)
+fact[CloseRechecksFilter]=$(as_bool in_order 'local function matches\(diff_data\)' \
+  'return diff_data ~= nil and \(not filter_fn or filter_fn\(diff_data\)\)' 'if matches\(diff_data\) then' \
+  'for _, tab_name in ipairs\(tab_names\) do' \
+  'if matches\(active_diffs\[tab_name\]\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
+# A saved diff outlives its client's connection, so a later connection must never get that client's id.
+FACTS+=(ClientIdsUnique)
+client_ids_unique() {
+  grep -qE '^local clients_created = 0$' "$CLIENT" &&
+    in_order '^  clients_created = clients_created \+ 1$' '^  local client_id = "client_" \.\. clients_created$' \
+      '^    id = client_id,$' <<<"$create_client"
+}
+fact[ClientIdsUnique]=$(as_bool client_ids_unique)
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \
   '_G\.claude_deferred_responses = \{\}' <<<"$server_stop")
 fact[StopPendingOnly]=$(as_bool grep -qE '^ *return diff_data\.status == "pending"$' <<<"$close_pending")
@@ -179,6 +227,7 @@ SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
+    close_all held_for_other close_tab_tool close_all_tool create_client \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
     handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
@@ -250,6 +299,7 @@ run_tlc() {
     if [[ -n $properties ]]; then echo "  Reqs = {r1, r2}"; else echo "  Reqs = {r1, r2, r3}"; fi
     echo "  Tabs = {t1, t2}"
     echo "  Clients = {c1, c2}"
+    echo "  ClosedHandlerResolvesOther = TRUE"
     for f in "${FACTS[@]}"; do echo "  $f = ${vals[$f]}"; done
     [[ -n $invariants ]] && echo "INVARIANT $invariants"
     [[ -n $properties ]] && echo "PROPERTY $properties"
@@ -293,6 +343,8 @@ if [[ $mutants == 1 ]]; then
     [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
     [SetupAnswerReturned]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
+    [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
+    [ClientIdsUnique]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
   )
   status=0

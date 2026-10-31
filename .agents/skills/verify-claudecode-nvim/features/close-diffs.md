@@ -8,6 +8,7 @@ Claude can close every open diff with the `closeAllDiffTabs` tool, and the user 
 - `close-all-rejects` answers each pending openDiff call with `DIFF_REJECTED` when its diff is closed in bulk.
 - `close-pending-command` closes only unanswered diffs on `:ClaudeCodeCloseAllDiffs` and reports the count.
 - `close-pending-keeps-saved` leaves an accepted (`:w`) diff open on `:ClaudeCodeCloseAllDiffs`.
+- `close-keeps-other-client-saved` leaves a diff the user accepted for another client open on `closeAllDiffTabs` and `close_tab`.
 
 ## How to get to it (user POV)
 
@@ -26,10 +27,11 @@ Steps:
 - **Close all as Claude.** Run `$V tool x3 closeAllDiffTabs` and `$V await x3`. The answer text is `CLOSED_2_DIFF_TABS`. `$V await x1` and `$V await x2` each print `DIFF_REJECTED` and their tab name. `$V expr "tabpagenr('\$') . winnr('\$') . bufname()"` prints `11hello.txt`.
 - **Close pending as the user.** Open a diff with id `y1` and tab `✻ [Claude Code] hello.txt (y1) ⧉`, using the `x1` command with `y1` in place of `x1`, then run `$V keys ':ClaudeCodeCloseAllDiffs' Enter` and `$V await y1 3`. The answer is `DIFF_REJECTED`. `$V expr 'execute("messages")'` ends with `Closed 1 pending Claude diff(s)`.
 - **Keep an accepted diff.** Open a diff with id `y2` and tab `✻ [Claude Code] hello.txt (y2) ⧉` the same way, accept it with `$V keys ':w' Enter` and `$V await y2` (`FILE_SAVED`), then run `$V keys ':ClaudeCodeCloseAllDiffs' Enter`. The messages end with `No pending Claude diffs to close`, and `$V expr "winnr('\$')"` still prints `2`. `$V tool y3 closeAllDiffTabs` then answers `CLOSED_1_DIFF_TABS` and the window count drops to `1`.
+- **Keep another client's accepted diff.** Run `VCN_CLIENT=b $V connect`. Open a diff as the launch client with id `z1` and tab `✻ [Claude Code] hello.txt (z1) ⧉`, accept it with `$V keys ':w' Enter` and `$V await z1` (`FILE_SAVED`), then run `$V disconnect`. `VCN_CLIENT=b $V tool z2 closeAllDiffTabs` answers `CLOSED_0_DIFF_TABS`, and `VCN_CLIENT=b $V tool z3 close_tab '{"tab_name":"✻ [Claude Code] hello.txt (z1) ⧉"}'` leaves the diff open: `$V expr "winnr('\$')"` still prints `2`.
 - **Proof.** Run `$V capture close-all-tool-before` and `$V screenshot close-all-tool-before` with both diffs open, the same with `-after` after `closeAllDiffTabs`, then `$V record close-diffs`. Keep the `x1`, `x2`, and `x3` answers from `$OUT/ws-in.jsonl`.
 
 ## Gotchas
 
-- `closeAllDiffTabs` also closes accepted diffs. Claude calls it only after writing accepted files, so a recipe that skips the write loses the edits.
+- `closeAllDiffTabs` also closes the caller's own accepted diffs. Claude calls it only after writing accepted files, so a recipe that skips the write loses the edits.
 - The second diff opens in a new tab page because the first one occupies the current tab.
 - The user command reports through `:messages`, not through the client. Read it with `$V expr 'execute("messages")'`.

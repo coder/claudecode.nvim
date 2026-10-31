@@ -13,7 +13,10 @@
 #   capture <name>              save the screen text to $OUT/<name>.screen.txt and print it
 #   screenshot <name>           save a PNG of the screen to $OUT/<name>.png and print its path
 #   record <name>               save a WebM of the session so far to $OUT/<name>.webm and print its path
+#   connect                     start one more client, named by VCN_CLIENT, and finish its handshake
+#   disconnect                  kill the client VCN_CLIENT names (unset: the launch client)
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
+# VCN_CLIENT=<name> makes rpc, tool, await, connect and disconnect act as that client.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -38,6 +41,7 @@ env_line() { printf '%s=%q\n' "$1" "$2"; }
 load() {
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
   [[ -f $VCN_STATE/run.env ]] || die "no run at $VCN_STATE (already cleaned up?)"
+  [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
 }
@@ -69,12 +73,17 @@ nv() {
   return "$rc"
 }
 
-send() { jq -nc "$@" >>"$OUT/ws-out.jsonl"; }
+# Each client has its own message files: ws-out.jsonl for the launch client, ws-out-<name>.jsonl for another.
+chan() { printf '%s' "${VCN_CLIENT:+-$VCN_CLIENT}"; }
+
+client_pid_var() { printf 'CLIENT_PID%s' "${VCN_CLIENT:+_$VCN_CLIENT}"; }
+
+send() { jq -nc "$@" >>"$OUT/ws-out$(chan).jsonl"; }
 
 # await matches responses by id, so a reused id would return the earlier answer.
 cmd_rpc() {
-  jq -e --arg id "$1" 'select(.id == $id)' "$OUT/ws-out.jsonl" >/dev/null 2>&1 &&
-    die "id $1 was already used in this run; pick a new id"
+  jq -e --arg id "$1" 'select(.id == $id)' "$OUT/ws-out$(chan).jsonl" >/dev/null 2>&1 &&
+    die "id $1 was already used by this client; pick a new id"
   send --arg id "$1" --arg m "$2" --argjson p "${3-"{}"}" '{jsonrpc:"2.0",id:$id,method:$m,params:$p}'
 }
 
@@ -83,7 +92,7 @@ cmd_await() {
   local deadline=$((SECONDS + secs))
   while :; do
     # fromjson? skips a line the client is still writing.
-    line=$(jq -cR --arg id "$id" 'fromjson? | select(.id == $id)' "$OUT/ws-in.jsonl" | head -n 1)
+    line=$(jq -cR --arg id "$id" 'fromjson? | select(.id == $id)' "$OUT/ws-in$(chan).jsonl" | head -n 1)
     if [[ -n $line ]]; then
       echo "$line"
       return 0
@@ -167,8 +176,10 @@ cmd_cleanup() {
     (cmd_record session) >/dev/null || echo "vcn: could not save session.webm" >&2
     att destroy "$SID" --json >/dev/null 2>&1 || att destroy "$SID" --force --json >/dev/null 2>&1 || true
   fi
-  local i pids=()
-  if ours "${CLIENT_PID-}"; then kill "$CLIENT_PID" 2>/dev/null || true; fi
+  local i var pids=()
+  for var in $(compgen -v CLIENT_PID); do
+    if ours "${!var}"; then kill "${!var}" 2>/dev/null || true; fi
+  done
   for i in $(seq 50); do
     mapfile -t pids < <(tagged)
     ((${#pids[@]} == 0)) && break
@@ -263,8 +274,49 @@ launch_failed() {
   exit "$rc"
 }
 
+# Start ws-client.mjs as the client VCN_CLIENT names, record its PID, and finish the MCP handshake.
+start_client() {
+  local setsid_exe=$1 ch init
+  ch=$(chan)
+  : >>"$OUT/ws-out$ch.jsonl"
+  : >>"$OUT/ws-in$ch.jsonl"
+  # setsid: an agent's bash tool kills the background jobs of a call when the call ends, and the
+  # client must outlive it. The client reads the token from the lock file, so it is not in argv.
+  VCN_RUN_TAG=$VCN_STATE "$setsid_exe" "$NODE_DIR/node" "$SKILL_DIR/scripts/ws-client.mjs" \
+    "$VCN_STATE/claude/ide/$PORT.lock" "$OUT/ws-out$ch.jsonl" "$OUT/ws-in$ch.jsonl" \
+    </dev/null >/dev/null 2>>"$OUT/ws-client$ch.log" &
+  env_line "$(client_pid_var)" "$!" >>"$VCN_STATE/run.env"
+  load
+  # VCN_INIT_JSONRPC lets scripts/proof-launch-refusals.sh get a real error answer from the plugin.
+  send --arg v "${VCN_INIT_JSONRPC:-2.0}" \
+    '{jsonrpc:$v,id:"init",method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"vcn",version:"0"}}}'
+  init=$(cmd_await init 10)
+  jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
+  send '{jsonrpc:"2.0",method:"notifications/initialized"}'
+}
+
+cmd_connect() {
+  local var setsid_exe
+  [[ -n ${VCN_CLIENT-} ]] || die "connect needs VCN_CLIENT=<name> for the new client"
+  var=$(client_pid_var)
+  [[ -z ${!var-} ]] || die "client $VCN_CLIENT was already started in this run"
+  setsid_exe=$(bin setsid)
+  start_client "$setsid_exe"
+  echo "client $VCN_CLIENT connected; its messages are in $OUT/ws-out$(chan).jsonl and $OUT/ws-in$(chan).jsonl"
+}
+
+# Kill a client by its recorded PID, the way a Claude CLI that exits drops its socket.
+cmd_disconnect() {
+  local var
+  var=$(client_pid_var)
+  ours "${!var-}" || die "client ${VCN_CLIENT:-<launch>} is not running in this run"
+  kill "${!var}"
+}
+
 cmd_launch() {
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock init lock="" f i
+  # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
+  local VCN_CLIENT=""
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
@@ -354,18 +406,7 @@ cmd_launch() {
   [[ -n $lock ]] || die "no lock file for pid $NVIM_PID in $state/claude/ide"
   env_line PORT "$(basename "$lock" .lock)" >>"$state/run.env"
   load
-  # setsid: an agent's bash tool kills the background jobs of a call when the call ends, and the
-  # client must outlive it. The client reads the token from the lock file, so it is not in argv.
-  VCN_RUN_TAG=$state "$setsid_exe" "$node_exe" "$SKILL_DIR/scripts/ws-client.mjs" "$lock" "$OUT/ws-out.jsonl" \
-    "$OUT/ws-in.jsonl" </dev/null >/dev/null 2>>"$OUT/ws-client.log" &
-  env_line CLIENT_PID "$!" >>"$state/run.env"
-  load
-  # VCN_INIT_JSONRPC lets scripts/proof-launch-refusals.sh get a real error answer from the plugin.
-  send --arg v "${VCN_INIT_JSONRPC:-2.0}" \
-    '{jsonrpc:$v,id:"init",method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"vcn",version:"0"}}}'
-  init=$(cmd_await init 10)
-  jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
-  send '{jsonrpc:"2.0",method:"notifications/initialized"}'
+  start_client "$setsid_exe"
   cp "$state/run.env" "$OUT/run.env"
   {
     "$nvim_exe" --version | head -n 1
@@ -382,7 +423,7 @@ launch)
   cmd_launch "$@"
   ;;
 cleanup) cmd_cleanup ;;
-doctor | keys | expr | until | rpc | tool | await | capture | screenshot | record)
+doctor | keys | expr | until | rpc | tool | await | capture | screenshot | record | connect | disconnect)
   load
   c=$1
   shift
@@ -400,6 +441,8 @@ doctor | keys | expr | until | rpc | tool | await | capture | screenshot | recor
   capture) cmd_capture "$1" ;;
   screenshot) cmd_screenshot "$1" ;;
   record) cmd_record "$1" ;;
+  connect) cmd_connect ;;
+  disconnect) cmd_disconnect ;;
   esac
   ;;
 help | -h | --help)
