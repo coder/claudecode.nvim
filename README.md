@@ -982,7 +982,9 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 - `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
   none [plugin/claudecode.lua].
 - `openDiff` must run in a non-main coroutine. Its response is deferred until the user accepts or rejects the diff
-  [lua/claudecode/diff.lua:M.open_diff_blocking] [lua/claudecode/server/init.lua:M.\_setup_deferred_response].
+  [lua/claudecode/diff.lua:M.open_diff_blocking] [lua/claudecode/server/init.lua:M.\_setup_deferred_response]. A diff
+  that resolves before `openDiff` yields, for example from a `ClaudeCodeDiffOpened` handler, is answered at once
+  [lua/claudecode/diff.lua:M.open_diff_blocking].
 
 ### Global Side Effects
 
