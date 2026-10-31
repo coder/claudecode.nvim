@@ -28,6 +28,7 @@ describe("Tool: open_file", function()
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
     end)
+    _G.vim.o = { selection = "inclusive" }
 
     -- Mock vim.json.encode
     _G.vim.json = _G.vim.json or {}
@@ -94,6 +95,7 @@ describe("Tool: open_file", function()
     _G.vim.cmd = nil
     _G.vim.cmd_history = nil
     _G.vim.v = nil
+    _G.vim.o = nil
   end)
 
   it("should error if filePath parameter is missing", function()
@@ -367,14 +369,16 @@ describe("Tool: open_file", function()
     end)
 
     -- The getregion() text of the charwise `normal! gv` selection, joined with "/". Line breaks do not show.
+    -- With 'selection' set to exclusive, the character under '> is left out.
     local function selected_text()
       assert_contains(table.concat(_G.vim.cmd_history, "\n"), "normal! gv")
       local first, last = marks["<"], marks[">"]
+      local last_included = _G.vim.o.selection == "exclusive" and 0 or 1
       local selected = {}
       for row = first.line, last.line do
         local text = buffer_lines[row]
         local from = row == first.line and first.col + 1 or 1
-        local to = row == last.line and math.min(math.max(last.col, 0) + 1, #text) or #text
+        local to = row == last.line and math.min(math.max(last.col, 0) + last_included, #text) or #text
         table.insert(selected, text:sub(from, to))
       end
       return table.concat(selected, "/")
@@ -417,6 +421,22 @@ describe("Tool: open_file", function()
 
       expect(success).to_be_true()
       expect(selected_text()).to_be("two/thr")
+    end)
+
+    it("keeps the last character of the endText match with selection=exclusive", function()
+      _G.vim.o.selection = "exclusive"
+      local success = pcall(open_file_handler, { filePath = "other.txt", startText = "two", endText = "three" })
+
+      expect(success).to_be_true()
+      expect(selected_text()).to_be("two/three")
+    end)
+
+    it("keeps whole lines with selection=exclusive", function()
+      _G.vim.o.selection = "exclusive"
+      local success = pcall(open_file_handler, { filePath = "other.txt", startLine = 3, endLine = 4 })
+
+      expect(success).to_be_true()
+      expect(selected_text()).to_be("three/four")
     end)
 
     it("selects only the startText match when no endText is given", function()
