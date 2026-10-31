@@ -36,15 +36,9 @@ CONSTANTS
   UserCloseAllPendingOnly, \* init.lua :ClaudeCodeCloseAllDiffs calls close_pending_diffs
   ClientTagged,            \* tools/init.lua passes the client to openDiff, which records client.id
   ClientIdsUnique,         \* server/client.lua numbers client ids, so a new connection never reuses one
-  OpenedEventInSetup,      \* diff.lua fires ClaudeCodeDiffOpened synchronously before the yield,
-                           \* and the resolution callback resumes the coroutine without a status check
-
-  \* Assumption, not a code fact: the user has a ClaudeCodeDiffOpened handler
-  \* (README "Diff Lifecycle Events") that runs :ClaudeCodeDiffAccept or
-  \* :ClaudeCodeDiffDeny, or closes the proposal window with `nested = true`.
-  \* A default handler that closes the window resolves nothing: WinClosed does
-  \* not fire inside a non-nested autocmd.
-  UserHandlerResolvesDiff
+  SetupAnswerReturned,     \* diff.lua open_diff_blocking returns a result that arrives before its yield
+  OpenedEventInSetup       \* diff.lua fires ClaudeCodeDiffOpened synchronously before the yield
+                           \* (not a guard: TRUE lets a user handler resolve the diff in setup)
 
 None == "none"
 NoDiff == [req |-> None, status |-> None]
@@ -62,34 +56,42 @@ VARIABLES
   active,     \* diff.lua active_diffs: per tab_name, the call it answers and its status
   sender,     \* per call: _G.claude_deferred_responses holds its response sender
   answers,    \* per call: the JSON-RPC responses the plugin sent, in order
+  early,      \* per call: the answer kept for open_diff_blocking to return when setup ends
   clientUp,   \* per client: connected
   serverUp,   \* the WebSocket server runs
   scheduled,  \* clients whose vim.schedule'd disconnect cleanup has not run yet
   savedLost,  \* ghost: a saved diff was torn down while no connected owner could write it
   staleOwner  \* ghost: calls whose client id now names a later connection
 
-vars == <<phase, reqTab, reqClient, active, sender, answers, clientUp, serverUp, scheduled, savedLost, staleOwner>>
+vars == <<phase, reqTab, reqClient, active, sender, answers, early, clientUp, serverUp, scheduled, savedLost,
+          staleOwner>>
 
 (* The parts of the state that one diff operation touches, as a record, so   *)
 (* that a step that closes several diffs can chain the same operators.       *)
-W == [phase |-> phase, active |-> active, sender |-> sender, answers |-> answers, savedLost |-> savedLost]
+W == [phase |-> phase, active |-> active, sender |-> sender, answers |-> answers, early |-> early,
+      savedLost |-> savedLost]
 
 SetW(w) ==
   /\ phase' = w.phase
   /\ active' = w.active
   /\ sender' = w.sender
   /\ answers' = w.answers
+  /\ early' = w.early
   /\ savedLost' = w.savedLost
 
-(* diff.lua open_diff_blocking resolution callback: coroutine.resume(co).    *)
-(* Resuming a running coroutine (still in setup) or a dead one fails; the    *)
-(* failure branch sends an error only if a sender is registered.             *)
+(* diff.lua open_diff_blocking resolution callback. Before the yield it keeps *)
+(* the result for open_diff_blocking to return. After the yield it calls      *)
+(* coroutine.resume(co): resuming a dead coroutine fails, and the failure     *)
+(* branch sends an error only if a sender is registered. Without the setup    *)
+(* branch, resuming the running coroutine fails too, and no sender exists.    *)
 Callback(w, q, msg) ==
-  LET alive == w.phase[q] = "waiting"
-      send == IF ~w.sender[q] THEN None ELSE IF alive THEN msg ELSE "ERROR"
-  IN [w EXCEPT !.phase[q] = IF alive THEN "done" ELSE @,
-               !.answers[q] = IF send = None THEN @ ELSE Append(@, send),
-               !.sender[q] = IF send # None /\ SenderCleared THEN FALSE ELSE @]
+  IF w.phase[q] = "setup" /\ SetupAnswerReturned
+  THEN [w EXCEPT !.early[q] = msg]
+  ELSE LET alive == w.phase[q] = "waiting"
+           send == IF ~w.sender[q] THEN None ELSE IF alive THEN msg ELSE "ERROR"
+       IN [w EXCEPT !.phase[q] = IF alive THEN "done" ELSE @,
+                    !.answers[q] = IF send = None THEN @ ELSE Append(@, send),
+                    !.sender[q] = IF send # None /\ SenderCleared THEN FALSE ELSE @]
 
 (* diff.lua _resolve_diff_as_saved / _resolve_diff_as_rejected. *)
 Resolve(w, t, outcome) ==
@@ -166,6 +168,7 @@ TypeOK ==
   /\ active \in [Tabs -> {NoDiff} \cup [req : Reqs, status : {"pending"} \cup Outcomes]]
   /\ sender \in [Reqs -> BOOLEAN]
   /\ answers \in [Reqs -> Seq({"FILE_SAVED", "DIFF_REJECTED", "ERROR"})]
+  /\ early \in [Reqs -> {None, "FILE_SAVED", "DIFF_REJECTED"}]
   /\ clientUp \in [Clients -> BOOLEAN]
   /\ serverUp \in BOOLEAN
   /\ scheduled \subseteq Clients
@@ -179,6 +182,7 @@ Init ==
   /\ active = [t \in Tabs |-> NoDiff]
   /\ sender = [r \in Reqs |-> FALSE]
   /\ answers = [r \in Reqs |-> <<>>]
+  /\ early = [r \in Reqs |-> None]
   /\ clientUp = [c \in Clients |-> TRUE]
   /\ serverUp = TRUE
   /\ scheduled = {}
@@ -201,21 +205,33 @@ ClaudeOpensDiff(r, c, t) ==
   /\ reqClient' = [reqClient EXCEPT ![r] = c]
   /\ UNCHANGED <<clientUp, serverUp, scheduled, staleOwner>>
 
-(* A user ClaudeCodeDiffOpened handler closes the diff window or accepts it, *)
-(* while open_diff_blocking has not yielded yet.                            *)
+(* A user ClaudeCodeDiffOpened handler (README "Diff Lifecycle Events") runs *)
+(* :ClaudeCodeDiffAccept or :ClaudeCodeDiffDeny, or closes the proposal     *)
+(* window from a `nested = true` autocmd, before open_diff_blocking yields. *)
+(* A default handler that closes the window resolves nothing: WinClosed     *)
+(* does not fire inside a non-nested autocmd.                               *)
 UserHandlerResolves(r, o) ==
-  /\ OpenedEventInSetup /\ UserHandlerResolvesDiff
+  /\ OpenedEventInSetup
   /\ phase[r] = "setup"
   /\ Resolve(W, reqTab[r], o) # W
   /\ SetW(Resolve(W, reqTab[r], o))
   /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
-(* coroutine.yield(); tools/init.lua returns _deferred; server/init.lua stores the sender. *)
-DiffYields(r) ==
+(* open_diff_blocking after setup. A kept answer is returned: the coroutine *)
+(* ends, and tools/init.lua and server/init.lua send it as the immediate    *)
+(* reply. Otherwise coroutine.yield(); tools/init.lua returns _deferred;    *)
+(* server/init.lua stores the sender.                                       *)
+SetupEnds(r) ==
   /\ phase[r] = "setup"
-  /\ phase' = [phase EXCEPT ![r] = "waiting"]
-  /\ sender' = [sender EXCEPT ![r] = TRUE]
-  /\ UNCHANGED <<reqTab, reqClient, active, answers, clientUp, serverUp, scheduled, savedLost, staleOwner>>
+  /\ IF early[r] # None
+     THEN /\ phase' = [phase EXCEPT ![r] = "done"]
+          /\ answers' = [answers EXCEPT ![r] = Append(@, early[r])]
+          /\ early' = [early EXCEPT ![r] = None]
+          /\ UNCHANGED sender
+     ELSE /\ phase' = [phase EXCEPT ![r] = "waiting"]
+          /\ sender' = [sender EXCEPT ![r] = TRUE]
+          /\ UNCHANGED <<answers, early>>
+  /\ UNCHANGED <<reqTab, reqClient, active, clientUp, serverUp, scheduled, savedLost, staleOwner>>
 
 (* :w or :ClaudeCodeDiffAccept (BufWriteCmd / accept_current_diff). *)
 UserAccepts(t) ==
@@ -256,7 +272,7 @@ ClientDisconnects(c) ==
   /\ Idle /\ serverUp /\ clientUp[c]
   /\ clientUp' = [clientUp EXCEPT ![c] = FALSE]
   /\ scheduled' = IF DisconnectRejects THEN scheduled \cup {c} ELSE scheduled
-  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, serverUp, savedLost, staleOwner>>
+  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, early, serverUp, savedLost, staleOwner>>
 
 (* Without ClientIdsUnique, a new connection can get the id of a client that  *)
 (* disconnected, and the plugin takes it for the owner of that client's diffs. *)
@@ -264,7 +280,7 @@ ClientIdReused(c) ==
   /\ ~ClientIdsUnique /\ Idle /\ serverUp /\ ~clientUp[c]
   /\ clientUp' = [clientUp EXCEPT ![c] = TRUE]
   /\ staleOwner' = staleOwner \cup {r \in Reqs : reqClient[r] = c}
-  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, serverUp, scheduled, savedLost>>
+  /\ UNCHANGED <<phase, reqTab, reqClient, active, sender, answers, early, serverUp, scheduled, savedLost>>
 
 (* The scheduled close_diffs_for_client runs; its filter reads the table now. *)
 DisconnectCleanupRuns(c) ==
@@ -286,7 +302,7 @@ ServerStops ==
 Next ==
   \/ \E r \in Reqs, c \in Clients, t \in Tabs : ClaudeOpensDiff(r, c, t)
   \/ \E r \in Reqs, o \in Outcomes : UserHandlerResolves(r, o)
-  \/ \E r \in Reqs : DiffYields(r)
+  \/ \E r \in Reqs : SetupEnds(r)
   \/ \E t \in Tabs : UserAccepts(t)
   \/ \E t \in Tabs : UserRejects(t)
   \/ UserClosesAllDiffs
@@ -300,7 +316,7 @@ Next ==
 (* Setup is synchronous and the scheduled cleanup runs on a later tick. *)
 Spec ==
   /\ Init /\ [][Next]_vars
-  /\ \A r \in Reqs : WF_vars(DiffYields(r))
+  /\ \A r \in Reqs : WF_vars(SetupEnds(r))
   /\ \A c \in Clients : WF_vars(DisconnectCleanupRuns(c))
 
 (* Only a model with both double-answer guards removed sends more than one *)
