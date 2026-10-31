@@ -111,6 +111,9 @@ describe("claudecode.terminal.native toggle behavior", function()
         end,
         -- Mirrors Neovim: a temporary window when no window shows bufnr, and a raised error comes back rewrapped.
         nvim_buf_call = function(bufnr, fn)
+          if not mock_state.buffers[bufnr] then
+            error("Invalid buffer id: " .. tostring(bufnr))
+          end
           local saved_win = mock_state.current_win
           local target_win = nil
           if mock_state.windows[saved_win] and mock_state.windows[saved_win].bufnr == bufnr then
@@ -403,6 +406,33 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       assert.are.same({ [plugin_bufnr] = plugin_buffer }, mock_state.buffers)
       assert.are.same({ name = "", options = { modified = false, buftype = "nofile" } }, plugin_buffer)
+    end)
+
+    it("closes the split and sends one notice when the autocmd also wipes its buffer", function()
+      mock_state.bufenter_autocmd = function(winid, bufnr)
+        if winid ~= 1 and bufnr ~= plugin_bufnr then
+          mock_state.windows[winid].bufnr = plugin_bufnr
+          mock_state.buffers[bufnr] = nil
+        end
+      end
+      local notified = {}
+      mock_vim.notify = function(msg, level)
+        table.insert(notified, { msg = msg, level = level })
+      end
+
+      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.are.equal(1, mock_state.current_win)
+      local open_windows = {}
+      for winid in pairs(mock_state.windows) do
+        table.insert(open_windows, winid)
+      end
+      assert.are.same({ 1 }, open_windows)
+      assert.are.same({ [plugin_bufnr] = plugin_buffer }, mock_state.buffers)
+      assert.are.same({
+        { msg = "Failed to open native terminal. Its buffer was deleted before termopen ran.", level = 4 },
+      }, notified)
     end)
 
     it("runs Claude in its own buffer and shows it in the split when termopen succeeds", function()
