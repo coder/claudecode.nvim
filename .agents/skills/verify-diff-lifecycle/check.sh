@@ -166,7 +166,7 @@ fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 echo "== code facts (TRUE = guard present)"
 for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
 
-# The coverage record: a hash of every Lua file under lua/ and plugin/, so any change to the plugin's Lua makes
+# The coverage record: a hash of every Lua and Vimscript file under lua/ and plugin/, so any change to the plugin's Lua makes
 # the run STALE until someone confirms the model still fits. The block hashes and call sites
 # below point the reader at what changed.
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
@@ -184,10 +184,10 @@ coverage() {
   local file
   while IFS= read -r file; do
     printf 'file %s %s\n' "$file" "$(sha256 <"$file" | cut -c1-16)"
-  done < <(find lua plugin -name '*.lua' | sort)
+  done < <(find lua plugin \( -name '*.lua' -o -name '*.vim' \) | sort)
   # Each site also names its enclosing top-level statement, so moving a call into another
   # function or autocmd changes the record.
-  find lua plugin -name '*.lua' -print0 | sort -z | RE=$SITE_RE xargs -0 awk '
+  find lua plugin \( -name '*.lua' -o -name '*.vim' \) -print0 | sort -z | RE=$SITE_RE xargs -0 awk '
     BEGIN { re = ENVIRON["RE"] }
     FNR == 1 { top = "" }
     /^[^[:space:]-]/ && !/^(end|else|elseif|return|[})])/ { top = $0 }
@@ -198,11 +198,22 @@ current=$(coverage)
 if [[ $record == 1 ]]; then
   sync=$(git rev-parse HEAD)
   if base=$(git merge-base HEAD origin/main 2>/dev/null) && git diff --quiet "$base" HEAD -- lua/ plugin/; then sync=$base; fi
-  printf 'sync %s\n%s\n' "$sync" "$current" >"$LOCK"
+  # A contributor checkout can make covered.lock a symlink to a script: never write through one.
+  if [[ -L $LOCK || (-e $LOCK && ! -f $LOCK) ]]; then
+    echo "ERROR: $LOCK is a symlink or not a regular file; refusing to write it" >&2
+    exit 2
+  fi
+  tmp=$(mktemp "$here/.covered.lock.XXXXXX")
+  printf 'sync %s\n%s\n' "$sync" "$current" >"$tmp"
+  mv -f "$tmp" "$LOCK"
   echo "recorded $LOCK at sync commit $sync"
   exit 0
 fi
 stale=0
+if [[ -L $LOCK ]]; then
+  echo "ERROR: $LOCK is a symlink; the coverage record must be a regular file" >&2
+  exit 2
+fi
 if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >/dev/null; then
   stale=1
   echo "== STALE: the covered code changed since commit $(head -1 "$LOCK" 2>/dev/null | cut -c6-17)."
@@ -330,8 +341,8 @@ if [[ $mutants == 1 ]]; then
   run_tlc mut-OpenedEventInSetup TRUE "$ALL_INV" "" OpenedEventInSetup=FALSE || rc=$?
   if [[ $rc == 0 ]]; then
     printf '  %-30s removes the known finding, as expected\n' "OpenedEventInSetup=FALSE"
-  elif [[ $rc != 12 && $rc != 13 ]]; then
-    echo "  OpenedEventInSetup=FALSE: TLC ERROR (exit $rc)"
+  elif [[ $rc != 12 && $rc != 13 ]] || [[ $rc == 12 && $(broken_rule "$work/mut-OpenedEventInSetup.out") == TypeOK ]]; then
+    echo "  OpenedEventInSetup=FALSE: TLC ERROR or TypeOK broken (exit $rc)"
     status=2
   else
     printf '  %-30s still breaks the opened-handler run (%s)\n' "OpenedEventInSetup=FALSE" "$(describe mut-OpenedEventInSetup "$rc")"
