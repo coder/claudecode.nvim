@@ -345,16 +345,20 @@ describe("Tool: open_file", function()
     local buffer_lines = { "one", "two", "three", "four" }
     local marks
 
-    -- Follows nvim_buf_set_mark: rows are 1-based, columns 0-based, and a row past the last line errors.
+    -- Follows nvim_buf_set_mark: rows are 1-based, columns are 0-based numbers, and a row past the last line errors.
     before_each(function()
       marks = {}
-      _G.vim.api.nvim_buf_get_lines = spy.new(function()
-        return buffer_lines
+      _G.vim.api.nvim_buf_get_lines = spy.new(function(_, first, last)
+        last = last < 0 and #buffer_lines + last + 1 or last
+        return { unpack(buffer_lines, first + 1, last) }
       end)
       _G.vim.api.nvim_buf_line_count = spy.new(function()
         return #buffer_lines
       end)
       _G.vim.api.nvim_buf_set_mark = spy.new(function(_, name, line, col)
+        if type(col) ~= "number" then
+          error("Expected lua number")
+        end
         if line < 0 or line > #buffer_lines then
           error("Invalid 'line': out of range")
         end
@@ -383,6 +387,14 @@ describe("Tool: open_file", function()
       expect(success).to_be_true()
       expect(result.content[1].text).to_be("Opened file and selected lines 3 to 4")
       expect(selected_text()).to_be("three/four")
+    end)
+
+    it("selects whole lines on Neovim 0.8, which has no v:maxcol", function()
+      _G.vim.v = {}
+      local success = pcall(open_file_handler, { filePath = "other.txt", startLine = 2, endLine = 3 })
+
+      expect(success).to_be_true()
+      expect(selected_text()).to_be("two/three")
     end)
 
     it("stops a line range that runs past the last line at the last line", function()
