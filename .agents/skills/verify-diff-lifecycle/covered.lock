@@ -1,4 +1,4 @@
-sync c0deb41a0c6ac74c620be0a683aa9834e535c84a
+sync b03b0bf0f4bf6af8944e6d03c1a908087d982f1a
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      332af93360ef939b
@@ -37,13 +37,13 @@ file lua/claudecode/selection.lua 82ec9632d05721ac
 file lua/claudecode/server/client.lua 61731e86a3b72d16
 file lua/claudecode/server/frame.lua ab054d6538add76b
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
-file lua/claudecode/server/init.lua 6039869e604c158e
+file lua/claudecode/server/init.lua 0a0c2e71d9a0b4d7
 file lua/claudecode/server/mock.lua 47986b9e1060acd8
 file lua/claudecode/server/tcp.lua 763cf0912217f5c9
 file lua/claudecode/server/utils.lua ee730723c5843430
 file lua/claudecode/terminal.lua 2639f3666bd87065
-file lua/claudecode/terminal/external.lua a01ac57d79ac270a
-file lua/claudecode/terminal/native.lua 6891c68dc8fe91e4
+file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
+file lua/claudecode/terminal/native.lua 2d462a2284561bc3
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 file lua/claudecode/terminal/snacks.lua a1ac6dc7db5bd31c
