@@ -28,7 +28,6 @@ describe("Tool: open_file", function()
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
     end)
-    _G.vim.v = { maxcol = 2147483647 }
 
     -- Mock vim.json.encode
     _G.vim.json = _G.vim.json or {}

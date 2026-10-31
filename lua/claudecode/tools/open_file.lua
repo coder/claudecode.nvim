@@ -194,9 +194,11 @@ local function handler(params)
       local start_line = math.min(math.max(params.startLine or 1, 1), line_count)
       local end_line = math.min(math.max(params.endLine or start_line, 1), line_count)
 
-      -- Mark rows are 1-based like startLine/endLine. A v:maxcol column puts '> after the end of the line.
+      -- Mark rows are 1-based like startLine/endLine. '> at the line's length selects the whole line
+      -- (Neovim 0.8 has no v:maxcol).
+      local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, true)[1]
       vim.api.nvim_buf_set_mark(0, "<", start_line, 0, {})
-      vim.api.nvim_buf_set_mark(0, ">", end_line, vim.v.maxcol, {})
+      vim.api.nvim_buf_set_mark(0, ">", end_line, #end_line_text, {})
       vim.cmd("normal! gv")
 
       message = "Opened file and selected lines " .. start_line .. " to " .. end_line
