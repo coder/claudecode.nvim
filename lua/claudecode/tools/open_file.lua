@@ -321,13 +321,15 @@ local function handler(params)
           message = 'Opened file and selected text "' .. start_text .. '"'
         end
 
+        -- A line range earlier in this call can leave Visual or Select mode on. Moving the cursor in it would
+        -- stretch that selection, and keys typed in Select mode replace the selected text.
+        if vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]") then
+          vim.cmd("normal! \27")
+        end
+        vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+        -- When endText is not found, only the cursor moves, as in the VS Code extension.
         if end_line_idx then
-          vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
           select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
-        else
-          -- Like the VS Code extension, only place the cursor on the startText match. The :edit above already
-          -- ended any Visual or Select mode in this window.
-          vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
         end
         vim.cmd("normal! zz") -- Center the selection in the window
       else
