@@ -927,6 +927,87 @@ opts = {
 - **Local installation not working?** If you used `claude migrate-installer`, set `terminal_cmd = "~/.claude/local/claude"` in your config. Check `which claude` vs `ls ~/.claude/local/claude` to verify your installation type.
 - **Native binary installation not working?** If you used the alpha native binary installer, run `claude doctor` to verify installation health and use `which claude` to find the binary path. Set `terminal_cmd = "/path/to/claude"` with the detected path in your config.
 
+## Repository Blueprint
+
+This section is the contract map of the source tree. Each linked README lists the interface, invariants, and side effects
+of one package.
+
+### System Overview
+
+Neovim loads [`plugin/claudecode.lua`](./plugin/README.md), which guards the load and can schedule
+`require("claudecode").setup()`. `setup` in [`lua/claudecode`](./lua/claudecode/README.md) validates config, registers the
+`:ClaudeCode*` commands, and (when `auto_start` is true) calls `start`. `start` opens the
+[WebSocket server](./lua/claudecode/server/README.md) on `127.0.0.1`, writes a lock file with an auth token, and enables
+selection tracking when `track_selection` is true. The Claude CLI finds the lock file, connects, and calls the [MCP tools](./lua/claudecode/tools/README.md).
+The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/README.md). Files under
+[`scripts/`](./scripts/README.md) are dev and release tooling and are never loaded by the plugin.
+
+### Local Interface & Invariants
+
+- `dev-config.lua` returns a lazy.nvim plugin spec for local development: `"coder/claudecode.nvim"` with `dev = true`, a
+  `cmd` list of `:ClaudeCode*` command stubs (it omits `ClaudeCodeSendText`), `<leader>a*` `keys` mappings, and `opts` that set only
+  `focus_after_send = true` [dev-config.lua:return]. The plugin never `require`s it. It has no side effects until a user
+  symlinks it into a Neovim config (see the comment at the top of the file).
+
+### Subdirectories & System Boundaries
+
+- lua: [./lua/README.md](./lua/README.md) - Neovim Lua runtime path. It holds only the `claudecode` package.
+- lua/claudecode: [./lua/claudecode/README.md](./lua/claudecode/README.md) - Core package: setup, commands, config, lock
+  file, terminal dispatcher, blocking diffs, selection tracking, explorer integrations, logging, and `:checkhealth`.
+- lua/claudecode/server: [./lua/claudecode/server/README.md](./lua/claudecode/server/README.md) - Pure-Lua RFC 6455
+  WebSocket and JSON-RPC 2.0 MCP server on `vim.loop` TCP, with auth-token-checked upgrade and a keep-alive ping timer.
+- lua/claudecode/terminal: [./lua/claudecode/terminal/README.md](./lua/claudecode/terminal/README.md) - Terminal
+  providers (native, snacks, external, none) and `paste_fix` for Neovim < 0.12.2.
+- lua/claudecode/tools: [./lua/claudecode/tools/README.md](./lua/claudecode/tools/README.md) - MCP tool registry: 10 tools
+  in `tools/list` plus the hidden `close_tab`. `openDiff` runs in a coroutine and defers its response.
+- plugin: [./plugin/README.md](./plugin/README.md) - Runtime loader: Neovim >= 0.8.0 check, `vim.g.loaded_claudecode`
+  guard, and optional `vim.g.claudecode_auto_setup`.
+- scripts: [./scripts/README.md](./scripts/README.md) - Shell WebSocket/MCP clients, issue repro scripts, integration test
+  runner, and the release-please runner.
+
+`fixtures/` (Neovim configs for manual repros) holds repro notes (`README.md` in some folders) but no EGM contracts.
+`tests/` (Busted specs) holds no contracts.
+
+### Global Invariants
+
+- The server listens only on `127.0.0.1` [lua/claudecode/server/tcp.lua:M.\_bind_and_listen].
+- A WebSocket upgrade must carry `x-claude-code-ide-authorization` that matches the lock-file token, compared in constant
+  time [lua/claudecode/server/handshake.lua:M.validate_upgrade_request]. `start` returns `false` before it starts the server
+  if the token is shorter than 10 characters. It stops the server if the token does not match the token that
+  `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
+- The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
+- Lock files live in `$CLAUDE_CONFIG_DIR/ide` or else `~/.claude/ide`, named `<port>.lock`
+  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients that use `find_claude_lockfile` read the port from that basename
+  [scripts/lib_claude.sh:find_claude_lockfile]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
+- `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
+  none [plugin/claudecode.lua].
+- `openDiff` must run in a non-main coroutine. Its response is deferred until the user accepts or rejects the diff
+  [lua/claudecode/diff.lua:M.open_diff_blocking] [lua/claudecode/server/init.lua:M.\_setup_deferred_response].
+
+### Global Side Effects
+
+- Lock file: `start` writes `<port>.lock` (file `0600`, atomic rename). A new lock directory gets `0700`, and the chmod of an existing one is best-effort [lua/claudecode/lockfile.lua:M.create].
+- Network: one loopback TCP listener plus WebSocket frames and JSON-RPC broadcasts (`selection_changed`, `at_mentioned`)
+  [lua/claudecode/server/init.lua:M.start] [lua/claudecode/selection.lua:M.send_selection_update].
+- Processes: the terminal provider spawns the Claude CLI with `ENABLE_IDE_INTEGRATION`, `FORCE_CODE_TERMINAL`,
+  loopback `no_proxy`/`NO_PROXY`, and, while the server runs, `CLAUDE_CODE_SSE_PORT`
+  [lua/claudecode/terminal.lua:get_claude_command_and_env].
+- Disk: diff temp files under `stdpath("cache")/claudecode_diffs`, or `stdpath("cache")/claudecode_diffs_fallback` if
+  that `mkdir` raises. A `mkdir` that returns 0 does not trigger the fallback (#334) [lua/claudecode/diff.lua:create_temp_file].
+- Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
+  `ClaudeCodeDiffCleanup`), `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
+  and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2
+  [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install].
+- Release tooling: `scripts/release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and PRs
+  [scripts/release-please-runner.js:main].
+
+### System Verification
+
+- Run: `mise run all` (format, lint, test)
+- Run: `mise run test` (Busted suite with coverage) or one file with `busted -v tests/unit/<name>_spec.lua`
+- Run: `mise run check` (Lua syntax and `luacheck` on `lua/` and `tests/`)
+- Run: `npm --prefix scripts run test:release-please-runner` (release runner, after `npm --prefix scripts ci`)
+
 ## Contributing
 
 See [DEVELOPMENT.md](./DEVELOPMENT.md) for build instructions and development guidelines. Tests can be run with `mise run test`.

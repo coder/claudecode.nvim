@@ -277,6 +277,24 @@ describe("claudecode.terminal.external", function()
     end)
   end)
 
+  describe("jobstart failure", function()
+    it("notifies instead of raising when jobstart rejects a command that is not executable", function()
+      local e475 = "Vim:E475: Invalid value for argument cmd: 'alacritty' is not executable"
+      mock_vim.fn.jobstart = spy.new(function()
+        error(e475, 0)
+      end)
+      external_provider.setup({ provider_opts = { external_terminal_cmd = "alacritty -e %s" } })
+
+      external_provider.open("claude", {})
+
+      assert.spy(mock_vim.notify).was_called(1)
+      assert
+        .spy(mock_vim.notify)
+        .was_called_with("Failed to start external terminal with command: alacritty -e claude. " .. e475, mock_vim.log.levels.ERROR)
+      assert.is_nil(external_provider.get_active_bufnr())
+    end)
+  end)
+
   describe("open with invalid config", function()
     it("should error if external_terminal_cmd not configured", function()
       external_provider.setup({})
