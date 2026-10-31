@@ -234,6 +234,9 @@ cmd_launch() {
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
   out=${VERIFY_OUT:-${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
+  # Absolute and lexical, symlinks kept: with a trailing "/" -L would test a link's target, and a leading "-"
+  # would read as an option.
+  out=$(realpath -ms -- "$out")
   # On a shared host another user can create the evidence dir, or a symlink in its place, before the run.
   if [[ -L $out ]]; then
     why="is a symlink"
@@ -248,7 +251,11 @@ cmd_launch() {
     rmdir "$state"
     die "$out $why; pick a fresh VERIFY_OUT"
   fi
-  mkdir -p "$out" "$state"/{home,claude,work}
+  if ! mkdir -p "$out"; then
+    rmdir "$state"
+    die "cannot create $out; pick a fresh VERIFY_OUT"
+  fi
+  mkdir -p "$state"/{home,claude,work}
   chmod 700 "$out"
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"

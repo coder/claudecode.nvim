@@ -41,7 +41,7 @@ Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json
 
 - Seed files in `$WORK` (nvim's cwd and the workspace folder): `hello.txt` is `alpha`, `beta`, `gamma`. `other.txt` is `one`, `two`, `three`, `four`.
 - The terminal is 160 columns by 40 rows.
-- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing, or an empty directory that you own. Launch refuses a symlink, a file, a directory that another user owns, and a directory that is not empty. It then exits 1 without starting the run. It checks the path itself, not its parent directories.
+- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing, or an empty directory that you own. Launch makes the path absolute without resolving symlinks, then refuses a symlink (a trailing `/` does not hide one), a file, a directory that another user owns, a directory that is not empty, and a path it cannot create. It then exits 1 without starting the run. It checks the path itself, not its parent directories.
 - `VCN_BREAK_INIT=1` sends the launch's `initialize` request under a method name the plugin does not know, so the plugin answers an error and launch refuses. Use it only to prove that refusal.
 - `VCN_SETUP='<json>'` is deep-merged into `require("claudecode").setup()` over the base `{ terminal = { provider = "none" } }`. Example: `VCN_SETUP='{"diff_opts":{"layout":"unified"}}' $V launch`.
 
@@ -115,7 +115,7 @@ To confirm, `grep -lzxF "VCN_RUN_TAG=$VCN_STATE" /proc/[0-9]*/environ 2>/dev/nul
 
 - `scripts/vcn.sh` is the harness. `$V help` lists its subcommands.
 - `scripts/init.lua` is the nvim config. It puts this checkout first on `runtimepath`, sets `terminal.provider = "none"` so no `claude` CLI starts, and merges `VCN_SETUP`.
-- `scripts/selftest-launch-refusals.sh` proves the launch refusals with real launches. It covers a failed `initialize` (`VCN_BREAK_INIT=1`) and a `VERIFY_OUT` that is a symlink, a file, owned by another user, or not empty. For the other-user case it uses an empty directory such as `/srv` and prints `SKIP` when it finds none. It also proves that launch accepts a missing path and an empty directory you own, and leaves both at mode `0700`. It prints `PASS`, `FAIL`, or `SKIP` per case, exits 1 on any `FAIL`, and takes about a minute.
+- `scripts/selftest-launch-refusals.sh` proves the launch refusals with real launches. It covers a failed `initialize` (`VCN_BREAK_INIT=1`) and a `VERIFY_OUT` that is a symlink (with and without a trailing `/`), a file, owned by another user, or not empty. For the other-user case it uses an empty directory such as `/srv` and prints `SKIP` when it finds none. It also proves that launch accepts a missing path, a relative path that starts with `-`, and an empty directory you own, and leaves each at mode `0700`. It prints `PASS`, `FAIL`, or `SKIP` per case, exits 1 on any `FAIL`, and takes about a minute.
 - `scripts/journey-opendiff-accept.sh` proves openDiff accept through `:w` on a fresh launch. It prints `PASS opendiff-accept` or `FAIL: <reason>` and writes `opendiff-accept-*` files to `$OUT`: screen text at each step, PNGs at open, after the edit, and after `:w`, a WebM, and the file's sha256 at each step.
 
 A full run, with the `VCN_STATE` value from launch:
