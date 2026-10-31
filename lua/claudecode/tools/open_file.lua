@@ -127,13 +127,16 @@ end
 
 ---Returns how many lines `file_path` will show once opened, counting at most `max` lines of the file on disk.
 ---A loaded buffer for the file can hold unsaved lines, and `:edit` shows that buffer, so its count wins.
+---Like `:edit`, this matches the buffer by inode, so a symlink, a symlinked directory, or a hard link finds it.
 ---@param file_path string Path of the file to open
 ---@param max integer Lines to read from disk at most
 ---@return integer count
 local function line_count_before_open(file_path, max)
-  local full_path = vim.fn.fnamemodify(file_path, ":p")
+  local uv = vim.uv or vim.loop
+  local target = uv.fs_stat(file_path)
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_name(buf) == full_path then
+    local stat = target and vim.api.nvim_buf_is_loaded(buf) and uv.fs_stat(vim.api.nvim_buf_get_name(buf))
+    if stat and stat.dev == target.dev and stat.ino == target.ino then
       return vim.api.nvim_buf_line_count(buf)
     end
   end
@@ -151,9 +154,9 @@ local function handler(params)
   end
 
   local start_line, end_line
-  if params.startLine or params.endLine then
-    start_line = params.startLine or 1
-    end_line = params.endLine or start_line
+  if params.startLine ~= nil or params.endLine ~= nil then
+    start_line = params.startLine == nil and 1 or params.startLine
+    end_line = params.endLine == nil and start_line or params.endLine
     local valid = type(start_line) == "number"
       and type(end_line) == "number"
       and start_line % 1 == 0
@@ -255,10 +258,13 @@ local function handler(params)
   -- Handle text selection by line numbers
   if start_line then
     run_in_target_window(function()
-      -- endLine can run past the last line. The buffer can also be shorter than the count checked before
-      -- opening, when :edit reuses a buffer under another name for the same file, such as a symlink.
+      -- endLine can run past the last line. start_line is clamped too, so a buffer that ends up shorter
+      -- than the count checked before opening still gets a selection.
       end_line = math.min(end_line, vim.api.nvim_buf_line_count(0))
       start_line = math.min(start_line, end_line)
+      -- With 'selection' inclusive, a charwise selection that ends on an empty line also covers that line's
+      -- line break: gv selects the character under '>, and on an empty line that is the line break. Ending
+      -- on the line above instead would move '> and the selection Claude receives off endLine.
       local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1]
       select_range(start_line, 0, end_line, math.max(#end_line_text - 1, 0))
 
@@ -306,9 +312,6 @@ local function handler(params)
           if end_line_idx then
             message = 'Opened file and selected text from "' .. start_text .. '" to "' .. end_text .. '"'
           else
-            -- End text not found, select only start text
-            end_line_idx = start_line_idx
-            end_col_idx = start_col_idx + string.len(start_text) - 1
             message = 'Opened file and positioned at "' .. start_text .. '" (end text "' .. end_text .. '" not found)'
           end
         else
@@ -318,9 +321,18 @@ local function handler(params)
           message = 'Opened file and selected text "' .. start_text .. '"'
         end
 
-        -- Apply the selection
-        vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
-        select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
+        if end_line_idx then
+          vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+          select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
+        else
+          -- Like the VS Code extension, only place the cursor on the startText match. Leave the visual mode
+          -- an earlier openFile may have left, or the cursor move would stretch that selection.
+          local mode = vim.api.nvim_get_mode().mode
+          if mode == "v" or mode == "V" or mode == "\22" then
+            vim.cmd("normal! \27")
+          end
+          vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+        end
         vim.cmd("normal! zz") -- Center the selection in the window
       else
         message = 'Opened file, but text "' .. start_text .. '" not found'
