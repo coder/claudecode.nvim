@@ -31,6 +31,7 @@ Steps:
 
 ## Gotchas
 
-- Both selection steps fail on commit `c0deb41` (observed 2026-10-31). The text span selects `one/two/three` and the line range selects `two/t`. Each selection starts one line early. Report the failure, and do not loosen the expected region to match it.
+- A line range ends after the end of `endLine`. `getpos("'>")` reads column 2147483647 (`v:maxcol`), and `y` on lines 2 to 3 yanks `two\nthree\n` (observed 2026-10-31). A range past the last line stops there: `startLine 3, endLine 5` answers `selected lines 3 to 4`.
+- openFile selects with `gv`, which reuses the buffer's last visual mode. After a linewise `V` selection in that buffer, `mode()` prints `V`, not `v`.
 - The selection is a live visual mode. Send `Escape` before the next step, or the next keys extend the selection.
 - With one window, `makeFrontmost: false` still swaps the visible buffer, because the main window is the current one. Focus behavior with several windows is not mapped yet.
