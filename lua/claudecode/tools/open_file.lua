@@ -125,6 +125,22 @@ local function select_range(start_row, start_col, end_row, last_col)
   vim.cmd("normal! gv")
 end
 
+---Returns how many lines `file_path` will show once opened, counting at most `max` lines of the file on disk.
+---A loaded buffer for the file can hold unsaved lines, and `:edit` shows that buffer, so its count wins.
+---@param file_path string Path of the file to open
+---@param max integer Lines to read from disk at most
+---@return integer count
+local function line_count_before_open(file_path, max)
+  local full_path = vim.fn.fnamemodify(file_path, ":p")
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_loaded(buf) and vim.api.nvim_buf_get_name(buf) == full_path then
+      return vim.api.nvim_buf_line_count(buf)
+    end
+  end
+  -- readfile() returns no lines for an empty file, which opens as one empty line.
+  return math.max(#vim.fn.readfile(file_path, "", max), 1)
+end
+
 --- Handles the openFile tool invocation.
 --- Opens a file in the editor with optional selection.
 ---@param params table The input parameters for the tool
@@ -164,8 +180,7 @@ local function handler(params)
   end
 
   if start_line then
-    -- readfile() returns no lines for an empty file, which opens as one empty line.
-    local file_line_count = math.max(#vim.fn.readfile(file_path, "", start_line), 1)
+    local file_line_count = line_count_before_open(file_path, start_line)
     if start_line > file_line_count then
       error({
         code = -32602,
@@ -240,7 +255,8 @@ local function handler(params)
   -- Handle text selection by line numbers
   if start_line then
     run_in_target_window(function()
-      -- endLine can run past the last line, and a buffer with unsaved changes can be shorter than the file.
+      -- endLine can run past the last line. The buffer can also be shorter than the count checked before
+      -- opening, when :edit reuses a buffer under another name for the same file, such as a symlink.
       end_line = math.min(end_line, vim.api.nvim_buf_line_count(0))
       start_line = math.min(start_line, end_line)
       local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1]
