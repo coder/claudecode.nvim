@@ -20,7 +20,15 @@ describe("claudecode.terminal.native toggle behavior", function()
       next_winid = 1000,
       next_jobid = 10000,
       buffer_options = {},
+      bufenter_autocmd = nil,
     }
+
+    local function enter_buf(winid, bufnr)
+      mock_state.windows[winid].bufnr = bufnr
+      if mock_state.bufenter_autocmd then
+        mock_state.bufenter_autocmd(winid, bufnr)
+      end
+    end
 
     -- Mock vim API with stateful behavior
     mock_vim = {
@@ -92,8 +100,49 @@ describe("claudecode.terminal.native toggle behavior", function()
         nvim_win_set_buf = function(winid, bufnr)
           local win = mock_state.windows[winid]
           if win and mock_state.buffers[bufnr] then
-            win.bufnr = bufnr
+            enter_buf(winid, bufnr)
           end
+        end,
+        nvim_create_buf = function(listed, _scratch)
+          local bufnr = mock_state.next_bufnr
+          mock_state.next_bufnr = mock_state.next_bufnr + 1
+          mock_state.buffers[bufnr] = { name = "", options = { modified = false, buflisted = listed } }
+          return bufnr
+        end,
+        -- Mirrors Neovim: a temporary window when no window shows bufnr, and a raised error comes back rewrapped.
+        nvim_buf_call = function(bufnr, fn)
+          if not mock_state.buffers[bufnr] then
+            error("Invalid buffer id: " .. tostring(bufnr))
+          end
+          local saved_win = mock_state.current_win
+          local target_win = nil
+          if mock_state.windows[saved_win] and mock_state.windows[saved_win].bufnr == bufnr then
+            target_win = saved_win
+          else
+            for winid, win in pairs(mock_state.windows) do
+              if win.bufnr == bufnr then
+                target_win = winid
+                break
+              end
+            end
+          end
+          local temp_win = nil
+          if not target_win then
+            temp_win = mock_state.next_winid
+            mock_state.next_winid = mock_state.next_winid + 1
+            mock_state.windows[temp_win] = { bufnr = bufnr }
+            target_win = temp_win
+          end
+          mock_state.current_win = target_win
+          local ok, result = pcall(fn)
+          mock_state.current_win = saved_win
+          if temp_win then
+            mock_state.windows[temp_win] = nil
+          end
+          if not ok then
+            error("Lua: " .. tostring(result) .. "\nstack traceback:\n\t[C]: in function 'nvim_buf_call'", 0)
+          end
+          return result
         end,
         nvim_win_set_height = function(winid, height)
           -- Mock window resizing
@@ -118,9 +167,9 @@ describe("claudecode.terminal.native toggle behavior", function()
           -- Create new buffer in current window
           local bufnr = mock_state.next_bufnr
           mock_state.next_bufnr = mock_state.next_bufnr + 1
-          mock_state.buffers[bufnr] = { name = "", options = { modified = false } }
+          mock_state.buffers[bufnr] = { name = "", options = { modified = false, buflisted = true } }
           if mock_state.windows[mock_state.current_win] then
-            mock_state.windows[mock_state.current_win].bufnr = bufnr
+            enter_buf(mock_state.current_win, bufnr)
           end
         end
       end,
@@ -133,20 +182,13 @@ describe("claudecode.terminal.native toggle behavior", function()
           local jobid = mock_state.next_jobid
           mock_state.next_jobid = mock_state.next_jobid + 1
 
-          -- Create terminal buffer
-          local bufnr = mock_state.next_bufnr
-          mock_state.next_bufnr = mock_state.next_bufnr + 1
-          mock_state.buffers[bufnr] = {
-            name = "term://claude",
-            options = { buftype = "terminal", bufhidden = "wipe" },
-            jobid = jobid,
-            on_exit = opts.on_exit,
-          }
-
-          -- Set buffer in current window
-          if mock_state.windows[mock_state.current_win] then
-            mock_state.windows[mock_state.current_win].bufnr = bufnr
-          end
+          local win = mock_state.windows[mock_state.current_win]
+          local buf = win and mock_state.buffers[win.bufnr]
+          assert(buf, "termopen needs a current buffer")
+          buf.name = "term://claude"
+          buf.options.buftype = "terminal"
+          buf.jobid = jobid
+          buf.on_exit = opts.on_exit
 
           return jobid
         end,
@@ -226,6 +268,35 @@ describe("claudecode.terminal.native toggle behavior", function()
     end)
   end)
 
+  describe("termopen success", function()
+    it("runs Claude in a listed terminal buffer shown in the split and closes it on exit", function()
+      local mock_state = _G.get_mock_state()
+      mock_state.windows[1] = { bufnr = 0 }
+      mock_state.current_win = 1
+
+      native_provider.open(
+        "claude",
+        {},
+        { split_side = "right", split_width_percentage = 0.3, auto_close = true },
+        true
+      )
+
+      local active = native_provider.get_active_bufnr()
+      local buf = mock_state.buffers[active]
+      assert.are.equal("terminal", buf.options.buftype)
+      assert.are.equal("hide", buf.options.bufhidden)
+      assert.is_true(buf.options.buflisted)
+      local split = mock_state.current_win
+      assert.are_not.equal(1, split)
+      assert.are.equal(active, mock_state.windows[split].bufnr)
+
+      buf.on_exit(buf.jobid, 0, "exit")
+
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.is_nil(mock_state.windows[split])
+    end)
+  end)
+
   describe("termopen failure", function()
     local e475 = "Vim:E475: Invalid value for argument cmd: 'claude' is not executable"
     local failures = {
@@ -251,67 +322,127 @@ describe("claudecode.terminal.native toggle behavior", function()
         message = "Failed to open native terminal. " .. e475,
       },
     }
+    local entries = {
+      open = function(config)
+        native_provider.open("claude", {}, config, true)
+      end,
+      simple_toggle = function(config)
+        native_provider.simple_toggle("claude", {}, config)
+      end,
+      focus_toggle = function(config)
+        native_provider.focus_toggle("claude", {}, config)
+      end,
+    }
     for _, failure in ipairs(failures) do
-      it("closes the split, deletes its buffer, and notifies once when termopen " .. failure.name, function()
-        local mock_state = _G.get_mock_state()
-        mock_state.windows[1] = { bufnr = 0 }
-        mock_state.current_win = 1
-        mock_vim.api.nvim_buf_delete = function(bufnr)
-          mock_state.buffers[bufnr] = nil
-        end
-        local notified = {}
-        mock_vim.notify = function(msg, level)
-          table.insert(notified, { msg = msg, level = level })
-        end
-        mock_vim.log = { levels = { ERROR = 4 } }
-        mock_vim.fn.termopen = failure.termopen
+      for entry_name, start in pairs(entries) do
+        it(
+          "closes the split, deletes its buffer, and sends one notice when termopen "
+            .. failure.name
+            .. " ("
+            .. entry_name
+            .. ")",
+          function()
+            local mock_state = _G.get_mock_state()
+            mock_state.windows[1] = { bufnr = 0 }
+            mock_state.current_win = 1
+            mock_vim.api.nvim_buf_delete = function(bufnr)
+              mock_state.buffers[bufnr] = nil
+            end
+            local notified = {}
+            mock_vim.notify = function(msg, level)
+              table.insert(notified, { msg = msg, level = level })
+            end
+            mock_vim.log = { levels = { ERROR = 4 } }
+            mock_vim.fn.termopen = failure.termopen
 
-        native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+            start({ split_side = "right", split_width_percentage = 0.3 })
 
-        assert.is_nil(native_provider.get_active_bufnr())
-        assert.are.equal(1, mock_state.current_win)
-        local open_windows = {}
-        for winid in pairs(mock_state.windows) do
-          table.insert(open_windows, winid)
-        end
-        assert.are.same({ 1 }, open_windows)
-        assert.are.same({}, mock_state.buffers)
-        assert.are.same({
-          { msg = failure.message, level = 4 },
-          { msg = "Failed to open Claude terminal using native fallback.", level = 4 },
-        }, notified)
-      end)
+            assert.is_nil(native_provider.get_active_bufnr())
+            assert.are.equal(1, mock_state.current_win)
+            local open_windows = {}
+            for winid in pairs(mock_state.windows) do
+              table.insert(open_windows, winid)
+            end
+            assert.are.same({ 1 }, open_windows)
+            assert.are.same({}, mock_state.buffers)
+            assert.are.same({ { msg = failure.message, level = 4 } }, notified)
+          end
+        )
+      end
     end
   end)
 
-  describe("termopen failure after an autocmd swaps the buffer", function()
-    it("keeps a named, modified user buffer that an autocmd put in the new split", function()
-      local mock_state = _G.get_mock_state()
+  describe("an autocmd swaps another plugin's empty buffer into the new split", function()
+    local plugin_bufnr = 99
+    local plugin_buffer
+    local mock_state
+
+    before_each(function()
+      mock_state = _G.get_mock_state()
       mock_state.windows[1] = { bufnr = 0 }
       mock_state.current_win = 1
-      local user_bufnr = 99
-      mock_state.buffers[user_bufnr] = { name = "/tmp/notes.txt", options = { modified = true } }
-      local original_win_call = mock_vim.api.nvim_win_call
-      mock_vim.api.nvim_win_call = function(winid, fn)
-        local result = original_win_call(winid, fn)
-        mock_state.windows[winid].bufnr = user_bufnr
-        return result
+      plugin_buffer = { name = "", options = { modified = false, buftype = "nofile" } }
+      mock_state.buffers[plugin_bufnr] = plugin_buffer
+      local swapped = false
+      mock_state.bufenter_autocmd = function(winid, bufnr)
+        if not swapped and winid ~= 1 and bufnr ~= plugin_bufnr then
+          swapped = true
+          mock_state.windows[winid].bufnr = plugin_bufnr
+        end
       end
-      local deleted = {}
       mock_vim.api.nvim_buf_delete = function(bufnr)
-        table.insert(deleted, bufnr)
         mock_state.buffers[bufnr] = nil
       end
       mock_vim.notify = function() end
       mock_vim.log = { levels = { ERROR = 4 } }
+    end)
+
+    it("keeps that buffer and deletes only its own when termopen fails", function()
       mock_vim.fn.termopen = function()
         error("Vim:E475: Invalid value for argument cmd: 'claude' is not executable", 0)
       end
 
       native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
 
-      assert.are.same({}, deleted)
-      assert.is_not_nil(mock_state.buffers[user_bufnr])
+      assert.are.same({ [plugin_bufnr] = plugin_buffer }, mock_state.buffers)
+      assert.are.same({ name = "", options = { modified = false, buftype = "nofile" } }, plugin_buffer)
+    end)
+
+    it("closes the split and sends one notice when the autocmd also wipes its buffer", function()
+      mock_state.bufenter_autocmd = function(winid, bufnr)
+        if winid ~= 1 and bufnr ~= plugin_bufnr then
+          mock_state.windows[winid].bufnr = plugin_bufnr
+          mock_state.buffers[bufnr] = nil
+        end
+      end
+      local notified = {}
+      mock_vim.notify = function(msg, level)
+        table.insert(notified, { msg = msg, level = level })
+      end
+
+      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.are.equal(1, mock_state.current_win)
+      local open_windows = {}
+      for winid in pairs(mock_state.windows) do
+        table.insert(open_windows, winid)
+      end
+      assert.are.same({ 1 }, open_windows)
+      assert.are.same({ [plugin_bufnr] = plugin_buffer }, mock_state.buffers)
+      assert.are.same({
+        { msg = "Failed to open native terminal. Its buffer was deleted before termopen ran.", level = 4 },
+      }, notified)
+    end)
+
+    it("runs Claude in its own buffer and shows it in the split when termopen succeeds", function()
+      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+      local active = native_provider.get_active_bufnr()
+      assert.are_not.equal(plugin_bufnr, active)
+      assert.are.equal("terminal", mock_state.buffers[active].options.buftype)
+      assert.are.equal(active, mock_state.windows[mock_state.current_win].bufnr)
+      assert.are.same({ name = "", options = { modified = false, buftype = "nofile" } }, plugin_buffer)
     end)
   end)
 

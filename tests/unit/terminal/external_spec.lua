@@ -291,7 +291,7 @@ describe("claudecode.terminal.external", function()
       assert
         .spy(mock_vim.notify)
         .was_called_with("Failed to start external terminal with command: alacritty -e claude. " .. e475, mock_vim.log.levels.ERROR)
-      assert.is_nil(external_provider.get_active_bufnr())
+      assert.is_nil(external_provider._get_terminal_for_test())
     end)
   end)
 
