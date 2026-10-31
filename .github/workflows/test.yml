@@ -135,7 +135,8 @@ jobs:
     needs: unit-tests
     strategy:
       matrix:
-        neovim-version: ["stable"]
+        # v0.8.0 is the minimum that README.md and plugin/claudecode.lua support.
+        neovim-version: ["stable", "v0.8.0"]
 
     steps:
       - name: Checkout
@@ -163,8 +164,10 @@ jobs:
       # Real-Neovim regression gate for issue #238 (reject-with-:q). The unit spec
       # only exercises the WinClosed handler logic against a mock; this drives a
       # genuine `:q` and self-reports via cquit (exit 0 = fixed, 1 = regressed).
+      # `nvim -l` needs Neovim 0.9, so the script runs through :luafile. If it raises before
+      # its own cquit, the second -c exits 2.
       - name: Reject-on-quit regression gate (#238)
-        run: nvim --headless -u NONE -l scripts/repro_issue_238.lua
+        run: nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 
   required:
     name: Required
