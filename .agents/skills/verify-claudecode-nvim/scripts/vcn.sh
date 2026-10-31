@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Drive claudecode.nvim in a real Neovim (agent-tty) while a websocat client plays the Claude CLI.
+# Drive claudecode.nvim in a real Neovim (agent-tty) while scripts/ws-client.mjs plays the Claude CLI.
 # Usage: vcn.sh <command> [args]. Every command except launch needs VCN_STATE (printed by launch).
 #   launch [file...]            start nvim + client; prints VCN_STATE=... and OUT=...
 #   doctor                      read-only health check, exit 1 on any FAIL
@@ -30,6 +30,8 @@ die() {
 bin() {
   mise which "$1" 2>/dev/null || command -v "$1" || die "$1 not found on PATH"
 }
+
+env_line() { printf '%s=%q\n' "$1" "$2"; }
 
 load() {
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
@@ -67,7 +69,10 @@ nv() {
 
 send() { jq -nc "$@" >>"$OUT/ws-out.jsonl"; }
 
+# await matches responses by id, so a reused id would return the earlier answer.
 cmd_rpc() {
+  jq -e --arg id "$1" 'select(.id == $id)' "$OUT/ws-out.jsonl" >/dev/null 2>&1 &&
+    die "id $1 was already used in this run; pick a new id"
   send --arg id "$1" --arg m "$2" --argjson p "${3-"{}"}" '{jsonrpc:"2.0",id:$id,method:$m,params:$p}'
 }
 
@@ -75,7 +80,7 @@ cmd_await() {
   local id=$1 secs=${2-10} line
   local deadline=$((SECONDS + secs))
   while :; do
-    # fromjson? skips a line websocat is still writing.
+    # fromjson? skips a line the client is still writing.
     line=$(jq -cR --arg id "$id" 'fromjson? | select(.id == $id)' "$OUT/ws-in.jsonl" | head -n 1)
     if [[ -n $line ]]; then
       echo "$line"
@@ -160,10 +165,8 @@ cmd_cleanup() {
     (cmd_record session) >/dev/null || echo "vcn: could not save session.webm" >&2
     att destroy "$SID" --json >/dev/null 2>&1 || att destroy "$SID" --force --json >/dev/null 2>&1 || true
   fi
-  local i pid pids=()
-  for pid in ${TAIL_PID-} ${WS_PID-}; do
-    if ours "$pid"; then kill "$pid" 2>/dev/null || true; fi
-  done
+  local i pids=()
+  if ours "${CLIENT_PID-}"; then kill "$CLIENT_PID" 2>/dev/null || true; fi
   for i in $(seq 50); do
     mapfile -t pids < <(tagged)
     ((${#pids[@]} == 0)) && break
@@ -198,8 +201,7 @@ cmd_doctor() {
   check "agent-tty session $SID is running" test "$(jq -r .status <<<"$session")" = running
   check "nvim server (pid $NVIM_PID) runs under the session's TUI (pid $TUI_PID)" \
     test "$(jq -r .childPid <<<"$session") $(ppid "$NVIM_PID")" = "$TUI_PID $TUI_PID"
-  check "client websocat (pid $WS_PID) is alive" is_exe "$WS_PID" "$WS_BIN"
-  check "client feed tail (pid $TAIL_PID) is alive" is_exe "$TAIL_PID" "$TAIL_BIN"
+  check "client ws-client.mjs (pid $CLIENT_PID) is alive" is_exe "$CLIENT_PID" "$NODE_DIR/node"
   check "nvim RPC answers as pid $NVIM_PID" test "$(nv 'getpid()' 2>/dev/null)" = "$NVIM_PID"
   check "nvim is not blocked in a prompt (mode '$mode')" not_prompt "$mode"
   check "lock file $lock names nvim pid $NVIM_PID" test "$(jq -r .pid "$lock" 2>/dev/null)" = "$NVIM_PID"
@@ -220,37 +222,35 @@ launch_failed() {
 }
 
 cmd_launch() {
-  local nvim_exe ws_exe tail_exe att_exe node_exe setsid_exe state out sid lock="" f i
+  local nvim_exe att_exe node_exe setsid_exe state out sid tui sock init lock="" f i
   nvim_exe=$(bin nvim)
-  ws_exe=$(bin websocat)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
-  tail_exe=$(bin tail)
   setsid_exe=$(bin setsid)
   bin jq >/dev/null
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
   out=${VERIFY_OUT:-${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
-  [[ ! -e $out/ws-in.jsonl ]] || die "$out already holds a run; pick a fresh VERIFY_OUT"
+  if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
+    rmdir "$state"
+    die "$out is not empty; pick a fresh VERIFY_OUT"
+  fi
   mkdir -p "$out" "$state"/{home,claude,work}
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"
-  mkfifo "$state/ws.fifo"
   : >"$out/ws-out.jsonl"
   : >"$out/ws-in.jsonl"
-  cat >"$state/run.env" <<EOF
-VCN_STATE=$state
-OUT=$out
-WORK=$state/work
-ATT_HOME=$state/att
-NVIM_SOCK=$state/nvim.sock
-NVIM_BIN=$nvim_exe
-ATT_BIN=$att_exe
-NODE_DIR=$(dirname "$node_exe")
-WS_BIN=$ws_exe
-TAIL_BIN=$tail_exe
-EOF
+  {
+    env_line VCN_STATE "$state"
+    env_line OUT "$out"
+    env_line WORK "$state/work"
+    env_line ATT_HOME "$state/att"
+    env_line NVIM_SOCK "$state/nvim.sock"
+    env_line NVIM_BIN "$nvim_exe"
+    env_line ATT_BIN "$att_exe"
+    env_line NODE_DIR "$(dirname "$node_exe")"
+  } >"$state/run.env"
   export VCN_STATE=$state
   load
   trap launch_failed EXIT
@@ -266,14 +266,17 @@ EOF
     XDG_STATE_HOME="$state/home/.local/state" XDG_CACHE_HOME="$state/home/.cache" \
     CLAUDE_CONFIG_DIR="$state/claude" VCN_REPO="$REPO" VCN_SETUP="${VCN_SETUP-}" \
     "$nvim_exe" --listen "$NVIM_SOCK" -u "$SKILL_DIR/scripts/init.lua" "$@" | jq -r .result.sessionId)
-  echo "SID=$sid" >>"$state/run.env"
+  env_line SID "$sid" >>"$state/run.env"
   load
   # The session's process is the nvim TUI. It runs the nvim server, which answers RPC, as its child.
-  attj inspect "$SID" --json |
-    jq -r '"TUI_PID=\(.result.session.childPid)", "ATT_SOCK=\(.result.host.rpcSocketPath)"' >>"$state/run.env"
+  { read -r tui && read -r sock; } < <(attj inspect "$SID" --json | jq -r '.result.session.childPid, .result.host.rpcSocketPath')
+  {
+    env_line TUI_PID "$tui"
+    env_line ATT_SOCK "$sock"
+  } >>"$state/run.env"
   load
   cmd_until 'getpid() > 0' 1 10
-  echo "NVIM_PID=$(nv 'getpid()')" >>"$state/run.env"
+  env_line NVIM_PID "$(nv 'getpid()')" >>"$state/run.env"
   load
   [[ $(ppid "$NVIM_PID") == "$TUI_PID" ]] || die "nvim server $NVIM_PID is not a child of the session's process $TUI_PID"
   for i in $(seq 100); do
@@ -284,19 +287,17 @@ EOF
     sleep 0.1
   done
   [[ -n $lock ]] || die "no lock file for pid $NVIM_PID in $state/claude/ide"
-  echo "PORT=$(basename "$lock" .lock)" >>"$state/run.env"
+  env_line PORT "$(basename "$lock" .lock)" >>"$state/run.env"
   load
   # setsid: an agent's bash tool kills the background jobs of a call when the call ends, and the
-  # client must outlive it. tail -f keeps websocat's stdin open, so a blocking call (openDiff) can
-  # answer minutes later.
-  VCN_RUN_TAG=$state "$setsid_exe" "$tail_exe" -n +1 -f "$OUT/ws-out.jsonl" </dev/null >"$state/ws.fifo" 2>/dev/null &
-  echo "TAIL_PID=$!" >>"$state/run.env"
-  VCN_RUN_TAG=$state "$setsid_exe" "$ws_exe" -t "ws://127.0.0.1:$PORT" -H="x-claude-code-ide-authorization: $(jq -r .authToken "$lock")" \
-    <"$state/ws.fifo" >>"$OUT/ws-in.jsonl" 2>>"$OUT/websocat.log" &
-  echo "WS_PID=$!" >>"$state/run.env"
+  # client must outlive it. The client reads the token from the lock file, so it is not in argv.
+  VCN_RUN_TAG=$state "$setsid_exe" "$node_exe" "$SKILL_DIR/scripts/ws-client.mjs" "$lock" "$OUT/ws-out.jsonl" \
+    "$OUT/ws-in.jsonl" </dev/null >/dev/null 2>>"$OUT/ws-client.log" &
+  env_line CLIENT_PID "$!" >>"$state/run.env"
   load
   cmd_rpc init initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"vcn","version":"0"}}'
-  cmd_await init 10 >/dev/null
+  init=$(cmd_await init 10)
+  jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
   send '{jsonrpc:"2.0",method:"notifications/initialized"}'
   cp "$state/run.env" "$OUT/run.env"
   {
@@ -334,8 +335,11 @@ doctor | keys | expr | until | rpc | tool | await | capture | screenshot | recor
   record) cmd_record "$1" ;;
   esac
   ;;
-*)
+help | -h | --help)
   sed -n '2,/^set /{/^#/s/^# \{0,1\}//p;}' "${BASH_SOURCE[0]}"
+  ;;
+*)
+  sed -n '2,/^set /{/^#/s/^# \{0,1\}//p;}' "${BASH_SOURCE[0]}" >&2
   exit 2
   ;;
 esac

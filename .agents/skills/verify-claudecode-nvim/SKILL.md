@@ -1,17 +1,17 @@
 ---
 name: verify-claudecode-nvim
-description: Drive the real claudecode.nvim plugin in a real Neovim (an agent-tty terminal) while a scripted websocat client plays the Claude Code CLI over the plugin's WebSocket MCP server, and capture screen text, PNG screenshots, WebM video, JSON-RPC traffic, and file state as evidence. Use to prove a claudecode.nvim feature works end to end (openDiff accept/reject, openFile, selection tracking, :ClaudeCodeSend at-mentions, closing diffs) without the claude CLI or network.
+description: Drive the real claudecode.nvim plugin in a real Neovim (an agent-tty terminal) while a scripted WebSocket client (scripts/ws-client.mjs) plays the Claude Code CLI over the plugin's WebSocket MCP server, and capture screen text, PNG screenshots, WebM video, JSON-RPC traffic, and file state as evidence. Use to prove a claudecode.nvim feature works end to end (openDiff accept/reject, openFile, selection tracking, :ClaudeCodeSend at-mentions, closing diffs) without the claude CLI or network.
 ---
 
 # Verify claudecode.nvim
 
-The user surface is Neovim plus the Claude Code CLI. This skill keeps Neovim real: an [agent-tty](https://github.com/coder/agent-tty) terminal session, keystrokes through `agent-tty type` and `send-keys`, state read over Neovim RPC. Only the CLI is replaced, by `websocat`, at the boundary the CLI uses: it reads the lock file the plugin writes, sends the `x-claude-code-ide-authorization` header, and speaks MCP JSON-RPC.
+The user surface is Neovim plus the Claude Code CLI. This skill keeps Neovim real: an [agent-tty](https://github.com/coder/agent-tty) terminal session, keystrokes through `agent-tty type` and `send-keys`, state read over Neovim RPC. Only the CLI is replaced, by `scripts/ws-client.mjs`, at the boundary the CLI uses: it reads the lock file the plugin writes (the token stays out of argv), sends the `x-claude-code-ide-authorization` header, and speaks MCP JSON-RPC.
 
 Each run gets its own HOME, XDG dirs, `CLAUDE_CONFIG_DIR`, agent-tty home, and nvim socket. Runs never touch the user's Neovim or `~/.claude/ide`, and two runs can go side by side.
 
 Needs:
 
-- `nvim` 0.12.3, `websocat`, `jq`, and Node 26, all from `mise install`.
+- `nvim` 0.12.3, `jq`, and Node 26, all from `mise install`.
 - `agent-tty` 0.5.0 (`npm install -g agent-tty`). It needs Node 24 to 26, so the harness runs it on the repo's mise Node.
 - Playwright Chromium for PNG and WebM: `npx playwright install chromium`.
 - `setsid` from util-linux.
@@ -35,13 +35,13 @@ VCN_STATE=/tmp/vcn.AbC123
 OUT=/home/coder/.xum/sessions/<ws>/scratch/verify-claudecode-nvim/20261031T120000Z-AbC123
 ```
 
-Every bash call is a fresh shell. Start each later call with the `VCN_STATE` value launch printed: `export VCN_STATE=/tmp/vcn.AbC123; source "$VCN_STATE/run.env"`. That also sets `OUT`, `WORK`, `PORT`, `SID` (the agent-tty session), and `NVIM_PID`.
+Every bash call is a fresh shell. Start each later call with the `VCN_STATE` value launch printed. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used: `export VCN_STATE=/tmp/vcn.AbC123; source "$VCN_STATE/run.env"`. That also sets `OUT`, `WORK`, `PORT`, `SID` (the agent-tty session), and `NVIM_PID`.
 
-Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. A failed check, such as the Node version or the Chromium launch, stops the launch and names the check. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, websocat finished the handshake, and the MCP `initialize` call answered. If a step misses its 10 s deadline, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1.
+Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. A failed check, such as the Node version or the Chromium launch, stops the launch and names the check. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, the client finished the handshake, and the MCP `initialize` call answered with a result. If a step misses its 10 s deadline, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1.
 
 - Seed files in `$WORK` (nvim's cwd and the workspace folder): `hello.txt` is `alpha`, `beta`, `gamma`. `other.txt` is `one`, `two`, `three`, `four`.
 - The terminal is 160 columns by 40 rows.
-- `VERIFY_OUT=<dir>` sets the evidence dir. It must not hold an earlier run.
+- `VERIFY_OUT=<dir>` sets the evidence dir. It must be missing or empty.
 - `VCN_SETUP='<json>'` is deep-merged into `require("claudecode").setup()` over the base `{ terminal = { provider = "none" } }`. Example: `VCN_SETUP='{"diff_opts":{"layout":"unified"}}' $V launch`.
 
 ## Doctor
@@ -50,9 +50,9 @@ Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json
 $V doctor
 ```
 
-Read-only. Prints one `ok` or `FAIL` line per check and exits 1 on any `FAIL`: agent-tty session running, nvim server running under the session's TUI process, websocat alive, its `tail` feed alive, RPC answers as the recorded pid, nvim not stuck in a prompt, lock file names that pid, plugin server running on the lock port, lock `authToken` matches the server token (compared by sha256), a client finished the handshake. Run it first whenever a step misbehaves.
+Read-only. Prints one `ok` or `FAIL` line per check and exits 1 on any `FAIL`: agent-tty session running, nvim server running under the session's TUI process, the `ws-client.mjs` client alive, RPC answers as the recorded pid, nvim not stuck in a prompt, lock file names that pid, plugin server running on the lock port, lock `authToken` matches the server token (compared by sha256), a client finished the handshake. Run it first whenever a step misbehaves.
 
-- A `FAIL` on the websocat, tail, or handshake line means the client died. Clean up and relaunch, because a new client cannot receive answers to calls the old one made.
+- A `FAIL` on the client or handshake line means the client died. Clean up and relaunch, because a new client cannot receive answers to calls the old one made.
 - A `FAIL` on the RPC line usually means nvim waits at `Press ENTER`, where it answers no RPC. `$V expr` then prints `vcn: nvim RPC gave no answer in 5s`. `$V capture blocked` shows the message. Keep that capture as evidence, then `$V keys Enter` dismisses it.
 
 ## Drive
@@ -89,7 +89,7 @@ Everything lands in `$OUT`, which cleanup never deletes. The default is `${XUM_S
 
 - `ws-out.jsonl` holds every JSON-RPC message the client sent. `ws-in.jsonl` holds every message it received, responses and notifications.
 - `<name>.screen.txt`, `<name>.png`, and `<name>.webm` come from `$V capture`, `$V screenshot`, and `$V record`.
-- `run.env` records paths, PIDs, port, session id, and the nvim and agent-tty versions. It holds no auth token. `agent-tty-doctor.json` and `websocat.log` sit next to it.
+- `run.env` records paths, PIDs, port, session id, and the nvim and agent-tty versions. It holds no auth token. `agent-tty-doctor.json` and `ws-client.log` sit next to it.
 - Cleanup adds `final.screen.txt`, `final.png`, `messages.txt` (`:messages`), and `session.webm`.
 - The `⧉` in diff tab names draws as an empty box in PNG and WebM, because neither agent-tty's fonts nor this host's fonts have that glyph. The `.screen.txt` file holds the real character.
 
@@ -106,9 +106,9 @@ A proof:
 $V cleanup
 ```
 
-Cleanup saves the final screen text, a PNG, `:messages`, and a WebM of the whole session into `$OUT`. Then it destroys the agent-tty session, which ends nvim, and stops websocat and its `tail` feed by their recorded PIDs. It waits for every process tagged `VCN_RUN_TAG=$VCN_STATE` to exit, and after 3 s kills only those. Then it drops the run's agent-tty home from the per-user home registry, removes its empty socket directory under `/tmp/agent-tty`, deletes `$VCN_STATE`, and leaves `$OUT` alone. It takes 10 to 15 s. Rerunning it prints `nothing to clean`. Run it after every failed iteration too.
+Cleanup saves the final screen text, a PNG, `:messages`, and a WebM of the whole session into `$OUT`. Then it destroys the agent-tty session, which ends nvim, and stops the client by its recorded PID. It waits for every process tagged `VCN_RUN_TAG=$VCN_STATE` to exit, and after 3 s kills only those. Then it drops the run's agent-tty home from the per-user home registry, removes its empty socket directory under `/tmp/agent-tty`, deletes `$VCN_STATE`, and leaves `$OUT` alone. It takes 10 to 15 s. Rerunning it prints `nothing to clean`. Run it after every failed iteration too.
 
-To confirm, `grep -lzxF "VCN_RUN_TAG=$VCN_STATE" /proc/[0-9]*/environ` prints nothing. Never `pkill` by name or by `-f` pattern: other agents' nvim and agent-tty hosts run on the same host, and a `-f` pattern can match your own shell.
+To confirm, `grep -lzxF "VCN_RUN_TAG=$VCN_STATE" /proc/[0-9]*/environ 2>/dev/null` prints nothing (the `2>/dev/null` hides other users' unreadable processes). Never `pkill` by name or by `-f` pattern: other agents' nvim and agent-tty hosts run on the same host, and a `-f` pattern can match your own shell.
 
 ## Helpers
 
