@@ -11,6 +11,8 @@ describe("Tool: open_file", function()
   local editor_mode
   local gv_mode
   local original_get_mode
+  local typed_over_selection
+  local call_win
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -34,14 +36,21 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = spy.new(function(path)
       return path -- Simple pass-through
     end)
-    -- Like Neovim, gv enters Visual mode (Select mode when 'selectmode' has "cmd"), and :edit or <Esc> ends it.
+    -- Like Neovim, gv enters Visual mode (Select mode when 'selectmode' has "cmd"). <Esc> ends it, and so does
+    -- :edit in the current window. In Select mode any other typed key replaces the selected text.
     editor_mode = "n"
     gv_mode = "v"
+    typed_over_selection = {}
+    call_win = nil
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
-      if command == "normal! gv" then
+      local keys = command:match("^normal! (.*)")
+      if keys and keys ~= "\27" and editor_mode:match("^[sS\19]") then
+        table.insert(typed_over_selection, keys)
+        editor_mode = "n"
+      elseif keys == "gv" then
         editor_mode = gv_mode
-      elseif command == "normal! \27" or command:match("^p?edit ") then
+      elseif keys == "\27" or (command:match("^p?edit ") and (call_win == nil or call_win == 1000)) then
         editor_mode = "n"
       end
     end)
@@ -73,7 +82,11 @@ describe("Tool: open_file", function()
       return false -- No window is in diff mode by default
     end)
     _G.vim.api.nvim_win_call = spy.new(function(win, callback)
-      return callback() -- Just execute the callback
+      local outer = call_win
+      call_win = win
+      local result = callback()
+      call_win = outer
+      return result
     end)
     _G.vim.api.nvim_set_current_win = spy.new(function(win)
       -- Do nothing
@@ -524,6 +537,31 @@ describe("Tool: open_file", function()
         expect(editor_mode).to_be("n")
         assert.are.same({ 2, 0 }, cursor)
       end
+    end)
+
+    it("never types over a selection that gv starts in Select mode", function()
+      gv_mode = "s"
+      for _, case in ipairs({
+        { params = { startText = "two", endText = "three" }, mode = "s" },
+        { params = { startText = "three" }, mode = "s" },
+        { params = { startLine = 3, endLine = 4 }, mode = "s" },
+        { params = { startLine = 3, endLine = 4, startText = "two", endText = "three" }, mode = "s" },
+        { params = { startLine = 3, endLine = 4, startText = "two", endText = "zzz" }, mode = "n" },
+      }) do
+        open(case.params)
+        assert.are.same({}, typed_over_selection)
+        expect(editor_mode).to_be(case.mode)
+      end
+    end)
+
+    it("leaves a Select mode the user holds in another window before gv", function()
+      _G.vim.api.nvim_list_wins = spy.new(function()
+        return { 2000 }
+      end)
+      editor_mode = "s"
+      expect(open({ startLine = 3, endLine = 4 })).to_be("Opened file and selected lines 3 to 4")
+      assert.are.same({}, typed_over_selection)
+      expect(editor_mode).to_be("v")
     end)
 
     it("selects only the startText match when there is no endText", function()
