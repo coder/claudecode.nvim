@@ -215,13 +215,13 @@ cmd_doctor() {
 }
 
 # On a shared host another user can read or swap evidence in a dir they own or can write.
-# Prints why <dir> is unsafe, or nothing. "shared" also refuses group- or world-write.
+# Prints why <dir> is unsafe, or nothing.
 unsafe_dir() {
   if [[ -L $1 ]]; then
     echo "$1 is a symlink"
   elif [[ -e $1 && ! -O $1 ]]; then
     echo "$1 is owned by another user"
-  elif [[ $2 == shared && -e $1 ]] && (((8#$(stat -c %a "$1") & 8#022) != 0)); then
+  elif [[ -e $1 ]] && (((8#$(stat -c %a "$1") & 8#022) != 0)); then
     echo "$1 is group- or world-writable"
   fi
 }
@@ -236,7 +236,7 @@ launch_failed() {
 }
 
 cmd_launch() {
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard shared="" why sid tui sock init lock="" f i
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock init lock="" f i
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
@@ -244,13 +244,14 @@ cmd_launch() {
   bin jq >/dev/null
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
   if [[ -n ${VERIFY_OUT-} ]]; then
-    guard=$(realpath -sm -- "$VERIFY_OUT")
+    # A trailing slash would make -L test the symlink's target.
+    guard=$VERIFY_OUT
+    while [[ $guard == ?*/ ]]; do guard=${guard%/}; done
     out=$guard
   else
     guard=${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim
-    shared=shared
   fi
-  why=$(unsafe_dir "$guard" "$shared")
+  why=$(unsafe_dir "$guard")
   [[ -z $why ]] || die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
@@ -261,7 +262,7 @@ cmd_launch() {
   fi
   mkdir -p "$out"
   # Check again: another user could have made the dir between the first check and mkdir.
-  why=$(unsafe_dir "$guard" "$shared")
+  why=$(unsafe_dir "$guard")
   if [[ -n $why ]]; then
     rmdir "$state"
     die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
