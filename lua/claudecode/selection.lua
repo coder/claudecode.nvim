@@ -492,13 +492,20 @@ local function get_selection_coordinates()
   end
 end
 
----Returns the byte index of the last byte of the character that starts at byte `col` of `line`.
----Marks and the cursor point at a character's first byte, but a visual selection includes the whole
----character. Cutting inside a multibyte character would put invalid UTF-8 into selection_changed.
----@param line string
----@param col integer 1-based byte index
+---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.
+---Marks and the cursor point at a character's first byte. Cutting inside a multibyte character would put
+---invalid UTF-8 into selection_changed, so the selection takes the whole end character. With 'selection'
+---set to exclusive, a selection of more than one position leaves that character out.
+---@param line string the selection's last line
+---@param start_coords table
+---@param end_coords table
 ---@return integer
-local function last_byte_of_char(line, col)
+local function selection_end_byte(line, start_coords, end_coords)
+  local col = end_coords.col
+  local one_position = start_coords.lnum == end_coords.lnum and start_coords.col == col
+  if vim.o.selection == "exclusive" and not one_position then
+    return col - 1
+  end
   -- In a pattern, `.` matches a character together with its composing characters.
   local char = vim.fn.matchstr(line, "\\%" .. col .. "c.")
   return col + math.max(#char, 1) - 1
@@ -606,7 +613,7 @@ function M.get_visual_selection()
     -- Blockwise ("\22") is approximated as the contiguous charwise span: selection_changed
     -- carries a single start/end range and cannot represent a rectangular block. Proper
     -- per-column block extraction is a follow-up.
-    end_coords.col = last_byte_of_char(lines_content[#lines_content], end_coords.col)
+    end_coords.col = selection_end_byte(lines_content[#lines_content], start_coords, end_coords)
     final_text = extract_characterwise_text(lines_content, start_coords, end_coords)
     if not final_text then
       return nil
@@ -681,7 +688,7 @@ function M.get_visual_selection_from_marks()
     -- Blockwise ("\22") is approximated as the contiguous charwise span (matching
     -- get_visual_selection), since selection_changed carries a single start/end range and
     -- cannot represent a rectangular block. Proper per-column block extraction is a follow-up.
-    end_coords.col = last_byte_of_char(last_line, end_coords.col)
+    end_coords.col = selection_end_byte(last_line, start_coords, end_coords)
     final_text = extract_characterwise_text(lines_content, start_coords, end_coords)
     if not final_text then
       return nil
