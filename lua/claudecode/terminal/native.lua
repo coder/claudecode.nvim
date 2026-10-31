@@ -96,6 +96,8 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
   -- Another plugin's autocmd can swap a different buffer into the split, so the code below uses this number.
   local new_bufnr = vim.api.nvim_create_buf(true, false)
+  -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
+  vim.b[new_bufnr][OWNED_MARK] = true
   vim.api.nvim_win_set_buf(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
@@ -108,6 +110,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     cwd = effective_config.cwd,
     on_exit = function(job_id, _, _)
       vim.schedule(function()
+        -- The session is over. With auto_close = false the buffer stays visible, and an open() must not adopt it.
+        if vim.api.nvim_buf_is_valid(new_bufnr) then
+          vim.b[new_bufnr][OWNED_MARK] = nil
+        end
         if job_id == jobid then
           logger.debug("terminal", "Terminal process exited, cleaning up")
 
@@ -180,7 +186,6 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
   winid = new_winid
   bufnr = new_bufnr
-  vim.b[bufnr][OWNED_MARK] = true
   vim.bo[bufnr].bufhidden = "hide"
   -- buftype=terminal is set by termopen
 
@@ -332,7 +337,7 @@ local function adopt_existing_terminal()
     if vim.api.nvim_buf_is_valid(buf) and vim.b[buf][OWNED_MARK] then
       for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == buf then
-          bufnr, winid, jobid = buf, win, vim.b[buf].terminal_job_id
+          bufnr, winid, jobid = buf, win, vim.bo[buf].channel
           logger.debug("terminal", "Recovered existing Claude terminal in buffer", buf, "window", win)
           return true
         end
