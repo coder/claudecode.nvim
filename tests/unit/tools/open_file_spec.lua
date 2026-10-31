@@ -11,6 +11,8 @@ describe("Tool: open_file", function()
   local file_ids
   local original_fs_stat
   local cursor
+  local editor_mode
+  local original_get_mode
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -34,8 +36,18 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = spy.new(function(path)
       return path -- Simple pass-through
     end)
+    editor_mode = "n"
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
+      if command == "normal! gv" then
+        editor_mode = "v"
+      elseif command == "normal! \27" then
+        editor_mode = "n"
+      end
+    end)
+    original_get_mode = _G.vim.api.nvim_get_mode
+    _G.vim.api.nvim_get_mode = spy.new(function()
+      return { mode = editor_mode, blocking = false }
     end)
 
     -- Mock vim.json.encode
@@ -159,6 +171,7 @@ describe("Tool: open_file", function()
     _G.vim.api.nvim_list_bufs = original_list_bufs
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
     _G.vim.loop.fs_stat = original_fs_stat
+    _G.vim.api.nvim_get_mode = original_get_mode
     _G.vim.o.selection = nil
   end)
 
@@ -520,6 +533,14 @@ describe("Tool: open_file", function()
       assert.are.same({ 5, 10 }, marks[">"])
       open({ startText = "three" })
       assert.are.same({ 3, 5 }, marks[">"])
+    end)
+
+    it("leaves the visual selection of an earlier call before placing the cursor", function()
+      open({ startLine = 3, endLine = 4 })
+      expect(editor_mode).to_be("v")
+      assert_contains(open({ startText = "two", endText = "zzz" }), 'Opened file and positioned at "two"')
+      expect(editor_mode).to_be("n")
+      assert.are.same({ 2, 0 }, cursor)
     end)
 
     it("selects only the startText match when there is no endText", function()
