@@ -166,7 +166,7 @@ Consistent error propagation pattern:
 ```lua
 local ok, result = pcall(risky_operation)
 if not ok then
-  logger.error("Operation failed: " .. tostring(result))
+  logger.error("server", "Operation failed: " .. tostring(result))
   return false, result
 end
 return true, result
