@@ -366,6 +366,52 @@ describe("Tools Module", function()
       expect(erroring_tool_handler_pcall.calls).to_be_table()
       expect(#erroring_tool_handler_pcall.calls > 0).to_be_true()
     end)
+
+    describe("with requires_coroutine", function()
+      local function invoke(handler)
+        tools.register({ name = "coroutineTool", handler = handler, requires_coroutine = true })
+        return tools.handle_invoke(nil, { name = "coroutineTool", arguments = {} })
+      end
+
+      it("keeps the code of a structured error the handler returns", function()
+        local result_obj = invoke(function()
+          return false, { code = -32602, message = "Invalid params", data = "Missing required parameter: x" }
+        end)
+
+        assert.same(
+          { error = { code = -32602, message = "Invalid params", data = "Missing required parameter: x" } },
+          result_obj
+        )
+      end)
+
+      it("keeps the code of a structured error the handler raises", function()
+        local result_obj = invoke(function()
+          error({ code = -32001, message = "File not open" })
+        end)
+
+        assert.same({ error = { code = -32001, message = "File not open" } }, result_obj)
+      end)
+
+      it("returns the handler's result", function()
+        local content = { content = { { type = "text", text = "ok" } } }
+
+        assert.same(
+          { result = content },
+          invoke(function()
+            return content
+          end)
+        )
+      end)
+
+      it("defers the response while the handler is suspended", function()
+        local result_obj = invoke(function()
+          coroutine.yield()
+        end)
+
+        assert.is_true(result_obj._deferred)
+        assert.equal("suspended", coroutine.status(result_obj.coroutine))
+      end)
+    end)
   end)
 
   -- All individual tool describe blocks (e.g., "Open File Tool", "Get Diagnostics Tool", etc.)
