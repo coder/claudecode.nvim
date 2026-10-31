@@ -183,6 +183,102 @@ describe("Diff Module", function()
         end)
       end
     end)
+
+    describe("session folder on disk", function()
+      local root
+      local old_time
+
+      local function sh(cmd)
+        local status = os.execute(cmd)
+        return status == 0 or status == true
+      end
+
+      local function exists(path)
+        return os.rename(path, path) ~= nil
+      end
+
+      local function parent(path)
+        return path:match("^(.*)/[^/]*$")
+      end
+
+      local function fire_cleanup_autocmd()
+        local events = vim._autocmds["ClaudeCodeDiffCleanup"].events
+        events[#events].opts.callback()
+      end
+
+      -- Models real Neovim on POSIX: mkdir and delete act on disk, and delete(path, "d") removes only an empty directory.
+      before_each(function()
+        old_time = os.time
+        root = os.tmpname()
+        os.remove(root)
+        assert(sh("mkdir -p '" .. root .. "'"))
+        for _, name in ipairs({ "stdpath", "mkdir", "delete", "isdirectory", "fnamemodify", "getpid", "tempname" }) do
+          original_vim_functions["fn." .. name] = vim.fn[name]
+        end
+        local fnamemodify = vim.fn.fnamemodify
+        vim.fn.fnamemodify = function(path, modifier)
+          if modifier == ":h" then
+            return parent(path)
+          end
+          return fnamemodify(path, modifier)
+        end
+        vim.fn.stdpath = function()
+          return root
+        end
+        vim.fn.mkdir = function(path)
+          return sh("mkdir -p '" .. path .. "'") and 1 or 0
+        end
+        vim.fn.isdirectory = function(path)
+          return sh("test -d '" .. path .. "'") and 1 or 0
+        end
+        vim.fn.delete = function(path, flags)
+          if flags == "rf" then
+            return sh("rm -rf '" .. path .. "'") and 0 or -1
+          end
+          return os.remove(path) and 0 or -1
+        end
+      end)
+
+      after_each(function()
+        rawset(os, "time", old_time)
+        sh("rm -rf '" .. root .. "'")
+      end)
+
+      it("removes the folder without a notification when the proposed buffer closes", function()
+        local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Cleanup")
+        expect(result.success).to_be_true()
+        expect(exists(result.temp_file)).to_be_true()
+
+        vim._last_notify = nil
+        fire_cleanup_autocmd()
+
+        expect(exists(parent(result.temp_file))).to_be_false()
+        expect(vim._last_notify).to_be_nil()
+      end)
+
+      it("gives two Neovim processes different folders even with the same tempname, time and RNG state", function()
+        -- Every process's first tempname() ends in the same counter, and the RNG is unseeded until the server starts.
+        vim.fn.tempname = function()
+          return "/tmp/nvim.user/abc/0"
+        end
+        rawset(os, "time", function()
+          return 1700000000
+        end)
+
+        local folders = {}
+        for _, pid in ipairs({ 101, 202 }) do
+          vim.fn.getpid = function()
+            return pid
+          end
+          math.randomseed(42)
+          local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Process " .. pid)
+          expect(result.success).to_be_true()
+          table.insert(folders, parent(result.temp_file))
+        end
+
+        expect(folders[1] ~= folders[2]).to_be_true()
+      end)
+    end)
   end)
 
   describe("Native Diff Implementation", function()
