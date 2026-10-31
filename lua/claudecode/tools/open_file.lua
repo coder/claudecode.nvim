@@ -189,8 +189,10 @@ local function handler(params)
   -- Handle text selection by line numbers
   if params.startLine or params.endLine then
     run_in_target_window(function()
-      local start_line = params.startLine or 1
-      local end_line = params.endLine or start_line
+      -- Claude's line numbers can fall outside the buffer, for example after the file changed.
+      local line_count = vim.api.nvim_buf_line_count(0)
+      local start_line = math.min(math.max(params.startLine or 1, 1), line_count)
+      local end_line = math.min(math.max(params.endLine or start_line, 1), line_count)
 
       -- Mark rows are 1-based like startLine/endLine. A v:maxcol column puts '> after the end of the line.
       vim.api.nvim_buf_set_mark(0, "<", start_line, 0, {})
