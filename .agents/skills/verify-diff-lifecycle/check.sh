@@ -100,6 +100,9 @@ handle_invoke=$(block "$TOOLS" '^function M\.handle_invoke\(')
 open_diff_tool=$(block "$OPEN_DIFF_TOOL" '^local function handler\(params, client\)')
 setup_inline=$(block "$INLINE" '^function M\.setup_inline_diff\(')
 accept_current=$(block "$DIFF" '^function M\.accept_current_diff\(')
+fire_event=$(block "$DIFF" '^local function fire_diff_event\(')
+register_state=$(block "$DIFF" '^function M\._register_diff_state\(')
+cleanup_state=$(block "$DIFF" '^function M\._cleanup_diff_state\(')
 deny_current=$(block "$DIFF" '^function M\.deny_current_diff\(')
 
 FACTS=(GuardSaved GuardRejected SenderCleared ReplaceRejects CloseTabRejectsPending CloseEachByName StopRejectsPending
@@ -142,7 +145,9 @@ fact[ClientTagged]=$(as_bool client_tagged)
 # the resolution callback resumes the coroutine without checking that it is
 # suspended, and the server stores the response sender only after the yield.
 opened_event_in_setup() {
-  grep -qE '^    fire_diff_event\("ClaudeCodeDiffOpened"' <<<"$setup_blocking" &&
+  grep -qE '^ *pcall\(vim\.api\.nvim_exec_autocmds, "User"' <<<"$fire_event" &&
+    ! grep -q 'vim\.schedule\|defer_fn' <<<"$fire_event" &&
+    grep -qE '^    fire_diff_event\("ClaudeCodeDiffOpened"' <<<"$setup_blocking" &&
     in_order 'pcall\(M\._setup_blocking_diff' 'coroutine\.resume\(co, result\)' 'coroutine\.yield\(\)' \
       <<<"$open_blocking" &&
     ! grep -q 'coroutine\.status(co)' <<<"$open_blocking" &&
@@ -161,7 +166,7 @@ coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
-    handle_request setup_deferred handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
+    handle_request setup_deferred fire_event register_state cleanup_state handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
       echo "ERROR: covered block $name not found; update its start regex in check.sh" >&2
       exit 2
@@ -307,7 +312,20 @@ if [[ $mutants == 1 ]]; then
     fi
   done
   echo "  SenderCleared=FALSE alone is caught by nothing: the pending guards also stop a second answer."
+  # OpenedEventInSetup drives only the known finding: with it FALSE, the opened-handler run must pass.
+  rc=0
+  run_tlc mut-OpenedEventInSetup TRUE "$ALL_INV" "" OpenedEventInSetup=FALSE || rc=$?
+  if [[ $rc == 0 ]]; then
+    printf '  %-30s removes the known finding, as expected\n' "OpenedEventInSetup=FALSE"
+  else
+    printf '  %-30s still breaks the opened-handler run (%s)\n' "OpenedEventInSetup=FALSE" "$(describe mut-OpenedEventInSetup "$rc")"
+    [[ $status == 2 ]] || status=1
+  fi
   [[ $status == 0 ]] && echo "== mutants: every guard is caught" || echo "== mutants: FAILED"
+  if [[ $status == 0 && $stale == 1 ]]; then
+    echo "== RESULT: STALE, UNVERIFIED (the mutants pass, but nobody has checked the model against the changed code)"
+    exit 3
+  fi
   exit "$status"
 fi
 
