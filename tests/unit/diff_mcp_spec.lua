@@ -247,6 +247,81 @@ describe("MCP-compliant diff operations", function()
     end)
   end)
 
+  describe("Deferred tools/call response", function()
+    local tools = require("claudecode.tools.init")
+    local sent
+
+    local function invoke_until_user_acts(tool_name)
+      local deferred = tools.handle_invoke(nil, {
+        name = tool_name,
+        arguments = {
+          old_file_path = test_old_file,
+          new_file_path = test_new_file,
+          new_file_contents = test_content_new,
+          tab_name = test_tab_name,
+        },
+      })
+      assert.is_true(deferred._deferred, "the tool should wait for the user")
+      _G.claude_deferred_responses = {
+        [tostring(deferred.coroutine)] = function(response)
+          sent = response
+        end,
+      }
+    end
+
+    local function register_after_diff(tool_name, finish)
+      tools.register({
+        name = tool_name,
+        requires_coroutine = true,
+        handler = function(args)
+          diff.open_diff_blocking(args.old_file_path, args.new_file_path, args.new_file_contents, args.tab_name)
+          return finish()
+        end,
+      })
+    end
+
+    before_each(function()
+      sent = nil
+    end)
+
+    after_each(function()
+      _G.claude_deferred_responses = nil
+    end)
+
+    it("sends openDiff's result once the user rejects the diff", function()
+      tools.register(require("claudecode.tools.open_diff"))
+      invoke_until_user_acts("openDiff")
+
+      diff._resolve_diff_as_rejected(test_tab_name)
+
+      assert.same({
+        content = { { type = "text", text = "DIFF_REJECTED" }, { type = "text", text = test_tab_name } },
+      }, sent)
+    end)
+
+    it("keeps the code of a structured error the handler returns after it resumes", function()
+      register_after_diff("returnsAfterDiff", function()
+        return false, { code = -32602, message = "Invalid params" }
+      end)
+      invoke_until_user_acts("returnsAfterDiff")
+
+      diff._resolve_diff_as_rejected(test_tab_name)
+
+      assert.same({ error = { code = -32602, message = "Invalid params" } }, sent)
+    end)
+
+    it("keeps the code of a structured error the handler raises after it resumes", function()
+      register_after_diff("raisesAfterDiff", function()
+        error({ code = -32001, message = "File not open" })
+      end)
+      invoke_until_user_acts("raisesAfterDiff")
+
+      diff._resolve_diff_as_rejected(test_tab_name)
+
+      assert.same({ error = { code = -32001, message = "File not open" } }, sent)
+    end)
+  end)
+
   describe("Error handling", function()
     it("should handle buffer creation failures gracefully", function()
       -- Mock vim.api.nvim_create_buf to fail
