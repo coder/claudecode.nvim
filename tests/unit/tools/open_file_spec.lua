@@ -8,6 +8,9 @@ describe("Tool: open_file", function()
   local loaded_bufs
   local original_list_bufs
   local original_buf_is_loaded
+  local file_ids
+  local original_fs_stat
+  local cursor
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -110,6 +113,12 @@ describe("Tool: open_file", function()
     _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
       return true
     end)
+    -- fs_stat() identifies a file by its inode, the way :edit decides to reuse a buffer.
+    file_ids = { ["test.txt"] = 1 }
+    original_fs_stat = _G.vim.loop.fs_stat
+    _G.vim.loop.fs_stat = spy.new(function(path)
+      return file_ids[path] and { dev = 1, ino = file_ids[path] } or nil
+    end)
     _G.vim.fn.readfile = spy.new(function(path, flags, max)
       local read = {}
       for line_nr = 1, math.min(max or #buffer_lines, #buffer_lines) do
@@ -127,10 +136,12 @@ describe("Tool: open_file", function()
       end
       return slice
     end)
+    cursor = nil
     _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
       if pos[1] < 1 or pos[1] > #buffer_lines then
         error("Invalid cursor line: out of range")
       end
+      cursor = { pos[1], pos[2] }
     end)
     _G.vim.o = _G.vim.o or {}
     _G.vim.o.selection = "inclusive"
@@ -147,6 +158,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.readfile = nil
     _G.vim.api.nvim_list_bufs = original_list_bufs
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
+    _G.vim.loop.fs_stat = original_fs_stat
     _G.vim.o.selection = nil
   end)
 
@@ -378,8 +390,11 @@ describe("Tool: open_file", function()
       expect(_G.vim.cmd_history[#_G.vim.cmd_history]).to_be("normal! gv")
     end)
 
-    it("rejects a line below 1, a fractional line, or endLine below startLine before opening the file", function()
+    it("rejects a line below 1, a fractional or false line, or endLine below startLine before opening", function()
       for _, lines in ipairs({
+        { startLine = false },
+        { startLine = false, endLine = 3 },
+        { startLine = 2, endLine = false },
         { startLine = 0 },
         { startLine = 2, endLine = 0 },
         { startLine = 1.5 },
@@ -414,6 +429,38 @@ describe("Tool: open_file", function()
         return { "one", "two" }
       end)
       expect(open({ startLine = 4, endLine = 5 })).to_be("Opened file and selected lines 4 to 5")
+    end)
+
+    it("counts the unsaved lines of a buffer loaded under another name for the same file", function()
+      loaded_bufs = { 1 }
+      _G.vim.api.nvim_buf_get_name = spy.new(function(buf)
+        return "/real/test.txt"
+      end)
+      file_ids["/real/test.txt"] = 1
+      _G.vim.fn.readfile = spy.new(function(path, flags, max)
+        return { "one", "two" }
+      end)
+      expect(open({ startLine = 4, endLine = 5 })).to_be("Opened file and selected lines 4 to 5")
+    end)
+
+    it("ignores a loaded buffer that holds a different file", function()
+      loaded_bufs = { 1 }
+      _G.vim.api.nvim_buf_get_name = spy.new(function(buf)
+        return "other.txt"
+      end)
+      file_ids["other.txt"] = 2
+      _G.vim.fn.readfile = spy.new(function(path, flags, max)
+        return { "one", "two" }
+      end)
+      local success, err = pcall(open_file_handler, { filePath = "test.txt", startLine = 4 })
+      expect(success).to_be_false()
+      expect(err.code).to_be(-32602)
+    end)
+
+    it("keeps the end mark on an empty endLine", function()
+      buffer_lines = { "abc", "", "xyz" }
+      expect(open({ startLine = 1, endLine = 2 })).to_be("Opened file and selected lines 1 to 2")
+      assert.are.same({ 2, 0 }, marks[">"])
     end)
 
     it("sets both marks with no column offset on every path", function()
@@ -481,10 +528,13 @@ describe("Tool: open_file", function()
       assert.are.same({ 3, 4 }, marks[">"])
     end)
 
-    it("selects the startText match when endText is not found", function()
-      assert_contains(open({ startText = "two", endText = "zzz" }), 'end text "zzz" not found')
-      assert.are.same({ 2, 0 }, marks["<"])
-      assert.are.same({ 2, 2 }, marks[">"])
+    it("puts the cursor on the startText match without a selection when endText is not found", function()
+      assert_contains(open({ startText = "two", endText = "zzz" }), 'Opened file and positioned at "two"')
+      assert.are.same({ 2, 0 }, cursor)
+      assert.are.same({}, marks)
+      for _, command in ipairs(_G.vim.cmd_history) do
+        expect(command == "normal! gv").to_be_false()
+      end
     end)
   end)
 
