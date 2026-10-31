@@ -217,7 +217,7 @@ if [[ -L $LOCK ]]; then
 fi
 if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >/dev/null; then
   stale=1
-  sync_id=$(head -1 "$LOCK" 2>/dev/null | sed -n 's/^sync \([0-9a-f]\{40\}\)$/\1/p')
+  sync_id=$({ head -1 "$LOCK" 2>/dev/null || true; } | sed -n 's/^sync \([0-9a-f]\{40\}\)$/\1/p')
   label=${sync_id:0:12}
   [[ -n $label ]] || label="<no valid sync line in covered.lock>"
   echo "== STALE: the covered code changed since commit $label."
@@ -389,7 +389,11 @@ run_tlc opened-handler TRUE "$ALL_INV" "" || rc=$?
 echo "  $(describe opened-handler "$rc")"
 case "$rc" in
 12)
-  if [[ $(broken_rule "$work/opened-handler.out") == NoStrandedCall ]]; then
+  if [[ $(broken_rule "$work/opened-handler.out") == TypeOK ]]; then
+    echo "  TypeOK broke: the model itself is wrong, not the code"
+    show_trace opened-handler
+    exit 2
+  elif [[ $(broken_rule "$work/opened-handler.out") == NoStrandedCall ]]; then
     echo "  still reproduces (expected): Claude's openDiff call is never answered."
     show_trace opened-handler
   else
