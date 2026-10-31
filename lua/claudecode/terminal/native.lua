@@ -121,10 +121,12 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     end,
   }
   -- pcall runs inside the callback because nvim_buf_call rewraps a raised error with a stack traceback.
-  local started, termopen_result
-  vim.api.nvim_buf_call(new_bufnr, function()
-    started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts)
-  end)
+  local started, termopen_result = false, "Its buffer was deleted before termopen ran."
+  if vim.api.nvim_buf_is_valid(new_bufnr) then
+    vim.api.nvim_buf_call(new_bufnr, function()
+      started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts)
+    end)
+  end
   jobid = started and termopen_result or nil
 
   -- termopen raises for a command that is not executable, and returns 0 or -1 instead when errors are silenced.
