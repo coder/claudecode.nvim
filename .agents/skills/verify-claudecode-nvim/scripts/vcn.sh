@@ -15,6 +15,8 @@
 #   record <name>               save a WebM of the session so far to $OUT/<name>.webm and print its path
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
 set -euo pipefail
+# Evidence holds buffer text and accepted diffs: keep every file this run writes private.
+umask 077
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$SKILL_DIR/../../.." && pwd)"
@@ -237,6 +239,7 @@ cmd_launch() {
     die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
   mkdir -p "$out" "$state"/{home,claude,work}
+  chmod 700 "$out"
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"
   : >"$out/ws-out.jsonl"
