@@ -271,11 +271,23 @@ describe("claudecode.terminal.native toggle behavior", function()
           assert(buf, "termopen needs a current buffer")
           buf.name = "term://claude"
           buf.options.buftype = "terminal"
+          buf.options.channel = jobid
           buf.vars = buf.vars or {}
           buf.vars.terminal_job_id = jobid
           buf.jobid = jobid
           buf.on_exit = opts.on_exit
           mock_state.running_jobs[jobid] = true
+
+          -- TermOpen fires before termopen returns. Autocmds do not nest, so a nested termopen fires none.
+          if not mock_state.in_term_open then
+            mock_state.in_term_open = true
+            for _, autocmd in ipairs({ unpack(mock_state.autocmds) }) do
+              if autocmd.event == "TermOpen" then
+                autocmd.callback({ buf = win.bufnr })
+              end
+            end
+            mock_state.in_term_open = false
+          end
 
           return jobid
         end,
@@ -942,6 +954,39 @@ describe("claudecode.terminal.native toggle behavior", function()
         assert.is_nil(native_provider.get_active_bufnr())
       end)
     end
+
+    it("should not start a second terminal when a TermOpen autocmd calls open", function()
+      local mock_state = _G.get_mock_state()
+      mock_vim.api.nvim_create_autocmd("TermOpen", {
+        callback = function()
+          native_provider.open("claude", {}, config)
+        end,
+      })
+
+      native_provider.open("claude", {}, config)
+
+      local running = {}
+      for id in pairs(mock_state.running_jobs) do
+        table.insert(running, id)
+      end
+      assert.are.equal(1, #running)
+      assert.are.equal(running[1], mock_state.buffers[native_provider.get_active_bufnr()].jobid)
+    end)
+
+    it("should start a new terminal instead of adopting one whose job exited", function()
+      local mock_state = _G.get_mock_state()
+      local keep_open = { split_side = "right", split_width_percentage = 0.3, auto_close = false }
+      native_provider.open("claude", {}, keep_open)
+      local exited_bufnr = native_provider.get_active_bufnr()
+      mock_state.exit_job(exited_bufnr)
+      assert.are.equal(1, windows_showing(exited_bufnr))
+
+      native_provider.open("claude", {}, keep_open)
+
+      local active = native_provider.get_active_bufnr()
+      assert.are_not.equal(exited_bufnr, active)
+      assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+    end)
 
     local function keep_only_window_of(bufnr)
       local mock_state = _G.get_mock_state()
