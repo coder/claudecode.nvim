@@ -5,11 +5,7 @@ describe("Tool: open_file", function()
   local buffer_lines
   local marks
   local coladds
-  local loaded_bufs
-  local original_list_bufs
   local original_buf_is_loaded
-  local file_ids
-  local original_fs_stat
   local edit_buffers
   local cursor
   local editor_mode
@@ -117,17 +113,10 @@ describe("Tool: open_file", function()
       coladds[expr:sub(2)] = pos[4]
       return 0
     end)
-    loaded_bufs = {}
-    original_list_bufs = _G.vim.api.nvim_list_bufs
     original_buf_is_loaded = _G.vim.api.nvim_buf_is_loaded
-    _G.vim.api.nvim_list_bufs = spy.new(function()
-      return loaded_bufs
-    end)
     _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
       return true
     end)
-    -- fs_stat() identifies a file by its inode, the way :edit decides to reuse a buffer.
-    file_ids = { ["test.txt"] = 1 }
     -- bufexists() and bufadd() find the buffer that :edit would reuse for a path, by name or cached inode.
     edit_buffers = {}
     _G.vim.fn.bufexists = spy.new(function(path)
@@ -135,10 +124,6 @@ describe("Tool: open_file", function()
     end)
     _G.vim.fn.bufadd = spy.new(function(path)
       return assert(edit_buffers[path], "bufadd would create a buffer for " .. path)
-    end)
-    original_fs_stat = _G.vim.loop.fs_stat
-    _G.vim.loop.fs_stat = spy.new(function(path)
-      return file_ids[path] and { dev = 1, ino = file_ids[path] } or nil
     end)
     _G.vim.fn.readfile = spy.new(function(path, flags, max)
       local read = {}
@@ -179,9 +164,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.readfile = nil
     _G.vim.fn.bufexists = nil
     _G.vim.fn.bufadd = nil
-    _G.vim.api.nvim_list_bufs = original_list_bufs
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
-    _G.vim.loop.fs_stat = original_fs_stat
     _G.vim.api.nvim_get_mode = original_get_mode
     _G.vim.o.selection = nil
   end)
@@ -448,20 +431,6 @@ describe("Tool: open_file", function()
     end)
 
     it("accepts a startLine that exists only in the unsaved lines of the loaded buffer", function()
-      loaded_bufs = { 1 }
-      edit_buffers["test.txt"] = 1
-      _G.vim.fn.readfile = spy.new(function(path, flags, max)
-        return { "one", "two" }
-      end)
-      expect(open({ startLine = 4, endLine = 5 })).to_be("Opened file and selected lines 4 to 5")
-    end)
-
-    it("counts the unsaved lines of a buffer loaded under another name for the same file", function()
-      loaded_bufs = { 1 }
-      _G.vim.api.nvim_buf_get_name = spy.new(function(buf)
-        return "/real/test.txt"
-      end)
-      file_ids["/real/test.txt"] = 1
       edit_buffers["test.txt"] = 1
       _G.vim.fn.readfile = spy.new(function(path, flags, max)
         return { "one", "two" }
@@ -470,27 +439,7 @@ describe("Tool: open_file", function()
     end)
 
     it("uses the file on disk when :edit would not reuse a loaded buffer", function()
-      -- A symlink retargeted after its buffer loaded: the buffer's name now stats as this file, but Neovim
-      -- still holds the buffer's old inode, so :edit opens a new buffer.
-      loaded_bufs = { 1 }
-      _G.vim.api.nvim_buf_get_name = spy.new(function(buf)
-        return "/link.txt"
-      end)
-      file_ids["/link.txt"] = 1
-      _G.vim.fn.readfile = spy.new(function(path, flags, max)
-        return { "one", "two" }
-      end)
-      local success, err = pcall(open_file_handler, { filePath = "test.txt", startLine = 4 })
-      expect(success).to_be_false()
-      expect(err.code).to_be(-32602)
-    end)
-
-    it("ignores a loaded buffer that holds a different file", function()
-      loaded_bufs = { 1 }
-      _G.vim.api.nvim_buf_get_name = spy.new(function(buf)
-        return "other.txt"
-      end)
-      file_ids["other.txt"] = 2
+      -- For example a buffer loaded through a symlink that was retargeted since: Neovim keeps the old inode.
       _G.vim.fn.readfile = spy.new(function(path, flags, max)
         return { "one", "two" }
       end)

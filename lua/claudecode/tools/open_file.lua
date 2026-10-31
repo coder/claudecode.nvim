@@ -127,16 +127,16 @@ end
 
 ---Returns how many lines `file_path` will show once opened, counting at most `max` lines of the file on disk.
 ---A loaded buffer for the file can hold unsaved lines, and `:edit` shows that buffer, so its count wins.
----Like `:edit`, this matches the buffer by inode, so a symlink, a symlinked directory, or a hard link finds it.
+---bufexists() and bufadd() find that buffer the way `:edit` does, by name or by the inode Neovim cached for it,
+---so a symlink, a symlinked directory, or a hard link finds it. bufexists() comes first because bufadd()
+---creates a buffer when none exists.
 ---@param file_path string Path of the file to open
 ---@param max integer Lines to read from disk at most
 ---@return integer count
 local function line_count_before_open(file_path, max)
-  local uv = vim.uv or vim.loop
-  local target = uv.fs_stat(file_path)
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local stat = target and vim.api.nvim_buf_is_loaded(buf) and uv.fs_stat(vim.api.nvim_buf_get_name(buf))
-    if stat and stat.dev == target.dev and stat.ino == target.ino then
+  if vim.fn.bufexists(file_path) == 1 then
+    local buf = vim.fn.bufadd(file_path)
+    if vim.api.nvim_buf_is_loaded(buf) then
       return vim.api.nvim_buf_line_count(buf)
     end
   end
