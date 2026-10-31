@@ -37,7 +37,7 @@ Sources: [tools/init.lua:M.register_all], [tools/close_tab.lua:schema], [tools/o
 ## Invariants
 
 - An unknown tool returns `{ error = { code = -32601, message = "Tool not found: <name>" } }` [tools/init.lua:M.handle_invoke]
-- An error that is a `{ code, message }` table keeps its code. This applies when the handler raises the table and when it returns `false, err`. Any other error maps to `-32000` [tools/init.lua:M.handle_invoke]
+- An error that is a `{ code, message }` table keeps its code. This applies when the handler raises the table, and when a tool without `requires_coroutine` returns `false, err`. A coroutine tool that returns `false, err` loses `err` and gets `-32000` (#334). Any other error maps to `-32000` [tools/init.lua:M.handle_invoke]
 - A successful handler returns `{ result = <value> }` [tools/init.lua:M.handle_invoke]. Each tool handler builds the MCP shape `{ content = { { type = "text", text = ... } } }` itself [tools/open_file.lua:handler]
 - Tools with `requires_coroutine` run in `coroutine.create`. If the coroutine yields, `handle_invoke` returns `{ _deferred = true, coroutine, client, params }` and sends no response yet. Only `openDiff` sets `requires_coroutine = true` [tools/init.lua:M.handle_invoke]
 - `openDiff` raises `-32602` when a required parameter is missing. Outside a non-main coroutine it raises `-32000` with `message = "Internal server error"` and `data = "openDiff must run in coroutine context"` [tools/open_diff.lua:handler]

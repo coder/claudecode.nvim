@@ -938,7 +938,7 @@ Neovim loads [`plugin/claudecode.lua`](./plugin/README.md), which guards the loa
 `require("claudecode").setup()`. `setup` in [`lua/claudecode`](./lua/claudecode/README.md) validates config, registers the
 `:ClaudeCode*` commands, and (when `auto_start` is true) calls `start`. `start` opens the
 [WebSocket server](./lua/claudecode/server/README.md) on `127.0.0.1`, writes a lock file with an auth token, and enables
-selection tracking. The Claude CLI finds the lock file, connects, and calls the [MCP tools](./lua/claudecode/tools/README.md).
+selection tracking when `track_selection` is true. The Claude CLI finds the lock file, connects, and calls the [MCP tools](./lua/claudecode/tools/README.md).
 The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/README.md). Files under
 [`scripts/`](./scripts/README.md) are dev and release tooling and are never loaded by the plugin.
 
@@ -990,7 +990,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 - Network: one loopback TCP listener plus WebSocket frames and JSON-RPC broadcasts (`selection_changed`, `at_mentioned`)
   [lua/claudecode/server/init.lua:M.start] [lua/claudecode/selection.lua:M.send_selection_update].
 - Processes: the terminal provider spawns the Claude CLI with `ENABLE_IDE_INTEGRATION`, `FORCE_CODE_TERMINAL`,
-  `CLAUDE_CODE_SSE_PORT`, and loopback `no_proxy`/`NO_PROXY` [lua/claudecode/terminal.lua:get_claude_command_and_env].
+  loopback `no_proxy`/`NO_PROXY`, and, while the server runs, `CLAUDE_CODE_SSE_PORT`
+  [lua/claudecode/terminal.lua:get_claude_command_and_env].
 - Disk: diff temp files under `stdpath("cache")/claudecode_diffs`, or `stdpath("cache")/claudecode_diffs_fallback` if
   that `mkdir` fails [lua/claudecode/diff.lua:create_temp_file].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
