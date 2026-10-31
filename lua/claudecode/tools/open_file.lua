@@ -16,10 +16,12 @@ local schema = {
       },
       startLine = {
         type = "integer",
+        minimum = 1,
         description = "Optional: Line number to start selection",
       },
       endLine = {
         type = "integer",
+        minimum = 1,
         description = "Optional: Line number to end selection",
       },
       startText = {
@@ -125,6 +127,25 @@ local function handler(params)
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
 
+  local start_line, end_line
+  if params.startLine or params.endLine then
+    start_line = params.startLine or 1
+    end_line = params.endLine or start_line
+    local valid = type(start_line) == "number"
+      and type(end_line) == "number"
+      and start_line % 1 == 0
+      and end_line % 1 == 0
+      and start_line >= 1
+      and end_line >= start_line
+    if not valid then
+      error({
+        code = -32602,
+        message = "Invalid params",
+        data = "startLine and endLine must be integers with 1 <= startLine <= endLine",
+      })
+    end
+  end
+
   -- Expand a leading `~` only. `vim.fn.expand` would treat `$name` as an
   -- environment variable and strip undefined ones, breaking literal `$` paths
   -- (e.g. TanStack Router `$param` files like `src/routes/$post.tsx`).
@@ -198,10 +219,8 @@ local function handler(params)
   end
 
   -- Handle text selection by line numbers
-  if params.startLine or params.endLine then
+  if start_line then
     run_in_target_window(function()
-      local start_line = params.startLine or 1
-      local end_line = params.endLine or start_line
       local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1] or ""
 
       -- nvim_buf_set_mark takes a 1-based row and a 0-based column.
