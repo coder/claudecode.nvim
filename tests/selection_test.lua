@@ -131,6 +131,21 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
+      -- Mirrors Neovim for the one pattern selection.lua passes: `\%<col>c.` matches the character that
+      -- starts at byte <col> with its composing characters (here U+0300 to U+036F, bytes CC 80 to CD AF).
+      matchstr = function(line, pattern)
+        local col = tonumber(pattern:match("^\\%%(%d+)c%.$"))
+        assert(col, "unexpected matchstr pattern " .. pattern)
+        local lead = line:byte(col)
+        if not lead or (lead >= 0x80 and lead < 0xC0) then
+          return ""
+        end
+        local stop = col + (lead < 0x80 and 1 or lead < 0xE0 and 2 or lead < 0xF0 and 3 or 4)
+        while line:byte(stop) == 0xCC or (line:byte(stop) == 0xCD and line:byte(stop + 1) < 0xB0) do
+          stop = stop + 2
+        end
+        return line:sub(col, stop - 1)
+      end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
         return _G.vim._visualmode or ""
@@ -1000,29 +1015,13 @@ describe("Range Selection Tests", function()
     end)
 
     describe("multibyte characters (#362)", function()
-      local original_matchstr
-
-      -- Mirrors Neovim for the one pattern selection.lua passes: `\%<col>c.` matches the character that
-      -- starts at byte <col> with its composing characters (here U+0300 to U+036F, bytes CC 80 to CD AF).
-      local function matchstr(line, pattern)
-        local col = tonumber(pattern:match("^\\%%(%d+)c%.$"))
-        assert(col, "unexpected matchstr pattern " .. pattern)
-        local lead = line:byte(col)
-        if not lead or (lead >= 0x80 and lead < 0xC0) then
-          return ""
-        end
-        local stop = col + (lead < 0x80 and 1 or lead < 0xE0 and 2 or lead < 0xF0 and 3 or 4)
-        while line:byte(stop) == 0xCC or (line:byte(stop) == 0xCD and line:byte(stop + 1) < 0xB0) do
-          stop = stop + 2
-        end
-        return line:sub(col, stop - 1)
-      end
-
       local function is_valid_utf8(text)
         local i = 1
         while i <= #text do
           local lead = text:byte(i)
-          local len = lead < 0x80 and 1 or lead >= 0xC2 and lead < 0xE0 and 2 or lead >= 0xE0 and lead < 0xF0 and 3
+          local len = lead < 0x80 and 1
+            or lead >= 0xC2 and lead < 0xE0 and 2
+            or lead >= 0xE0 and lead < 0xF0 and 3
             or lead >= 0xF0 and lead < 0xF5 and 4
           if not len then
             return false
@@ -1047,15 +1046,6 @@ describe("Range Selection Tests", function()
         assert.is_true(is_valid_utf8(sel.text))
         return sel
       end
-
-      before_each(function()
-        original_matchstr = _G.vim.fn.matchstr
-        _G.vim.fn.matchstr = matchstr
-      end)
-
-      after_each(function()
-        _G.vim.fn.matchstr = original_matchstr
-      end)
 
       it("sends the whole last character when a live charwise selection ends on a multibyte one", function()
         -- The issue's repro: on the line `naïve café`, `0vwe` leaves the cursor on the final é (bytes 11-12).
