@@ -258,6 +258,60 @@ describe("a diff the user accepted for one Claude client", function()
       assert_kept()
     end)
 
+    it("hands the text to the file the diff showed, after a :cd while the diff was open", function()
+      local real_getcwd = vim.fn.getcwd
+      local shown = "/tmp/issue363_open_dir/issue363_relative.txt"
+      local elsewhere = "/tmp/issue363_other_dir/issue363_relative.txt"
+      local relative_tab = "✻ [Claude Code] issue363_relative.txt ⧉"
+      finally(function()
+        vim.fn.getcwd = real_getcwd
+        for _, path in ipairs({ shown, elsewhere }) do
+          if vim.fn.bufnr(path) ~= -1 then
+            vim.api.nvim_buf_delete(vim.fn.bufnr(path), { force = true })
+          end
+        end
+      end)
+      vim.fn.getcwd = function()
+        return "/tmp/issue363_open_dir"
+      end
+      local deferred = call_tool(owner, "openDiff", {
+        old_file_path = "issue363_relative.txt",
+        new_file_path = "issue363_relative.txt",
+        new_file_contents = "relative accepted\n",
+        tab_name = relative_tab,
+      })
+      assert.is_true(deferred._deferred, "openDiff should wait for the user")
+      _G.claude_deferred_responses[tostring(deferred.coroutine)] = function() end
+      vim.fn.getcwd = function()
+        return "/tmp/issue363_other_dir"
+      end
+      diff._resolve_diff_as_saved(relative_tab, diff._get_active_diffs()[relative_tab].new_buffer)
+      diff.close_diffs_for_client(owner.id, "client disconnected")
+
+      user_closes_all_diffs()
+
+      assert.are_not.equal(-1, vim.fn.bufnr(shown), "the file the diff showed must get the text")
+      assert.are.same({ "relative accepted" }, vim.api.nvim_buf_get_lines(vim.fn.bufnr(shown), 0, -1, false))
+      assert.equal(-1, vim.fn.bufnr(elsewhere), "a file in the new cwd must not get the text")
+      assert.is_nil(diff._get_active_diffs()[relative_tab])
+    end)
+
+    it("makes a bufhidden=wipe buffer survive the close of its last window", function()
+      open_and_accept()
+      owner_exits()
+      local buf = vim.fn.bufnr(file)
+      if buf == -1 then
+        buf = vim.fn.bufadd(file)
+        vim.fn.bufload(buf)
+      end
+      vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
+
+      user_closes_all_diffs()
+
+      assert.are.same({ "line 1", "line 2", "accepted line" }, file_buffer_lines())
+      assert.equal("hide", vim.api.nvim_buf_get_option(vim.fn.bufnr(file), "bufhidden"))
+    end)
+
     it("stays open, and the buffer keeps its edits, while the file's buffer has unsaved changes", function()
       open_and_accept()
       owner_exits()

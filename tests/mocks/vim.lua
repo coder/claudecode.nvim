@@ -629,6 +629,9 @@ local vim = {
       if modifier == ":t" then
         return path:match("([^/]+)$") or path
       end
+      if modifier == ":p" and path:sub(1, 1) ~= "/" then
+        return vim.fn.getcwd() .. "/" .. path
+      end
       return path
     end,
 
