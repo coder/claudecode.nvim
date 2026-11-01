@@ -1,0 +1,195 @@
+-- Real-Neovim checks of :ClaudeCodeCloseAllDiffs finishing an accepted diff whose Claude client exited: the accepted
+-- text goes into the file's buffer, and the user's :w writes it. Neovim's own file format, encoding, and write rules
+-- decide the bytes, so under busted's mock vim this is pending; scripts/run_integration_tests_individually.sh runs it
+-- in Neovim.
+if vim == nil or vim.fn.has("nvim") ~= 1 then
+  describe(":ClaudeCodeCloseAllDiffs hand-over", function()
+    pending("needs a real Neovim")
+  end)
+  return
+end
+
+describe(":ClaudeCodeCloseAllDiffs hand-over", function()
+  local diff = require("claudecode.diff")
+  local tools = require("claudecode.tools.init")
+  local owner = { id = "hand_over_spec_client" }
+  local dir, notes, real_notify
+
+  before_each(function()
+    dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    tools.register_all()
+    require("claudecode")._create_commands()
+    _G.claude_deferred_responses = {}
+    notes = {}
+    real_notify = vim.notify
+    vim.notify = function(msg)
+      notes[#notes + 1] = msg
+    end
+  end)
+
+  after_each(function()
+    vim.notify = real_notify
+    diff._cleanup_all_active_diffs("test cleanup")
+    vim.cmd("silent! %bwipeout!")
+    vim.fn.delete(dir, "rf")
+    _G.claude_deferred_responses = nil
+  end)
+
+  local function write_bytes(path, bytes)
+    local file = assert(io.open(path, "wb"))
+    file:write(bytes)
+    file:close()
+  end
+
+  local function read_bytes(path)
+    local file = io.open(path, "rb")
+    if not file then
+      return nil
+    end
+    local bytes = file:read("*a")
+    file:close()
+    return bytes
+  end
+
+  -- Claude proposes `contents`, the user accepts with :w in the proposal, and the Claude client exits before it
+  -- writes the file. `before_write` runs in the proposal buffer before the :w.
+  local function accept_then_client_exits(path, contents, before_write)
+    local tab = "✻ [Claude Code] " .. vim.fn.fnamemodify(path, ":t") .. " ⧉"
+    local call = tools.handle_invoke(owner, {
+      name = "openDiff",
+      arguments = { old_file_path = path, new_file_path = path, new_file_contents = contents, tab_name = tab },
+    })
+    assert.is_true(call._deferred, "openDiff waits for the user")
+    local answers = {}
+    _G.claude_deferred_responses[tostring(call.coroutine)] = function(response)
+      answers[#answers + 1] = response
+    end
+    vim.api.nvim_buf_call(diff._get_active_diffs()[tab].new_buffer, function()
+      if before_write then
+        before_write()
+      end
+      vim.cmd("write")
+    end)
+    assert.equal("FILE_SAVED", answers[1].content[1].text)
+    diff.close_diffs_for_client(owner.id, "client disconnected")
+    assert.equal("saved", diff._get_active_diffs()[tab].status)
+    return tab
+  end
+
+  local function close_all_then_write(path)
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+    local buf = vim.fn.bufnr(path)
+    assert.are_not.equal(-1, buf, "the file's buffer holds the accepted text")
+    vim.api.nvim_buf_call(buf, function()
+      vim.cmd("silent write")
+    end)
+    return buf
+  end
+
+  it("writes one CR per line break of a CRLF proposal to a dos file", function()
+    local path = dir .. "/crlf.txt"
+    write_bytes(path, "alpha\r\nbeta\r\n")
+    vim.cmd.edit(path)
+    assert.equal("dos", vim.bo.fileformat)
+    accept_then_client_exits(path, "alpha\r\nBETA accepted\r\n")
+
+    close_all_then_write(path)
+
+    assert.equal("alpha\r\nBETA accepted\r\n", read_bytes(path))
+  end)
+
+  it("writes one BOM when the proposal for a 'bomb' file starts with one", function()
+    local path = dir .. "/bom.txt"
+    write_bytes(path, "\239\187\191alpha\n")
+    vim.cmd.edit(path)
+    assert.is_true(vim.bo.bomb)
+    accept_then_client_exits(path, "\239\187\191alpha accepted\n")
+
+    close_all_then_write(path)
+
+    assert.equal("\239\187\191alpha accepted\n", read_bytes(path))
+  end)
+
+  it("writes a text with no final line break as accepted, then the buffer's 'fixeol' applies again", function()
+    local path = dir .. "/noeol.txt"
+    write_bytes(path, "alpha\n")
+    accept_then_client_exits(path, "alpha accepted\n", function()
+      vim.bo.eol = false
+    end)
+
+    local buf = close_all_then_write(path)
+
+    assert.equal("alpha accepted", read_bytes(path))
+    assert.is_true(vim.bo[buf].fixeol, "the user's next :w adds the final line break again")
+  end)
+
+  it("tells the user to change 'fileencoding' when the file's encoding cannot hold the accepted text", function()
+    local path = dir .. "/latin1.txt"
+    write_bytes(path, "caf\233\n")
+    vim.cmd.edit(path)
+    assert.equal("latin1", vim.bo.fileencoding)
+    accept_then_client_exits(path, "café costs 5 €\n")
+
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+
+    assert.are.same({ "café costs 5 €" }, vim.api.nvim_buf_get_lines(vim.fn.bufnr(path), 0, -1, false))
+    assert.is_truthy(notes[#notes]:find("'fileencoding' latin1", 1, true), notes[#notes])
+    assert.is_truthy(notes[#notes]:find(":set fileencoding=utf-8", 1, true), notes[#notes])
+  end)
+
+  it("names :w ++p when the accepted file's folder does not exist yet", function()
+    local path = dir .. "/new folder/created.txt"
+    accept_then_client_exits(path, "created\n")
+
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+
+    assert.is_truthy(notes[#notes]:find(":w ++p writes them", 1, true), notes[#notes])
+    vim.api.nvim_buf_call(vim.fn.bufnr(path), function()
+      vim.cmd("silent write ++p")
+    end)
+    assert.equal("created\n", read_bytes(path))
+  end)
+
+  it("keeps the diff, names the error, and leaves no buffer behind when the file's buffer refuses the text", function()
+    local path = dir .. "/refuses.txt"
+    write_bytes(path, "alpha\n")
+    local tab = accept_then_client_exits(path, "alpha accepted\n")
+    vim.cmd("bwipeout! " .. vim.fn.fnameescape(path))
+    vim.api.nvim_create_autocmd("BufReadPost", {
+      pattern = path,
+      once = true,
+      callback = function()
+        vim.bo.modifiable = false
+      end,
+    })
+
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+
+    assert.equal("saved", diff._get_active_diffs()[tab].status)
+    assert.is_truthy(notes[#notes]:find("not 'modifiable'", 1, true), notes[#notes])
+    assert.equal(0, vim.fn.bufexists(path), "the command leaves no buffer the user did not have")
+    assert.equal("alpha\n", read_bytes(path))
+  end)
+
+  it("closes a diff the user rejected after its client exited", function()
+    local path = dir .. "/rejected.txt"
+    write_bytes(path, "alpha\n")
+    local tab = "✻ [Claude Code] rejected.txt ⧉"
+    local call = tools.handle_invoke(owner, {
+      name = "openDiff",
+      arguments = { old_file_path = path, new_file_path = path, new_file_contents = "x\n", tab_name = tab },
+    })
+    _G.claude_deferred_responses[tostring(call.coroutine)] = function() end
+    vim.api.nvim_buf_call(diff._get_active_diffs()[tab].new_buffer, function()
+      vim.cmd("ClaudeCodeDiffDeny")
+    end)
+    diff.close_diffs_for_client(owner.id, "client disconnected")
+    assert.equal("rejected", diff._get_active_diffs()[tab].status)
+
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+
+    assert.is_nil(diff._get_active_diffs()[tab])
+    assert.are.same({ "Closed 1 rejected Claude diff(s)" }, notes)
+  end)
+end)
