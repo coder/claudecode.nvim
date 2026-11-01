@@ -88,7 +88,7 @@ function M.start(config, auth_token)
       end
     end,
     on_error = function(error_msg)
-      logger.error("server", "WebSocket server error:", error_msg)
+      logger.one_line("error", "server", error_msg)
     end,
   }
 

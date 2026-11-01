@@ -24,6 +24,7 @@ local CLOSE_REASONS = {
 ---@field tcp_handle table The vim.loop TCP handle
 ---@field state string Connection state: "connecting", "connected", "closing", "closed"
 ---@field buffer string Incoming data buffer
+---@field pending table|nil The reads of an incomplete frame, with their total length in `size` and the frame's in `needed`
 ---@field fragments table|nil Joined pieces of the text message whose last fragment has not arrived, and their total `size`
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
 ---@field last_ping number Timestamp of last ping sent
@@ -100,7 +101,20 @@ end
 ---@param on_error function Callback for errors: function(client, error_msg)
 ---@param auth_token string|nil Expected authentication token for validation
 function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-  client.buffer = client.buffer .. data
+  -- A frame longer than one read arrives in many. Joining each read onto the bytes before it copies them all every
+  -- time, so the reads of an incomplete frame wait in a list until the whole frame is there.
+  local pending = client.pending
+  if pending then
+    table.insert(pending, data)
+    pending.size = pending.size + #data
+    if pending.size < pending.needed then
+      return
+    end
+    client.pending = nil
+    client.buffer = table.concat(pending)
+  else
+    client.buffer = client.buffer .. data
+  end
 
   if not client.handshake_complete then
     local complete, request, remaining = handshake.extract_http_request(client.buffer)
@@ -124,29 +138,14 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           logger.debug("client", "Client handshake completed (no auth required):", client.id)
         end
       else
-        -- Log specific authentication failure details
-        if auth_token and response_from_handshake:find("auth") then
-          logger.warn(
-            "client",
-            "Authentication failed for client "
-              .. client.id
-              .. ": "
-              .. (response_from_handshake:match("Bad WebSocket upgrade request: (.+)") or "unknown auth error")
-          )
-        else
-          logger.warn(
-            "client",
-            "WebSocket handshake failed for client "
-              .. client.id
-              .. ": "
-              .. (response_from_handshake:match("HTTP/1.1 %d+ (.+)") or "unknown handshake error")
-          )
-        end
+        -- The body of the error response says why.
+        local body = response_from_handshake:match("\r\n\r\n(.+)$") or "Bad handshake"
+        local reason = body:gsub("^Bad WebSocket upgrade request: ", "")
+        logger.one_line("warn", "client", "Rejected " .. client.id .. ": " .. reason)
       end
 
       client.tcp_handle:write(response_from_handshake, function(err)
         if err then
-          logger.error("client", "Failed to send handshake response to client " .. client.id .. ": " .. err)
           on_error(client, "Failed to send handshake response: " .. err)
           return
         end
@@ -164,7 +163,10 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           client.state = "closing"
           logger.debug("client", "Closing connection for client due to failed handshake:", client.id)
           vim.schedule(function()
-            client.tcp_handle:close()
+            -- A client that hung up after reading the reply had its handle closed then.
+            if not client.tcp_handle:is_closing() then
+              client.tcp_handle:close()
+            end
           end)
         end
       end)
@@ -175,6 +177,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
   -- Parse from an offset and cut the buffer once at the end: cutting it after each frame copies the rest of the
   -- buffer every time, which costs quadratic time for many small frames in one read.
   local offset = 1
+  local frame_length
   while #client.buffer - offset >= 1 do -- Minimum frame size is 2 bytes
     -- Stop if a prior frame (or a TCP error) already initiated teardown. The
     -- handle can still be open (Close-frame write / scheduled on_close/on_error
@@ -184,7 +187,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       break
     end
 
-    local parsed_frame, bytes_consumed, close_code = frame.parse_frame(client.buffer, offset)
+    local parsed_frame, bytes_consumed, close_code, detail = frame.parse_frame(client.buffer, offset)
 
     if not parsed_frame then
       if close_code then
@@ -199,10 +202,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- been flushed, so the peer actually receives the 1002/1007/1009 close.
         client.buffer = ""
         M.close_client(client, close_code, CLOSE_REASONS[close_code], function()
-          on_error(client, "WebSocket protocol error in frame")
+          on_error(client, detail)
         end)
+      else
+        frame_length = detail -- The frame is incomplete. Its length is known once its header arrived.
       end
-      break -- No close_code means the frame is incomplete; wait for more bytes.
+      break
     end
 
     offset = offset + bytes_consumed
@@ -263,6 +268,10 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
     end
   end
   client.buffer = client.buffer:sub(offset)
+  if frame_length then
+    client.pending = { client.buffer, size = #client.buffer, needed = frame_length }
+    client.buffer = ""
+  end
 end
 
 ---Send a text message to a client
@@ -378,7 +387,7 @@ function M.get_client_info(client)
     id = client.id,
     state = client.state,
     handshake_complete = client.handshake_complete,
-    buffer_size = #client.buffer,
+    buffer_size = #client.buffer + (client.pending and client.pending.size or 0),
     last_ping = client.last_ping,
     last_pong = client.last_pong,
   }
