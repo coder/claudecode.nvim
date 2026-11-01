@@ -85,9 +85,10 @@ describe("openDiff window sizes", function()
     )
   end
 
-  -- Makes the diff's setup fail once its proposed buffer is shown, as a user's autocmd that errors would.
-  local function fail_when_shown(suffix)
-    vim.api.nvim_create_autocmd("BufWinEnter", {
+  -- Makes the diff's setup fail once a buffer whose name ends in `suffix` is shown (or entered, with `event`), as a
+  -- user's autocmd that errors would.
+  local function fail_when_shown(suffix, event)
+    vim.api.nvim_create_autocmd(event or "BufWinEnter", {
       group = vim.api.nvim_create_augroup("window_sizes_spec", { clear = true }),
       callback = function(args)
         if args.file:sub(-#suffix) == suffix then
@@ -255,6 +256,20 @@ describe("openDiff window sizes", function()
     assert.equal(other_win, vim.api.nvim_get_current_win())
   end)
 
+  it("puts the cursor back in the user's tab when the diff's setup fails in another tab", function()
+    use_layout("vertical")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    vim.cmd("tabnew")
+    vim.fn.termopen({ "sleep", "60" })
+    local user_win = vim.api.nvim_get_current_win()
+    fail_when_shown("/a.txt", "BufEnter")
+
+    local call = call_open_diff("a.txt")
+
+    assert.is_truthy(call.error, "the setup failed")
+    assert.equal(user_win, vim.api.nvim_get_current_win())
+  end)
+
   it("puts the cursor back in the tab the user was in when the diff opened in another tab", function()
     use_layout("vertical")
     vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
@@ -304,12 +319,28 @@ describe("openDiff window sizes", function()
     two_editors()
     local before = window_sizes()
 
+    local user_win = vim.api.nvim_get_current_win()
+
     open_diff("a.txt")
     assert.is_false(open_diff("b.txt", "✻ [Claude Code] second.txt ⧉").created_new_tab)
     close_tab()
     close_tab("✻ [Claude Code] second.txt ⧉")
 
     assert.are.same(before, window_sizes())
+    assert.equal(user_win, vim.api.nvim_get_current_win(), "the cursor is back where it was before the first diff")
+  end)
+
+  it("puts the cursor back in the window the user opened the second of two unified diffs from", function()
+    use_layout("unified")
+    two_editors()
+    local second_win = vim.api.nvim_tabpage_list_wins(0)[2]
+
+    open_diff("a.txt")
+    vim.api.nvim_set_current_win(second_win)
+    open_diff("b.txt", "✻ [Claude Code] second.txt ⧉")
+    close_tab("✻ [Claude Code] second.txt ⧉")
+
+    assert.equal(second_win, vim.api.nvim_get_current_win())
   end)
 
   it("gives the sizes back when the unified diff's setup fails", function()
