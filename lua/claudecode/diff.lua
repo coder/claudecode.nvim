@@ -118,11 +118,27 @@ local function fire_diff_event(name, data)
   pcall(vim.api.nvim_exec_autocmds, "User", { pattern = name, data = data, modeline = false })
 end
 
+---Every window, the current tab's first. A diff opens where the user is, as VS Code opens it in the active editor
+---group, and goes to another tab only when this one has no window it can use.
+---@return number[] windows
+local function windows_current_tab_first()
+  local current_tab = vim.api.nvim_get_current_tabpage()
+  local here, elsewhere = {}, {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local list = vim.api.nvim_win_get_tabpage(win) == current_tab and here or elsewhere
+    list[#list + 1] = win
+  end
+  for _, win in ipairs(elsewhere) do
+    here[#here + 1] = win
+  end
+  return here
+end
+
 ---Find a suitable main editor window to open diffs in.
 ---Excludes terminals, sidebars, and floating windows.
 ---@return number? win_id Window ID of the main editor window, or nil if not found
 local function find_main_editor_window()
-  local windows = vim.api.nvim_list_wins()
+  local windows = windows_current_tab_first()
 
   for _, win in ipairs(windows) do
     local buf = vim.api.nvim_win_get_buf(win)
@@ -1388,7 +1404,7 @@ function M._setup_blocking_diff(params, resolution_callback)
         end
 
         if existing_buffer then
-          for _, win in ipairs(vim.api.nvim_list_wins()) do
+          for _, win in ipairs(windows_current_tab_first()) do
             -- Don't reuse a window that is already in diff mode (e.g. the old
             -- file shown inside the user's diffview/vimdiff): diffing into it
             -- would join and corrupt that diff (issue #277). Skip the preview
