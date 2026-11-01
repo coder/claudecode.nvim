@@ -786,6 +786,15 @@ describe("Tool: open_file", function()
       end
     end)
 
+    it("selects as usual from Terminal, Visual and Select mode, which are between commands", function()
+      for _, mode in ipairs({ "t", "nt", "v", "s" }) do
+        editor_mode, _G.vim.cmd_history = mode, {}
+        expect(open({ startLine = 3, endLine = 4 })).to_be("Opened file and selected lines 3 to 4")
+        expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+        expect(editor_mode).to_be("v")
+      end
+    end)
+
     it("leaves a Select mode the user holds in another window before gv", function()
       _G.vim.api.nvim_list_wins = spy.new(function()
         return { 2000 }
