@@ -3,11 +3,11 @@ file lua/claudecode/config.lua dfb93bd69a6198ec
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 92c83d7d5ba5873c
+file lua/claudecode/diff.lua a40bf716d289350c
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
-block setup_blocking     2d1b9a26f2a87f7a
+block setup_blocking     747b1c99b6783df1
 block close_by_name      cc40c0d2ffdf7946
 block close_pending      31bc827d1065da70
 block close_for_client   330cc91666bc7884
@@ -23,7 +23,7 @@ block cleanup_all        43e7b595cf106229
 block accept_current     7577efa33506569e
 block fire_event         ef778bb39419d91a
 block register_state     dd8024e262a26c38
-block cleanup_state      9a8b3895e6d7d78b
+block cleanup_state      5c9bdb89dcfbe720
 block diff_autocmds      675566664a1546fb
 block deny_current       94385d781b70d50c
 site lua/claudecode/diff.lua: M._cleanup_all_active_diffs("shutdown") @ vim.api.nvim_create_autocmd("VimLeavePre", {
@@ -99,10 +99,10 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 6385595ab491b8fd
+file lua/claudecode/diff_inline.lua cc4577ab1fed8b95
 block inline_saved       53e3ff9a47388fc9
 block inline_rejected    3a098216eef4b774
-block setup_inline       1abe1949d84cec59
+block setup_inline       7ec15c5084a58665
 site lua/claudecode/diff_inline.lua: diff._cleanup_diff_state(tab_name, "setup failed") @ local function cleanup_unregistered_inline_setup(tab_name, partial)
 site lua/claudecode/diff_inline.lua: diff._register_diff_state(tab_name, { @ function M.setup_inline_diff(params, resolution_callback, config)
 site lua/claudecode/diff_inline.lua: diff._resolve_diff_as_rejected(tab_name) @ function M.setup_inline_diff(params, resolution_callback, config)

@@ -211,6 +211,7 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
       pcall(vim.api.nvim_win_close, partial.fallback_window, true)
     end
 
+    diff._restore_cursor(partial.window_sizes, partial.cursor_origin)
     diff._restore_window_sizes(partial.window_sizes)
   end
 
@@ -353,6 +354,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   local fallback_window
   local fallback_split_win
   local window_sizes
+  local cursor_origin
   if created_new_tab then
     local tab_wins = vim.api.nvim_tabpage_list_wins(0)
     for _, w in ipairs(tab_wins) do
@@ -370,7 +372,9 @@ function M.setup_inline_diff(params, resolution_callback, config)
     window_sizes = diff._save_window_sizes(
       editor_win and vim.api.nvim_win_get_tabpage(editor_win) or vim.api.nvim_get_current_tabpage()
     )
+    cursor_origin = vim.api.nvim_get_current_win()
     partial_setup.window_sizes = window_sizes
+    partial_setup.cursor_origin = cursor_origin
     if not editor_win then
       fallback_window, fallback_split_win = guard_inline_setup(create_fallback_editor_window)
       partial_setup.fallback_window = fallback_window
@@ -467,6 +471,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
       target_window = editor_win,
       fallback_window = fallback_window,
       window_sizes = window_sizes,
+      cursor_origin = cursor_origin,
       lines = lines,
       line_types = line_types,
       is_new_file = is_new_file,
@@ -584,6 +589,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
       end
     end
   else
+    local cursor_window = vim.api.nvim_get_current_win()
     -- Close the diff split window
     if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
@@ -593,6 +599,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
       pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
     end
 
+    diff._restore_cursor(diff_data.window_sizes, diff_data.cursor_origin, cursor_window)
     diff._restore_window_sizes(diff_data.window_sizes)
 
     -- Restore terminal width
