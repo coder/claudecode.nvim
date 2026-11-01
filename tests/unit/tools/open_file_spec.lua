@@ -1228,6 +1228,18 @@ describe("Tool: open_file", function()
         end)
       end
 
+      it("does not fail a write when an earlier BufWritePost autocommand wipes the buffer", function()
+        -- autocmd BufWritePost *.tmp bwipeout. Neovim still runs the other BufWritePost autocommands.
+        buffers[30] = nil
+        _G.vim.api.nvim_buf_get_name = function(buf)
+          return assert(buffers[buf] and "test.txt", "Invalid buffer id: " .. buf)
+        end
+        fire("BufUnload", 30)
+        assert.has_no.errors(function()
+          fire("BufWritePost", 30)
+        end)
+      end)
+
       it("keeps the empty buffer while the user holds Visual mode in the middle of a command", function()
         editor_mode, state_flags = "v", "S"
         local success = pcall(open_file_handler, { filePath = "test.txt", startText = "second" })
