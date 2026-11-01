@@ -12,10 +12,11 @@
 --      "Reject: `:q` or <leader>ad").
 --   4. EXPECTED: the diff is rejected (Claude is told DIFF_REJECTED) and the
 --      tab closes.
---      ACTUAL (the bug): `:q` only closes the proposed window; the buffer is
---      merely *hidden* (it is a scratch buffer => bufhidden=hide), so none of
---      the BufDelete/BufUnload/BufWipeout autocmds that drive rejection fire.
---      The diff stays "pending" forever and the tab lingers.
+--      BEFORE #266 (the bug): `:q` only closed the proposed window; the buffer
+--      was merely *hidden* (it is a scratch buffer => bufhidden=hide), so none
+--      of the BufDelete/BufUnload/BufWipeout autocmds that drove rejection fired.
+--      The diff stayed "pending" forever and the tab lingered. A WinClosed
+--      autocmd now rejects the diff when its last proposed window closes.
 --
 -- This fixture mirrors `remote-diff` but uses the reporter's exact config and
 -- exposes a `:DiffStateFile` command that writes a machine-readable JSON
@@ -40,9 +41,9 @@ vim.g.maplocalleader = "\\"
 local ok, claudecode = pcall(require, "claudecode")
 assert(ok, "Failed to load claudecode.nvim from repo root: " .. tostring(claudecode))
 
--- The reporter's exact config uses open_in_new_tab = true, but the underlying
--- bug is not tab-specific. Set REPRO238_NEW_TAB=0 to probe the default
--- (same-tab) layout and confirm `:q` rejection is broken there too.
+-- The reporter's exact config uses open_in_new_tab = true, but the bug was not
+-- tab-specific. Set REPRO238_NEW_TAB=0 to check `:q` rejection in the default
+-- (same-tab) layout too.
 local open_in_new_tab = os.getenv("REPRO238_NEW_TAB") ~= "0"
 
 claudecode.setup({

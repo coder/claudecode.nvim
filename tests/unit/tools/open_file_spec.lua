@@ -415,13 +415,112 @@ describe("Tool: open_file", function()
     expect(vsplit_idx < edit_idx).to_be_true()
   end)
 
-  it("should handle preview mode parameter", function()
-    local params = { filePath = "test.txt", preview = true }
-    local success, result = pcall(open_file_handler, params)
+  describe("with preview", function()
+    -- Like Neovim, :pedit shows the file in the preview window (3000) and leaves the cursor in the current window,
+    -- which keeps its own buffer (10). Marks, the cursor and gv act in the current window, or in the window that
+    -- nvim_win_call runs in.
+    local current_win, win_buf, buffers, mark_pos, visual
 
-    expect(success).to_be_true()
-    expect(result.content[1].text).to_be("Opened file: test.txt")
-    -- Preview mode affects window behavior but basic functionality should work
+    local function buf_of(buf)
+      return buf == 0 and win_buf[call_win or current_win] or buf
+    end
+
+    local function text_between(lines, from, to)
+      local picked = {}
+      for row = from[1], to[1] do
+        local first = row == from[1] and from[2] + 1 or 1
+        local last = row == to[1] and to[2] + 1 or #lines[row]
+        picked[#picked + 1] = lines[row]:sub(first, last)
+      end
+      return table.concat(picked, "\n")
+    end
+
+    local function open(params)
+      params.filePath = "test.txt"
+      params.preview = true
+      local success, result = pcall(open_file_handler, params)
+      expect(success).to_be_true()
+      return result.content[1].text
+    end
+
+    before_each(function()
+      buffer_lines = { "alpha", "beta", "gamma", "delta", "epsilon" }
+      current_win, win_buf, mark_pos, visual = 1000, { [1000] = 10 }, {}, nil
+      buffers = {
+        [10] = { lines = { "one", "two", "three", "four" }, filetype = "text" },
+        [30] = { lines = buffer_lines, filetype = "lua" },
+      }
+      local run_cmd = _G.vim.cmd
+      _G.vim.cmd = spy.new(function(command)
+        if command:match("^pedit ") then
+          win_buf[3000] = 30
+        elseif command == "normal! gv" then
+          local lines = buffers[buf_of(0)].lines
+          visual = { win = call_win or current_win, text = text_between(lines, mark_pos["<"], mark_pos[">"]) }
+        end
+        run_cmd(command)
+      end)
+      _G.vim.fn.setpos = spy.new(function(expr, pos)
+        mark_pos[expr:sub(2)] = { pos[2], pos[3] - 1 }
+        return 0
+      end)
+      _G.vim.api.nvim_win_get_tabpage = spy.new(function(win)
+        return 1
+      end)
+      _G.vim.api.nvim_tabpage_list_wins = spy.new(function(tab)
+        return win_buf[3000] and { 1000, 3000 } or { 1000 }
+      end)
+      _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+        return option == "previewwindow" and win == 3000
+      end)
+      _G.vim.api.nvim_get_current_win = spy.new(function()
+        return call_win or current_win
+      end)
+      _G.vim.api.nvim_set_current_win = spy.new(function(win)
+        current_win = win
+      end)
+      _G.vim.api.nvim_win_get_buf = spy.new(function(win)
+        return win_buf[win]
+      end)
+      _G.vim.api.nvim_get_current_buf = spy.new(function()
+        return buf_of(0)
+      end)
+      _G.vim.api.nvim_buf_get_lines = spy.new(function(buf, start, end_line, strict)
+        local lines = buffers[buf_of(buf)].lines
+        return { unpack(lines, start + 1, end_line < 0 and #lines + end_line + 1 or end_line) }
+      end)
+      _G.vim.api.nvim_buf_line_count = spy.new(function(buf)
+        return #buffers[buf_of(buf)].lines
+      end)
+      _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
+        return option == "filetype" and buffers[buf].filetype or ""
+      end)
+    end)
+
+    it("opens the file without a range", function()
+      expect(open({})).to_be("Opened file: test.txt")
+    end)
+
+    it("selects lines in the preview window, which shows the file, and focuses it", function()
+      expect(open({ startLine = 2, endLine = 3 })).to_be("Opened file and selected lines 2 to 3")
+      assert.are.same({ win = 3000, text = "beta\ngamma" }, visual)
+      expect(current_win).to_be(3000)
+    end)
+
+    it("finds startText and endText in the previewed file", function()
+      expect(open({ startText = "beta", endText = "gamma" })).to_be(
+        'Opened file and selected text from "beta" to "gamma"'
+      )
+      assert.are.same({ win = 3000, text = "beta\ngamma" }, visual)
+      expect(current_win).to_be(3000)
+    end)
+
+    it("reports the previewed file and keeps the focus with makeFrontmost = false", function()
+      local parsed = require("tests.busted_setup").json_decode(open({ makeFrontmost = false }))
+      expect(parsed.languageId).to_be("lua")
+      expect(parsed.lineCount).to_be(5)
+      expect(current_win).to_be(1000)
+    end)
   end)
 
   describe("selection marks", function()
