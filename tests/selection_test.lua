@@ -1227,6 +1227,13 @@ describe("Range Selection Tests", function()
           assert.are.equal(sent.text, selection.get_latest_selection().text)
         end)
 
+        it("keeps a position on a lone continuation byte, which Neovim treats as a character of its own", function()
+          local sel = from_marks({ "a\128b" }, "v", 1, 2, 1, 2)
+          assert.are.equal(replacement, sel.text)
+          assert.are.same({ line = 0, character = 1 }, sel.selection.start)
+          assert.are.same({ line = 0, character = 2 }, sel.selection["end"])
+        end)
+
         it("sends one U+FFFD for each invalid sequence, as a UTF-8 decoder does", function()
           -- 日 cut after two bytes, a lone continuation byte, an overlong `/`, and an encoded surrogate half.
           local sel = from_marks({ "é\230\151b\128", "\192\175\237\160\128" }, "V", 1, 1, 2, 2147483647)
