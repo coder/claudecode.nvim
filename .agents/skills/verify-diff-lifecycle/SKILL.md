@@ -25,9 +25,12 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 .agents/skills/verify-diff-lifecycle/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
 .agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 14 min, after you edit the model or a fact
 .agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change" (refused together with --mutants, and refused when covered.lock is a symlink)
+.agents/skills/verify-diff-lifecycle/check.sh --hash-only  # under 1 s, no TLC: only compares covered.lock with the code (exit 0 or 3)
 ```
 
-Needs bash 4 or newer, Java 11 or newer (`JAVA=/path/to/java` overrides), `sha256sum` or `shasum`, and curl for the first run. The first run downloads TLC 1.7.4 to `~/.cache/claudecode-nvim-tla/` and refuses a jar whose sha256 differs. Run one copy at a time on a shared host. TLC is CPU heavy.
+CI runs `check.sh --hash-only` in the `covered-lock` job on every pull request. `Required` does not need that job: a PR that changes `lua/` or `plugin/` without a re-recorded `covered.lock` shows the job red but can still merge.
+
+Needs bash 4 or newer, Java 11 or newer (`JAVA=/path/to/java` overrides), `sha256sum` or `shasum`, and curl for the first run (`--hash-only` and `--record` need only bash 4, git and `sha256sum` or `shasum`, and download nothing). The first run downloads TLC 1.7.4 to `~/.cache/claudecode-nvim-tla/` and refuses a jar whose sha256 differs. Run one copy at a time on a shared host. TLC is CPU heavy.
 
 Exit codes:
 
