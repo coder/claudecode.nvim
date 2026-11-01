@@ -172,6 +172,36 @@ describe("a diff the user accepted for one Claude client", function()
       assert.equal(vim.log.levels.WARN, notes[#notes].level)
     end)
 
+    it("leaves the file as it was when the write fails partway", function()
+      open_and_accept()
+      owner_exits()
+      local real_open = io.open
+      finally(function()
+        io.open = real_open
+      end)
+      -- A full disk: opening for writing truncates, and the write itself fails.
+      io.open = function(path, mode)
+        if mode == "wb" then
+          local f = assert(real_open(path, mode))
+          return {
+            write = function()
+              return nil, "No space left on device"
+            end,
+            close = function()
+              return f:close()
+            end,
+          }
+        end
+        return real_open(path, mode)
+      end
+
+      user_closes_all_diffs()
+      io.open = real_open
+
+      assert.equal("line 1\nline 2\n", read_file())
+      assert_kept()
+    end)
+
     it("stays open, and the file is not written, while the file's buffer has unsaved changes", function()
       open_and_accept()
       owner_exits()
