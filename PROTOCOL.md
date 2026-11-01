@@ -215,7 +215,7 @@ When `makeFrontmost=false`, returns detailed JSON:
 - `new_file_contents` (string): Contents of the new file
 - `tab_name` (string): Tab name for the diff view
 
-A new call with the `tab_name` of an open diff replaces that diff. One exception: if the user already accepted that diff for another client, the call fails at once with error `-32000`, and the accepted diff stays open.
+A new call with the `tab_name` of an open diff replaces that diff. One exception: if the user already accepted that diff for another client, the call fails at once with error `-32000`, and the accepted diff stays open until that client closes it or the user runs `:ClaudeCodeCloseAllDiffs`. That command closes it once the file holds the accepted text, and writes the text first when the file is unchanged since the accept.
 
 **Output**: Returns MCP-formatted response:
 
@@ -446,7 +446,7 @@ Or when document not open:
 
 **Output**: Returns `{content: [{type: "text", text: "TAB_CLOSED"}]}`
 
-A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file.
+A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file, or until the user runs `:ClaudeCodeCloseAllDiffs`.
 
 ### 11. closeAllDiffTabs
 

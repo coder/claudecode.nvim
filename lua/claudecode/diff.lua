@@ -430,6 +430,18 @@ local function is_buffer_dirty(file_path)
   return is_dirty, nil
 end
 
+---@param path string
+---@return string|nil text The file's bytes, or nil when it cannot be read
+local function read_file(path)
+  local file = io.open(path, "rb")
+  if not file then
+    return nil
+  end
+  local text = file:read("*a")
+  file:close()
+  return text
+end
+
 ---Setup the diff module
 ---@param user_config ClaudeCodeConfig The configuration passed from init.lua
 function M.setup(user_config)
@@ -805,6 +817,10 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   if not diff_data or diff_data.status ~= "pending" then
     return
   end
+
+  -- Claude writes the file only after it gets FILE_SAVED, so this is the file as it was before that write.
+  -- close_saved_diffs writes the accepted text only over this, never over a later edit.
+  diff_data.file_at_accept = read_file(diff_data.old_file_path)
 
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
@@ -1753,10 +1769,10 @@ end
 ---Closes diffs in ANY state (including saved), so its only caller is the
 ---closeAllDiffTabs tool, where Claude is the connected client and has written
 ---its accepted files. A saved diff that belongs to another client stays open:
----that client has not written it yet. Automatic cleanup and the
----:ClaudeCodeCloseAllDiffs command deliberately use close_pending_diffs /
----close_diffs_for_client instead, to leave already-saved diffs alone -- see
----close_pending_diffs for why.
+---that client has not written it yet. Automatic cleanup deliberately uses
+---close_pending_diffs / close_diffs_for_client instead, to leave already-saved
+---diffs alone -- see close_pending_diffs for why. :ClaudeCodeCloseAllDiffs
+---closes saved diffs only through close_saved_diffs.
 ---@param reason string Human-readable reason (for logging)
 ---@param client_id string|nil The Claude client that called closeAllDiffTabs
 ---@return number count Number of diffs closed
@@ -1794,6 +1810,52 @@ function M.close_diffs_for_client(client_id, reason)
   return close_active_diffs(function(diff_data)
     return diff_data.client_id == client_id and diff_data.status == "pending"
   end, reason or ("client " .. tostring(client_id)))
+end
+
+---@param diff_data table A saved active_diffs entry
+---@return boolean
+local function file_holds_accepted_text(diff_data)
+  return read_file(diff_data.old_file_path) == diff_data.result_content.content[2].text
+end
+
+---Write the accepted text unless the file already holds it. Never writes over a change made after the accept, or
+---under a buffer with unsaved changes.
+---@param diff_data table A saved active_diffs entry
+local function write_accepted_text(diff_data)
+  local path = diff_data.old_file_path
+  if file_holds_accepted_text(diff_data) or read_file(path) ~= diff_data.file_at_accept or is_buffer_dirty(path) then
+    return
+  end
+  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
+  local file = io.open(path, "wb")
+  if file then
+    file:write(diff_data.result_content.content[2].text)
+    file:close()
+  end
+end
+
+---Close every diff the user accepted, once its file holds the accepted text. The text is written first when the
+---file still holds what it held at the accept, which covers a Claude client that exited, or dropped the answer,
+---before it wrote the file. A diff whose text cannot be written stays open, so its edits are never lost.
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+---@return string[] kept File paths of the saved diffs that stay open
+function M.close_saved_diffs(reason)
+  for _, diff_data in pairs(active_diffs) do
+    if diff_data.status == "saved" then
+      write_accepted_text(diff_data)
+    end
+  end
+  local count = close_active_diffs(function(diff_data)
+    return diff_data.status == "saved" and file_holds_accepted_text(diff_data)
+  end, reason or "close saved diffs")
+  local kept = {}
+  for _, diff_data in pairs(active_diffs) do
+    if diff_data.status == "saved" then
+      kept[#kept + 1] = diff_data.old_file_path
+    end
+  end
+  return count, kept
 end
 
 ---Test helper function (only for testing)

@@ -1149,19 +1149,34 @@ function M._create_commands()
   })
 
   vim.api.nvim_create_user_command("ClaudeCodeCloseAllDiffs", function()
-    -- Pending only: a status="saved" diff holds the user's :w'd edits in its
-    -- proposed buffer until Claude writes the file, and closing it would discard
-    -- them (same data-loss branch the auto-cleanup avoids). So this clears
-    -- orphaned proposals but leaves accepted diffs for the user to handle.
+    -- A status="saved" diff holds the user's :w'd edits in its proposed buffer
+    -- until the file holds them, so only close_saved_diffs, which writes them
+    -- first, may close it.
     local diff = require("claudecode.diff")
-    local count = diff.close_pending_diffs("user command")
-    if count > 0 then
-      vim.notify(("Closed %d pending Claude diff(s)"):format(count), vim.log.levels.INFO)
-    else
-      vim.notify("No pending Claude diffs to close", vim.log.levels.WARN)
+    local pending = diff.close_pending_diffs("user command")
+    local saved, kept = diff.close_saved_diffs("user command")
+    if pending > 0 then
+      vim.notify(("Closed %d pending Claude diff(s)"):format(pending), vim.log.levels.INFO)
+    end
+    if saved > 0 then
+      vim.notify(
+        ("Closed %d accepted Claude diff(s). Their files hold the accepted text."):format(saved),
+        vim.log.levels.INFO
+      )
+    end
+    for _, path in ipairs(kept) do
+      vim.notify(
+        ("Kept the accepted Claude diff for %s: the file or its buffer changed after you accepted it"):format(
+          vim.fn.fnamemodify(path, ":~:.")
+        ),
+        vim.log.levels.WARN
+      )
+    end
+    if pending + saved + #kept == 0 then
+      vim.notify("No Claude diffs to close", vim.log.levels.WARN)
     end
   end, {
-    desc = "Close pending Claude Code diffs (leaves accepted/saved diffs intact)",
+    desc = "Close Claude Code diffs: reject pending ones, and close accepted ones once their file holds the accepted text",
   })
 
   vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)

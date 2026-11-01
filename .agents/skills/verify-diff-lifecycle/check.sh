@@ -98,6 +98,9 @@ close_by_name=$(block "$DIFF" '^function M\.close_diff_by_tab_name\(')
 close_pending=$(block "$DIFF" '^function M\.close_pending_diffs\(')
 close_for_client=$(block "$DIFF" '^function M\.close_diffs_for_client\(')
 close_all=$(block "$DIFF" '^function M\.close_all_diffs\(')
+close_saved=$(block "$DIFF" '^function M\.close_saved_diffs\(')
+holds_accepted=$(block "$DIFF" '^local function file_holds_accepted_text\(')
+write_accepted=$(block "$DIFF" '^local function write_accepted_text\(')
 held_for_other=$(block "$DIFF" '^local function holds_edits_for_other_client\(')
 close_tab_tool=$(block "$CLOSE_TAB_TOOL" '^local function handler\(params, client\)')
 close_all_tool=$(block "$CLOSE_ALL_TOOL" '^local function handler\(params, client\)')
@@ -192,6 +195,16 @@ user_close_all_pending_only() {
   grep -q 'diff\.close_pending_diffs(' <<<"$user_close_all" && ! grep -q 'close_all_diffs' <<<"$user_close_all"
 }
 fact[UserCloseAllPendingOnly]=$(as_bool user_close_all_pending_only)
+# The user's command closes a saved diff only through close_saved_diffs, whose filter reads the file.
+FACTS+=(UserCloseSavedOnDisk)
+user_close_saved_on_disk() {
+  grep -q 'diff\.close_saved_diffs(' <<<"$user_close_all" &&
+    in_order 'close_active_diffs\(function\(diff_data\)$' \
+      '^    return diff_data\.status == "saved" and file_holds_accepted_text\(diff_data\)$' <<<"$close_saved" &&
+    grep -qE '^  return read_file\(diff_data\.old_file_path\) == diff_data\.result_content\.content\[2\]\.text$' \
+      <<<"$holds_accepted"
+}
+fact[UserCloseSavedOnDisk]=$(as_bool user_close_saved_on_disk)
 client_tagged() {
   grep -q 'return tool_data\.handler(input, client)' <<<"$handle_invoke" &&
     grep -q 'client and client\.id or nil' <<<"$open_diff_tool" &&
@@ -227,7 +240,7 @@ SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
-    close_all held_for_other close_tab_tool close_all_tool create_client \
+    close_all close_saved holds_accepted write_accepted held_for_other close_tab_tool close_all_tool create_client \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
     handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
@@ -343,6 +356,7 @@ if [[ $mutants == 1 ]]; then
     [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
     [SetupAnswerReturned]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
+    [UserCloseSavedOnDisk]=SavedDiffKept
     [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
     [ClientIdsUnique]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
