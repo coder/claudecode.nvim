@@ -1421,9 +1421,17 @@ function M._setup_blocking_diff(params, resolution_callback)
         end
       end
 
-      if not target_window then
-        target_window = find_main_editor_window()
+      -- A window that shows the file comes first, but not at the cost of leaving the current tab.
+      local editor_window = find_main_editor_window()
+      local current_tab = vim.api.nvim_get_current_tabpage()
+      if
+        not (target_window and vim.api.nvim_win_get_tabpage(target_window) == current_tab)
+        and editor_window
+        and vim.api.nvim_win_get_tabpage(editor_window) == current_tab
+      then
+        target_window = editor_window
       end
+      target_window = target_window or editor_window
 
       -- A Neovim diff is scoped to its tabpage: all &diff windows in a tab share
       -- one diff set. If the tab that would host Claude's diff already contains a
