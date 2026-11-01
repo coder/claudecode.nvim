@@ -452,6 +452,58 @@ describe("ClaudeCodeAdd command", function()
         end)
       end)
 
+      describe("paths containing spaces (issue #314)", function()
+        it("should keep an unquoted path with spaces intact when no line numbers are given", function()
+          vim.fn.filereadable = spy.new(function(path)
+            return path == "/existing/my file.lua" and 1 or 0
+          end)
+
+          command_handler({ args = "/existing/my file.lua" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/my file.lua",
+            lineStart = nil,
+            lineEnd = nil,
+          })
+          assert.spy(mock_logger.error).was_not_called()
+        end)
+
+        it("should split trailing numeric tokens off an unquoted path with spaces", function()
+          vim.fn.filereadable = spy.new(function(path)
+            return path == "/existing/my file.lua" and 1 or 0
+          end)
+
+          command_handler({ args = "/existing/my file.lua 10 20" })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/my file.lua",
+            lineStart = 9,
+            lineEnd = 19,
+          })
+        end)
+
+        it("should honor a quoted path containing spaces", function()
+          vim.fn.filereadable = spy.new(function(path)
+            return path == "/existing/my file.lua" and 1 or 0
+          end)
+
+          command_handler({ args = '"/existing/my file.lua" 10 20' })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/my file.lua",
+            lineStart = 9,
+            lineEnd = 19,
+          })
+        end)
+
+        it("should error on an unterminated quote", function()
+          command_handler({ args = '"/existing/my file.lua' })
+
+          assert.spy(mock_logger.error).was_called()
+          assert.spy(mock_server.broadcast).was_not_called()
+        end)
+      end)
+
       describe("path expansion with line ranges", function()
         it("should expand tilde paths with line numbers", function()
           command_handler({ args = "~/test.lua 10 20" })

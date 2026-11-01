@@ -912,6 +912,10 @@ local vim = {
     end,
   },
 
+  trim = function(str)
+    return (str:gsub("^%s+", ""):gsub("%s+$", ""))
+  end,
+
   split = function(str, sep, opts)
     local plain = opts and opts.plain
     local result = {}
