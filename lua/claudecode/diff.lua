@@ -845,6 +845,86 @@ end
 ---@type table<string, table>
 local active_diffs = {}
 
+---@class DiffWindowSizes What a tab's tiled windows looked like before the first open diff split that tab.
+---@field tab integer tabpage handle
+---@field layout table the tab's winlayout(), which leaves out floating and external windows
+---@field width integer the columns the windows fill, as measure_layout counts them
+---@field height integer the rows the windows fill, counted the same way
+---@field windows { win: NvimWin, width: integer, height: integer }[] in winlayout() order
+
+---Add the size of each window in a winlayout() tree to `windows`, and return the columns and rows the tree fills,
+---leaving out separators and status lines: the same tree always has the same number of them.
+---@param node table a winlayout() node
+---@param windows { win: NvimWin, width: integer, height: integer }[]
+---@return integer width
+---@return integer height
+local function measure_layout(node, windows)
+  if node[1] == "leaf" then
+    local width, height = vim.api.nvim_win_get_width(node[2]), vim.api.nvim_win_get_height(node[2])
+    windows[#windows + 1] = { win = node[2], width = width, height = height }
+    return width, height
+  end
+  local width, height = 0, 0
+  for _, child in ipairs(node[2]) do
+    local child_width, child_height = measure_layout(child, windows)
+    if node[1] == "row" then
+      width, height = width + child_width, child_height
+    else
+      width, height = child_width, height + child_height
+    end
+  end
+  return width, height
+end
+
+---@param tab integer tabpage handle
+---@return DiffWindowSizes
+local function window_sizes_of(tab)
+  local layout = vim.fn.winlayout(vim.api.nvim_tabpage_get_number(tab))
+  local windows = {}
+  local width, height = measure_layout(layout, windows)
+  return { tab = tab, layout = layout, width = width, height = height, windows = windows }
+end
+
+---Take the sizes a diff about to split `tab` gives back when it closes. When another open diff already split that
+---tab, share its sizes: the current ones include that diff's windows.
+---@param tab integer tabpage handle
+---@return DiffWindowSizes
+local function save_window_sizes(tab)
+  assert(vim.api.nvim_tabpage_is_valid(tab), "save_window_sizes needs a valid tab")
+  for _, other in pairs(active_diffs) do
+    if other.window_sizes and other.window_sizes.tab == tab then
+      return other.window_sizes
+    end
+  end
+  return window_sizes_of(tab)
+end
+
+---Give a tab's windows back the sizes save_window_sizes took. The diff's `wincmd =` resizes every window in the tab,
+---and closing the diff's windows shares their space out by 'equalalways' rules, so without this the user's windows
+---end at other sizes. Does nothing when the tab's window tree changed (another diff's windows are still open, or the
+---user moved or added a window) or the space the windows fill changed (a resized screen, a tab line that appeared):
+---the old sizes do not fit then.
+---@param saved DiffWindowSizes|nil
+local function restore_window_sizes(saved)
+  if not saved or not vim.api.nvim_tabpage_is_valid(saved.tab) then
+    return
+  end
+  local now = window_sizes_of(saved.tab)
+  if not vim.deep_equal(now.layout, saved.layout) or now.width ~= saved.width or now.height ~= saved.height then
+    return
+  end
+  -- Twice, as winrestcmd() does: a resize can move a window that an earlier one already set.
+  for _ = 1, 2 do
+    for _, entry in ipairs(saved.windows) do
+      pcall(vim.api.nvim_win_set_width, entry.win, entry.width)
+      pcall(vim.api.nvim_win_set_height, entry.win, entry.height)
+    end
+  end
+end
+
+M._save_window_sizes = save_window_sizes
+M._restore_window_sizes = restore_window_sizes
+
 ---Register diff state for tracking
 ---@param tab_name string Unique identifier for the diff
 ---@param diff_data table Diff state data
@@ -1266,6 +1346,8 @@ function M._cleanup_diff_state(tab_name, reason)
       end
     end
 
+    restore_window_sizes(diff_data.window_sizes)
+
     -- After closing the diff in the same tab, restore the idle terminal width
     -- (unless the user opted out via auto_resize_terminal). Floating terminals are skipped.
     resize_terminal_for_diff(find_claudecode_terminal_window(), "idle")
@@ -1321,6 +1403,7 @@ function M._setup_blocking_diff(params, resolution_callback)
   -- (the state-based cleanup is gated on a registered diff). Issue #231.
   local fallback_window = nil
   local new_buffer = nil
+  local window_sizes = nil
   -- Same rationale for the open_in_new_tab path: display_terminal_in_new_tab() runs `:tabnew`
   -- early, so a failure before registration would strand that tab. Hoist its handle (and the tab
   -- we came from, to refocus) so the error handler can close it and switch back. Issue #262.
@@ -1454,6 +1537,8 @@ function M._setup_blocking_diff(params, resolution_callback)
           display_terminal_in_new_tab()
         created_new_tab = true
         target_window = nil
+      else
+        window_sizes = save_window_sizes(dest_tab)
       end
     end
     -- If created_new_tab is true, target_window stays nil and will be created in the new tab.
@@ -1522,6 +1607,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       target_window = diff_info.target_window,
       target_window_created_by_plugin = diff_info.target_window_created_by_plugin,
       fallback_window = fallback_window,
+      window_sizes = window_sizes,
       original_buffer = diff_info.original_buffer,
       original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,
@@ -1581,6 +1667,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
         pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
       end
+      restore_window_sizes(window_sizes)
       -- Close the tab opened by display_terminal_in_new_tab() before registration (issue #262).
       -- That helper runs `:tabnew` (switching to the new tab) and the tab holds no user content.
       -- Prefer the returned handle; if the helper itself threw after `:tabnew`, Lua never assigned

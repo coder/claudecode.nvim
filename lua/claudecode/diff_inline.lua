@@ -210,6 +210,8 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
     if partial.fallback_window and vim.api.nvim_win_is_valid(partial.fallback_window) then
       pcall(vim.api.nvim_win_close, partial.fallback_window, true)
     end
+
+    diff._restore_window_sizes(partial.window_sizes)
   end
 
   if partial.new_buffer and vim.api.nvim_buf_is_valid(partial.new_buffer) then
@@ -350,6 +352,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   local editor_win
   local fallback_window
   local fallback_split_win
+  local window_sizes
   if created_new_tab then
     local tab_wins = vim.api.nvim_tabpage_list_wins(0)
     for _, w in ipairs(tab_wins) do
@@ -364,6 +367,10 @@ function M.setup_inline_diff(params, resolution_callback, config)
     end
   else
     editor_win = diff._find_main_editor_window()
+    window_sizes = diff._save_window_sizes(
+      editor_win and vim.api.nvim_win_get_tabpage(editor_win) or vim.api.nvim_get_current_tabpage()
+    )
+    partial_setup.window_sizes = window_sizes
     if not editor_win then
       fallback_window, fallback_split_win = guard_inline_setup(create_fallback_editor_window)
       partial_setup.fallback_window = fallback_window
@@ -459,6 +466,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
       new_window = diff_win,
       target_window = editor_win,
       fallback_window = fallback_window,
+      window_sizes = window_sizes,
       lines = lines,
       line_types = line_types,
       is_new_file = is_new_file,
@@ -584,6 +592,8 @@ function M.cleanup_inline_diff(tab_name, diff_data)
     if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
       pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
     end
+
+    diff._restore_window_sizes(diff_data.window_sizes)
 
     -- Restore terminal width
     if diff_data.term_win and vim.api.nvim_win_is_valid(diff_data.term_win) then

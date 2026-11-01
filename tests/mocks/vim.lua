@@ -559,6 +559,20 @@ local vim = {
       return 12345
     end,
 
+    -- The mock keeps no split tree, so a tab's tiled windows form one row.
+    winlayout = function(tabnr)
+      local leaves = {}
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabnr or 0)) do
+        if (vim.api.nvim_win_get_config(win).relative or "") == "" then
+          leaves[#leaves + 1] = { "leaf", win }
+        end
+      end
+      if #leaves == 1 then
+        return leaves[1]
+      end
+      return { "row", leaves }
+    end,
+
     -- Every code point is one cell wide here. Real Neovim gives most CJK characters two.
     strdisplaywidth = function(text)
       return select(2, text:gsub("[^\128-\191]", ""))
@@ -1008,6 +1022,26 @@ local vim = {
     end
 
     return copy
+  end,
+
+  deep_equal = function(a, b)
+    if a == b then
+      return true
+    end
+    if type(a) ~= "table" or type(b) ~= "table" then
+      return false
+    end
+    for k, v in pairs(a) do
+      if not vim.deep_equal(v, b[k]) then
+        return false
+      end
+    end
+    for k in pairs(b) do
+      if a[k] == nil then
+        return false
+      end
+    end
+    return true
   end,
 
   --- Mock implementation of vim.diff using a simple LCS-based diff algorithm.

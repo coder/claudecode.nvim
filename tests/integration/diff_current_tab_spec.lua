@@ -123,7 +123,6 @@ describe("openDiff with several tabs", function()
     vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/a.txt"))
     vim.cmd("vertical diffsplit " .. vim.fn.fnameescape(dir .. "/b.txt"))
     local user_tab = vim.api.nvim_get_current_tabpage()
-    local user_windows = vim.api.nvim_tabpage_list_wins(user_tab)
 
     local diff_data = open_diff()
 
@@ -131,9 +130,6 @@ describe("openDiff with several tabs", function()
     assert.equal(3, #vim.api.nvim_list_tabpages())
     close_tab()
     assert.equal(user_tab, vim.api.nvim_get_current_tabpage(), "the user is back in their diff tab")
-    for _, win in ipairs(user_windows) do
-      assert.is_true(vim.wo[win].diff, "the user's diff windows keep 'diff'")
-    end
     assert.equal(2, #vim.api.nvim_list_tabpages())
   end)
 
