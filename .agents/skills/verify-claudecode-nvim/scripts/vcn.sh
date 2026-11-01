@@ -17,6 +17,7 @@
 #   disconnect                  kill the client VCN_CLIENT names (unset: the launch client)
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
 # VCN_CLIENT=<name> makes rpc, tool, await, connect and disconnect act as that client.
+# VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -67,7 +68,12 @@ settle() {
 
 nv() {
   local rc=0
-  timeout -s KILL 5 "$NVIM_BIN" --server "$NVIM_SOCK" --remote-expr "$1" || rc=$?
+  if [[ ${NVIM_08-0} == 1 ]]; then
+    # Neovim 0.8 prints the --remote-expr result on stderr, together with any error.
+    timeout -s KILL 5 "$NVIM_BIN" --server "$NVIM_SOCK" --remote-expr "$1" 2>&1 || rc=$?
+  else
+    timeout -s KILL 5 "$NVIM_BIN" --server "$NVIM_SOCK" --remote-expr "$1" || rc=$?
+  fi
   # GNU timeout exits 137 after -s KILL, uutils exits 124.
   ((rc != 124 && rc != 137)) || echo "vcn: nvim RPC gave no answer in 5s; nvim may be blocked in a prompt" >&2
   return "$rc"
@@ -161,6 +167,11 @@ ppid() { ps -o ppid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 is_exe() { [[ -n $1 && $(readlink "/proc/$1/exe" 2>/dev/null) == "$(readlink -f "$2")" ]]; }
 
+# Neovim 0.9+ runs the server that answers RPC as a child of the TUI process. On 0.8 one process is both.
+server_under_tui() {
+  if [[ ${NVIM_08-0} == 1 ]]; then [[ $NVIM_PID == "$TUI_PID" ]]; else [[ $(ppid "$NVIM_PID") == "$TUI_PID" ]]; fi
+}
+
 cmd_cleanup() {
   if [[ -z ${VCN_STATE-} || ! -f $VCN_STATE/run.env ]]; then
     echo "vcn: nothing to clean at ${VCN_STATE-<unset>}"
@@ -212,8 +223,8 @@ cmd_doctor() {
   tok_nvim=$(nv "luaeval(\"vim.fn.sha256(require('claudecode').state.auth_token)\")" 2>/dev/null || true)
   tok_lock=$(jq -j .authToken "$lock" 2>/dev/null | sha256sum | cut -d' ' -f1) || true
   check "agent-tty session $SID is running" test "$(jq -r .status <<<"$session")" = running
-  check "nvim server (pid $NVIM_PID) runs under the session's TUI (pid $TUI_PID)" \
-    test "$(jq -r .childPid <<<"$session") $(ppid "$NVIM_PID")" = "$TUI_PID $TUI_PID"
+  tui_ok() { [[ $(jq -r .childPid <<<"$session") == "$TUI_PID" ]] && server_under_tui; }
+  check "nvim server (pid $NVIM_PID) runs under the session's TUI (pid $TUI_PID)" tui_ok
   check "client ws-client.mjs (pid $CLIENT_PID) is alive" is_exe "$CLIENT_PID" "$NODE_DIR/node"
   check "nvim RPC answers as pid $NVIM_PID" test "$(nv 'getpid()' 2>/dev/null)" = "$NVIM_PID"
   check "nvim is not blocked in a prompt (mode '$mode')" not_prompt "$mode"
@@ -316,8 +327,15 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir missing made mode
-  nvim_exe=$(bin nvim)
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
+  if [[ -n ${VCN_NVIM-} ]]; then
+    # Absolute, without resolving symlinks: a mise shim only works under its own name.
+    nvim_exe=$(realpath -s -- "$VCN_NVIM")
+    [[ -f $nvim_exe && -x $nvim_exe ]] || die "VCN_NVIM=$VCN_NVIM is not an executable file"
+  else
+    nvim_exe=$(bin nvim)
+  fi
+  [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
   setsid_exe=$(bin setsid)
@@ -378,10 +396,10 @@ cmd_launch() {
     die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   fi
   # A default ACL on the evidence dir, which mkdir copies from its parent and chmod leaves alone, gives every
-  # file made in it group access whatever the umask. Remove all ACLs, make the dir 0700 (a 0500 VERIFY_OUT is
-  # safe but not writable), then check that a new file is private.
+  # file made in it group access whatever the umask. Remove all ACLs from it and from the dirs this launch made
+  # above it, make it 0700 (a 0500 VERIFY_OUT is safe but not writable), then check that a new file is private.
   if command -v setfacl >/dev/null; then
-    setfacl -b -k -- "$out" 2>/dev/null || true
+    setfacl -b -k -- "$out" ${made[@]+"${made[@]}"} 2>/dev/null || true
   fi
   chmod 700 "$out"
   : >"$out/ws-in.jsonl"
@@ -403,6 +421,7 @@ cmd_launch() {
     env_line ATT_HOME "$state/att"
     env_line NVIM_SOCK "$state/nvim.sock"
     env_line NVIM_BIN "$nvim_exe"
+    env_line NVIM_08 "$nvim_08"
     env_line ATT_BIN "$att_exe"
     env_line NODE_DIR "$(dirname "$node_exe")"
   } >"$state/run.env"
@@ -433,7 +452,7 @@ cmd_launch() {
   cmd_until 'getpid() > 0' 1 10
   env_line NVIM_PID "$(nv 'getpid()')" >>"$state/run.env"
   load
-  [[ $(ppid "$NVIM_PID") == "$TUI_PID" ]] || die "nvim server $NVIM_PID is not a child of the session's process $TUI_PID"
+  server_under_tui || die "nvim server $NVIM_PID does not run under the session's TUI process $TUI_PID"
   for i in $(seq 100); do
     for f in "$state"/claude/ide/*.lock; do
       [[ -f $f ]] && jq -e --argjson p "$NVIM_PID" '.pid == $p' "$f" >/dev/null 2>&1 && lock=$f
