@@ -177,7 +177,7 @@ fact[CloseRechecksFilter]=$(as_bool in_order 'local function matches\(diff_data\
 # The counter is a global so a reload of server/client.lua keeps it, and only create_client may set it.
 FACTS+=(ClientIdsUnique)
 client_ids_unique() {
-  [[ $(grep -rE '_G\.claudecode_clients_created =' lua plugin | wc -l) == 1 ]] &&
+  [[ $(grep -rEo '_G(\.claudecode_clients_created|\["claudecode_clients_created"\]) *=([^=]|$)|rawset\(_G, *"claudecode_clients_created"' lua plugin | wc -l) == 1 ]] &&
     in_order '^  _G\.claudecode_clients_created = \(_G\.claudecode_clients_created or 0\) \+ 1$' \
       '^  local client_id = "client_" \.\. _G\.claudecode_clients_created$' '^    id = client_id,$' <<<"$create_client"
 }

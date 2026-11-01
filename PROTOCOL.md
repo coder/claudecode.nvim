@@ -41,7 +41,7 @@ Claude reads the lock files, finds the matching port from the environment, and c
 
 Each WebSocket connection is a separate client. A diff belongs to the client whose `openDiff` call opened it. A Claude CLI that reconnects is a new client, so it does not own the diffs it opened before.
 
-Claude Code 2.1.312 sends nothing that ties a new connection to an old one. Besides the standard WebSocket headers, its upgrade request carries only `User-Agent` and the auth token. Its `initialize` request names only the client (`claude-code`) and its version. After `initialize`, it sends the notification `ide_connected` with `{ "pid": <its process id> }`. The plugin does not use the pid to match clients, because a process id is not unique across containers and the OS reuses it.
+Claude Code 2.1.312 sends nothing that ties a new connection to an old one. Besides the standard WebSocket headers, its upgrade request carries only `User-Agent` and the auth token. Its `initialize` request carries `clientInfo` (`name: "claude-code"`, `title`, `version`, `description`, `websiteUrl`) and `capabilities`, and no session id. After `initialize`, it sends the notification `ide_connected` with `{ "pid": <its process id> }`. The plugin does not use the pid to match clients, because a process id is not unique across containers and the OS reuses it.
 
 Claude Code also never refers to an older diff over a new connection. Each `openDiff` call uses a new random `tab_name`, and Claude Code sends `close_tab` only over the connection that opened the diff. A diff that the user accepted before the reconnect stays open, the same as a diff whose Claude exited.
 
