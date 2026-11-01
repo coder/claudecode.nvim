@@ -1,3 +1,41 @@
+-- Like Neovim, a byte that does not start a complete UTF-8 sequence is a character of its own.
+local function mock_code_point(line, i)
+  local b = line:byte(i)
+  if not b then
+    return nil, 0
+  end
+  if b < 0xC0 or b >= 0xF8 then
+    return b, 1
+  end
+  local len = b < 0xE0 and 2 or b < 0xF0 and 3 or 4
+  local cp = b - (len == 2 and 0xC0 or len == 3 and 0xE0 or 0xF0)
+  for j = i + 1, i + len - 1 do
+    local next_byte = line:byte(j)
+    if not next_byte or next_byte < 0x80 or next_byte >= 0xC0 then
+      return b, 1
+    end
+    cp = cp * 64 + (next_byte - 0x80)
+  end
+  return cp, len
+end
+
+-- Last byte of the character that starts at byte i. A character is a code point and its composing characters
+-- (here U+0300 to U+036F and the Devanagari signs U+093A to U+094F). As on Neovim 0.11 and later, a virama also
+-- joins the next consonant, so स्ते is one character from स, while the cursor can still stand on त.
+local function mock_char_last_byte(line, i)
+  local last_cp, len = mock_code_point(line, i)
+  local stop = i + len
+  while true do
+    local cp, next_len = mock_code_point(line, stop)
+    local composing = cp and ((cp >= 0x300 and cp <= 0x36F) or (cp >= 0x93A and cp <= 0x94F))
+    local conjunct = cp and last_cp == 0x94D and cp >= 0x915 and cp <= 0x939
+    if not (composing or conjunct) then
+      return stop - 1
+    end
+    last_cp, stop = cp, stop + next_len
+  end
+end
+
 if not _G.vim then
   local next_timer_id = 0
 
@@ -130,6 +168,24 @@ if not _G.vim then
           return { 0, 5, 10, 0 }
         end
         return { 0, 0, 0, 0 }
+      end,
+      -- Models Neovim for the two regex calls selection.lua makes (see mock_char_last_byte). From byte start,
+      -- `\_.` matches the character that starts there. `^\_.*\%<Nc\_.` matches up to the end of the last character
+      -- that starts before byte N, scanning from the line start.
+      matchend = function(line, pattern, start)
+        -- Like Neovim, vim.fn passes a Lua string with a NUL byte as a Blob.
+        assert(not line:find("%z"), "Vim:E976: Using a Blob as a String")
+        if pattern == "\\_." and start then
+          return start < #line and mock_char_last_byte(line, start + 1) or -1
+        end
+        local before = tonumber(pattern:match("^%^\\_%.%*\\%%<(%d+)c\\_%.$"))
+        assert(before and not start, "unexpected matchend call " .. pattern)
+        local i, last = 1, -1
+        while i <= #line and i < before do
+          last = mock_char_last_byte(line, i)
+          i = last + 1
+        end
+        return last
       end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
@@ -996,6 +1052,250 @@ describe("Range Selection Tests", function()
         -- carries a single range, so the block is sent as its contiguous span.
         assert.are.equal("alpha beta\nga", sel.text)
         assert.are.equal(false, sel.selection.isEmpty)
+      end)
+    end)
+
+    describe("multibyte characters (#362)", function()
+      local function is_valid_utf8(text)
+        local i = 1
+        while i <= #text do
+          local lead = text:byte(i)
+          local len = lead < 0x80 and 1
+            or lead >= 0xC2 and lead < 0xE0 and 2
+            or lead >= 0xE0 and lead < 0xF0 and 3
+            or lead >= 0xF0 and lead < 0xF5 and 4
+          if not len then
+            return false
+          end
+          for j = i + 1, i + len - 1 do
+            local byte = text:byte(j)
+            if not byte or byte < 0x80 or byte >= 0xC0 then
+              return false
+            end
+          end
+          i = i + len
+        end
+        return true
+      end
+
+      local function from_marks(lines, mode, start_lnum, start_col, end_lnum, end_col)
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", lines)
+        _G.vim._visualmode = mode
+        _G.vim._marks = { ["'<"] = { 0, start_lnum, start_col, 0 }, ["'>"] = { 0, end_lnum, end_col, 0 } }
+        local sel = selection.get_visual_selection_from_marks()
+        assert(sel ~= nil)
+        assert.is_true(is_valid_utf8(sel.text))
+        return sel
+      end
+
+      it("sends the whole last character when a live charwise selection ends on a multibyte one", function()
+        -- The issue's repro: on the line `naïve café`, `0vwe` leaves the cursor on the final é (bytes 11-12).
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "line one", "cafe", "naïve café" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("v")
+        _G.vim._marks = { v = { 0, 3, 1, 0 } }
+        _G.vim.test.set_cursor(0, 3, 10)
+
+        selection.update_selection()
+
+        local sent = mock_server.last_broadcast.data
+        assert.is_true(is_valid_utf8(sent.text))
+        assert.are.equal("naïve café", sent.text)
+        assert.are.same({ line = 2, character = 0 }, sent.selection.start)
+        assert.are.same({ line = 2, character = #"naïve café" }, sent.selection["end"])
+      end)
+
+      it("sends the whole last character on the visual-exit flush", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "naïve café" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 10)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 11, 0 } }
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+
+        selection.on_mode_changed()
+
+        local sent = mock_server.last_broadcast.data
+        assert.is_true(is_valid_utf8(sent.text))
+        assert.are.equal("naïve café", sent.text)
+        assert.are.equal(#"naïve café", sent.selection["end"].character)
+      end)
+
+      it("keeps a multi-line charwise selection whole when it starts and ends on multibyte characters", function()
+        -- From the é of `café` (bytes 11-12) to the 本 of `日本語` (bytes 4-6).
+        local sel = from_marks({ "naïve café", "日本語 テキスト" }, "v", 1, 11, 2, 4)
+        assert.are.equal("é\n日本", sel.text)
+        assert.are.equal(10, sel.selection.start.character)
+        assert.are.equal(#"日本", sel.selection["end"].character)
+      end)
+
+      it("includes the composing characters of the last character", function()
+        -- `e` followed by U+0301 COMBINING ACUTE ACCENT is one character in Neovim.
+        local sel = from_marks({ "cafe\204\129 x" }, "v", 1, 1, 1, 4)
+        assert.are.equal("cafe\204\129", sel.text)
+        assert.are.equal(6, sel.selection["end"].character)
+      end)
+
+      it("keeps a selection whole when it ends inside a cluster, on a conjunct's inner consonant", function()
+        -- `0ve` on `नमस्ते` ends on त (bytes 13-15). From the line start, स्ते (bytes 7-18) is one cluster.
+        local sel = from_marks({ "नमस्ते" }, "v", 1, 1, 1, 13)
+        assert.are.equal("नमस्ते", sel.text)
+        assert.are.equal(#"नमस्ते", sel.selection["end"].character)
+      end)
+
+      it("sends the rest of the cluster for a live one-position selection on a conjunct's inner consonant", function()
+        -- `$v` on `नमस्ते` puts the anchor and the cursor on त. Neovim then selects and yanks ते.
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "नमस्ते" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("v")
+        _G.vim._marks = { v = { 0, 1, 13, 0 } }
+        _G.vim.test.set_cursor(0, 1, 12)
+
+        selection.update_selection()
+
+        local sent = mock_server.last_broadcast.data
+        assert.is_true(is_valid_utf8(sent.text))
+        assert.are.equal("ते", sent.text)
+        assert.are.same({ line = 0, character = 12 }, sent.selection.start)
+        assert.are.same({ line = 0, character = #"नमस्ते" }, sent.selection["end"])
+      end)
+
+      it("ends a selection on a 4-byte emoji after the emoji", function()
+        local sel = from_marks({ "a😀b" }, "v", 1, 1, 1, 2)
+        assert.are.equal("a😀", sel.text)
+        assert.are.equal(5, sel.selection["end"].character)
+      end)
+
+      it("handles a line with a NUL byte", function()
+        -- nvim_buf_get_lines returns NUL as "\0".
+        local sel = from_marks({ "a\0b" }, "v", 1, 1, 1, 2)
+        assert.are.equal("a\0", sel.text)
+        assert.are.equal(2, sel.selection["end"].character)
+      end)
+
+      describe("when a stale position falls inside a character", function()
+        -- Marks keep their byte column when text is inserted before them on the line. Select `cd` on `abcdef`,
+        -- then insert `aé` at the line start: '< (column 3) is now the second byte of é.
+        it("starts at the first byte of the character, from the marks", function()
+          local sel = from_marks({ "aéabcdef" }, "v", 1, 3, 1, 4)
+          assert.are.equal("éa", sel.text)
+          assert.are.same({ line = 0, character = 1 }, sel.selection.start)
+          assert.are.same({ line = 0, character = 4 }, sel.selection["end"])
+        end)
+
+        it("starts at the first byte of the character for a live selection after gv", function()
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "aéabcdef" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 3, 0 } }
+          _G.vim.test.set_cursor(0, 1, 3)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.is_true(is_valid_utf8(sent.text))
+          assert.are.equal("éa", sent.text)
+          assert.are.same({ line = 0, character = 1 }, sent.selection.start)
+        end)
+
+        it("ends after the whole character", function()
+          -- Select `abc` backward, so the anchor is the c (column 3), then insert `x日`: column 3 is inside 日.
+          local sel = from_marks({ "x日abcdef" }, "v", 1, 1, 1, 3)
+          assert.are.equal("x日", sel.text)
+          assert.are.same({ line = 0, character = #"x日" }, sel.selection["end"])
+        end)
+      end)
+
+      describe("on a line that is not valid UTF-8", function()
+        local replacement = "\239\191\189" -- U+FFFD REPLACEMENT CHARACTER
+
+        it("sends U+FFFD for an invalid byte and keeps the buffer's byte columns", function()
+          -- `:e ++bad=keep` keeps the byte 255 of a file that is not valid UTF-8.
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "abc\255def" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 1, 0 } }
+          _G.vim.test.set_cursor(0, 1, 6)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.are.equal("abc" .. replacement .. "def", sent.text)
+          assert.are.same({ line = 0, character = 0 }, sent.selection.start)
+          assert.are.same({ line = 0, character = 7 }, sent.selection["end"])
+          assert.are.equal(sent.text, selection.get_latest_selection().text)
+        end)
+
+        it("keeps a position on a lone continuation byte, which Neovim treats as a character of its own", function()
+          local sel = from_marks({ "a\128b" }, "v", 1, 2, 1, 2)
+          assert.are.equal(replacement, sel.text)
+          assert.are.same({ line = 0, character = 1 }, sel.selection.start)
+          assert.are.same({ line = 0, character = 2 }, sel.selection["end"])
+        end)
+
+        it("sends one U+FFFD for each invalid sequence, as a UTF-8 decoder does", function()
+          -- 日 cut after two bytes, a lone continuation byte, an overlong `/`, and an encoded surrogate half.
+          local sel = from_marks({ "é\230\151b\128", "\192\175\237\160\128" }, "V", 1, 1, 2, 2147483647)
+          assert.are.equal("é" .. replacement .. "b" .. replacement .. "\n" .. string.rep(replacement, 5), sel.text)
+        end)
+      end)
+
+      it("keeps the contiguous span of a blockwise selection on character boundaries", function()
+        local sel = from_marks({ "naïve café", "日本語 テキスト" }, "\22", 1, 1, 2, 4)
+        assert.are.equal("naïve café\n日本", sel.text)
+      end)
+
+      describe("with 'selection' set to exclusive", function()
+        before_each(function()
+          _G.vim.o.selection = "exclusive"
+        end)
+
+        after_each(function()
+          _G.vim.o.selection = nil
+        end)
+
+        it("leaves out the multibyte character at the end of a backward live selection", function()
+          -- `$vb` on `naïve café`: the anchor stays on é (byte 11), and the cursor moves to the c (byte 8).
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "naïve café" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 11, 0 } }
+          _G.vim.test.set_cursor(0, 1, 7)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.are.equal("caf", sent.text)
+          assert.are.same({ line = 0, character = 7 }, sent.selection.start)
+          assert.are.same({ line = 0, character = 10 }, sent.selection["end"])
+        end)
+
+        it("leaves out the multibyte character at the '> mark of a multi-line selection", function()
+          local sel = from_marks({ "naïve café", "日本語 テキスト" }, "v", 1, 11, 2, 4)
+          assert.are.equal("é\n日", sel.text)
+          assert.are.equal(#"日", sel.selection["end"].character)
+        end)
+
+        it("ends after the whole cluster before the end position, as Neovim 0.11+ does for a conjunct", function()
+          -- `$v0` on `नमस्ते`: the excluded end position is त, and the character before it is the cluster स्ते,
+          -- which reaches past त. Neovim 0.12 then yanks the whole word.
+          local sel = from_marks({ "नमस्ते" }, "v", 1, 1, 1, 13)
+          assert.are.equal("नमस्ते", sel.text)
+          assert.are.equal(#"नमस्ते", sel.selection["end"].character)
+        end)
+
+        it("keeps the one character of a selection that starts and ends at the same position", function()
+          local sel = from_marks({ "日本語" }, "v", 1, 1, 1, 1)
+          assert.are.equal("日", sel.text)
+          assert.are.equal(#"日", sel.selection["end"].character)
+        end)
+      end)
+
+      it("sends whole lines for a linewise selection", function()
+        local sel = from_marks({ "naïve café", "日本語 テキスト" }, "V", 1, 1, 2, 2147483647)
+        assert.are.equal("naïve café\n日本語 テキスト", sel.text)
+        assert.are.equal(#"日本語 テキスト", sel.selection["end"].character)
       end)
     end)
 
