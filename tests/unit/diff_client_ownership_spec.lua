@@ -95,4 +95,96 @@ describe("a diff the user accepted for one Claude client", function()
 
     assert.is_nil(diff._get_active_diffs()[tab])
   end)
+
+  describe("after its client exits", function()
+    local notes, saved_notify
+
+    before_each(function()
+      notes = {}
+      saved_notify = vim.notify
+      vim.notify = function(msg, level)
+        notes[#notes + 1] = { msg = msg, level = level }
+      end
+      require("claudecode")._create_commands()
+    end)
+
+    after_each(function()
+      vim.notify = saved_notify
+    end)
+
+    local function owner_exits()
+      diff.close_diffs_for_client(owner.id, "client disconnected")
+      assert_kept()
+    end
+
+    local function user_closes_all_diffs()
+      vim._commands.ClaudeCodeCloseAllDiffs.callback({})
+    end
+
+    local function read_file()
+      local f = assert(io.open(file, "rb"))
+      local text = f:read("*a")
+      f:close()
+      return text
+    end
+
+    local function write_file(text)
+      local f = assert(io.open(file, "wb"))
+      f:write(text)
+      f:close()
+    end
+
+    it("is written and closed by :ClaudeCodeCloseAllDiffs, freeing its tab_name", function()
+      open_and_accept()
+      owner_exits()
+
+      user_closes_all_diffs()
+
+      assert.equal("line 1\nline 2\naccepted line\n", read_file())
+      assert.is_nil(diff._get_active_diffs()[tab])
+      local response = call_tool(other, "openDiff", open_diff_args("line 1\nfrom another session\n"))
+      assert.is_true(response._deferred, "the tab_name must be free for a new diff")
+    end)
+
+    it("is closed by :ClaudeCodeCloseAllDiffs when the file already holds the accepted text", function()
+      open_and_accept()
+      write_file("line 1\nline 2\naccepted line\n")
+      owner_exits()
+
+      user_closes_all_diffs()
+
+      assert.equal("line 1\nline 2\naccepted line\n", read_file())
+      assert.is_nil(diff._get_active_diffs()[tab])
+    end)
+
+    it("stays open, and the file keeps its later edit, when the file changed after the accept", function()
+      open_and_accept()
+      write_file("line 1\nedited after the accept\n")
+      owner_exits()
+
+      user_closes_all_diffs()
+
+      assert.equal("line 1\nedited after the accept\n", read_file())
+      assert_kept()
+      assert.is_truthy(notes[#notes].msg:find(file, 1, true), "the warning must name the file")
+      assert.equal(vim.log.levels.WARN, notes[#notes].level)
+    end)
+
+    it("stays open, and the file is not written, while the file's buffer has unsaved changes", function()
+      open_and_accept()
+      owner_exits()
+      local buf = vim.fn.bufnr(file)
+      if buf == -1 then
+        buf = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(buf, file)
+      end
+      vim.api.nvim_set_option_value("modified", true, { buf = buf })
+
+      user_closes_all_diffs()
+
+      assert.equal("line 1\nline 2\n", read_file())
+      assert_kept()
+      assert.equal(vim.log.levels.WARN, notes[#notes].level)
+    end)
+  end)
 end)
