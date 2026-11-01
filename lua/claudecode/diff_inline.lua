@@ -203,6 +203,7 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
       pcall(vim.api.nvim_set_current_tabpage, original_tab)
     end
   else
+    local cursor_window = vim.api.nvim_get_current_win()
     if partial.diff_window and vim.api.nvim_win_is_valid(partial.diff_window) then
       pcall(vim.api.nvim_win_close, partial.diff_window, true)
     end
@@ -211,6 +212,7 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
       pcall(vim.api.nvim_win_close, partial.fallback_window, true)
     end
 
+    diff._restore_cursor(partial.window_sizes, cursor_window)
     diff._restore_window_sizes(partial.window_sizes)
   end
 
@@ -584,6 +586,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
       end
     end
   else
+    local cursor_window = vim.api.nvim_get_current_win()
     -- Close the diff split window
     if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
@@ -593,6 +596,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
       pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
     end
 
+    diff._restore_cursor(diff_data.window_sizes, cursor_window)
     diff._restore_window_sizes(diff_data.window_sizes)
 
     -- Restore terminal width
