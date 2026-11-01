@@ -840,7 +840,8 @@ describe("Tool: open_file", function()
           elseif written.new_file and written.disk then
             error("Vim(write):E13: File exists (add ! to override)")
           else
-            written.on_disk, written.disk, written.new_file, written.modified = { unpack(written.lines) }, nil, nil, false
+            written.on_disk, written.disk, written.new_file, written.modified =
+              { unpack(written.lines) }, nil, nil, false
           end
         elseif command == "edit" and call_buf then
           read_disk(call_buf)
@@ -1326,8 +1327,10 @@ describe("Tool: open_file", function()
       for _, unsaved in ipairs({ false, true }) do
         for _, preview in ipairs({ false, true }) do
           it(
-            ("keeps Claude's file when a BufEnter autocommand writes the buffer through a BufWriteCmd handler, %s "
-              .. "unsaved changes%s"):format(unsaved and "with" or "without", preview and ", with preview = true" or ""),
+            (
+              "keeps Claude's file when a BufEnter autocommand writes the buffer through a BufWriteCmd handler, %s "
+              .. "unsaved changes%s"
+            ):format(unsaved and "with" or "without", preview and ", with preview = true" or ""),
             function()
               if unsaved then
                 buffers[30].lines, buffers[30].modified = { "MY NOTES" }, true
