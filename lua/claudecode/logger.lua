@@ -41,19 +41,25 @@ end
 
 local NAME = "[ClaudeCode] "
 
----Makes a log line one line no wider than the command line. A line that is too wide loses the component and level
----tags first, and the plugin name too when it would take half the width. Then it is cut, ending in "..." if that fits.
+-- The level word that stays when a line loses its tags. Without colors (a notify plugin, or :messages read through
+-- execute()), it is the only sign of an error or a warning. An info line has none.
+local SHORT_LEVEL = { [M.levels.ERROR] = "ERROR: ", [M.levels.WARN] = "WARN: " }
+
+---Makes a log line one line no wider than the command line. A line that is too wide loses the component tag and
+---keeps a short level word, and loses the plugin name too when it would take half the width. Then it is cut, ending
+---in "..." if that fits.
+---@param level integer
 ---@param prefix string "[ClaudeCode] [component] [LEVEL]"
 ---@param message string
 ---@return string
-local function fit_command_line(prefix, message)
+local function fit_command_line(level, prefix, message)
   message = message:gsub("%s+", " ")
   local width = vim.v.echospace
   local text = prefix .. " " .. message
   if vim.fn.strdisplaywidth(text) <= width then
     return text
   end
-  text = (width >= 2 * #NAME and NAME or "") .. message
+  text = (width >= 2 * #NAME and NAME or "") .. (SHORT_LEVEL[level] or "") .. message
   if vim.fn.strdisplaywidth(text) <= width then
     return text
   end
@@ -103,7 +109,7 @@ local function log(level, component, message_parts, one_line)
   -- Wrap all vim.notify and nvim_echo calls in vim.schedule to avoid
   -- "nvim_echo must not be called in a fast event context" errors
   vim.schedule(function()
-    local text = one_line and fit_command_line(prefix, message) or prefix .. " " .. message
+    local text = one_line and fit_command_line(level, prefix, message) or prefix .. " " .. message
     if level == M.levels.ERROR then
       vim.notify(text, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
     elseif level == M.levels.WARN then

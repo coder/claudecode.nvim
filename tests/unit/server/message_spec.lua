@@ -246,6 +246,39 @@ describe("WebSocket client messages", function()
     assert.is_true(allocated_kib < 32768, string.format("allocated %.0f KiB", allocated_kib))
   end)
 
+  it("answers a handshake once, and keeps the frames that arrive before the answer is written", function()
+    local answers, written = {}, {}
+    local handle = {}
+    function handle:write(data, callback)
+      table.insert(answers, data)
+      table.insert(written, callback)
+    end
+    function handle:is_closing()
+      return false
+    end
+    local fresh = client.create_client(handle)
+    local function read(data)
+      client.process_data(fresh, data, function(_, message)
+        table.insert(messages, message)
+      end, function() end, function(_, err)
+        table.insert(errors, err)
+      end)
+    end
+    read(
+      "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        .. "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+    )
+
+    read(frames({ TEXT, "{}" })) -- before the 101 answer is written
+    for _, callback in ipairs(written) do
+      callback()
+    end
+
+    assert.equals(1, #answers, "the request was answered more than once")
+    assert.same({ "{}" }, messages)
+    assert.same({}, errors)
+  end)
+
   it("handles many small frames in one read with memory linear in their number", function()
     local count = 4000
     local data = string.rep(frames({ TEXT, "{}" }), count)

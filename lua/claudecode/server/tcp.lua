@@ -172,8 +172,10 @@ function M.create_server(config, callbacks, auth_token)
   if not tried_any then
     return nil, "No available ports in range " .. min_port .. "-" .. max_port
   end
-  -- Short: Neovim shows it at startup, and a line wider than the command line waits for a key.
-  return nil, string.format("No free port in %d-%d (%s)", min_port, max_port, last_reason or "unknown error")
+  -- Short, so that it fits the command line at 80 columns: Neovim shows it at startup. libuv's error starts with its
+  -- code ("EADDRINUSE: address already in use"), and the code alone says why.
+  local code = last_reason and last_reason:match("^(%u+):") or last_reason or "unknown error"
+  return nil, string.format("No free port in %d-%d (%s)", min_port, max_port, code)
 end
 
 ---Handle a new client connection
