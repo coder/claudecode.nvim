@@ -216,11 +216,13 @@ describe("WebSocket client messages", function()
       table.insert(reads, data:sub(i, i + 1023))
     end
     -- JIT traces and the coverage line hook allocate too. Without them, the count is what the server allocates.
+    -- jit.off() keeps the traces that earlier tests compiled, so jit.flush() drops them.
     local hook, mask, hook_count = debug.gethook()
     local jit_was_on = jit and jit.status()
     debug.sethook()
     if jit then
       jit.off()
+      jit.flush()
     end
     collectgarbage("collect")
     collectgarbage("stop")
@@ -248,11 +250,14 @@ describe("WebSocket client messages", function()
     local count = 4000
     local data = string.rep(frames({ TEXT, "{}" }), count)
     -- JIT traces and the coverage line hook allocate too. Without them, the count is what the server allocates.
+    -- jit.off() keeps the traces that earlier tests compiled, and they still run. Here they allocated up to 5 MiB more
+    -- in some runs, so jit.flush() drops them.
     local hook, mask, hook_count = debug.gethook()
     local jit_was_on = jit and jit.status()
     debug.sethook()
     if jit then
       jit.off()
+      jit.flush()
     end
     collectgarbage("collect")
     collectgarbage("stop")
