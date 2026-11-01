@@ -413,19 +413,20 @@ function M.setup_inline_diff(params, resolution_callback, config)
 
   -- Restore terminal width after opening the split
   guard_inline_setup(function()
-    local terminal_config = config.terminal or {}
-    local split_width = terminal_config.split_width_percentage or 0.30
-    local total_width = vim.o.columns
-    local terminal_width = math.floor(total_width * split_width)
     if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
+      local terminal_config = config.terminal or {}
+      local split_width = terminal_config.split_width_percentage or 0.30
+      local total_width = vim.o.columns
+      local terminal_width = math.floor(total_width * split_width)
       vim.api.nvim_win_set_width(terminal_win_in_new_tab, terminal_width)
+    elseif term_win and term_win == fallback_split_win then
+      -- The fallback split took its columns from the terminal, so its old width would leave the diff none.
+      diff._resize_terminal_for_diff(term_win, "diff")
     elseif term_win and vim.api.nvim_win_is_valid(term_win) then
       local win_config = vim.api.nvim_win_get_config(term_win)
       local is_floating = win_config.relative and win_config.relative ~= ""
-      -- A fallback split off the terminal took its columns, so its old width would leave the diff none.
-      local width = term_win == fallback_split_win and terminal_width or term_width
-      if not is_floating and width then
-        pcall(vim.api.nvim_win_set_width, term_win, width)
+      if not is_floating and term_width then
+        pcall(vim.api.nvim_win_set_width, term_win, term_width)
       end
     end
   end)
