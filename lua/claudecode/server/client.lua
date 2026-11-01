@@ -2,6 +2,7 @@
 local frame = require("claudecode.server.frame")
 local handshake = require("claudecode.server.handshake")
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 local M = {}
 
@@ -228,7 +229,9 @@ function M.send_message(client, message, callback)
     return
   end
 
-  local text_frame = frame.create_text_frame(message)
+  -- Every outbound message passes here. A buffer name or path in it can hold any bytes, and the client drops the
+  -- connection on a text frame that is not valid UTF-8.
+  local text_frame = frame.create_text_frame(utils.valid_utf8(message))
   client.tcp_handle:write(text_frame, callback)
 end
 

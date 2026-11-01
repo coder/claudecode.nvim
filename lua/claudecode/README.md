@@ -25,7 +25,7 @@ Module map (direct files):
 | `integrations.lua`    | File-explorer selection readers (nvim-tree, neo-tree, oil, mini.files, netrw, snacks picker) |
 | `visual_commands.lua` | Visual-mode command wrapper and tree-explorer line-to-path mapping                           |
 | `cwd.lua`             | Terminal working-directory resolution and git root lookup                                    |
-| `utils.lua`           | Shell-free argv parsing and tilde expansion                                                  |
+| `utils.lua`           | Shell-free argv parsing, tilde expansion, and UTF-8 repair                                   |
 | `logger.lua`          | Level-filtered logging to `vim.notify` and `nvim_echo`                                       |
 | `health.lua`          | `:checkhealth claudecode`                                                                    |
 | `types.lua`           | LuaLS `@class` and `@alias` declarations. Its only runtime code is `return {}`               |
@@ -81,7 +81,7 @@ Module map (direct files):
 - `integrations.lua`: `get_selected_files_from_tree()` dispatches on filetype to `_get_nvim_tree_selection`, `_get_neotree_selection`, `_get_oil_selection`, `_get_mini_files_selection`, `_get_mini_files_selection_with_range(start_line, end_line)`, `_get_netrw_selection`, and `_get_snacks_picker_selection` [integrations.lua:M.get_selected_files_from_tree]
 - `visual_commands.lua`: `create_visual_command_wrapper`, `exit_visual_and_schedule`, `validate_visual_mode`, `get_visual_range`, `get_tree_state`, `capture_visual_selection_data`, and `get_files_from_visual_selection` [visual_commands.lua:M.create_visual_command_wrapper]
 - `cwd.lua`: `resolve(term_cfg, ctx)` and `git_root(start_dir)` [cwd.lua:M.resolve]
-- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, and `normalize_focus` [utils.lua:M.parse_command]
+- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `utf8_sequence_length`, and `valid_utf8` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8]
 - `logger.lua`: `levels`, `setup`, `error`, `warn`, `info`, `debug`, `trace`, and `is_level_enabled` [logger.lua:M.setup]
 - `health.lua`: `check()` [health.lua:M.check]
 
@@ -119,7 +119,7 @@ Module map (direct files):
 - A charwise selection that includes a line break (`v$`) ends at the start of the next line, and its text ends with that line break, as Neovim yanks it. On the buffer's last line, for a blockwise selection, and with `'virtualedit'` containing `all` (where the end is a virtual space), the end stays at the end of the line [selection.lua:end_past_line]
 - A linewise selection ends on its last line at that line's byte length. When that line is empty and another line follows, it ends at the start of the next line, and its text ends with the empty line's line break, because Claude Code counts an end at `character` 0 as the line before [selection.lua:extract_linewise_text]
 - A mention sent without a range from a tracked selection that ends at `character` 0 of a line ends on the line before [selection.lua:M.send_at_mention_for_visual_selection]
-- Selection text sent to Claude is always valid UTF-8. Each invalid byte sequence in the buffer becomes U+FFFD, so the text can be longer than the byte range of its positions [selection.lua:valid_utf8]
+- Selection text sent to Claude is always valid UTF-8. Each invalid byte sequence in the buffer becomes U+FFFD, so the text can be longer than the byte range of its positions [utils.lua:M.valid_utf8]
 
 ### Diffs
 
