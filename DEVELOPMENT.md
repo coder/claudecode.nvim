@@ -105,7 +105,9 @@ mise run check
 mise run format
 ```
 
-Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua`, which `.busted` loads for every busted run, fails a test that a spec registers inside a `pairs()` loop.
+Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua` reports each `pairs()` loop that registers a test, in a spec file, in a coroutine that the loop resumes, or in a function that the loop calls. It fails the run, and the rest of the spec still registers and runs. `.busted` in the repository root loads the helper when busted starts there, as `mise run test` does. From another directory, pass `--helper=<repo>/tests/helpers/test_order.lua`.
+
+A PR that changes a `.lua` or `.vim` file under `lua/` or `plugin/` also changes what `.agents/skills/verify-diff-lifecycle/covered.lock` records, and the advisory `covered-lock` CI job turns red. Run `.agents/skills/verify-diff-lifecycle/check.sh --record` and commit `covered.lock`, or ask a maintainer to.
 
 ## Release Automation
 
