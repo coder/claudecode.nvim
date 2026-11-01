@@ -39,12 +39,21 @@ function M.setup(plugin_config)
   end
 end
 
----Makes text one line no wider than the command line, ending in "..." where it was cut if that fits.
----@param text string
+local NAME = "[ClaudeCode] "
+
+---Makes a log line one line no wider than the command line. A line that is too wide loses the component and level
+---tags first, and the plugin name too when it would take half the width. Then it is cut, ending in "..." if that fits.
+---@param prefix string "[ClaudeCode] [component] [LEVEL]"
+---@param message string
 ---@return string
-local function fit_command_line(text)
-  text = text:gsub("%s+", " ")
+local function fit_command_line(prefix, message)
+  message = message:gsub("%s+", " ")
   local width = vim.v.echospace
+  local text = prefix .. " " .. message
+  if vim.fn.strdisplaywidth(text) <= width then
+    return text
+  end
+  text = (width >= 2 * #NAME and NAME or "") .. message
   if vim.fn.strdisplaywidth(text) <= width then
     return text
   end
@@ -94,10 +103,7 @@ local function log(level, component, message_parts, one_line)
   -- Wrap all vim.notify and nvim_echo calls in vim.schedule to avoid
   -- "nvim_echo must not be called in a fast event context" errors
   vim.schedule(function()
-    local text = prefix .. " " .. message
-    if one_line then
-      text = fit_command_line(text)
-    end
+    local text = one_line and fit_command_line(prefix, message) or prefix .. " " .. message
     if level == M.levels.ERROR then
       vim.notify(text, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
     elseif level == M.levels.WARN then
@@ -145,7 +151,7 @@ end
 
 ---Logs a line about an event the user did not start, such as a server callback. A message wider than the command
 ---line stops Neovim at "Press ENTER" until the user presses a key. Below log_level debug, the line loses its line
----breaks and is cut to the width of the command line.
+---breaks, and a line wider than the command line loses its tags and is cut to that width.
 ---@param level_name "error"|"warn"|"info"
 ---@param component string Component/module name
 ---@param message string

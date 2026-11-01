@@ -19,7 +19,8 @@ describe("Server lines on the command line", function()
       package.loaded[name] = nil
     end
     lines = {}
-    saved.notify, saved.echo, saved.new_timer = vim.notify, vim.api.nvim_echo, vim.loop.new_timer
+    saved.notify, saved.echo, saved.new_timer, saved.new_tcp =
+      vim.notify, vim.api.nvim_echo, vim.loop.new_timer, vim.loop.new_tcp
     vim.notify = function(msg, level)
       table.insert(lines, { text = msg, level = level })
     end
@@ -34,7 +35,8 @@ describe("Server lines on the command line", function()
     if server.state.server then
       server.stop()
     end
-    vim.notify, vim.api.nvim_echo, vim.loop.new_timer = saved.notify, saved.echo, saved.new_timer
+    vim.notify, vim.api.nvim_echo, vim.loop.new_timer, vim.loop.new_tcp =
+      saved.notify, saved.echo, saved.new_timer, saved.new_tcp
   end)
 
   local function start()
@@ -124,6 +126,68 @@ describe("Server lines on the command line", function()
 
     assert.is_true(closed)
     assert.equals(vim.log.levels.WARN, only_line().level)
+  end)
+
+  it("removes a rejected client from the server and closes its socket", function()
+    local tcp_server = start()
+    local client = connect(tcp_server)
+    local closed = false
+    client.tcp_handle.close = function()
+      closed = true
+    end
+    client.tcp_handle.is_closing = function()
+      return closed
+    end
+
+    client.tcp_handle._read_cb(nil, upgrade("wrong-token-0123456789"))
+
+    assert.is_nil(tcp_server.clients[client.id])
+    assert.is_true(closed)
+  end)
+
+  for _, write_error in ipairs({ false, "ECANCELED: operation canceled" }) do
+    local outcome = write_error and "fails with " .. write_error or "succeeds"
+    it("closes a rejected client's socket when the server stops and the reply write then " .. outcome, function()
+      local tcp_server = start()
+      local client = connect(tcp_server)
+      local handle, written = client.tcp_handle, nil
+      local closed = false
+      function handle:write(_, callback)
+        written = callback
+      end
+      function handle:close()
+        closed = true
+      end
+      function handle:is_closing()
+        return closed
+      end
+      handle._read_cb(nil, upgrade("wrong-token-0123456789"))
+
+      tcp.stop_server(tcp_server)
+      written(write_error or nil)
+
+      assert.is_true(closed)
+    end)
+  end
+
+  it("shows a server whose ports are all in use as one error line that names the range", function()
+    package.loaded["claudecode"] = nil
+    vim.loop.new_tcp = function()
+      local handle = saved.new_tcp()
+      handle.listen = function()
+        return nil, "EADDRINUSE: address already in use"
+      end
+      return handle
+    end
+    local claudecode = require("claudecode")
+    claudecode.setup({ auto_start = false, port_range = { min = 10000, max = 10000 } })
+    lines = {}
+
+    assert.is_false(claudecode.start(false))
+
+    local line = only_line()
+    assert.equals(vim.log.levels.ERROR, line.level)
+    assert_contains(line.text, "10000-10000")
   end)
 
   it("keeps a handshake reply that fails to send off the screen", function()

@@ -506,11 +506,12 @@ function M.start(show_startup_notification)
   local success, result = server.start(M.state.config, auth_token)
 
   if not success then
-    local error_msg = "Failed to start Claude Code server: " .. (result or "unknown error")
+    local error_msg = "Server not started: " .. (result or "unknown error")
     if result and result:find("auth") then
       error_msg = error_msg .. " (authentication related)"
     end
-    logger.error("init", error_msg)
+    -- auto_start runs this while Neovim starts, where a line wider than the command line waits for a key.
+    logger.one_line("error", "init", error_msg)
     return false, error_msg
   end
 

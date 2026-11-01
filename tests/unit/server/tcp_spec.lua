@@ -157,7 +157,7 @@ describe("TCP server disconnect handling", function()
 
       assert.is_nil(server)
       assert.is_string(err)
-      assert.is_truthy(err:find("Failed to bind to any port in range 10000%-10002"))
+      assert.equals("No free port in 10000-10002 (EADDRINUSE: address already in use)", err)
       assert.are.equal(3, #handles) -- every candidate tried exactly once
       for _, h in ipairs(handles) do
         assert.is_true(h.closed)
@@ -174,7 +174,7 @@ describe("TCP server disconnect handling", function()
 
       assert.is_nil(server)
       assert.is_string(err)
-      assert.is_truthy(err:find("Failed to listen on port 10000"))
+      assert.equals("No free port in 10000-10000 (EADDRINUSE: address already in use)", err)
       assert.is_true(handles[1].closed)
     end)
 
@@ -306,5 +306,49 @@ describe("TCP server disconnect handling", function()
     -- Simulate a later EOF after the CLOSE path already removed the client.
     client.tcp_handle._read_cb(nil, nil)
     assert.spy(callbacks.on_disconnect).was_called(1)
+  end)
+
+  -- RFC 6455 section 7.4.1 reserves 1006 for a connection that closed without a Close frame: an endpoint must not
+  -- send it.
+  it("closes a client that stopped answering pings with 1011, and reports 1006 to on_disconnect", function()
+    local frame = require("claudecode.server.frame")
+    local tick
+    local new_timer = vim.loop.new_timer
+    vim.loop.new_timer = function()
+      return {
+        start = function(_, _, _, callback)
+          tick = callback
+        end,
+        stop = function() end,
+        close = function() end,
+      }
+    end
+    local writes = {}
+    local handle = { closed = false }
+    function handle:write(data, callback)
+      table.insert(writes, data)
+      if callback then
+        callback()
+      end
+    end
+    function handle:close()
+      self.closed = true
+    end
+    function handle:is_closing()
+      return self.closed
+    end
+    local client = client_manager.create_client(handle)
+    client.state, client.handshake_complete, client.last_pong = "connected", true, vim.loop.now() - 61000
+    local server = { clients = { [client.id] = client }, on_disconnect = spy.new(function() end) }
+    tcp.start_ping_timer(server, 30000)
+    vim.loop.new_timer = new_timer
+
+    tick()
+
+    local close = assert(frame.parse_frame(writes[1]))
+    assert.equals(frame.OPCODE.CLOSE, close.opcode)
+    assert.equals(1011, close.payload:byte(1) * 256 + close.payload:byte(2))
+    assert.spy(server.on_disconnect).was_called_with(client, 1006, "Connection timeout")
+    assert.is_nil(server.clients[client.id])
   end)
 end)

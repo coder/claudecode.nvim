@@ -100,6 +100,7 @@ end
 ---@param port number Port to bind and listen on
 ---@return table|nil handle The bound+listening TCP handle, or nil on failure
 ---@return string|nil error Error message if failed
+---@return string|nil reason The libuv error alone, if bind or listen failed
 function M._bind_and_listen(server, port)
   local handle = vim.loop.new_tcp()
   if not handle then
@@ -109,7 +110,7 @@ function M._bind_and_listen(server, port)
   local bind_success, bind_err = handle:bind("127.0.0.1", port)
   if not bind_success then
     handle:close()
-    return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")
+    return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error"), bind_err
   end
 
   local listen_success, listen_err = handle:listen(128, function(err)
@@ -123,7 +124,7 @@ function M._bind_and_listen(server, port)
 
   if not listen_success then
     handle:close()
-    return nil, "Failed to listen on port " .. port .. ": " .. (listen_err or "unknown error")
+    return nil, "Failed to listen on port " .. port .. ": " .. (listen_err or "unknown error"), listen_err
   end
 
   return handle, nil
@@ -155,24 +156,24 @@ function M.create_server(config, callbacks, auth_token)
   -- here (rather than committing to a single pre-probed port) is what fixes #283:
   -- when several Neovim instances race for the same port, the losers just advance
   -- to the next candidate instead of giving up with EADDRINUSE.
-  local last_err
+  local last_reason
   local tried_any = false
   for port in port_iterator(min_port, max_port) do
     tried_any = true
-    local handle, err = M._bind_and_listen(server, port)
+    local handle, err, reason = M._bind_and_listen(server, port)
     if handle then
       server.server = handle
       server.port = port
       return server, nil
     end
-    last_err = err
+    last_reason = reason or err
   end
 
   if not tried_any then
     return nil, "No available ports in range " .. min_port .. "-" .. max_port
   end
-  return nil,
-    "Failed to bind to any port in range " .. min_port .. "-" .. max_port .. ": " .. (last_err or "unknown error")
+  -- Short: Neovim shows it at startup, and a line wider than the command line waits for a key.
+  return nil, string.format("No free port in %d-%d (%s)", min_port, max_port, last_reason or "unknown error")
 end
 
 ---Handle a new client connection
@@ -401,7 +402,9 @@ function M.start_ping_timer(server, interval)
             "server",
             string.format("Closed %s: no reply for %ds", client.id, time_since_pong)
           )
-          client_manager.close_client(client, 1006, "Connection timeout")
+          -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
+          -- connection still ends without the client's Close frame, which is what 1006 means here.
+          client_manager.close_client(client, 1011, "Keepalive timeout")
           M._disconnect_client(server, client, 1006, "Connection timeout")
         end
       end
