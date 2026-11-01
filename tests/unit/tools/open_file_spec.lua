@@ -701,6 +701,9 @@ describe("Tool: open_file", function()
         return #buffers[buf_of(buf)].lines
       end)
       _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
+        if option == "modified" then
+          return buffers[buf].modified == true
+        end
         return option == "filetype" and buffers[buf].filetype or ""
       end)
     end)

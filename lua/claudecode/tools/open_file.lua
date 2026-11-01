@@ -139,10 +139,20 @@ local function loaded_buffer(file_path)
   return nil
 end
 
+---Loads `buf` again when its file changed on disk, as Neovim does when a window enters a loaded buffer. A buffer with
+---unsaved changes is left alone, because Neovim would ask the user, and the user's next key would answer.
+---@param buf integer
+local function check_file_on_disk(buf)
+  if not vim.api.nvim_buf_get_option(buf, "modified") then
+    vim.cmd("checktime " .. buf)
+  end
+end
+
 ---Shows `file_path` from `win`, like `:edit`, or like `:pedit` when `preview` is set, and returns the window that
----shows it. A loaded buffer is shown as it is, because `:edit` and `:pedit` re-read a file that the window they edit
----in already shows: that fails on unsaved changes (E37) and resets folds in every window on that buffer. The preview
----path does not run `:pedit` at all, because `:pedit` also ends the user's Visual mode.
+---shows it. A window that already shows the loaded buffer keeps it, and only a changed file on disk is loaded again,
+---because `:edit` and `:pedit` re-read the buffer there: that fails on unsaved changes (E37) and resets folds in every
+---window on that buffer. The preview path does not run `:pedit` at all, because `:pedit` also ends the user's Visual
+---mode.
 ---@param win integer
 ---@param file_path string
 ---@param preview boolean
@@ -150,7 +160,9 @@ end
 local function open_from(win, file_path, preview)
   if not preview then
     local buf = loaded_buffer(file_path)
-    if not buf or vim.api.nvim_win_get_buf(win) ~= buf then
+    if buf and vim.api.nvim_win_get_buf(win) == buf then
+      check_file_on_disk(buf)
+    else
       vim.api.nvim_win_call(win, function()
         vim.cmd("edit " .. vim.fn.fnameescape(file_path))
       end)
@@ -173,6 +185,7 @@ local function open_from(win, file_path, preview)
       vim.api.nvim_win_set_option(new_win, "foldcolumn", "0")
       return new_win
     end)
+  local shown = vim.api.nvim_win_get_buf(preview_win) == buf
   -- :pedit shows the file even when the preview window has 'winfixbuf' set, and keeps the option.
   local fixed = vim.fn.exists("+winfixbuf") == 1 and vim.api.nvim_win_get_option(preview_win, "winfixbuf")
   if fixed then
@@ -188,6 +201,9 @@ local function open_from(win, file_path, preview)
   -- An autocommand can clear 'previewwindow' or close the window as it gets the buffer.
   if not vim.api.nvim_win_is_valid(preview_win) or not vim.api.nvim_win_get_option(preview_win, "previewwindow") then
     error({ code = -32000, message = "File operation error", data = "No preview window shows the file" })
+  end
+  if shown then
+    check_file_on_disk(buf)
   end
   return preview_win
 end
