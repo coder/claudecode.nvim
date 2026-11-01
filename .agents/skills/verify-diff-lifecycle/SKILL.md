@@ -117,7 +117,7 @@ Then decide which kind of failure it is:
 - Every run assumes that the user has a `ClaudeCodeDiffClosed` handler (`ClosedHandlerResolvesOther`). Each time a bulk close closes a diff, the handler can accept or deny one other open diff, in any order of the snapshot. After a single close (`close_tab`, a replacing openDiff) the handler can touch only other diffs, the same as a later user action, so only the bulk-close loop models it. `SavedDiffKept` checks that the loop keeps a diff the handler accepted, and `NoRejectedLeftover` checks that it closes one the handler denied.
 - These are not modeled:
   - a `ClaudeCodeDiffClosed` handler that starts another bulk close
-  - a `ClaudeCodeDiffClosed` handler that opens a diff under a listed `tab_name` (the code closes a rejected entry only when it is the listed one, which the unit tests check)
+  - a `ClaudeCodeDiffClosed` handler that opens or replaces a diff while a bulk close runs. A handler can do that only by running the event loop (for example `vim.wait`), so that a queued openDiff from Claude runs inside the loop. The loop reads each entry again and reruns its filter, so a new entry under a listed `tab_name` closes only when it matches the filter, and a rejected entry closes only when it is the listed one (`tests/unit/diff_bulk_close_reentrancy_spec.lua` checks a replaced entry). A new `tab_name` is not in the list and stays open. Modeling this needs the per-call `reqTab` and `reqClient` inside the record that the bulk-close operators pass along, which changes every action
   - window and tab layout
   - the `keep_empty` new-file cleanup inside `_resolve_diff_as_rejected` (it runs after the answer)
   - setup errors, which answer at once
