@@ -109,6 +109,8 @@ Register table-driven tests from an array with `ipairs`, not from `pairs()` over
 
 A PR that changes a `.lua` or `.vim` file under `lua/` or `plugin/` also changes what `.agents/skills/verify-diff-lifecycle/covered.lock` records, and the advisory `covered-lock` CI job turns red. Run `.agents/skills/verify-diff-lifecycle/check.sh --record` and commit `covered.lock`, or ask a maintainer to.
 
+Two PRs that edit the same Lua file, or that add or delete neighbouring Lua files, conflict in `covered.lock` once one of them merges. That conflict is expected, because the merged code needs a new record. To resolve it, merge `origin/main` into your branch, resolve any code conflicts, run `.agents/skills/verify-diff-lifecycle/check.sh --record`, `git add` `covered.lock`, and commit the merge.
+
 ## Release Automation
 
 Releases are managed by Release Please. After feature and fix PRs land on `main`, the `Release Please` workflow opens or updates a single release PR that bumps `VERSION`, updates `.release-please-manifest.json`, and rewrites the next `CHANGELOG.md` entry with Communique-generated notes. Merging that release PR creates the `v<version>` tag and GitHub Release, then dispatches the `Release Notes` workflow to rewrite the GitHub Release body with Communique's GitHub-release format.
