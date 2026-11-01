@@ -851,7 +851,7 @@ local active_diffs = {}
 ---@field width integer the columns the windows fill, as measure_layout counts them
 ---@field height integer the rows the windows fill, counted the same way
 ---@field windows { win: NvimWin, width: integer, height: integer }[] in winlayout() order
----@field cursor_window NvimWin the window the cursor was in, in any tab
+---@field cursor_window NvimWin the window the cursor was in, in any tab, before the first diff opened
 
 ---Add the size of each window in a winlayout() tree to `windows`, and return the columns and rows the tree fills,
 ---leaving out separators and status lines: the same tree always has the same number of them.
@@ -927,14 +927,21 @@ local function restore_window_sizes(saved)
   return true
 end
 
----Put the cursor back in the window it was in when save_window_sizes ran, if the window it was in before the diff's
----windows closed (`cursor_window`) closed with them: Neovim gives it to the window that takes the space, such as the
----Claude terminal. A cursor the user moved to another window during the diff stays there.
+---Put the cursor back in `origin`, the window it was in when the diff opened, or in `saved.cursor_window` when
+---`origin` is gone (it was another diff's window). Only when the window the cursor was in before the diff's windows
+---closed (`cursor_window`) closed with them: Neovim gives the cursor to the window that takes the space, such as the
+---Claude terminal, and a cursor the user moved to another window during the diff stays there. After a failed setup,
+---which the user cannot have moved away from, pass no `cursor_window`.
 ---@param saved DiffWindowSizes|nil
----@param cursor_window NvimWin
-local function restore_cursor(saved, cursor_window)
-  if saved and not vim.api.nvim_win_is_valid(cursor_window) and vim.api.nvim_win_is_valid(saved.cursor_window) then
-    pcall(vim.api.nvim_set_current_win, saved.cursor_window)
+---@param origin NvimWin|nil
+---@param cursor_window NvimWin|nil
+local function restore_cursor(saved, origin, cursor_window)
+  if not saved or (cursor_window and vim.api.nvim_win_is_valid(cursor_window)) then
+    return
+  end
+  local target = (origin and vim.api.nvim_win_is_valid(origin)) and origin or saved.cursor_window
+  if vim.api.nvim_win_is_valid(target) then
+    pcall(vim.api.nvim_set_current_win, target)
   end
 end
 
@@ -1364,7 +1371,7 @@ function M._cleanup_diff_state(tab_name, reason)
       end
     end
 
-    restore_cursor(diff_data.window_sizes, cursor_window)
+    restore_cursor(diff_data.window_sizes, diff_data.cursor_origin, cursor_window)
     -- A restore gives a Claude terminal in this tab its width from before the diff, a width the user chose included,
     -- and the diff never resized one in another tab. Only a failed restore leaves the idle width to set (unless the
     -- user opted out via auto_resize_terminal). Floating terminals are skipped.
@@ -1424,6 +1431,7 @@ function M._setup_blocking_diff(params, resolution_callback)
   local fallback_window = nil
   local new_buffer = nil
   local window_sizes = nil
+  local cursor_origin = nil
   -- Same rationale for the open_in_new_tab path: display_terminal_in_new_tab() runs `:tabnew`
   -- early, so a failure before registration would strand that tab. Hoist its handle (and the tab
   -- we came from, to refocus) so the error handler can close it and switch back. Issue #262.
@@ -1559,6 +1567,7 @@ function M._setup_blocking_diff(params, resolution_callback)
         target_window = nil
       else
         window_sizes = save_window_sizes(dest_tab)
+        cursor_origin = vim.api.nvim_get_current_win()
       end
     end
     -- If created_new_tab is true, target_window stays nil and will be created in the new tab.
@@ -1628,6 +1637,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       target_window_created_by_plugin = diff_info.target_window_created_by_plugin,
       fallback_window = fallback_window,
       window_sizes = window_sizes,
+      cursor_origin = cursor_origin,
       original_buffer = diff_info.original_buffer,
       original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,
@@ -1681,14 +1691,13 @@ function M._setup_blocking_diff(params, resolution_callback)
       -- Errored before the diff state was registered, so the state-based cleanup can't run. Close
       -- the fallback split we may have created (its bufhidden=wipe scratch self-cleans) and delete
       -- the proposed buffer; neither is owned by a registered diff.
-      local cursor_window = vim.api.nvim_get_current_win()
       if fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
         pcall(vim.api.nvim_win_close, fallback_window, true)
       end
       if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
         pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
       end
-      restore_cursor(window_sizes, cursor_window)
+      restore_cursor(window_sizes, cursor_origin)
       restore_window_sizes(window_sizes)
       -- Close the tab opened by display_terminal_in_new_tab() before registration (issue #262).
       -- That helper runs `:tabnew` (switching to the new tab) and the tab holds no user content.
