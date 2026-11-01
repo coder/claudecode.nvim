@@ -139,6 +139,62 @@ local function loaded_buffer(file_path)
   return nil
 end
 
+-- Buffers whose file did not exist when Neovim read them, and that Neovim has not read or written since (BF_NEW in
+-- Neovim). After the file is created, Neovim asks W13 about such a buffer when a window enters it or `:checktime` checks
+-- it, and no FileChangedShell autocommand can answer W13. A buffer loaded before this module counts when its file is
+-- missing.
+local new_file_buffers = {}
+do
+  local group = vim.api.nvim_create_augroup("ClaudeCodeOpenFileNewFiles", { clear = true })
+  vim.api.nvim_create_autocmd("BufNewFile", {
+    group = group,
+    callback = function(args)
+      new_file_buffers[args.buf] = true
+    end,
+  })
+  vim.api.nvim_create_autocmd({ "BufReadPost", "BufUnload" }, {
+    group = group,
+    callback = function(args)
+      new_file_buffers[args.buf] = nil
+    end,
+  })
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
+    callback = function(args)
+      -- Writing another file (`:w {file}`) keeps BF_NEW.
+      if args.match == vim.api.nvim_buf_get_name(args.buf) then
+        new_file_buffers[args.buf] = nil
+      end
+    end,
+  })
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    local name = vim.api.nvim_buf_get_name(buf)
+    if
+      name ~= ""
+      and vim.api.nvim_buf_is_loaded(buf)
+      and vim.api.nvim_buf_get_option(buf, "buftype") == ""
+      and vim.fn.filereadable(name) == 0
+    then
+      new_file_buffers[buf] = true
+    end
+  end
+end
+
+---Runs the Ex command `command`, which can load a file again, under `:silent!`. Run from Lua, an error in a user's
+---autocommand stops the reload halfway: the buffer keeps wrong text but takes the file as read, so a later `:w`
+---overwrites the file without a warning. Under `:silent!` the reload ends, as for a command the user types, and the
+---error is raised after it.
+---@param command string
+local function run_reload_command(command)
+  local errmsg = vim.v.errmsg
+  vim.v.errmsg = ""
+  vim.cmd("silent! " .. command)
+  if vim.v.errmsg ~= "" then
+    error(vim.v.errmsg, 0)
+  end
+  vim.v.errmsg = errmsg
+end
+
 ---Runs `fn`, which can enter `buf` or run `:checktime` for it, so that Neovim does not ask the user about a file that
 ---changed on disk. Neovim asks for a buffer with unsaved changes, and with 'noautoread' for any buffer, and the user's
 ---next key answers: `l` loads the file and drops the unsaved changes. A FileChangedShell autocommand replaces that
@@ -200,21 +256,102 @@ local function file_changed_shell_ignored(buf)
   return #wins > 0
 end
 
+---Returns whether Neovim can skip FileChangedShell autocommands when it checks the file of `buf` as `win` enters it:
+---'eventignore' ignores the event, or 'eventignorewin' of `win` or of a window that shows `buf` does.
+---@param buf integer
+---@param win integer
+---@return boolean
+local function file_changed_shell_can_be_ignored(buf, win)
+  if ignores_file_changed_shell(vim.o.eventignore) then
+    return true
+  end
+  if vim.fn.exists("+eventignorewin") == 0 then
+    return false
+  end
+  local wins = vim.fn.win_findbuf(buf)
+  wins[#wins + 1] = win
+  for _, shown_in in ipairs(wins) do
+    if ignores_file_changed_shell(vim.api.nvim_win_get_option(shown_in, "eventignorewin")) then
+      return true
+    end
+  end
+  return false
+end
+
+---Runs `fn` while Neovim does not check the file of `buf`: it checks only a buffer whose 'buftype' is empty. The
+---BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "nowrite".
+---@param buf integer
+---@param fn fun()
+local function without_neovim_file_check(buf, fn)
+  local function set_buftype(value)
+    vim.api.nvim_buf_call(buf, function()
+      vim.cmd("noautocmd setlocal buftype=" .. value)
+    end)
+  end
+  set_buftype("nowrite")
+  local ok, err = pcall(fn)
+  if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "nowrite" then
+    set_buftype("")
+  end
+  if not ok then
+    error(err, 0)
+  end
+end
+
 ---Loads `buf` again when its file changed on disk and it has no unsaved changes, as `:edit` does in a window that shows
 ---it. A buffer with unsaved changes keeps them, and a later `:w` still warns that the file changed. With 'autoread'
 ---Neovim loads the file without FileChangedShell. Without it, when 'eventignore' or 'eventignorewin' ignores the
----event, nothing is checked, because Neovim would ask the user.
+---event, nothing is checked, because Neovim would ask the user. A buffer opened before its file existed reads the
+---file with `:edit` in `win`, as W13's "Load File" would, except while the user holds Visual or Select mode in the
+---middle of a command (`keep_mode`), which `:edit` ends.
 ---@param buf integer
-local function check_file_on_disk(buf)
-  if
-    vim.api.nvim_buf_get_option(buf, "modified")
-    or (vim.fn.getbufvar(buf, "&autoread") == 0 and file_changed_shell_ignored(buf))
-  then
+---@param win integer A window that shows `buf`, or will show it
+---@param keep_mode boolean
+local function check_file_on_disk(buf, win, keep_mode)
+  if vim.api.nvim_buf_get_option(buf, "modified") then
+    return
+  end
+  if new_file_buffers[buf] then
+    if not (keep_mode and vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]")) then
+      vim.api.nvim_win_call(win, function()
+        run_reload_command("edit")
+      end)
+    end
+    return
+  end
+  if vim.fn.getbufvar(buf, "&autoread") == 0 and file_changed_shell_ignored(buf) then
     return
   end
   without_file_changed_question(buf, function()
-    vim.cmd("checktime " .. buf)
+    run_reload_command("checktime " .. buf)
   end)
+end
+
+---Runs `fn`, which shows `buf` in `win`, a window that does not show it yet, so that Neovim does not ask the user about
+---the file of a loaded `buf`, and loads a changed file again as check_file_on_disk() does. When Neovim's own check as
+---`win` enters `buf` cannot ask, check_file_on_disk() runs first, so that no reload runs inside the enter, where a
+---failing autocommand would stop it. Otherwise that check is turned off and check_file_on_disk() runs after: W13 runs
+---no FileChangedShell, and Neovim can skip one.
+---@param buf integer?
+---@param win integer
+---@param keep_mode boolean
+---@param fn fun()
+local function show_buffer(buf, win, keep_mode, fn)
+  if not (buf and vim.api.nvim_buf_is_loaded(buf)) then
+    return fn()
+  end
+  if new_file_buffers[buf] or file_changed_shell_can_be_ignored(buf, win) then
+    without_neovim_file_check(buf, fn)
+    check_file_on_disk(buf, win, keep_mode)
+  else
+    -- An error of a user's autocommand in the check comes after the buffer is shown.
+    local ok, err = pcall(check_file_on_disk, buf, win, keep_mode)
+    -- A buffer with unsaved changes was not checked.
+    without_file_changed_question(buf, fn)
+    if not ok then
+      error(err, 0)
+    end
+  end
 end
 
 ---Shows `file_path` from `win`, like `:edit`, or like `:pedit` when `preview` is set, and returns the window that
@@ -225,14 +362,15 @@ end
 ---@param win integer
 ---@param file_path string
 ---@param preview boolean
+---@param keep_mode boolean The user is in the middle of a command
 ---@return integer win_id
-local function open_from(win, file_path, preview)
+local function open_from(win, file_path, preview, keep_mode)
   if not preview then
     local buf = loaded_buffer(file_path)
     if buf and vim.api.nvim_win_get_buf(win) == buf then
-      check_file_on_disk(buf)
+      check_file_on_disk(buf, win, keep_mode)
     else
-      without_file_changed_question(buf, function()
+      show_buffer(buf, win, keep_mode, function()
         vim.api.nvim_win_call(win, function()
           vim.cmd("edit " .. vim.fn.fnameescape(file_path))
         end)
@@ -262,9 +400,12 @@ local function open_from(win, file_path, preview)
   if fixed then
     vim.api.nvim_win_set_option(preview_win, "winfixbuf", false)
   end
-  local ok, err = pcall(without_file_changed_question, buf, function()
-    vim.api.nvim_win_set_buf(preview_win, buf)
-  end)
+  local ok, err = true, nil
+  if not shown then
+    ok, err = pcall(show_buffer, buf, preview_win, keep_mode, function()
+      vim.api.nvim_win_set_buf(preview_win, buf)
+    end)
+  end
   if fixed and vim.api.nvim_win_is_valid(preview_win) then
     vim.api.nvim_win_set_option(preview_win, "winfixbuf", true)
   end
@@ -276,7 +417,7 @@ local function open_from(win, file_path, preview)
     error({ code = -32000, message = "File operation error", data = "No preview window shows the file" })
   end
   if shown then
-    check_file_on_disk(buf)
+    check_file_on_disk(buf, preview_win, keep_mode)
   end
   return preview_win
 end
@@ -420,7 +561,7 @@ local function handler(params)
   end
 
   if target_win then
-    target_win = open_from(target_win, file_path, preview)
+    target_win = open_from(target_win, file_path, preview, mid_command)
   else
     -- Fallback: Create a new window if no suitable window found
     -- Try to move to a better position
@@ -458,7 +599,7 @@ local function handler(params)
       vim.cmd("diffoff")
     end
 
-    target_win = open_from(vim.api.nvim_get_current_win(), file_path, preview)
+    target_win = open_from(vim.api.nvim_get_current_win(), file_path, preview, mid_command)
     if not make_frontmost then
       vim.api.nvim_set_current_win(origin_win)
     end
