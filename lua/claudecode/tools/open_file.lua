@@ -139,26 +139,55 @@ local function loaded_buffer(file_path)
   return nil
 end
 
----Loads `buf` again when its file changed on disk, without asking, as `:edit` does in a window that shows it. A buffer
----with unsaved changes is left alone. Neovim asks the user for one, and with 'noautoread' for any buffer, and the
----user's next key would answer. A FileChangedShell autocommand replaces that question, so openFile adds one, after the
----user's, that chooses "reload".
----@param buf integer
-local function check_file_on_disk(buf)
-  if vim.api.nvim_buf_get_option(buf, "modified") then
-    return
+---Runs `fn`, which can enter `buf` or run `:checktime` for it, so that Neovim does not ask the user about a file that
+---changed on disk. Neovim asks for a buffer with unsaved changes, and with 'noautoread' for any buffer, and the user's
+---next key answers: `l` loads the file and drops the unsaved changes. A FileChangedShell autocommand replaces that
+---question, so openFile adds one, after the user's, that loads a buffer without unsaved changes again and keeps one
+---with unsaved changes as it is.
+---@param buf integer? A buffer that is not loaded has no file to check
+---@param fn fun()
+local function without_file_changed_question(buf, fn)
+  if not (buf and vim.api.nvim_buf_is_loaded(buf)) then
+    return fn()
   end
   local autocmd = vim.api.nvim_create_autocmd("FileChangedShell", {
     buffer = buf,
     callback = function()
-      vim.v.fcs_choice = "reload"
+      vim.v.fcs_choice = vim.api.nvim_buf_get_option(buf, "modified") and "" or "reload"
     end,
   })
-  local ok, err = pcall(vim.cmd, "checktime " .. buf)
-  vim.api.nvim_del_autocmd(autocmd)
+  local ok, err = pcall(fn)
+  -- A user's `autocmd! FileChangedShell` can delete it first.
+  pcall(vim.api.nvim_del_autocmd, autocmd)
   if not ok then
     error(err, 0)
   end
+end
+
+---Returns whether 'eventignore' ignores FileChangedShell. Neovim 0.12 takes "all,-FileChangedShell".
+---@return boolean
+local function file_changed_shell_ignored()
+  local ignored = false
+  for item in vim.o.eventignore:lower():gmatch("[^,]+") do
+    if item == "-filechangedshell" then
+      return false
+    end
+    ignored = ignored or item == "all" or item == "filechangedshell"
+  end
+  return ignored
+end
+
+---Loads `buf` again when its file changed on disk and it has no unsaved changes, as `:edit` does in a window that shows
+---it. A buffer with unsaved changes keeps them, and a later `:w` still warns that the file changed. When 'eventignore'
+---ignores FileChangedShell, nothing is checked, because Neovim would ask the user.
+---@param buf integer
+local function check_file_on_disk(buf)
+  if vim.api.nvim_buf_get_option(buf, "modified") or file_changed_shell_ignored() then
+    return
+  end
+  without_file_changed_question(buf, function()
+    vim.cmd("checktime " .. buf)
+  end)
 end
 
 ---Shows `file_path` from `win`, like `:edit`, or like `:pedit` when `preview` is set, and returns the window that
@@ -176,8 +205,10 @@ local function open_from(win, file_path, preview)
     if buf and vim.api.nvim_win_get_buf(win) == buf then
       check_file_on_disk(buf)
     else
-      vim.api.nvim_win_call(win, function()
-        vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+      without_file_changed_question(buf, function()
+        vim.api.nvim_win_call(win, function()
+          vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+        end)
       end)
     end
     return win
@@ -204,7 +235,9 @@ local function open_from(win, file_path, preview)
   if fixed then
     vim.api.nvim_win_set_option(preview_win, "winfixbuf", false)
   end
-  local ok, err = pcall(vim.api.nvim_win_set_buf, preview_win, buf)
+  local ok, err = pcall(without_file_changed_question, buf, function()
+    vim.api.nvim_win_set_buf(preview_win, buf)
+  end)
   if fixed and vim.api.nvim_win_is_valid(preview_win) then
     vim.api.nvim_win_set_option(preview_win, "winfixbuf", true)
   end
