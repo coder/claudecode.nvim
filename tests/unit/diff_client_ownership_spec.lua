@@ -263,12 +263,40 @@ describe("a diff the user accepted for one Claude client", function()
       assert.is_truthy(msg:find("E325: ATTENTION", 1, true), msg)
       assert.is_truthy(
         msg:find(
-          "open it with :e (answer the swap file prompt if Neovim shows one), then run the command again",
+          "open it with :e " .. file .. " (answer the swap file prompt if Neovim shows one), then run the command again",
           1,
           true
         ),
         msg
       )
+    end)
+
+    it("names a forced write that keeps the change check for a read-only buffer in a missing folder", function()
+      local gone = "/tmp/issue393_gone_dir/readonly.txt"
+      local tab_gone = "✻ [Claude Code] readonly.txt ⧉"
+      finally(function()
+        if vim.fn.bufnr(gone) ~= -1 then
+          vim.api.nvim_buf_delete(vim.fn.bufnr(gone), { force = true })
+        end
+      end)
+      local deferred = call_tool(owner, "openDiff", {
+        old_file_path = gone,
+        new_file_path = gone,
+        new_file_contents = "accepted\n",
+        tab_name = tab_gone,
+      })
+      _G.claude_deferred_responses[tostring(deferred.coroutine)] = function() end
+      diff._resolve_diff_as_saved(tab_gone, diff._get_active_diffs()[tab_gone].new_buffer)
+      diff.close_diffs_for_client(owner.id, "client disconnected")
+      -- The file was opened read-only before its folder went away.
+      local buf = vim.fn.bufadd(gone)
+      vim.fn.bufload(buf)
+      vim.api.nvim_buf_set_option(buf, "readonly", true)
+
+      user_closes_all_diffs()
+
+      local msg = notes[#notes].msg
+      assert.is_truthy(msg:find(": :checktime, then :call mkdir(expand('%:p:h'), 'p') | w! writes them", 1, true), msg)
     end)
 
     it("stays open when it cannot change a buffer that already shows the accepted lines", function()

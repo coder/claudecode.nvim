@@ -111,7 +111,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     assert.equal("alpha\r\nBETA accepted\r\ngamma\r\n", read_bytes(path))
   end)
 
-  it("names :w! when the file's buffer is read-only", function()
+  it("names :checktime before :w! when the file's buffer is read-only", function()
     local path = dir .. "/readonly.txt"
     write_bytes(path, "alpha\n")
     vim.fn.setfperm(path, "r--r--r--")
@@ -121,7 +121,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
 
     vim.cmd("ClaudeCodeCloseAllDiffs")
 
-    assert.is_truthy(notes[#notes]:find(": :w! writes them", 1, true), notes[#notes])
+    assert.is_truthy(notes[#notes]:find(": :checktime, then :w! writes them", 1, true), notes[#notes])
     vim.api.nvim_buf_call(vim.fn.bufnr(path), function()
       vim.cmd("silent write!")
     end)
