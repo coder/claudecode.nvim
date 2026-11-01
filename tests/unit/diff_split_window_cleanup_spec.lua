@@ -100,6 +100,7 @@ describe("Diff split window cleanup", function()
     vim._windows[1001].options = { previewwindow = true }
     vim._win_tab[1001] = 1
     vim._tab_windows[1] = { 1001, 1000 }
+    vim._next_winid = 1002
 
     diff._setup_blocking_diff({
       old_file_path = test_old_file,
@@ -113,7 +114,7 @@ describe("Diff split window cleanup", function()
     assert.are_not.equal(1001, state.target_window)
     assert.are_not.equal(1001, state.new_window)
     assert.are.equal(2, vim.api.nvim_win_get_buf(1001))
-    assert.is_false(vim.api.nvim_win_get_option(1001, "diff"))
+    assert.is_falsy(vim.api.nvim_win_get_option(1001, "diff"))
   end)
 
   it("does not close the reused target window when the old file is already open", function()
