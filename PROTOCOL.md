@@ -432,21 +432,25 @@ Or when document not open:
 
 ### 10. close_tab
 
-**Description**: Close a tab by name
+**Description**: Close a diff tab by name. Claude calls it only with the `tab_name` it passed to `openDiff`.
 
 **Input**:
 
 ```json
 {
-  "tab_name": "filename.js"
+  "tab_name": "✻ [Claude Code] filename.js (e18e1e) ⧉"
 }
 ```
 
-- `tab_name` (string, required): Name of the tab to close
+- `tab_name` (string, required): The `tab_name` of the diff to close
 
 **Output**: Returns `{content: [{type: "text", text: "TAB_CLOSED"}]}`
 
+The plugin closes only the diff that `openDiff` opened with this exact `tab_name`. A name that matches no diff closes nothing, and no name closes or deletes another buffer.
+
 A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file.
+
+The answer is `TAB_CLOSED` in all three cases: the diff closed, the diff stays for another client, or no diff has that name. VS Code also answers `TAB_CLOSED` when no tab has that label. Claude Code 2.1.312 does not read the answer text. It logs only a call that fails.
 
 ### 11. closeAllDiffTabs
 

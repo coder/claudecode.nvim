@@ -50,7 +50,7 @@ Sources: [tools/init.lua:M.register_all], [tools/close_tab.lua:schema], [tools/o
 - `getDiagnostics` raises `-32000` when `vim.lsp`, `vim.diagnostic`, or `vim.diagnostic.get` is missing. It raises `-32001` "File not open" when no buffer exists for `uri` (`vim.fn.bufnr(path) == -1`). An unloaded buffer does not raise [tools/get_diagnostics.lua:handler]
 - `getLatestSelection` returns a `success=false` JSON result when no selection exists [tools/get_latest_selection.lua:handler]
 - With no selection, `getCurrentSelection` returns `success=false` only when the active buffer has no name. When a named buffer is active, it returns `success=true` with an empty selection [tools/get_current_selection.lua:handler]
-- `close_tab` returns its error tables as values, not raised errors. `handle_invoke` therefore wraps them in `result`. A missing buffer counts as success [tools/close_tab.lua:handler]
+- `close_tab` returns its error tables as values, not raised errors. `handle_invoke` therefore wraps them in `result`. It answers `TAB_CLOSED` when it closes the diff, when it keeps a diff the user accepted for another client, and when no diff has that name [tools/close_tab.lua:handler]
 
 ## Side Effects
 
@@ -58,7 +58,7 @@ Sources: [tools/init.lua:M.register_all], [tools/close_tab.lua:schema], [tools/o
 - `openDiff` opens a blocking diff through `claudecode.diff`. The response stays deferred until the user accepts or rejects the diff [tools/open_diff.lua:handler]. A diff that resolves before `openDiff` yields, for example from a `ClaudeCodeDiffOpened` handler, is answered at once [diff.lua:M.open_diff_blocking]
 - `saveDocument` runs `write` in the matching buffer with `nvim_buf_call` [tools/save_document.lua:handler]
 - `closeAllDiffTabs` calls `diff.close_all_diffs` and returns `CLOSED_<n>_DIFF_TABS` [tools/close_all_diff_tabs.lua:handler]
-- `close_tab` calls `diff.close_diff_by_tab_name` for diff tabs. Otherwise it calls `nvim_buf_delete` with `force=false` [tools/close_tab.lua:handler]
+- `close_tab` calls `diff.close_diff_by_tab_name` with the tab name and the calling client. It closes or deletes no other buffer, whatever the name [tools/close_tab.lua:handler]
 - `getCurrentSelection`, `getLatestSelection`, `getOpenEditors`, `getDiagnostics`, `getWorkspaceFolders`, and `checkDocumentDirty` only read editor state [tools/get_open_editors.lua:handler]
 - `handle_invoke` writes debug log entries through `claudecode.logger` [tools/init.lua:M.handle_invoke]
 
