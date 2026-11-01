@@ -617,7 +617,8 @@ describe("Tool: open_file", function()
     -- re-reads the buffer that its window shows without asking. A buffer loads, with its BufReadPost, FileType and
     -- BufEnter autocommands (`events`), in the window that enters it, or for bufload() in a hidden autocommand window.
     -- A failing BufReadPost autocommand (`read_error`) stops a read halfway under a command from Lua, and under
-    -- :silent! the read ends and v:errmsg keeps the error.
+    -- :silent! the read ends and v:errmsg keeps the error. An autocommand can also set v:errmsg for an error it hides
+    -- itself (`handled_error`). The file on disk stays readable after a read (`on_disk`).
     local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked, events, autocmds
     local ignore_win, silenced, call_buf
     local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
@@ -683,8 +684,10 @@ describe("Tool: open_file", function()
         autocmds[id] = false
       end)
       local function read_disk(buf)
-        local old, new = buffers[buf].lines, buffers[buf].disk or buffers[buf].lines
-        buffers[buf].disk, buffers[buf].new_file = nil, nil
+        local old = buffers[buf].lines
+        local new = buffers[buf].disk or buffers[buf].on_disk or old
+        buffers[buf].disk, buffers[buf].new_file, buffers[buf].on_disk = nil, nil, new
+        fire("BufReadPre", buf)
         if buffers[buf].read_error and not silenced then
           buffers[buf].lines = { unpack(old) }
           table.insert(buffers[buf].lines, "")
@@ -694,6 +697,8 @@ describe("Tool: open_file", function()
         buffers[buf].lines = new
         if buffers[buf].read_error then
           _G.vim.v.errmsg = "user boom"
+        elseif buffers[buf].handled_error then
+          _G.vim.v.errmsg = "E31: No such mapping" -- sil! nunmap <buffer> [[ in Neovim's markdown ftplugin
         end
         fire("BufReadPost", buf)
       end
@@ -775,6 +780,8 @@ describe("Tool: open_file", function()
         local buftype = command:match("^noautocmd setlocal buftype=(.*)$")
         if buftype then
           buffers[call_buf].buftype = buftype
+        elseif command == "edit" and call_buf then
+          read_disk(call_buf)
         elseif command == "edit" then
           edit_file_in(call_win or current_win)
         elseif command:match("^pedit ") then
@@ -795,6 +802,11 @@ describe("Tool: open_file", function()
         end
         silenced = false
         run_cmd(recorded)
+      end)
+      local win_call = _G.vim.api.nvim_win_call
+      _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+        assert(win_buf[win] ~= nil, "Invalid window id: " .. tostring(win))
+        return win_call(win, callback)
       end)
       _G.vim.api.nvim_buf_call = spy.new(function(buf, callback)
         local outer = call_buf
@@ -1173,6 +1185,20 @@ describe("Tool: open_file", function()
         end)
       end
 
+      it("fails as documented when an autocommand closes the preview window as it gets the buffer", function()
+        local set_buf = _G.vim.api.nvim_win_set_buf
+        _G.vim.api.nvim_win_set_buf = spy.new(function(win, buf)
+          set_buf(win, buf)
+          win_buf[win] = nil -- autocmd BufWinEnter * ++nested if &previewwindow | close | endif
+        end)
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true, startLine = 1 })
+        expect(success).to_be_false()
+        assert.are.same(
+          { code = -32000, message = "File operation error", data = "No preview window shows the file" },
+          err
+        )
+      end)
+
       it("keeps the empty buffer while the user holds Visual mode in the middle of a command", function()
         editor_mode, state_flags = "v", "S"
         local success = pcall(open_file_handler, { filePath = "test.txt", startText = "second" })
@@ -1205,6 +1231,19 @@ describe("Tool: open_file", function()
       end
     end)
 
+    for _, case in ipairs({ { name = "the window shows it", shown = 1000 }, { name = "it is hidden" } }) do
+      it("succeeds when an autocommand hides its own error during the reload and " .. case.name, function()
+        buffers[30].loaded, buffers[30].handled_error = true, true
+        buffers[30].disk = { "alpha", "beta", "fresh" }
+        if case.shown then
+          win_buf[case.shown] = 30
+        end
+        local success, result = pcall(open_file_handler, { filePath = "test.txt", startText = "fresh" })
+        expect(success).to_be_true()
+        expect(result.content[1].text).to_be('Opened file and selected text "fresh"')
+      end)
+    end
+
     describe(
       "when the file changed and Neovim's own check as a window gets the buffer skips FileChangedShell",
       function()
@@ -1219,6 +1258,18 @@ describe("Tool: open_file", function()
           expect(success).to_be_true()
           expect(asked).to_be_false()
         end)
+
+        for _, buftype in ipairs({ "acwrite", "nofile" }) do
+          it(
+            "keeps 'buftype' " .. buftype .. ", whose file Neovim never checks, when 'eventignore' ignores the event",
+            function()
+              _G.vim.o.eventignore, buffers[30].buftype = "FileChangedShell", buftype
+              local success = pcall(open_file_handler, { filePath = "test.txt" })
+              expect(success).to_be_true()
+              assert.are.same({ buftype, false }, { buffers[30].buftype, asked })
+            end
+          )
+        end
 
         it("never asks (W11) when 'eventignore' ignores the event for a hidden buffer, and keeps its text", function()
           _G.vim.o.eventignore = "FileChangedShell"
