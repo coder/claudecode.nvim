@@ -179,8 +179,9 @@ jobs:
         run: nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 
   # covered.lock records the lua/ and plugin/ code that the openDiff lifecycle model was last
-  # confirmed against. A change there without a re-record leaves main STALE for check.sh.
-  # Advisory: Required does not need this job, so a stale lock shows red without blocking a merge.
+  # confirmed against. check.sh model-checks that lifecycle with TLC on the runner's Java, then
+  # compares the lock. Advisory: Required does not need this job, so a broken rule or a stale
+  # lock shows red without blocking a merge.
   covered-lock:
     runs-on: ubuntu-latest
 
@@ -190,8 +191,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check that covered.lock matches the code
-        run: .agents/skills/verify-diff-lifecycle/check.sh --hash-only
+      - name: Model-check the openDiff lifecycle and compare covered.lock
+        run: .agents/skills/verify-diff-lifecycle/check.sh
 
   required:
     name: Required

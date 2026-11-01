@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2329,SC2034 # helpers run through as_bool; coverage() reads blocks by name
+# shellcheck disable=SC2329,SC2034,SC2154 # helpers run through as_bool; covered_block sets, and coverage() reads, blocks by name
 # Model-check the openDiff answer lifecycle against facts read from the code.
 # Usage: check.sh [--mutants] [--keep] [--record] | check.sh --hash-only
 #   exit 0 pass, 1 rule broken, 2 tool or script error, 3 stale (the covered code
@@ -8,6 +8,10 @@
 #   --record and --hash-only run no TLC, so they do not download it.
 set -euo pipefail
 export LC_ALL=C
+if ((BASH_VERSINFO[0] < 4)); then
+  echo "ERROR: check.sh needs bash 4 or newer, not $BASH_VERSION (on macOS: brew install bash)" >&2
+  exit 2
+fi
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$here" rev-parse --show-toplevel)
@@ -101,41 +105,49 @@ CLOSE_TAB_TOOL=lua/claudecode/tools/close_tab.lua
 CLOSE_ALL_TOOL=lua/claudecode/tools/close_all_diff_tabs.lua
 CLIENT=lua/claudecode/server/client.lua
 
-resolve_saved=$(block "$DIFF" '^function M\._resolve_diff_as_saved\(')
-resolve_rejected=$(block "$DIFF" '^function M\._resolve_diff_as_rejected\(')
-open_blocking=$(block "$DIFF" '^function M\.open_diff_blocking\(')
-setup_blocking=$(block "$DIFF" '^function M\._setup_blocking_diff\(')
-close_by_name=$(block "$DIFF" '^function M\.close_diff_by_tab_name\(')
-close_pending=$(block "$DIFF" '^function M\.close_pending_diffs\(')
-close_for_client=$(block "$DIFF" '^function M\.close_diffs_for_client\(')
-close_all=$(block "$DIFF" '^function M\.close_all_diffs\(')
-close_saved=$(block "$DIFF" '^function M\.close_saved_diffs\(')
-close_rejected=$(block "$DIFF" '^function M\.close_rejected_diffs\(')
-file_holds=$(block "$DIFF" '^local function file_holds_accepted_text\(')
-buffer_holds=$(block "$DIFF" '^local function buffer_holds_accepted_text\(')
-put_in_buffer=$(block "$DIFF" '^local function put_accepted_text_in_buffer\(')
-held_for_other=$(block "$DIFF" '^local function holds_edits_for_other_client\(')
-close_tab_tool=$(block "$CLOSE_TAB_TOOL" '^local function handler\(params, client\)')
-close_all_tool=$(block "$CLOSE_ALL_TOOL" '^local function handler\(params, client\)')
-create_client=$(block "$CLIENT" '^function M\.create_client\(')
-server_stop=$(block "$SERVER" '^function M\.stop\(\)')
-on_disconnect=$(block "$SERVER" '^ *on_disconnect = function\(')
-handle_request=$(block "$SERVER" '^function M\._handle_request\(')
-setup_deferred=$(block "$SERVER" '^function M\._setup_deferred_response\(')
-user_close_all=$(block "$MAIN" 'nvim_create_user_command\("ClaudeCodeCloseAllDiffs"')
-close_active=$(block "$DIFF" '^local function close_active_diffs\(')
-cleanup_all=$(block "$DIFF" '^function M\._cleanup_all_active_diffs\(')
-inline_saved=$(block "$INLINE" '^function M\.resolve_inline_as_saved\(')
-inline_rejected=$(block "$INLINE" '^function M\.resolve_inline_as_rejected\(')
-handle_invoke=$(block "$TOOLS" '^function M\.handle_invoke\(')
-open_diff_tool=$(block "$OPEN_DIFF_TOOL" '^local function handler\(params, client\)')
-setup_inline=$(block "$INLINE" '^function M\.setup_inline_diff\(')
-accept_current=$(block "$DIFF" '^function M\.accept_current_diff\(')
-fire_event=$(block "$DIFF" '^local function fire_diff_event\(')
-register_state=$(block "$DIFF" '^function M\._register_diff_state\(')
-cleanup_state=$(block "$DIFF" '^function M\._cleanup_diff_state\(')
-diff_autocmds=$(block "$DIFF" '^local function register_diff_autocmds\(')
-deny_current=$(block "$DIFF" '^function M\.deny_current_diff\(')
+blocks=()
+declare -A block_file
+# covered_block NAME FILE REGEX: set $NAME to the block of FILE that starts at REGEX, and note it for the record.
+covered_block() {
+  blocks+=("$1")
+  block_file[$1]=$2
+  printf -v "$1" '%s' "$(block "$2" "$3")"
+}
+covered_block resolve_saved "$DIFF" '^function M\._resolve_diff_as_saved\('
+covered_block resolve_rejected "$DIFF" '^function M\._resolve_diff_as_rejected\('
+covered_block open_blocking "$DIFF" '^function M\.open_diff_blocking\('
+covered_block setup_blocking "$DIFF" '^function M\._setup_blocking_diff\('
+covered_block close_by_name "$DIFF" '^function M\.close_diff_by_tab_name\('
+covered_block close_pending "$DIFF" '^function M\.close_pending_diffs\('
+covered_block close_for_client "$DIFF" '^function M\.close_diffs_for_client\('
+covered_block close_all "$DIFF" '^function M\.close_all_diffs\('
+covered_block close_saved "$DIFF" '^function M\.close_saved_diffs\('
+covered_block close_rejected "$DIFF" '^function M\.close_rejected_diffs\('
+covered_block file_holds "$DIFF" '^local function file_holds_accepted_text\('
+covered_block buffer_holds "$DIFF" '^local function buffer_holds_accepted_text\('
+covered_block put_in_buffer "$DIFF" '^local function put_accepted_text_in_buffer\('
+covered_block held_for_other "$DIFF" '^local function holds_edits_for_other_client\('
+covered_block close_tab_tool "$CLOSE_TAB_TOOL" '^local function handler\(params, client\)'
+covered_block close_all_tool "$CLOSE_ALL_TOOL" '^local function handler\(params, client\)'
+covered_block create_client "$CLIENT" '^function M\.create_client\('
+covered_block server_stop "$SERVER" '^function M\.stop\(\)'
+covered_block on_disconnect "$SERVER" '^ *on_disconnect = function\('
+covered_block handle_request "$SERVER" '^function M\._handle_request\('
+covered_block setup_deferred "$SERVER" '^function M\._setup_deferred_response\('
+covered_block user_close_all "$MAIN" 'nvim_create_user_command\("ClaudeCodeCloseAllDiffs"'
+covered_block close_active "$DIFF" '^local function close_active_diffs\('
+covered_block cleanup_all "$DIFF" '^function M\._cleanup_all_active_diffs\('
+covered_block inline_saved "$INLINE" '^function M\.resolve_inline_as_saved\('
+covered_block inline_rejected "$INLINE" '^function M\.resolve_inline_as_rejected\('
+covered_block handle_invoke "$TOOLS" '^function M\.handle_invoke\('
+covered_block open_diff_tool "$OPEN_DIFF_TOOL" '^local function handler\(params, client\)'
+covered_block setup_inline "$INLINE" '^function M\.setup_inline_diff\('
+covered_block accept_current "$DIFF" '^function M\.accept_current_diff\('
+covered_block fire_event "$DIFF" '^local function fire_diff_event\('
+covered_block register_state "$DIFF" '^function M\._register_diff_state\('
+covered_block cleanup_state "$DIFF" '^function M\._cleanup_diff_state\('
+covered_block diff_autocmds "$DIFF" '^local function register_diff_autocmds\('
+covered_block deny_current "$DIFF" '^function M\.deny_current_diff\('
 
 FACTS=(GuardSaved GuardRejected SenderCleared ReplaceRejects CloseTabRejectsPending CloseEachByName StopRejectsPending
   StopPendingOnly DisconnectRejects DisconnectPendingOnly UserCloseAllPendingOnly ClientTagged SetupAnswerReturned
@@ -271,48 +283,48 @@ if [[ $hash_only == 0 ]]; then
   for f in "${FACTS[@]}"; do printf '  %-26s %s\n' "$f" "${fact[$f]}"; done
 fi
 
-# The coverage record: a hash of every Lua and Vimscript file under lua/ and plugin/, so any change to the plugin's Lua makes
-# the run STALE until someone confirms the model still fits. The block hashes and call sites
-# below point the reader at what changed.
+# The coverage record: one group per Lua and Vimscript file under lua/ and plugin/, so any change to the plugin's
+# Lua makes the run STALE until someone confirms the model still fits. A group holds the file's hash, the hashes of
+# the covered blocks in it, and its call sites, which point the reader at what changed. Each group starts with a
+# header line that only adding or removing the file changes. Git conflicts only on changes to the same or adjacent
+# lines, so two branches that edit different files and re-record merge covered.lock without a conflict. Editing the
+# same file, or adding or removing files whose groups sit next to each other, still conflicts.
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 coverage() {
-  local name
-  for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
-    close_all close_saved close_rejected file_holds buffer_holds put_in_buffer held_for_other close_tab_tool close_all_tool create_client \
-    close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
-    handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
+  local name file
+  for name in "${blocks[@]}"; do
     [[ -n ${!name} ]] || {
       echo "ERROR: covered block $name not found; update its start regex in check.sh" >&2
       exit 2
     }
-    printf 'block %-18s %s\n' "$name" "$(printf '%s\n' "${!name}" | sha256 | cut -c1-16)"
   done
-  local file
   while IFS= read -r file; do
+    printf '== %s\n' "$file"
     printf 'file %s %s\n' "$file" "$(sha256 <"$file" | cut -c1-16)"
+    for name in "${blocks[@]}"; do
+      [[ ${block_file[$name]} == "$file" ]] || continue
+      printf 'block %-18s %s\n' "$name" "$(printf '%s\n' "${!name}" | sha256 | cut -c1-16)"
+    done
+    # Each site also names its enclosing top-level statement, so moving a call into another
+    # function or autocmd changes the record.
+    RE=$SITE_RE awk '
+      BEGIN { re = ENVIRON["RE"] }
+      /^[^[:space:]-]/ && !/^(end|else|elseif|return|[})])/ { top = $0 }
+      $0 ~ re && $0 !~ /^[[:space:]]*--/ { line = $0; sub(/^[[:space:]]+/, "", line); print "site " FILENAME ": " line " @ " top }
+    ' "$file" | sort
   done < <(find lua plugin \( -name '*.lua' -o -name '*.vim' \) | sort)
-  # Each site also names its enclosing top-level statement, so moving a call into another
-  # function or autocmd changes the record.
-  find lua plugin \( -name '*.lua' -o -name '*.vim' \) -print0 | sort -z | RE=$SITE_RE xargs -0 awk '
-    BEGIN { re = ENVIRON["RE"] }
-    FNR == 1 { top = "" }
-    /^[^[:space:]-]/ && !/^(end|else|elseif|return|[})])/ { top = $0 }
-    $0 ~ re && $0 !~ /^[[:space:]]*--/ { line = $0; sub(/^[[:space:]]+/, "", line); print "site " FILENAME ": " line " @ " top }
-  ' | sort
 }
 current=$(coverage)
 if [[ $record == 1 ]]; then
-  sync=$(git rev-parse HEAD)
-  if base=$(git merge-base HEAD origin/main 2>/dev/null) && git diff --quiet "$base" HEAD -- lua/ plugin/; then sync=$base; fi
   # A contributor checkout can make covered.lock a symlink to a script: never write through one.
   if [[ -L $LOCK || (-e $LOCK && ! -f $LOCK) ]]; then
     echo "ERROR: $LOCK is a symlink or not a regular file; refusing to write it" >&2
     exit 2
   fi
   tmp=$(mktemp "$here/.covered.lock.XXXXXX")
-  printf 'sync %s\n%s\n' "$sync" "$current" >"$tmp"
+  printf '%s\n' "$current" >"$tmp"
   mv -f "$tmp" "$LOCK"
-  echo "recorded $LOCK at sync commit $sync"
+  echo "recorded $LOCK"
   exit 0
 fi
 stale=0
@@ -320,14 +332,11 @@ if [[ -L $LOCK ]]; then
   echo "ERROR: $LOCK is a symlink; the coverage record must be a regular file" >&2
   exit 2
 fi
-if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >/dev/null; then
+if [[ ! -f $LOCK ]] || ! diff -q "$LOCK" <(printf '%s\n' "$current") >/dev/null; then
   stale=1
-  sync_id=$({ head -1 "$LOCK" 2>/dev/null || true; } | sed -n 's/^sync \([0-9a-f]\{40\}\)$/\1/p')
-  label=${sync_id:0:12}
-  [[ -n $label ]] || label="<no valid sync line in covered.lock>"
-  echo "== STALE: the covered code changed since commit $label."
+  echo "== STALE: the covered code changed since covered.lock was recorded (git log -- covered.lock shows when)."
   echo "   UNVERIFIED: no result below covers these changes until you read them and update the model."
-  { diff <(sed 1d "$LOCK" 2>/dev/null) <(printf '%s\n' "$current") || true; } | grep -E '^[<>]' |
+  { diff <(cat -- "$LOCK" 2>/dev/null) <(printf '%s\n' "$current") || true; } | grep -E '^[<>]' |
     sed -e 's/^</   was:/' -e 's/^>/   now:/' -e 's/[^[:print:]]/?/g'
 fi
 if [[ $hash_only == 1 ]]; then
