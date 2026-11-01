@@ -573,19 +573,6 @@ local vim = {
       return path
     end,
 
-    getfperm = function(path)
-      local file = io.open(path, "rb")
-      if not file then
-        return ""
-      end
-      file:close()
-      return "rw-r--r--"
-    end,
-
-    setfperm = function(path, mode)
-      return 1
-    end,
-
     getpos = function(mark)
       if mark == "'<" then
         return { 0, 1, 1, 0 }

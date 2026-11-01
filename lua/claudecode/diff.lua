@@ -431,15 +431,19 @@ local function is_buffer_dirty(file_path)
 end
 
 ---@param path string
----@return string|nil text The file's bytes, or nil when it cannot be read
+---@return string|false|nil text The file's bytes, nil when the file does not exist, or false when it cannot be read
 local function read_file(path)
-  local file = io.open(path, "rb")
+  local file, _, errno = io.open(path, "rb")
   if not file then
-    return nil
+    local enoent = 2
+    if errno == enoent then
+      return nil
+    end
+    return false
   end
   local text = file:read("*a")
   file:close()
-  return text
+  return text or false
 end
 
 ---Setup the diff module
@@ -1818,31 +1822,41 @@ local function file_holds_accepted_text(diff_data)
   return read_file(diff_data.old_file_path) == diff_data.result_content.content[2].text
 end
 
----Write the accepted text unless the file already holds it. Never writes over a change made after the accept, or
----under a buffer with unsaved changes.
+---Write the accepted text unless the file already holds it. Never writes over a change made after the accept, over
+---a file it cannot read, or under a buffer with unsaved changes.
 ---@param diff_data table A saved active_diffs entry
 local function write_accepted_text(diff_data)
   local path = diff_data.old_file_path
-  if file_holds_accepted_text(diff_data) or read_file(path) ~= diff_data.file_at_accept or is_buffer_dirty(path) then
+  local text = diff_data.result_content.content[2].text
+  local current = read_file(path)
+  if current == text or current == false or current ~= diff_data.file_at_accept or is_buffer_dirty(path) then
     return
   end
   -- A temp file renamed over the target, so a failed write (a full disk) leaves the file whole. resolve() writes
-  -- through a symlink to the file it names, and the temp file gets the target's permissions.
+  -- through a symlink to the file it names. "wx" refuses an existing file or symlink at the temp path, and 0600
+  -- keeps the text private until the temp file gets the target's mode.
+  local uv = vim.loop
   local target = vim.fn.resolve(path)
   vim.fn.mkdir(vim.fn.fnamemodify(target, ":h"), "p")
-  local tmp = target .. ".claudecode-" .. vim.fn.getpid() .. ".tmp"
-  local file = io.open(tmp, "wb")
-  if not file then
+  local stat = uv.fs_stat(target)
+  local tmp = ("%s.claudecode-%d-%s.tmp"):format(target, vim.fn.getpid(), string.format("%d", uv.hrtime()))
+  local fd = uv.fs_open(tmp, "wx", stat and tonumber("600", 8) or tonumber("666", 8))
+  if not fd then
     return
   end
-  local written = file:write(diff_data.result_content.content[2].text)
-  local closed = file:close()
-  local perm = vim.fn.getfperm(target)
-  if
-    not (written and closed and (perm == "" or vim.fn.setfperm(tmp, perm) == 1) and vim.loop.fs_rename(tmp, target))
-  then
-    os.remove(tmp)
+  local ok = not stat or uv.fs_fchmod(fd, stat.mode % 512)
+  local pos = 0
+  while ok and pos < #text do
+    local written = uv.fs_write(fd, text:sub(pos + 1), pos)
+    ok = type(written) == "number" and written > 0
+    pos = pos + (ok and written or 0)
   end
+  ok = uv.fs_close(fd) and ok
+  -- Another process can edit the target while the temp file is written, so check it again right before the rename.
+  if ok and read_file(path) == diff_data.file_at_accept and uv.fs_rename(tmp, target) then
+    return
+  end
+  uv.fs_unlink(tmp)
 end
 
 ---Close every diff the user accepted, once its file holds the accepted text. The text is written first when the
