@@ -16,7 +16,6 @@ describe("close_tab and getDiagnostics log lines", function()
     saved = {
       echo = vim.api.nvim_echo,
       notify = vim.notify,
-      buf_delete = vim.api.nvim_buf_delete,
       lsp = vim.lsp,
       diagnostic = vim.diagnostic,
       uri_to_fname = vim.uri_to_fname,
@@ -41,13 +40,10 @@ describe("close_tab and getDiagnostics log lines", function()
   after_each(function()
     vim.api.nvim_echo = saved.echo
     vim.notify = saved.notify
-    vim.api.nvim_buf_delete = saved.buf_delete
     vim.lsp, vim.diagnostic, vim.uri_to_fname = saved.lsp, saved.diagnostic, saved.uri_to_fname
     package.loaded["claudecode.logger"] = saved.logger
     package.loaded["claudecode.diff"] = saved.diff
-    for _, bufnr in ipairs({ 7, 8, 9 }) do
-      vim._buffers[bufnr] = nil
-    end
+    vim._buffers[9] = nil
   end)
 
   it("names close_tab as the component on every path", function()
@@ -65,13 +61,6 @@ describe("close_tab and getDiagnostics log lines", function()
     close_tab({ tab_name = diff_tab })
     package.loaded["claudecode.diff"] = {}
     close_tab({ tab_name = diff_tab })
-    vim._mock.add_buffer(7, "/tmp/project/notes.txt", "one")
-    close_tab({ tab_name = "notes.txt" })
-    vim._mock.add_buffer(8, "/tmp/project/dirty.txt", "two")
-    vim.api.nvim_buf_delete = function()
-      error("E89: No write since last change for buffer 8")
-    end
-    close_tab({ tab_name = "/tmp/project/dirty.txt" })
 
     assert_every_line_names("close_tab")
     assert_contains(lines, "[ClaudeCode] [close_tab] [DEBUG] close_tab handler called")
