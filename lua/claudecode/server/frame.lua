@@ -31,19 +31,22 @@ M.MAX_PAYLOAD_LENGTH = 100 * 1024 * 1024
 ---  * a fatal protocol violation returns `nil, 0, <close_code>` where the close
 ---    code is the RFC 6455 status to send in the Close frame (1002/1007/1009)
 ---@param data string The binary frame data
+---@param start integer|nil Byte of data where the frame starts (default 1), so a caller can parse many frames from one
+---  buffer without copying the rest of it after each one
 ---@return WebSocketFrame|nil frame The parsed frame, or nil if incomplete/invalid
 ---@return number bytes_consumed Number of bytes consumed from input
 ---@return number|nil close_code WebSocket close code for fatal protocol violations
-function M.parse_frame(data)
+function M.parse_frame(data, start)
   if type(data) ~= "string" then
     return nil, 0
   end
+  start = start or 1
 
-  if #data < 2 then
+  if #data < start + 1 then
     return nil, 0 -- Need at least 2 bytes for basic header
   end
 
-  local pos = 1
+  local pos = start
   local byte1 = data:byte(pos)
   local byte2 = data:byte(pos + 1)
 
@@ -168,7 +171,7 @@ function M.parse_frame(data)
     payload = payload,
   }
 
-  return frame, pos - 1
+  return frame, pos - start
 end
 
 ---Create a WebSocket frame
@@ -276,43 +279,6 @@ end
 ---@return boolean is_control True if it's a control frame
 function M.is_control_frame(opcode)
   return opcode >= 0x8
-end
-
----Validate a WebSocket frame
----@param frame WebSocketFrame The frame to validate
----@return boolean valid True if the frame is valid
----@return string|nil error Error message if invalid
-function M.validate_frame(frame)
-  -- Control frames must not be fragmented
-  if M.is_control_frame(frame.opcode) and not frame.fin then
-    return false, "Control frames must not be fragmented"
-  end
-
-  -- Control frames must have payload <= 125 bytes
-  if M.is_control_frame(frame.opcode) and frame.payload_length > 125 then
-    return false, "Control frame payload too large"
-  end
-
-  -- Check for valid opcodes
-  local valid_opcodes = {
-    [M.OPCODE.CONTINUATION] = true,
-    [M.OPCODE.TEXT] = true,
-    [M.OPCODE.BINARY] = true,
-    [M.OPCODE.CLOSE] = true,
-    [M.OPCODE.PING] = true,
-    [M.OPCODE.PONG] = true,
-  }
-
-  if not valid_opcodes[frame.opcode] then
-    return false, "Invalid opcode: " .. frame.opcode
-  end
-
-  -- Text frames must contain valid UTF-8
-  if frame.opcode == M.OPCODE.TEXT and not utils.is_valid_utf8(frame.payload) then
-    return false, "Text frame contains invalid UTF-8"
-  end
-
-  return true
 end
 
 return M
