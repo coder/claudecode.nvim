@@ -3,6 +3,13 @@ local client_manager = require("claudecode.server.client")
 
 local M = {}
 
+-- libuv error names that just mean the peer went away, as opposed to a real read
+-- failure. See _handle_new_connection.
+local PEER_DISCONNECT_ERRORS = {
+  ECONNRESET = true,
+  ECONNABORTED = true,
+}
+
 ---@class TCPServer
 ---@field server table The vim.loop TCP server handle
 ---@field port number The port the server is listening on
@@ -198,6 +205,19 @@ function M._handle_new_connection(server)
   -- Set up data handler
   client_tcp:read_start(function(err, data)
     if err then
+      -- A client that dies without sending a Close frame (killed CLI, closed
+      -- terminal, suspended machine) surfaces here as a read error. That is a normal
+      -- disconnect, so it must not go through on_error: the notify(ERROR) it raises
+      -- interrupts the user with a hit-enter prompt every time a broadcast probes the
+      -- dead socket (#316).
+      -- Stream callbacks hand us the bare error name, but luv also formats errors as
+      -- "NAME: message", so key off the leading name and keep the whole string as the
+      -- disconnect reason.
+      if PEER_DISCONNECT_ERRORS[err:match("^([^:]+)")] then
+        M._disconnect_client(server, client, 1006, err)
+        return
+      end
+
       local error_msg = "Client read error: " .. err
       server.on_error(error_msg)
       M._disconnect_client(server, client, 1006, error_msg)
