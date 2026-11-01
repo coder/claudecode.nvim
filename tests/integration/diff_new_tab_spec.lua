@@ -50,20 +50,27 @@ describe("openDiff in a new tab", function()
     _G.claude_deferred_responses = nil
   end)
 
-  it("opens the diff in a new tab that shows the terminal with its window options", function()
+  local client = { id = "new_tab_spec_client" }
+  local tab_name = "✻ [Claude Code] hello.txt ⧉"
+
+  local function open_diff()
     local path = dir .. "/hello.txt"
     vim.fn.writefile({ "alpha" }, path)
-    vim.wo.number = true
-
-    local call = tools.handle_invoke({ id = "new_tab_spec_client" }, {
+    return tools.handle_invoke(client, {
       name = "openDiff",
       arguments = {
         old_file_path = path,
         new_file_path = path,
         new_file_contents = "alpha accepted\n",
-        tab_name = "✻ [Claude Code] hello.txt ⧉",
+        tab_name = tab_name,
       },
     })
+  end
+
+  it("opens the diff in a new tab that shows the terminal with its window options", function()
+    vim.wo.number = true
+
+    local call = open_diff()
 
     assert.is_nil(call.error, vim.inspect(call.error))
     assert.is_true(call._deferred, "openDiff waits for the user")
@@ -77,5 +84,24 @@ describe("openDiff in a new tab", function()
     assert.is_not_nil(terminal_in_tab, "the new tab shows the Claude terminal")
     assert.is_false(vim.wo[terminal_in_tab].number)
     assert.equal("no", vim.wo[terminal_in_tab].signcolumn)
+  end)
+
+  it("answers the user's :w, then closes the new tab on Claude's close_tab", function()
+    local call = open_diff()
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    local answers = {}
+    _G.claude_deferred_responses[tostring(call.coroutine)] = function(response)
+      answers[#answers + 1] = response
+    end
+
+    vim.api.nvim_buf_call(diff._get_active_diffs()[tab_name].new_buffer, function()
+      vim.cmd("write")
+    end)
+    tools.handle_invoke(client, { name = "close_tab", arguments = { tab_name = tab_name } })
+
+    assert.equal("FILE_SAVED", answers[1].content[1].text)
+    assert.is_nil(diff._get_active_diffs()[tab_name])
+    assert.equal(1, vim.fn.tabpagenr("$"))
+    assert.is_true(vim.api.nvim_win_is_valid(terminal_win), "the user's terminal window stays")
   end)
 end)
