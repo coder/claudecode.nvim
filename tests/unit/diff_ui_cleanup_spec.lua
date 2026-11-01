@@ -15,6 +15,8 @@ describe("Diff UI cleanup behavior", function()
     -- Reset tabs mock
     vim._tabs = { [1] = true, [2] = true }
     vim._current_tabpage = 2 -- Simulate we're on the newly created tab during cleanup
+    -- The tabclose assertions read the last command, so drop the one the previous test ran
+    vim._last_command = nil
   end)
 
   after_each(function()
