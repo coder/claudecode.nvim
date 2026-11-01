@@ -1,4 +1,4 @@
-sync 7e40b89d6438919888dedd023e13e1a565dce7e3
+sync 512072b102d999776241bc0da8e509df3c43b00f
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -10,7 +10,7 @@ block close_saved        8b0e92edb12c8ad3
 block close_rejected     920733fc3e3d2561
 block file_holds         3cac24d43bd9c5e5
 block buffer_holds       367269eda82431d2
-block put_in_buffer      71bcbbc6152c7bdc
+block put_in_buffer      a31f95ec951fb3e5
 block held_for_other     3d1e2911d5310cc2
 block close_tab_tool     e9d6c3aae4615ac7
 block close_all_tool     8a83fdac94646751
@@ -36,14 +36,14 @@ block deny_current       94385d781b70d50c
 block user_close_all     10e024fd8ada1c16
 file lua/claudecode/config.lua dfb93bd69a6198ec
 file lua/claudecode/cwd.lua 55d26ea362173afa
-file lua/claudecode/diff.lua d691536057edc530
+file lua/claudecode/diff.lua 54e0d031b4c0c819
 file lua/claudecode/diff_inline.lua 2455b567689247e0
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 file lua/claudecode/init.lua d216e0f31e907072
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
 file lua/claudecode/logger.lua eacf2556921ab1b2
-file lua/claudecode/selection.lua f37829d12cb7e8b7
+file lua/claudecode/selection.lua f9cd61cbc71b82bb
 file lua/claudecode/server/client.lua d16ad16f5a17f662
 file lua/claudecode/server/frame.lua ab054d6538add76b
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
@@ -67,11 +67,11 @@ file lua/claudecode/tools/get_open_editors.lua 96392f05d7af7521
 file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 file lua/claudecode/tools/init.lua f33aada98120acbe
 file lua/claudecode/tools/open_diff.lua 1637b47e7a5d6c35
-file lua/claudecode/tools/open_file.lua 15f2a6f9d6cc9a7b
+file lua/claudecode/tools/open_file.lua 6effec1cf599649b
 file lua/claudecode/tools/save_document.lua 5fd303da9fac9d23
 file lua/claudecode/types.lua 08aa28a9c192d17a
 file lua/claudecode/utils.lua fec39728f0301703
-file lua/claudecode/visual_commands.lua 76bf4304c3dcf7f1
+file lua/claudecode/visual_commands.lua f396dd26cc0c1050
 file plugin/claudecode.lua 804894ad7b515ef8
 site lua/claudecode/diff.lua: M._cleanup_all_active_diffs("shutdown") @ vim.api.nvim_create_autocmd("VimLeavePre", {
 site lua/claudecode/diff.lua: M._cleanup_diff_state(tab_name, "diff rejected (keep_empty)") @ function M._resolve_diff_as_rejected(tab_name)
