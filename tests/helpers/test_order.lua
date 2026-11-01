@@ -2,6 +2,10 @@
 --- string hash in each process, so `pairs()` visits string keys in a different order in each run, and the seed that
 --- `mise run test` prints would not repeat the test order. Loop over an array with `ipairs` instead.
 
+-- This repository's tests dir, as busted names the chunks it loads from there: "@tests/" for the relative paths that
+-- `mise run test` passes. Only code there counts. Busted's own event loop iterates its channels with pairs().
+local tests_dir = assert(debug.getinfo(1, "S").source:match("^(@.*tests/)helpers/test_order%.lua$"))
+
 ---Finds a `pairs()` loop that is running in a test file further up the stack. A generic `for` keeps its iterator in
 ---the hidden local "(for generator)", and `pairs()` returns `next` as that iterator.
 ---@param level integer The stack level to start at
@@ -12,8 +16,7 @@ local function pairs_loop_above(level)
     if not info then
       return nil
     end
-    -- Only test code: busted's own event loop iterates its channels with pairs().
-    if info.source:match("^@.*tests/") then
+    if info.source:sub(1, #tests_dir) == tests_dir then
       local index = 1
       while true do
         local name, value = debug.getlocal(level + 1, index)
