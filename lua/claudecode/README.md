@@ -73,7 +73,7 @@ Module map (direct files):
 - `terminal.lua`: `setup`, `open`, `close`, `simple_toggle`, `focus_toggle`, `toggle`, `toggle_open_no_focus`, `ensure_visible`, `get_active_terminal_bufnr`, and `send_to_terminal(text, { submit = true, focus = false })` [terminal.lua:M.send_to_terminal]
 - `terminal.lua` test hook: `_get_managed_terminal_for_test()` returns the provider's `_get_terminal_for_test()` result, or nil [terminal.lua:M._get_managed_terminal_for_test]
 - `terminal.lua` defaults: `split_side = "right"`, `split_width_percentage = 0.30`, `provider = "auto"`, `auto_close = true`, `auto_insert = true`, `fix_streamed_paste = "auto"`, and `git_repo_cwd = false` [terminal.lua:M.defaults]
-- `diff.lua`: `setup`, `open_diff(old_file_path, new_file_path, new_file_contents, tab_name)` (wraps `_open_native_diff`), `open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)`, `close_diff_by_tab_name`, `close_all_diffs`, `close_pending_diffs`, `close_diffs_for_client`, `accept_current_diff`, `deny_current_diff`, and `reload_file_buffers_manual` [diff.lua:M.open_diff_blocking]
+- `diff.lua`: `setup`, `open_diff(old_file_path, new_file_path, new_file_contents, tab_name)` (wraps `_open_native_diff`), `open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)`, `close_diff_by_tab_name`, `close_all_diffs`, `close_pending_diffs`, `close_saved_diffs`, `close_diffs_for_client`, `accept_current_diff`, `deny_current_diff`, and `reload_file_buffers_manual` [diff.lua:M.open_diff_blocking]
 - `diff_inline.lua`: `setup_inline_diff`, `compute_inline_diff`, `extract_new_content`, `render_diff_buffer`, `resolve_inline_as_saved`, `resolve_inline_as_rejected`, and `cleanup_inline_diff` [diff_inline.lua:M.setup_inline_diff]
 - `selection.lua`: `enable(server, visual_demotion_delay_ms)`, `disable`, `get_latest_selection`, `send_current_selection`, `get_range_selection`, `send_at_mention_for_visual_selection`, and the autocmd handlers `on_cursor_moved`, `on_mode_changed`, and `on_text_changed` [selection.lua:M.enable]
 - `selection.lua` internals: `state`, `debounce_update`, `update_selection`, `handle_selection_demotion`, `get_visual_selection`, `get_visual_selection_from_marks`, `flush_visual_selection`, `get_cursor_position`, `has_selection_changed`, and `send_selection_update` [selection.lua:M.update_selection]
@@ -124,6 +124,7 @@ Module map (direct files):
 ### Diffs
 
 - `open_diff_blocking` must run inside a non-main coroutine. Otherwise it raises `-32000` [diff.lua:M.open_diff_blocking]
+- `open_diff_blocking` makes `old_file_path` absolute against the cwd at the call, so a later `:cd` does not change the file a diff points at [diff.lua:M.open_diff_blocking]
 - A diff opens in a new tab when `diff_opts.open_in_new_tab` is set or when the tab of the window it would use already has a diff window. Otherwise it starts from a window that shows the old file or from the main editor window, neither of which is a diff window or the preview window. When neither exists, it splits the current window [diff.lua:M._setup_blocking_diff] [diff.lua:find_main_editor_window]
 - A new diff with an existing tab name first rejects the old diff (if pending), then cleans it up [diff.lua:M.open_diff_blocking]
 - A diff that resolves before `open_diff_blocking` yields, for example from a `ClaudeCodeDiffOpened` handler that runs `:ClaudeCodeDiffDeny`, is returned at once as the openDiff reply instead of a deferred one [diff.lua:M.open_diff_blocking]
@@ -131,9 +132,11 @@ Module map (direct files):
 - A diff resolves only from status `pending`. Save returns `FILE_SAVED` and the content. Reject returns `DIFF_REJECTED` and the tab name [diff.lua:M._resolve_diff_as_saved]
 - Saving the proposed buffer (`BufWriteCmd`) never writes the file. It only resolves the diff. Windows stay open until `close_tab` [diff.lua:register_diff_autocmds]
 - `close_pending_diffs` and `close_diffs_for_client` close only `pending` diffs. `close_all_diffs` closes every diff [diff.lua:M.close_pending_diffs]
+- `close_saved_diffs`, which `:ClaudeCodeCloseAllDiffs` runs after `close_pending_diffs`, closes a `saved` diff only once its file or the file's buffer holds the accepted text. When the file does not hold it, and the file's buffer has no unsaved changes and an empty `'buftype'`, it first loads the file into its buffer and sets the accepted lines there, unsaved. It never writes the file. It also makes the buffer durable: a `'bufhidden'` of `wipe`, `delete`, or `unload` becomes `hide`. It returns the count, the paths whose buffer got the text, and the paths of the saved diffs it kept [diff.lua:M.close_saved_diffs]
 
 ## Side Effects
 
+- `:ClaudeCodeCloseAllDiffs` can load an accepted diff's file into a listed buffer and replace its lines with the accepted text, leaving the buffer modified [diff.lua:M.close_saved_diffs]
 - `start` binds a `127.0.0.1` TCP port and writes the lock file. It enables selection tracking only when `track_selection` is true. `stop` removes the lock file and stops the server [init.lua:M.start]
 - `lockfile.create` creates the lock directory with mode 0700. It then tries to chmod an existing directory to 0700 through `pcall` and ignores the result, so on platforms without `fs_chmod` the old mode stays. It writes a temp file opened `wx` with mode 0600, then renames it to `<port>.lock` [lockfile.lua:M.create]
 - The terminal env gets `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`, `CLAUDE_CODE_SSE_PORT=<port>` only while the server runs, the user `env` (merged last, so it can override these), and the merged `no_proxy`/`NO_PROXY` [terminal.lua:get_claude_command_and_env]

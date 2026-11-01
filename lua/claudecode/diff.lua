@@ -435,6 +435,18 @@ local function is_buffer_dirty(file_path)
   return is_dirty, nil
 end
 
+---@param path string
+---@return string|nil text The file's bytes, or nil when it cannot be read
+local function read_file(path)
+  local file = io.open(path, "rb")
+  if not file then
+    return nil
+  end
+  local text = file:read("*a")
+  file:close()
+  return text
+end
+
 ---Setup the diff module
 ---@param user_config ClaudeCodeConfig The configuration passed from init.lua
 function M.setup(user_config)
@@ -1572,6 +1584,8 @@ end
 ---@param client_id string|nil Id of the MCP client opening the diff (so it can be cleaned up if that client disconnects)
 ---@return table response MCP-compliant response with content array
 function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
+  -- Absolute from here on, so a later :cd cannot point this diff at another file.
+  old_file_path = vim.fn.fnamemodify(old_file_path, ":p")
   -- Check for existing diff with same tab_name
   if active_diffs[tab_name] then
     local existing_diff = active_diffs[tab_name]
@@ -1763,10 +1777,10 @@ end
 ---Closes diffs in ANY state (including saved), so its only caller is the
 ---closeAllDiffTabs tool, where Claude is the connected client and has written
 ---its accepted files. A saved diff that belongs to another client stays open:
----that client has not written it yet. Automatic cleanup and the
----:ClaudeCodeCloseAllDiffs command deliberately use close_pending_diffs /
----close_diffs_for_client instead, to leave already-saved diffs alone -- see
----close_pending_diffs for why.
+---that client has not written it yet. Automatic cleanup deliberately uses
+---close_pending_diffs / close_diffs_for_client instead, to leave already-saved
+---diffs alone -- see close_pending_diffs for why. :ClaudeCodeCloseAllDiffs
+---closes saved diffs only through close_saved_diffs.
 ---@param reason string Human-readable reason (for logging)
 ---@param client_id string|nil The Claude client that called closeAllDiffTabs
 ---@return number count Number of diffs closed
@@ -1804,6 +1818,109 @@ function M.close_diffs_for_client(client_id, reason)
   return close_active_diffs(function(diff_data)
     return diff_data.client_id == client_id and diff_data.status == "pending"
   end, reason or ("client " .. tostring(client_id)))
+end
+
+---@param diff_data table A saved active_diffs entry
+---@return string[] lines The accepted text as buffer lines
+---@return boolean eol True when the text ends with a line break
+local function accepted_lines(diff_data)
+  local text = diff_data.result_content.content[2].text
+  local lines = vim.split(text, "\n", { plain = true })
+  local eol = text:sub(-1) == "\n"
+  if eol then
+    table.remove(lines)
+  end
+  return lines, eol
+end
+
+---@param diff_data table A saved active_diffs entry
+---@return boolean
+local function file_holds_accepted_text(diff_data)
+  return read_file(diff_data.old_file_path) == diff_data.result_content.content[2].text
+end
+
+---@param diff_data table A saved active_diffs entry
+---@return boolean
+local function buffer_holds_accepted_text(diff_data)
+  local buf = diff_data.accepted_buffer
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  local lines, eol = accepted_lines(diff_data)
+  if vim.api.nvim_buf_get_option(buf, "eol") ~= eol then
+    return false
+  end
+  local buffer_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  if #buffer_lines ~= #lines then
+    return false
+  end
+  for i, line in ipairs(lines) do
+    if buffer_lines[i] ~= line then
+      return false
+    end
+  end
+  return true
+end
+
+---Load the file into its buffer and replace the lines with the accepted text, as unsaved changes. The user's :w
+---writes them through Neovim's own write (backups, permissions, symlinks, the "changed since reading" check), and
+---:e! drops them. Neovim refuses to quit while they are unsaved.
+---@param diff_data table A saved active_diffs entry
+local function put_accepted_text_in_buffer(diff_data)
+  local buf = vim.fn.bufadd(diff_data.old_file_path)
+  vim.fn.bufload(buf)
+  -- A BufRead autocmd can edit the buffer while it loads. Those edits are the user's to keep. A special buffer
+  -- (nofile, nowrite, acwrite, ...) cannot :w the text to this file, and Neovim can quit without asking about it.
+  if vim.api.nvim_buf_get_option(buf, "modified") or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
+    return
+  end
+  vim.api.nvim_buf_set_option(buf, "buflisted", true)
+  -- The diff's cleanup can close this buffer's last window, and these values would drop the unsaved text with it.
+  local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
+  if bufhidden == "wipe" or bufhidden == "delete" or bufhidden == "unload" then
+    vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
+  end
+  local lines, eol = accepted_lines(diff_data)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(buf, "eol", eol)
+  if not eol then
+    vim.api.nvim_buf_set_option(buf, "fixeol", false)
+  end
+  diff_data.accepted_buffer = buf
+end
+
+---Close every diff the user accepted, once its accepted text is on disk or in the file's buffer. The plugin never
+---writes the file: when the file does not hold the text yet (its Claude client exited, or dropped the answer, before
+---it wrote the file), the text goes into the file's buffer as unsaved changes. A diff whose file buffer already has
+---unsaved changes stays open, so neither those changes nor the accepted text are lost.
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+---@return string[] unsaved Paths whose buffer now holds the accepted text as unsaved changes
+---@return string[] kept Paths of the saved diffs that stay open
+function M.close_saved_diffs(reason)
+  local unsaved = {}
+  for _, diff_data in pairs(active_diffs) do
+    if
+      diff_data.status == "saved"
+      and not file_holds_accepted_text(diff_data)
+      and not is_buffer_dirty(diff_data.old_file_path)
+      and pcall(put_accepted_text_in_buffer, diff_data)
+      and diff_data.accepted_buffer
+    then
+      unsaved[#unsaved + 1] = diff_data.old_file_path
+    end
+  end
+  local count = close_active_diffs(function(diff_data)
+    return diff_data.status == "saved"
+      and (file_holds_accepted_text(diff_data) or buffer_holds_accepted_text(diff_data))
+  end, reason or "close saved diffs")
+  local kept = {}
+  for _, diff_data in pairs(active_diffs) do
+    if diff_data.status == "saved" then
+      kept[#kept + 1] = diff_data.old_file_path
+    end
+  end
+  return count, unsaved, kept
 end
 
 ---Test helper function (only for testing)

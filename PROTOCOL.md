@@ -241,7 +241,7 @@ When `makeFrontmost=false`, returns detailed JSON:
 - `new_file_contents` (string): Contents of the new file
 - `tab_name` (string): Tab name for the diff view
 
-A new call with the `tab_name` of an open diff replaces that diff. One exception: if the user already accepted that diff for another client, the call fails at once with error `-32000`, and the accepted diff stays open.
+A new call with the `tab_name` of an open diff replaces that diff. One exception: if the user already accepted that diff for another client, the call fails at once with error `-32000`, and the accepted diff stays open until that client closes it or the user runs `:ClaudeCodeCloseAllDiffs`. That command closes it once the file holds the accepted text, or after it puts the text into the file's buffer as unsaved changes.
 
 **Output**: Returns MCP-formatted response:
 
@@ -474,7 +474,7 @@ Or when document not open:
 
 The plugin closes only the diff that `openDiff` opened with this exact `tab_name`. A name that matches no diff closes nothing, and no name closes or deletes another buffer.
 
-A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file.
+A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file, or until the user runs `:ClaudeCodeCloseAllDiffs`.
 
 The answer is `TAB_CLOSED` in all three cases: the diff closed, the diff stays for another client, or no diff has that name. VS Code also answers `TAB_CLOSED` when no tab has that label. Claude Code 2.1.312 does not read the answer text. It logs only a call that fails.
 
