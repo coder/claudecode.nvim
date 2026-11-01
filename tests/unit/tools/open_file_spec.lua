@@ -618,7 +618,9 @@ describe("Tool: open_file", function()
     -- BufEnter autocommands (`events`), in the window that enters it, or for bufload() in a hidden autocommand window.
     -- A failing BufReadPost autocommand (`read_error`) stops a read halfway under a command from Lua, and under
     -- :silent! the read ends and v:errmsg keeps the error. An autocommand can also set v:errmsg for an error it hides
-    -- itself (`handled_error`). The file on disk stays readable after a read (`on_disk`).
+    -- itself (`handled_error`). The file on disk stays readable after a read (`on_disk`). A window that enters a buffer
+    -- runs its BufEnter autocommands. 'modified' reads false while 'buftype' is nofile, nowrite, terminal or prompt
+    -- (bt_dontwrite() in Neovim), and then :edit re-reads the buffer without E37.
     local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked, events, autocmds
     local ignore_win, silenced, call_buf
     local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
@@ -647,6 +649,20 @@ describe("Tool: open_file", function()
         picked[#picked + 1] = lines[row]:sub(first, last)
       end
       return table.concat(picked, "\n")
+    end
+
+    -- autocmd BufEnter test.txt if !&modified | edit | endif
+    local function reload_on_enter_without_unsaved_changes()
+      _G.vim.api.nvim_create_autocmd("BufEnter", {
+        buffer = 30,
+        callback = function()
+          if not _G.vim.api.nvim_buf_get_option(30, "modified") then
+            _G.vim.api.nvim_buf_call(30, function()
+              _G.vim.cmd("edit")
+            end)
+          end
+        end,
+      })
     end
 
     local function open(params)
@@ -758,6 +774,7 @@ describe("Tool: open_file", function()
         end
         win_buf[win] = buf
         events[#events + 1] = "enter@" .. where
+        fire("BufEnter", buf)
       end
       local function edit_file_in(win)
         if win_buf[win] == 30 and buffers[30].modified then
@@ -917,7 +934,8 @@ describe("Tool: open_file", function()
       end)
       _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
         if option == "modified" then
-          return buffers[buf].modified == true
+          local dontwrite = { nofile = true, nowrite = true, terminal = true, prompt = true }
+          return buffers[buf].modified == true and not dontwrite[buffers[buf].buftype]
         elseif option == "buftype" then
           return buffers[buf].buftype or ""
         end
@@ -1089,6 +1107,21 @@ describe("Tool: open_file", function()
         end
       end
 
+      for _, preview in ipairs({ false, true }) do
+        it(
+          "keeps unsaved changes from a BufEnter autocommand that loads an unmodified buffer again, when 'eventignore' "
+            .. "ignores FileChangedShell"
+            .. (preview and ", with preview = true" or ""),
+          function()
+            _G.vim.o.autoread, _G.vim.o.eventignore, buffers[30].modified = false, "FileChangedShell", true
+            reload_on_enter_without_unsaved_changes()
+            local success = pcall(open_file_handler, { filePath = "test.txt", preview = preview, startLine = 2 })
+            expect(success).to_be_true()
+            assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
+          end
+        )
+      end
+
       it("does not check the file when 'eventignore' ignores FileChangedShell, so Neovim does not ask", function()
         _G.vim.o.autoread, _G.vim.o.eventignore, win_buf[1000] = false, "all", 30
         local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
@@ -1226,6 +1259,20 @@ describe("Tool: open_file", function()
           pcall(open_file_handler, { filePath = "test.txt", preview = case.preview, startLine = 1 })
           assert.are.same({ { "plugin text" }, { "" } }, { buffers[40].lines, buffers[30].lines })
         end)
+      end
+
+      for _, preview in ipairs({ false, true }) do
+        it(
+          "keeps the unsaved text from a BufEnter autocommand that loads an unmodified buffer again"
+            .. (preview and ", with preview = true" or ""),
+          function()
+            buffers[30].lines, buffers[30].modified = { "MY NOTES" }, true
+            reload_on_enter_without_unsaved_changes()
+            local success = pcall(open_file_handler, { filePath = "test.txt", preview = preview, startLine = 1 })
+            expect(success).to_be_true()
+            assert.are.same({ { "MY NOTES" }, false }, { buffers[30].lines, asked })
+          end
+        )
       end
 
       it("does not fail a write when an earlier BufWritePost autocommand wipes the buffer", function()
