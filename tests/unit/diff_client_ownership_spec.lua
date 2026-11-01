@@ -139,14 +139,22 @@ describe("a diff the user accepted for one Claude client", function()
       f:close()
     end
 
-    it("is written and closed by :ClaudeCodeCloseAllDiffs, freeing its tab_name", function()
-      local accepted = open_and_accept()
+    local function file_buffer_lines()
+      local buf = vim.fn.bufnr(file)
+      assert.are_not.equal(-1, buf, "the file must have a buffer")
+      return vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    end
+
+    it("is closed by :ClaudeCodeCloseAllDiffs, which puts the accepted text in the file's buffer", function()
+      open_and_accept()
       owner_exits()
 
       user_closes_all_diffs()
 
-      assert.equal(accepted, read_file())
+      assert.are.same({ "line 1", "line 2", "accepted line" }, file_buffer_lines())
+      assert.equal("line 1\nline 2\n", read_file(), "the plugin must never write the file")
       assert.is_nil(diff._get_active_diffs()[tab])
+      assert.is_truthy(notes[#notes].msg:find(file, 1, true), "the message must name the file")
       local response = call_tool(other, "openDiff", open_diff_args("line 1\nfrom another session\n"))
       assert.is_true(response._deferred, "the tab_name must be free for a new diff")
     end)
@@ -162,118 +170,22 @@ describe("a diff the user accepted for one Claude client", function()
       assert.is_nil(diff._get_active_diffs()[tab])
     end)
 
-    it("stays open, and the file keeps its later edit, when the file changed after the accept", function()
-      open_and_accept()
-      write_file("line 1\nedited after the accept\n")
-      owner_exits()
+    it(
+      "puts the accepted text in the buffer, and leaves a later edit on disk, when the file changed after the accept",
+      function()
+        open_and_accept()
+        write_file("line 1\nedited after the accept\n")
+        owner_exits()
 
-      user_closes_all_diffs()
+        user_closes_all_diffs()
 
-      assert.equal("line 1\nedited after the accept\n", read_file())
-      assert_kept()
-      assert.is_truthy(notes[#notes].msg:find(file, 1, true), "the warning must name the file")
-      assert.equal(vim.log.levels.WARN, notes[#notes].level)
-    end)
-
-    it("leaves the file as it was when the write fails partway", function()
-      open_and_accept()
-      owner_exits()
-      local real_open = io.open
-      finally(function()
-        rawset(io, "open", real_open)
-      end)
-      -- A full disk: opening for writing truncates, and the write itself fails.
-      rawset(io, "open", function(path, mode)
-        if mode == "wb" then
-          local f = assert(real_open(path, mode))
-          return {
-            write = function()
-              return nil, "No space left on device"
-            end,
-            close = function()
-              return f:close()
-            end,
-          }
-        end
-        return real_open(path, mode)
-      end)
-
-      user_closes_all_diffs()
-      rawset(io, "open", real_open)
-
-      assert.equal("line 1\nline 2\n", read_file())
-      assert_kept()
-    end)
-
-    it("is not written while the file cannot be read", function()
-      local real_open = io.open
-      finally(function()
-        rawset(io, "open", real_open)
-      end)
-
-      open_and_accept(function()
-        rawset(io, "open", function(path, mode)
-          if path == file and mode == "rb" then
-            return nil, path .. ": Permission denied", 13
-          end
-          return real_open(path, mode)
-        end)
-      end)
-      owner_exits()
-      user_closes_all_diffs()
-      rawset(io, "open", real_open)
-
-      assert.equal("line 1\nline 2\n", read_file())
-      assert_kept()
-    end)
-
-    it("keeps an edit that lands while the accepted text is being written", function()
-      open_and_accept()
-      owner_exits()
-      local real_open = io.open
-      finally(function()
-        rawset(io, "open", real_open)
-      end)
-      rawset(io, "open", function(path, mode)
-        if mode == "wb" and path ~= file then
-          local f = assert(real_open(file, "wb"))
-          f:write("edited meanwhile\n")
-          f:close()
-        end
-        return real_open(path, mode)
-      end)
-
-      user_closes_all_diffs()
-      rawset(io, "open", real_open)
-
-      assert.equal("edited meanwhile\n", read_file())
-      assert_kept()
-    end)
-
-    it("creates its temp file exclusively, readable only by the user", function()
-      open_and_accept()
-      owner_exits()
-      local opened = {}
-      local real_fs_open = vim.loop.fs_open
-      finally(function()
-        vim.loop.fs_open = real_fs_open
-      end)
-      vim.loop.fs_open = function(path, flags, mode)
-        opened[#opened + 1] = { path = path, flags = flags, mode = mode }
-        return real_fs_open(path, flags, mode)
+        assert.equal("line 1\nedited after the accept\n", read_file())
+        assert.are.same({ "line 1", "line 2", "accepted line" }, file_buffer_lines())
+        assert.is_nil(diff._get_active_diffs()[tab])
       end
+    )
 
-      user_closes_all_diffs()
-
-      assert.equal(1, #opened, "the accepted text must go through one new temp file")
-      assert.are_not.equal(file, opened[1].path)
-      assert.equal("wx", opened[1].flags)
-      assert.equal(tonumber("600", 8), opened[1].mode)
-      assert.is_nil(io.open(opened[1].path, "rb"), "the temp file must be gone")
-      assert.is_nil(diff._get_active_diffs()[tab])
-    end)
-
-    it("stays open, and the file is not written, while the file's buffer has unsaved changes", function()
+    it("stays open, and the buffer keeps its edits, while the file's buffer has unsaved changes", function()
       open_and_accept()
       owner_exits()
       local buf = vim.fn.bufnr(file)
@@ -281,12 +193,15 @@ describe("a diff the user accepted for one Claude client", function()
         buf = vim.api.nvim_create_buf(true, false)
         vim.api.nvim_buf_set_name(buf, file)
       end
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "line 1", "unsaved user edit" })
       vim.api.nvim_set_option_value("modified", true, { buf = buf })
 
       user_closes_all_diffs()
 
+      assert.are.same({ "line 1", "unsaved user edit" }, file_buffer_lines())
       assert.equal("line 1\nline 2\n", read_file())
       assert_kept()
+      assert.is_truthy(notes[#notes].msg:find(file, 1, true), "the warning must name the file")
       assert.equal(vim.log.levels.WARN, notes[#notes].level)
     end)
   end)
