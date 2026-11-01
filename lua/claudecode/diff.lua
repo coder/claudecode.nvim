@@ -109,6 +109,54 @@ end
 -- Exposed for testing the gate + floating-skip + resize behavior.
 M._resize_terminal_for_diff = resize_terminal_for_diff
 
+---@class DiffWindowSizes The sizes of a tab's tiled windows, in Neovim's window order, before a diff split that tab.
+---@field tab integer tabpage handle
+---@field windows { win: NvimWin, width: integer, height: integer }[]
+
+---@param tab integer tabpage handle
+---@return DiffWindowSizes
+local function save_window_sizes(tab)
+  assert(vim.api.nvim_tabpage_is_valid(tab), "save_window_sizes needs a valid tab")
+  local windows = {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if (vim.api.nvim_win_get_config(win).relative or "") == "" then
+      windows[#windows + 1] =
+        { win = win, width = vim.api.nvim_win_get_width(win), height = vim.api.nvim_win_get_height(win) }
+    end
+  end
+  return { tab = tab, windows = windows }
+end
+
+---Give a tab's windows back the sizes save_window_sizes took. The diff's `wincmd =` resizes every window in the tab,
+---and closing the diff's windows shares their space out by 'equalalways' rules, so without this the user's windows
+---end at other sizes. Does nothing when the tab no longer has exactly the saved windows: the user changed the layout,
+---and the old sizes do not fit the new one.
+---@param saved DiffWindowSizes|nil
+local function restore_window_sizes(saved)
+  if not saved or not vim.api.nvim_tabpage_is_valid(saved.tab) then
+    return
+  end
+  local now = save_window_sizes(saved.tab).windows
+  if #now ~= #saved.windows then
+    return
+  end
+  for i, entry in ipairs(now) do
+    if entry.win ~= saved.windows[i].win then
+      return
+    end
+  end
+  -- Twice, as winrestcmd() does: a resize can move a window that an earlier one already set.
+  for _ = 1, 2 do
+    for _, entry in ipairs(saved.windows) do
+      pcall(vim.api.nvim_win_set_width, entry.win, entry.width)
+      pcall(vim.api.nvim_win_set_height, entry.win, entry.height)
+    end
+  end
+end
+
+M._save_window_sizes = save_window_sizes
+M._restore_window_sizes = restore_window_sizes
+
 ---Fire a plugin User autocmd for the diff lifecycle. Always emitted, regardless
 ---of `auto_resize_terminal`, so users can react to diffs opening/closing. Wrapped
 ---in pcall so a faulty user handler can never break diff setup or teardown.
@@ -1266,6 +1314,8 @@ function M._cleanup_diff_state(tab_name, reason)
       end
     end
 
+    restore_window_sizes(diff_data.window_sizes)
+
     -- After closing the diff in the same tab, restore the idle terminal width
     -- (unless the user opted out via auto_resize_terminal). Floating terminals are skipped.
     resize_terminal_for_diff(find_claudecode_terminal_window(), "idle")
@@ -1372,6 +1422,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     -- new_tab_handle is hoisted above the pcall (issue #262) so the error handler can reach it;
     -- only the original-terminal visibility flag is local here.
     local had_terminal_in_original = false
+    local window_sizes = nil
 
     if config and config.diff_opts and config.diff_opts.open_in_new_tab then
       -- Capture the tab we're leaving BEFORE display_terminal_in_new_tab() runs `:tabnew`, so the
@@ -1454,6 +1505,8 @@ function M._setup_blocking_diff(params, resolution_callback)
           display_terminal_in_new_tab()
         created_new_tab = true
         target_window = nil
+      else
+        window_sizes = save_window_sizes(dest_tab)
       end
     end
     -- If created_new_tab is true, target_window stays nil and will be created in the new tab.
@@ -1522,6 +1575,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       target_window = diff_info.target_window,
       target_window_created_by_plugin = diff_info.target_window_created_by_plugin,
       fallback_window = fallback_window,
+      window_sizes = window_sizes,
       original_buffer = diff_info.original_buffer,
       original_buffer_created_by_plugin = diff_info.original_buffer_created_by_plugin,
       original_cursor_pos = original_cursor_pos,
