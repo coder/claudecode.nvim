@@ -244,17 +244,21 @@ describe("the test order helper", function()
     assert_contains(output, "Expected objects to be equal.")
   end)
 
-  it("counts a flagged test that passes as a failure, not an error, in the default output", function()
-    local spec = write_spec("count_spec.lua", {
-      'describe("block", function()',
-      "  for name in pairs({ a = 1 }) do",
-      '    it("passes " .. name, function() end)',
-      "  end",
-      "end)",
-    })
+  -- A flagged test that calls pending() must fail too: a pending test does not fail the run.
+  for _, case in ipairs({ { "passes", "" }, { "calls pending()", 'pending("later")' } }) do
+    it("counts a flagged test that " .. case[1] .. " as a failure, not an error, in the default output", function()
+      local spec = write_spec("count_spec.lua", {
+        'describe("block", function()',
+        "  for name in pairs({ a = 1 }) do",
+        '    it("test " .. name, function() ' .. case[2] .. " end)",
+        "  end",
+        "end)",
+      })
 
-    local _, _, _, _, output = run(busted .. " " .. quote(spec))
+      local _, _, _, status, output = run(busted .. " " .. quote(spec))
 
-    assert_contains(output, "0 successes / 1 failure / 0 errors / 0 pending")
-  end)
+      assert_contains(output, "0 successes / 1 failure / 0 errors / 0 pending")
+      assert.are_not.equal("0", status)
+    end)
+  end
 end)

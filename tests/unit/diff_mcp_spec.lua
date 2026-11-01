@@ -1,10 +1,18 @@
 --- Tests for MCP-compliant openDiff blocking behavior
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("MCP-compliant diff operations", function()
-  local test_old_file = "/tmp/test_old_file.txt"
-  local test_new_file = "/tmp/test_new_file.txt"
+  local dir, test_old_file, test_new_file
+  setup(function()
+    dir = temp_dir.new()
+    test_old_file = dir .. "/test_old_file.txt"
+    test_new_file = dir .. "/test_new_file.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local test_content_old = "line 1\nline 2\noriginal content"
   local test_content_new = "line 1\nline 2\nnew content\nextra line"
   local test_tab_name = "test_diff_tab"
@@ -91,7 +99,7 @@ describe("MCP-compliant diff operations", function()
     end)
 
     it("should handle non-existent old file as new file", function()
-      local non_existent_file = "/tmp/non_existent_file.txt"
+      local non_existent_file = dir .. "/non_existent_file.txt"
 
       -- Set up mock resolution
       _G.claude_deferred_responses = {

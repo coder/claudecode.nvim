@@ -1,4 +1,5 @@
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 local function reset_vim_state_for_splits()
   assert(vim and vim._mock and vim._mock.reset, "Expected vim mock with _mock.reset()")
@@ -19,7 +20,14 @@ end
 
 describe("Diff split window cleanup", function()
   local diff
-  local test_old_file = "/tmp/test_split_window_cleanup_old.txt"
+  local dir, test_old_file
+  setup(function()
+    dir = temp_dir.new()
+    test_old_file = dir .. "/test_split_window_cleanup_old.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local tab_name = "test_split_window_cleanup_tab"
 
   before_each(function()

@@ -2,13 +2,21 @@
 -- preview window, a side-by-side diff must not go into the preview window or into a split of it. The
 -- preview window has 'winfixheight' and 'previewheight' lines, so a vertical split of it is that short too.
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("Diff with the preview window as the only editor window (issue #385)", function()
   local diff
   local preview_win, terminal_win = 1000, 1001
   local preview_height, terminal_height = 12, 25
   local preview_buf, terminal_buf
-  local old_file = "/tmp/claudecode_preview_window_old.txt"
+  local dir, old_file
+  setup(function()
+    dir = temp_dir.new()
+    old_file = dir .. "/claudecode_preview_window_old.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
 
   local function setup_diff()
     package.loaded["claudecode.diff"] = nil
