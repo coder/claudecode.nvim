@@ -1,3 +1,34 @@
+local function mock_code_point(line, i)
+  local b = line:byte(i)
+  if not b then
+    return nil, 0
+  end
+  if b < 0x80 then
+    return b, 1
+  end
+  local len = b < 0xE0 and 2 or b < 0xF0 and 3 or 4
+  local cp = b - (len == 2 and 0xC0 or len == 3 and 0xE0 or 0xF0)
+  for j = i + 1, i + len - 1 do
+    cp = cp * 64 + (line:byte(j) - 0x80)
+  end
+  return cp, len
+end
+
+-- Last byte of the character that starts at byte i, in the model the matchstr and matchend mocks describe.
+local function mock_char_last_byte(line, i)
+  local last_cp, len = mock_code_point(line, i)
+  local stop = i + len
+  while true do
+    local cp, next_len = mock_code_point(line, stop)
+    local composing = cp and ((cp >= 0x300 and cp <= 0x36F) or (cp >= 0x93A and cp <= 0x94F))
+    local conjunct = cp and last_cp == 0x94D and cp >= 0x915 and cp <= 0x939
+    if not (composing or conjunct) then
+      return stop - 1
+    end
+    last_cp, stop = cp, stop + next_len
+  end
+end
+
 if not _G.vim then
   local next_timer_id = 0
 
@@ -131,20 +162,22 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
-      -- Mirrors Neovim for the one pattern selection.lua passes: `\%<col>c.` matches the character that
-      -- starts at byte <col> with its composing characters (here U+0300 to U+036F, bytes CC 80 to CD AF).
+      -- Model Neovim's regex characters for the calls selection.lua makes. A character is a code point and its
+      -- composing characters (here U+0300 to U+036F and the Devanagari signs U+093A to U+094F). As on Neovim 0.11
+      -- and later, a virama also joins the next consonant into the cluster, so a scan from the line start never
+      -- begins a character at that consonant, while the cursor can stand on it.
       matchstr = function(line, pattern)
         local col = tonumber(pattern:match("^\\%%(%d+)c%.$"))
         assert(col, "unexpected matchstr pattern " .. pattern)
-        local lead = line:byte(col)
-        if not lead or (lead >= 0x80 and lead < 0xC0) then
-          return ""
+        local i = 1
+        while i <= #line and i < col do
+          i = mock_char_last_byte(line, i) + 1
         end
-        local stop = col + (lead < 0x80 and 1 or lead < 0xE0 and 2 or lead < 0xF0 and 3 or 4)
-        while line:byte(stop) == 0xCC or (line:byte(stop) == 0xCD and line:byte(stop + 1) < 0xB0) do
-          stop = stop + 2
-        end
-        return line:sub(col, stop - 1)
+        return i == col and line:sub(col, mock_char_last_byte(line, col)) or ""
+      end,
+      matchend = function(line, pattern, start)
+        assert(pattern == "\\_." and start, "unexpected matchend call " .. pattern)
+        return start < #line and mock_char_last_byte(line, start + 1) or -1
       end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
@@ -1094,6 +1127,30 @@ describe("Range Selection Tests", function()
         local sel = from_marks({ "cafe\204\129 x" }, "v", 1, 1, 1, 4)
         assert.are.equal("cafe\204\129", sel.text)
         assert.are.equal(6, sel.selection["end"].character)
+      end)
+
+      it("keeps a selection whole when it ends inside a cluster, on a conjunct's inner consonant", function()
+        -- `0ve` on `नमस्ते` ends on त (bytes 13-15). From the line start, स्ते (bytes 7-18) is one cluster.
+        local sel = from_marks({ "नमस्ते" }, "v", 1, 1, 1, 13)
+        assert.are.equal("नमस्ते", sel.text)
+        assert.are.equal(#"नमस्ते", sel.selection["end"].character)
+      end)
+
+      it("sends the rest of the cluster for a live one-position selection on a conjunct's inner consonant", function()
+        -- `$v` on `नमस्ते` puts the anchor and the cursor on त. Neovim then selects and yanks ते.
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "नमस्ते" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("v")
+        _G.vim._marks = { v = { 0, 1, 13, 0 } }
+        _G.vim.test.set_cursor(0, 1, 12)
+
+        selection.update_selection()
+
+        local sent = mock_server.last_broadcast.data
+        assert.is_true(is_valid_utf8(sent.text))
+        assert.are.equal("ते", sent.text)
+        assert.are.same({ line = 0, character = 12 }, sent.selection.start)
+        assert.are.same({ line = 0, character = #"नमस्ते" }, sent.selection["end"])
       end)
 
       it("ends a selection on a 4-byte emoji after the emoji", function()
