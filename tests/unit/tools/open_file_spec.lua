@@ -64,7 +64,7 @@ describe("Tool: open_file", function()
         editor_mode = "n"
       elseif keys == "gv" then
         editor_mode = gv_mode == "s" and select_of[last_visual] or last_visual
-      elseif keys == "v\27" and editor_mode == "n" then
+      elseif command == "noautocmd normal! v\27" and editor_mode == "n" then
         last_visual = "v"
       elseif in_visual and (keys == "\27" or (command:match("^p?edit ") and (call_win == nil or call_win == 1000))) then
         last_visual = kind_of[editor_mode]

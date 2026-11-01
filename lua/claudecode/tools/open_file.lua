@@ -120,6 +120,7 @@ end
 ---`last_col`. The marks use setpos() because nvim_buf_set_mark on Neovim 0.8 also sets the mark's coladd,
 ---and gv then selects one more character. gv reselects in the buffer's last Visual mode, so a charwise Visual
 ---pass (v<Esc>) comes first, or a buffer last selected with V or CTRL-V gets a linewise or blockwise selection.
+---It runs under :noautocmd, so its own ModeChanged pair does not reach user handlers or the selection tracker.
 ---gv must be the last key openFile sends: with 'selectmode' set to "cmd" it starts Select mode, where any later
 ---key would replace the selection.
 ---@param start_row integer 1-based row of the first character
@@ -132,7 +133,7 @@ local function select_range(start_row, start_col, end_row, last_col)
     end_col = last_col + 1
   end
   leave_visual_or_select_mode()
-  vim.cmd("normal! v\27")
+  vim.cmd("noautocmd normal! v\27")
   vim.fn.setpos("'<", { 0, start_row, start_col + 1, 0 })
   vim.fn.setpos("'>", { 0, end_row, end_col + 1, 0 })
   vim.cmd("normal! gv")
