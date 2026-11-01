@@ -76,13 +76,13 @@ A changed file with no changed block or call site still needs a look. A wrapper 
 
 The bulk closes, the Claude close tools, and client ids add five facts:
 
-| Fact                      | Code it reads                                                                                                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CloseRechecksFilter`     | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                      |
-| `CloseTakesRejected`      | in that recheck, `close_active_diffs` also closes an entry whose `status` is `"rejected"`, which a `ClaudeCodeDiffClosed` handler can cause after the snapshot            |
-| `CloseKeepsOthersSaved`   | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on |
-| `ReplaceKeepsOthersSaved` | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                     |
-| `ClientIdsUnique`         | `create_client` in `server/client.lua` builds each id from the counter `_G.claudecode_clients_created`, which survives a module reload, not from the handle address       |
+| Fact                      | Code it reads                                                                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CloseRechecksFilter`     | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                                                  |
+| `CloseTakesRejected`      | in that recheck, `close_active_diffs` also closes an entry whose `status` is `"rejected"` when it is the entry the snapshot listed. A `ClaudeCodeDiffClosed` handler can reject it after the snapshot |
+| `CloseKeepsOthersSaved`   | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on                             |
+| `ReplaceKeepsOthersSaved` | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                                                 |
+| `ClientIdsUnique`         | `create_client` in `server/client.lua` builds each id from the counter `_G.claudecode_clients_created`, which survives a module reload, not from the handle address                                   |
 
 On `BROKEN`, the script prints the TLC trace as action names. Read it with the pstack `/statechart` skill:
 
@@ -116,6 +116,7 @@ Then decide which kind of failure it is:
 - Every run assumes that the user has a `ClaudeCodeDiffClosed` handler (`ClosedHandlerResolvesOther`). Each time a bulk close closes a diff, the handler can accept or deny one other open diff, in any order of the snapshot. After a single close (`close_tab`, a replacing openDiff) the handler can touch only other diffs, the same as a later user action, so only the bulk-close loop models it. `SavedDiffKept` checks that the loop keeps a diff the handler accepted, and `NoRejectedLeftover` checks that it closes one the handler denied.
 - These are not modeled:
   - a `ClaudeCodeDiffClosed` handler that starts another bulk close
+  - a `ClaudeCodeDiffClosed` handler that opens a diff under a listed `tab_name` (the code closes a rejected entry only when it is the listed one, which the unit tests check)
   - window and tab layout
   - the `keep_empty` new-file cleanup inside `_resolve_diff_as_rejected` (it runs after the answer)
   - setup errors, which answer at once

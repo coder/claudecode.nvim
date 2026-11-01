@@ -185,9 +185,9 @@ close_rechecks_filter() {
 fact[CloseRechecksFilter]=$(as_bool close_rechecks_filter)
 # An entry that a handler rejected since the snapshot holds no edits and has its answer, so the loop closes it too.
 FACTS+=(CloseTakesRejected)
-fact[CloseTakesRejected]=$(as_bool in_order 'for _, tab_name in ipairs\(tab_names\) do' \
-  '^    local diff_data = active_diffs\[tab_name\]$' \
-  '^    local rejected = diff_data ~= nil and diff_data\.status == "rejected"$' \
+fact[CloseTakesRejected]=$(as_bool in_order '^      listed\[tab_name\] = diff_data$' \
+  'for _, tab_name in ipairs\(tab_names\) do' '^    local diff_data = active_diffs\[tab_name\]$' \
+  '^    local rejected = diff_data == listed\[tab_name\] and diff_data\.status == "rejected"$' \
   'if \(matches\(diff_data\) or rejected\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
 # A saved diff outlives its client's connection, so a later connection must never get that client's id.
 # The counter is a global so a reload of server/client.lua keeps it, and only create_client may set it.
