@@ -621,8 +621,9 @@ end
 
 ---Handles an end past the last character of its line, which `v$` and `l` past the last character make. A charwise
 ---selection then includes the line break and ends at the start of the next line: Neovim yanks that line break, and
----VS Code ends such a selection there. Neovim yanks no line break after the buffer's last line, and a blockwise
----selection never includes one, so those end at the end of the line.
+---VS Code ends such a selection there. Neovim yanks no line break after the buffer's last line, a blockwise
+---selection never includes one, and with 'virtualedit' containing `all` the end is a virtual space instead, so
+---those end at the end of the line.
 ---@param bufnr integer
 ---@param visual_mode string
 ---@param lines_content string[] the selection's lines. The next line is appended when the end moves there.
@@ -632,7 +633,8 @@ local function end_past_line(bufnr, visual_mode, lines_content, end_coords)
   if end_coords.col <= #last_line then
     return
   end
-  if visual_mode == "v" and end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
+  local line_break = visual_mode == "v" and not vim.o.virtualedit:find("all", 1, true)
+  if line_break and end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
     end_coords.lnum = end_coords.lnum + 1
     end_coords.col = 0
     table.insert(lines_content, vim.api.nvim_buf_get_lines(bufnr, end_coords.lnum - 1, end_coords.lnum, false)[1])
@@ -1113,8 +1115,9 @@ function M.send_at_mention_for_visual_selection(line1, line2)
   local file_path = sel_to_send.filePath
   local start_line = sel_to_send.selection.start.line -- Already 0-indexed from selection module
   local end_line = sel_to_send.selection["end"].line -- Already 0-indexed
-  -- A selection that ends at character 0 of a line, such as `v$`, ends after the line break of the line before.
-  if sel_to_send.selection["end"].character == 0 and end_line > start_line then
+  -- A tracked selection that ends at character 0 of a line, such as `v$`, ends after the line break of the line
+  -- before. A range ends on its last line, which can be empty.
+  if not (line1 and line2) and sel_to_send.selection["end"].character == 0 and end_line > start_line then
     end_line = end_line - 1
   end
 
