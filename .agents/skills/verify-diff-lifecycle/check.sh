@@ -99,6 +99,7 @@ close_pending=$(block "$DIFF" '^function M\.close_pending_diffs\(')
 close_for_client=$(block "$DIFF" '^function M\.close_diffs_for_client\(')
 close_all=$(block "$DIFF" '^function M\.close_all_diffs\(')
 close_saved=$(block "$DIFF" '^function M\.close_saved_diffs\(')
+close_rejected=$(block "$DIFF" '^function M\.close_rejected_diffs\(')
 file_holds=$(block "$DIFF" '^local function file_holds_accepted_text\(')
 buffer_holds=$(block "$DIFF" '^local function buffer_holds_accepted_text\(')
 put_in_buffer=$(block "$DIFF" '^local function put_accepted_text_in_buffer\(')
@@ -221,6 +222,14 @@ user_close_keeps_accepted_text() {
     grep -q 'vim\.api\.nvim_buf_get_lines(buf, 0, -1, false)' <<<"$buffer_holds"
 }
 fact[UserCloseKeepsAcceptedText]=$(as_bool user_close_keeps_accepted_text)
+# The user's command also closes rejected diffs: they hold no edits and Claude has their answer, and a client that
+# exited never sends the close_tab that would close them.
+FACTS+=(UserCloseTakesRejected)
+user_close_takes_rejected() {
+  grep -q 'diff\.close_rejected_diffs(' <<<"$user_close_all" &&
+    grep -qE '^ *return diff_data\.status == "rejected"$' <<<"$close_rejected"
+}
+fact[UserCloseTakesRejected]=$(as_bool user_close_takes_rejected)
 client_tagged() {
   grep -q 'return tool_data\.handler(input, client)' <<<"$handle_invoke" &&
     grep -q 'client and client\.id or nil' <<<"$open_diff_tool" &&
@@ -256,7 +265,7 @@ SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
-    close_all close_saved file_holds buffer_holds put_in_buffer held_for_other close_tab_tool close_all_tool create_client \
+    close_all close_saved close_rejected file_holds buffer_holds put_in_buffer held_for_other close_tab_tool close_all_tool create_client \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
     handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
@@ -373,7 +382,7 @@ if [[ $mutants == 1 ]]; then
     [SetupAnswerReturned]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
     [UserCloseKeepsAcceptedText]=SavedDiffKept
-    [CloseTakesRejected]=NoRejectedLeftover
+    [CloseTakesRejected]=NoRejectedLeftover [UserCloseTakesRejected]=NoRejectedLeftover
     [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
     [ClientIdsUnique]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered

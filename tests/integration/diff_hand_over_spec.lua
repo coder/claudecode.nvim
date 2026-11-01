@@ -122,6 +122,11 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
 
     assert.equal("alpha accepted", read_bytes(path))
     assert.is_true(vim.bo[buf].fixeol, "the user's next :w adds the final line break again")
+    vim.bo[buf].fixeol = false
+    vim.api.nvim_buf_call(buf, function()
+      vim.cmd("silent edit!")
+    end)
+    assert.is_false(vim.bo[buf].fixeol, "the user's own 'fixeol' stays after a later :e!")
   end)
 
   it("tells the user to change 'fileencoding' when the file's encoding cannot hold the accepted text", function()
@@ -134,8 +139,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     vim.cmd("ClaudeCodeCloseAllDiffs")
 
     assert.are.same({ "café costs 5 €" }, vim.api.nvim_buf_get_lines(vim.fn.bufnr(path), 0, -1, false))
-    assert.is_truthy(notes[#notes]:find("'fileencoding' latin1", 1, true), notes[#notes])
-    assert.is_truthy(notes[#notes]:find(":set fileencoding=utf-8", 1, true), notes[#notes])
+    assert.is_truthy(notes[#notes]:find(":set fileencoding=utf-8 (latin1 cannot hold them), then :w", 1, true))
   end)
 
   it("names :w ++p when the accepted file's folder does not exist yet", function()
@@ -167,7 +171,8 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     vim.cmd("ClaudeCodeCloseAllDiffs")
 
     assert.equal("saved", diff._get_active_diffs()[tab].status)
-    assert.is_truthy(notes[#notes]:find("not 'modifiable'", 1, true), notes[#notes])
+    assert.is_truthy(notes[#notes]:find(": Buffer is not 'modifiable'$"), notes[#notes])
+    assert.is_nil(notes[#notes]:find("%.lua:%d+:"), "the message names no plugin source line")
     assert.equal(0, vim.fn.bufexists(path), "the command leaves no buffer the user did not have")
     assert.equal("alpha\n", read_bytes(path))
   end)

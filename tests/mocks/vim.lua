@@ -214,7 +214,7 @@ local vim = {
         name = "",
         lines = {},
         -- As in Neovim, a scratch buffer is 'buftype' nofile and any other buffer is a file buffer.
-        options = { buftype = scratch and "nofile" or "" },
+        options = { buftype = scratch and "nofile" or "", fileformat = "unix", fileencoding = "", bomb = false },
         listed = listed,
         scratch = scratch,
       }
@@ -601,6 +601,24 @@ local vim = {
       return vim._buffers[bufnr] and vim._buffers[bufnr].listed and 1 or 0
     end,
 
+    bufexists = function(buf)
+      if type(buf) == "number" then
+        return vim._buffers[buf] and 1 or 0
+      end
+      return vim.fn.bufnr(buf) ~= -1 and 1 or 0
+    end,
+
+    isdirectory = function(path)
+      local file = io.open(path, "r")
+      if not file then
+        return 0
+      end
+      -- Opening a directory works on Linux and macOS, and reading it fails with EISDIR.
+      local _, _, errno = file:read(1)
+      file:close()
+      return errno == 21 and 1 or 0
+    end,
+
     mkdir = function(path, flags)
       return 1
     end,
@@ -629,6 +647,9 @@ local vim = {
     fnamemodify = function(path, modifier)
       if modifier == ":t" then
         return path:match("([^/]+)$") or path
+      end
+      if modifier == ":h" then
+        return path:match("^(.+)/[^/]*$") or (path:sub(1, 1) == "/" and "/" or ".")
       end
       if modifier == ":p" and path:sub(1, 1) ~= "/" then
         return vim.fn.getcwd() .. "/" .. path
