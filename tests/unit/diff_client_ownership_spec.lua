@@ -312,6 +312,22 @@ describe("a diff the user accepted for one Claude client", function()
       assert.equal("hide", vim.api.nvim_buf_get_option(vim.fn.bufnr(file), "bufhidden"))
     end)
 
+    it("stays open when the file's buffer cannot be written", function()
+      open_and_accept()
+      owner_exits()
+      local buf = vim.fn.bufnr(file)
+      if buf == -1 then
+        buf = vim.fn.bufadd(file)
+        vim.fn.bufload(buf)
+      end
+      vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+
+      user_closes_all_diffs()
+
+      assert.are.same({ "line 1", "line 2" }, file_buffer_lines())
+      assert_kept()
+    end)
+
     it("stays open, and the buffer keeps its edits, while the file's buffer has unsaved changes", function()
       open_and_accept()
       owner_exits()
