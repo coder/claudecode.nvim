@@ -157,7 +157,11 @@ local vim = {
         return nil
       end
 
-      return vim._buffers[bufnr].options and vim._buffers[bufnr].options[name] or nil
+      local options = vim._buffers[bufnr].options
+      if not options then
+        return nil
+      end
+      return options[name]
     end,
 
     nvim_buf_delete = function(bufnr, opts)

@@ -1815,8 +1815,9 @@ end
 ---@return string[] lines The accepted text as buffer lines
 ---@return boolean eol True when the text ends with a line break
 local function accepted_lines(diff_data)
-  local lines = vim.split(diff_data.result_content.content[2].text, "\n", { plain = true })
-  local eol = lines[#lines] == ""
+  local text = diff_data.result_content.content[2].text
+  local lines = vim.split(text, "\n", { plain = true })
+  local eol = text:sub(-1) == "\n"
   if eol then
     table.remove(lines)
   end
@@ -1832,11 +1833,14 @@ end
 ---@param diff_data table A saved active_diffs entry
 ---@return boolean
 local function buffer_holds_accepted_text(diff_data)
-  local buf = vim.fn.bufnr(diff_data.accepted_path)
-  if buf == -1 then
+  local buf = diff_data.accepted_buffer
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return false
   end
-  local lines = accepted_lines(diff_data)
+  local lines, eol = accepted_lines(diff_data)
+  if vim.api.nvim_buf_get_option(buf, "eol") ~= eol then
+    return false
+  end
   local buffer_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   if #buffer_lines ~= #lines then
     return false
@@ -1856,13 +1860,18 @@ end
 local function put_accepted_text_in_buffer(diff_data)
   local buf = vim.fn.bufadd(diff_data.accepted_path)
   vim.fn.bufload(buf)
+  -- A BufRead autocmd can edit the buffer while it loads. Those edits are the user's to keep.
+  if vim.api.nvim_buf_get_option(buf, "modified") then
+    return
+  end
   vim.api.nvim_buf_set_option(buf, "buflisted", true)
   local lines, eol = accepted_lines(diff_data)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.api.nvim_buf_set_option(buf, "eol", eol)
   if not eol then
-    vim.api.nvim_buf_set_option(buf, "eol", false)
     vim.api.nvim_buf_set_option(buf, "fixeol", false)
   end
+  diff_data.accepted_buffer = buf
 end
 
 ---Close every diff the user accepted, once its accepted text is on disk or in the file's buffer. The plugin never
@@ -1881,6 +1890,7 @@ function M.close_saved_diffs(reason)
       and not file_holds_accepted_text(diff_data)
       and not is_buffer_dirty(diff_data.accepted_path)
       and pcall(put_accepted_text_in_buffer, diff_data)
+      and diff_data.accepted_buffer
     then
       unsaved[#unsaved + 1] = diff_data.accepted_path
     end
