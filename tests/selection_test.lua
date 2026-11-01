@@ -190,7 +190,7 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
-      -- byteidx and charidx count characters the way the cursor and `y` do, so on Neovim 0.11+ (tests set
+      -- byteidx and charidx count characters the way `y` does, so on Neovim 0.11+ (tests set
       -- _G.vim._has["nvim-0.11"]) a control is a character of its own.
       byteidx = function(str, nr)
         assert(not str:find("%z"), "Vim:E976: Using a Blob as a String")
