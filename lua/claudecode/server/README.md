@@ -76,6 +76,7 @@ Layers, top to bottom:
 - A deferred response is keyed by `tostring(coroutine)` in `_G.claude_deferred_responses`. A result with neither `content` nor `error` becomes -32603 [server/init.lua:M._setup_deferred_response]
 - The ping timer closes a connected client with 1006 "Connection timeout" when no pong arrived within `interval * 2`. A tick gap above `interval * 1.5` counts as a wake from sleep and resets `last_pong` [server/tcp.lua:M.start_ping_timer]
 - `_disconnect_client` is idempotent: `on_disconnect` fires once per client id [server/tcp.lua:M._disconnect_client]
+- Each connection gets the id `client_<n>`, where `n` counts the connections of this Neovim process in `_G.claudecode_clients_created`. An id never repeats, even after a reload of `claudecode.server.*`. A Claude CLI that reconnects gets a new id, so it does not own the diffs it opened before [server/client.lua:M.create_client]
 - When the state is already `closing` or `closed`, `close_client` sends nothing. It still schedules `on_done` if one is given [server/client.lua:M.close_client]
 - `sha1` rejects non-string input and input over 10 MiB [server/utils.lua:M.sha1]
 
@@ -87,6 +88,7 @@ Layers, top to bottom:
 - `M.stop` calls `diff.close_pending_diffs("server stopping")` when `package.loaded["claudecode.diff"]` is set, resets `_G.claude_deferred_responses`, and clears `M.state.auth_token` [server/init.lua:M.stop]
 - `M.start` logs only the auth token length, not the token [server/init.lua:M.start]
 - `tools/call` debug lines name the tool and list the argument and result keys with their sizes (string bytes, table entry counts), never their values, so file contents and selected text stay out of `:messages`. An error result logs its code and message [server/init.lua:M.register_handlers]
+- `client.create_client` increments `_G.claudecode_clients_created` [server/client.lua:M.create_client]
 - `tcp.lua` seeds `math.randomseed` once per process. `init.lua` calls `math.random` at load. Both change the global PRNG [server/tcp.lua:ensure_rng_seeded]
 - `client.process_data` writes handshake, PONG, and Close frames to the socket. It runs `on_message` and `on_close` through `vim.schedule`. It calls `on_error` directly after a failed handshake write, and after it writes the Close frame for a protocol error [server/client.lua:M.process_data] [server/client.lua:M.close_client]
 - The ping timer writes ping frames and closes timed-out clients [server/tcp.lua:M.start_ping_timer]

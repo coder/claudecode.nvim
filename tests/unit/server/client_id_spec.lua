@@ -20,4 +20,18 @@ describe("WebSocket client ids", function()
 
     assert.are_not.equal(first.id, second.id)
   end)
+
+  -- A reload drops the module's locals, while the diff module still holds the old ids.
+  it("never repeat after claudecode.server.client is reloaded", function()
+    local seen = {}
+    for _ = 1, 3 do
+      package.loaded["claudecode.server.client"] = nil
+      local reloaded = require("claudecode.server.client")
+      for _ = 1, 2 do
+        local id = reloaded.create_client(handle_at("0x5555deadbeef")).id
+        assert.is_nil(seen[id], "id " .. id .. " came back after a reload")
+        seen[id] = true
+      end
+    end
+  end)
 end)
