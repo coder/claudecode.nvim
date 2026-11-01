@@ -163,6 +163,25 @@ describe("WebSocket client messages", function()
     assert.equals(1002, close_code())
   end)
 
+  it("keeps memory flat while a message arrives in many empty and one-byte fragments", function()
+    local count = 100000
+    receive(frames({ TEXT, "[", false }))
+    collectgarbage("collect")
+    local before = collectgarbage("count")
+    local empty, one_byte = frame.create_frame(CONTINUATION, "", false), frame.create_frame(CONTINUATION, "1", false)
+    for _ = 1, count do
+      receive(empty)
+      receive(one_byte)
+    end
+    collectgarbage("collect")
+    local grown_kib = collectgarbage("count") - before
+    receive(frames({ CONTINUATION, "]" }))
+
+    assert.same({ "[" .. string.rep("1", count) .. "]" }, messages)
+    -- The text itself is about 100 KiB. One table entry per fragment would hold 200000 entries, over 1.5 MiB.
+    assert.is_true(grown_kib < 512, string.format("memory grew by %.0f KiB", grown_kib))
+  end)
+
   it("closes with 1009 when the fragments of one message add up to more than the frame limit", function()
     local limit = frame.MAX_PAYLOAD_LENGTH
     frame.MAX_PAYLOAD_LENGTH = 16
