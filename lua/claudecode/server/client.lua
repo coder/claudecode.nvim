@@ -168,8 +168,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
             M.process_data(client, "", on_message, on_close, on_error, auth_token)
           end
         else
-          -- on_error removes the client from the server and closes its socket.
+          -- on_error removes the client from the server and closes its socket. A server that stopped while the reply
+          -- was written has already dropped the client, so the socket is closed here too.
           on_error(client, "Rejected: " .. rejection)
+          if not client.tcp_handle:is_closing() then
+            client.tcp_handle:close()
+          end
         end
       end)
     end

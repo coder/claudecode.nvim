@@ -145,6 +145,28 @@ describe("Server lines on the command line", function()
     assert.is_true(closed)
   end)
 
+  it("closes a rejected client's socket when the server stops before the reply is written", function()
+    local tcp_server = start()
+    local client = connect(tcp_server)
+    local handle, written = client.tcp_handle, nil
+    local closed = false
+    function handle:write(_, callback)
+      written = callback
+    end
+    function handle:close()
+      closed = true
+    end
+    function handle:is_closing()
+      return closed
+    end
+    handle._read_cb(nil, upgrade("wrong-token-0123456789"))
+
+    tcp.stop_server(tcp_server)
+    written()
+
+    assert.is_true(closed)
+  end)
+
   it("shows a server whose ports are all in use as one error line that names the range", function()
     package.loaded["claudecode"] = nil
     vim.loop.new_tcp = function()
