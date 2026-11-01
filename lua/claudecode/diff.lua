@@ -277,7 +277,10 @@ local function capture_window_options(win_id)
   options.number = vim.api.nvim_get_option_value("number", { win = win_id })
   options.relativenumber = vim.api.nvim_get_option_value("relativenumber", { win = win_id })
   options.signcolumn = vim.api.nvim_get_option_value("signcolumn", { win = win_id })
-  options.statuscolumn = vim.api.nvim_get_option_value("statuscolumn", { win = win_id })
+  -- Neovim 0.8 has no 'statuscolumn', and reading it there raises "unknown option".
+  if vim.fn.has("nvim-0.9") == 1 then
+    options.statuscolumn = vim.api.nvim_get_option_value("statuscolumn", { win = win_id })
+  end
   options.foldcolumn = vim.api.nvim_get_option_value("foldcolumn", { win = win_id })
 
   -- Visual options
@@ -2098,6 +2101,7 @@ end
 -- Expose internal utilities for use by diff_inline.lua
 M._find_main_editor_window = find_main_editor_window
 M._find_claudecode_terminal_window = find_claudecode_terminal_window
+M._leave_preview_window = leave_preview_window
 M._is_buffer_dirty = is_buffer_dirty
 M._detect_filetype = detect_filetype
 M._get_autocmd_group = get_autocmd_group
