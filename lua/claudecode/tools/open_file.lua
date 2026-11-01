@@ -291,7 +291,9 @@ local function file_changed_shell_can_be_ignored(buf, win)
 end
 
 ---Runs `fn` while Neovim does not check the file of `buf`: it checks only a buffer whose 'buftype' is empty. The
----BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "nowrite".
+---BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "acwrite". Not "nowrite": Neovim reads
+---'modified' as off for a nowrite buffer, so an autocommand that loads an unmodified buffer again would drop unsaved
+---changes.
 ---@param buf integer
 ---@param fn fun()
 local function without_neovim_file_check(buf, fn)
@@ -300,9 +302,9 @@ local function without_neovim_file_check(buf, fn)
       vim.cmd("noautocmd setlocal buftype=" .. value)
     end)
   end
-  set_buftype("nowrite")
+  set_buftype("acwrite")
   local ok, err = pcall(fn)
-  if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "nowrite" then
+  if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "acwrite" then
     set_buftype("")
   end
   if not ok then
