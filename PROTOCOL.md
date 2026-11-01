@@ -93,6 +93,24 @@ Sent whenever the user's selection changes:
 }
 ```
 
+claudecode.nvim encodes these positions as follows. The `getCurrentSelection` and `getLatestSelection` results use the same encoding, because they return the last selection the plugin tracked.
+
+- `line` is 0-based.
+- `character` is a 0-based UTF-8 byte offset into the buffer line. VS Code counts UTF-16 code units instead, so the two differ when the line has non-ASCII text before the position. In `日本語`, the position after `本` is `character` 6 here and 2 in VS Code.
+- `end` is exclusive: it is the offset just after the last selected character.
+
+| Selection          | `start`                         | `end`                                      | `text`                                                                          |
+| ------------------ | ------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------- |
+| None (cursor only) | the cursor                      | the same as `start`, with `isEmpty: true`  | `""`                                                                            |
+| Charwise (`v`)     | the first selected byte         | after the last selected character          | the selected text                                                               |
+| `v$`               | the first selected byte         | the line's byte length + 1                 | the selected text, without the line break that Neovim's `y` includes            |
+| Linewise (`V`)     | `character` 0 of the first line | the last selected line, at its byte length | the lines joined by `\n`, without a final line break                            |
+| Blockwise (Ctrl-V) | as charwise                     | as charwise                                | the contiguous span from the cursor to the block's other end, not the rectangle |
+
+With `'selection'` set to `exclusive`, a charwise or blockwise selection of more than one position ends after the character before its end position.
+
+Claude Code CLI 2.1.312 reads `character` in one place only. It counts `end.line - start.line + 1` lines and subtracts one when `end.character` is 0. So the unit does not change what the CLI shows. A linewise selection whose last line is empty ends at `character` 0, so the CLI counts one line fewer than the user selected.
+
 #### 2. At-Mentions
 
 When the user explicitly sends a selection as context:
@@ -108,6 +126,8 @@ When the user explicitly sends a selection as context:
   }
 }
 ```
+
+`lineStart` and `lineEnd` are 0-based, and `lineEnd` is the last selected line. Claude Code CLI 2.1.312 adds 1 to each and shows the mention as `@<path>#L<start>-<end>`, or `@<path>#L<line>` for one line, with the path relative to its working directory.
 
 ### From Claude to IDE
 
@@ -432,21 +452,25 @@ Or when document not open:
 
 ### 10. close_tab
 
-**Description**: Close a tab by name
+**Description**: Close a diff tab by name. Claude calls it only with the `tab_name` it passed to `openDiff`.
 
 **Input**:
 
 ```json
 {
-  "tab_name": "filename.js"
+  "tab_name": "✻ [Claude Code] filename.js (e18e1e) ⧉"
 }
 ```
 
-- `tab_name` (string, required): Name of the tab to close
+- `tab_name` (string, required): The `tab_name` of the diff to close
 
 **Output**: Returns `{content: [{type: "text", text: "TAB_CLOSED"}]}`
 
+The plugin closes only the diff that `openDiff` opened with this exact `tab_name`. A name that matches no diff closes nothing, and no name closes or deletes another buffer.
+
 A diff that the user accepted for another client stays open. Its edits live only in the editor until that client writes the file.
+
+The answer is `TAB_CLOSED` in all three cases: the diff closed, the diff stays for another client, or no diff has that name. VS Code also answers `TAB_CLOSED` when no tab has that label. Claude Code 2.1.312 does not read the answer text. It logs only a call that fails.
 
 ### 11. closeAllDiffTabs
 

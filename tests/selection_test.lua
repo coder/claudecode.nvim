@@ -443,13 +443,14 @@ describe("Selection module", function()
     last_broadcast = nil,
   }
 
-  setup(function()
+  -- A fresh module per test: the state checks below must not see what an earlier test left.
+  before_each(function()
     package.loaded["claudecode.selection"] = nil
 
     selection = require("claudecode.selection")
   end)
 
-  teardown(function()
+  after_each(function()
     if selection.state.tracking_enabled then
       selection.disable()
     end
