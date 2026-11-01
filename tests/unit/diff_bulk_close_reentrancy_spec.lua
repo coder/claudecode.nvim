@@ -1,10 +1,11 @@
 --- A bulk close fires ClaudeCodeDiffClosed synchronously for each diff it closes. A user
 --- handler that accepts another diff from the same bulk close turns that diff into one that
---- holds the user's accepted edits, so the rest of the loop must keep it (issue #342).
+--- holds the user's accepted edits, so the rest of the loop must keep it (issue #342). A
+--- handler that rejects another diff leaves nothing to keep, so the loop closes it too (#363).
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
 
-describe("bulk close with a ClaudeCodeDiffClosed handler that accepts another diff", function()
+describe("bulk close with a ClaudeCodeDiffClosed handler that resolves another diff", function()
   local file_a = "/tmp/issue342_a.txt"
   local file_b = "/tmp/issue342_b.txt"
   local original_exec_autocmds
@@ -58,6 +59,26 @@ describe("bulk close with a ClaudeCodeDiffClosed handler that accepts another di
     end
   end
 
+  -- The same handler, rejecting the other open diff the way :ClaudeCodeDiffDeny does.
+  local function reject_other_diff_on_first_close()
+    local rejected
+    vim.api.nvim_exec_autocmds = function(event, opts)
+      if event ~= "User" or opts.pattern ~= "ClaudeCodeDiffClosed" or rejected then
+        return
+      end
+      for tab_name in pairs(diff._get_active_diffs()) do
+        if tab_name ~= opts.data.tab_name then
+          rejected = tab_name
+          diff._resolve_diff_as_rejected(tab_name)
+          return
+        end
+      end
+    end
+    return function()
+      return rejected
+    end
+  end
+
   local bulk_closes = {
     [":ClaudeCodeCloseAllDiffs and server stop (close_pending_diffs)"] = function()
       return diff.close_pending_diffs("user command")
@@ -84,6 +105,35 @@ describe("bulk close with a ClaudeCodeDiffClosed handler that accepts another di
       local entry = diff._get_active_diffs()[kept]
       assert.is_table(entry, "the accepted diff must stay open")
       assert.equal("saved", entry.status)
+    end)
+
+    it(name .. " also closes the diff the handler rejected, and answers each call once", function()
+      local answers = {}
+      -- Every lookup finds a sender, so a second answer to either call would be counted too.
+      _G.claude_deferred_responses = setmetatable({}, {
+        __index = function()
+          return function(response)
+            answers[#answers + 1] = response
+          end
+        end,
+      })
+      finally(function()
+        _G.claude_deferred_responses = nil
+      end)
+      local handles = {
+        ["tab-A"] = open_pending(file_a, "tab-A", "clientA"),
+        ["tab-B"] = open_pending(file_b, "tab-B", "clientA"),
+      }
+      local rejected = reject_other_diff_on_first_close()
+
+      local closed = bulk_close()
+
+      local other = rejected()
+      assert.is_not_nil(other, "the handler should have rejected the other diff")
+      assert.equal("DIFF_REJECTED", handles[other].result.content[1].text)
+      assert.is_nil(diff._get_active_diffs()[other], "the rejected diff must close too")
+      assert.equal(2, closed)
+      assert.equal(2, #answers, "each openDiff call must get exactly one answer")
     end)
   end
 end)
