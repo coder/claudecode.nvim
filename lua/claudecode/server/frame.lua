@@ -13,6 +13,9 @@ M.OPCODE = {
   PONG = 0xA,
 }
 
+-- The largest payload of one frame, and of one message however many fragments it arrives in.
+M.MAX_PAYLOAD_LENGTH = 100 * 1024 * 1024
+
 ---@class WebSocketFrame
 ---@field fin boolean Final fragment flag
 ---@field opcode number Frame opcode
@@ -108,7 +111,7 @@ function M.parse_frame(data)
     -- Note: Technically should be > 65535, but some implementations may vary
 
     -- Prevent extremely large payloads (DOS protection)
-    if actual_payload_len > 100 * 1024 * 1024 then -- 100MB limit
+    if actual_payload_len > M.MAX_PAYLOAD_LENGTH then
       return nil, 0, 1009 -- Message too big
     end
   end
@@ -140,11 +143,6 @@ function M.parse_frame(data)
   -- Unmask payload if needed
   if masked and mask then
     payload = utils.apply_mask(payload, mask)
-  end
-
-  -- Validate text frame payload is valid UTF-8
-  if opcode == M.OPCODE.TEXT and not utils.is_valid_utf8(payload) then
-    return nil, 0, 1007 -- Invalid UTF-8 in text frame (invalid payload data)
   end
 
   -- Basic validation for close frame payload

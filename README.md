@@ -1010,7 +1010,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 ### System Verification
 
 - Run: `mise run all` (format, lint, test)
-- Run: `mise run test` (Busted suite with coverage, in a random order whose seed it prints; `BUSTED_SEED=<seed> mise run test` repeats that order) or one file with `busted -v tests/unit/<name>_spec.lua`
+- Run: `mise run test` (Busted suite with coverage, in a random order whose seed it prints; `BUSTED_SEED=<seed> mise run test` repeats that order, and a test registered inside a `pairs()` loop fails the run) or one file with `busted -v tests/unit/<name>_spec.lua`
 - Run: `mise run check` (Lua syntax and `luacheck` on `lua/` and `tests/`)
 - Run: `npm --prefix scripts run test:release-please-runner` (release runner, after `npm --prefix scripts ci`)
 

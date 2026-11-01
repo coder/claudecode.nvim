@@ -13,12 +13,14 @@
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
-#   parent-made-unsafe  mkdir makes a new default parent dir group-writable (a default ACL)
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
+#   race           another launch makes the missing dir above VERIFY_OUT first, group-writable: launch uses it,
+#                  refuses it in the check after mkdir, and leaves it in place
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
-#   out-made       a new VERIFY_OUT in a dir with a default ACL: launch creates it 0700, so every evidence file is 0600
+#   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700, so
+#                  every evidence file is 0600
 # A refused launch must also leave the files under the proof's temp dir as it found them.
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
 # deleted when every case passes, and kept with its path printed when one fails.
@@ -98,11 +100,21 @@ refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-pro
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
 refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCRATCH_DIR=/proc
-# A default ACL makes mkdir create a group-writable dir despite the harness's umask 077, so only
-# the check after mkdir sees it.
+# Two first launches can both find the default parent dir missing. The mkdir shim plays the launch that makes
+# $TMP/race/mid first, and makes it unsafe, so only the check after mkdir can refuse it.
+mkdir "$TMP/race" "$TMP/race-bin"
+printf '#!/bin/sh\n[ "$4" = "%s" ] && "%s" -m 770 -- "$4" && echo "mkdir: File exists" >&2 && exit 1\nexec "%s" "$@"\n' \
+  "$TMP/race/mid" "$(command -v mkdir)" "$(command -v mkdir)" >"$TMP/race-bin/mkdir"
+chmod +x "$TMP/race-bin/mkdir"
+launch race PATH="$TMP/race-bin:$PATH" VERIFY_OUT="$TMP/race/mid/out"
+[[ $err == *"$TMP/race/mid, above the evidence dir, is writable by others and not sticky"* ]] ||
+  fail "race: launch did not take the dir the other launch made: $err"
+[[ -d $TMP/race/mid && ! -e $TMP/race/mid/out ]] ||
+  fail "race: launch removed the dir the other launch made, or kept the one it made"
+echo "PASS race: $err"
+# A default ACL gives a new dir or file group access whatever the harness's umask 077.
 mkdir "$TMP/acl"
 if command -v setfacl >/dev/null && setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl" 2>/dev/null; then
-  refused parent-made-unsafe "$TMP/acl/verify-claudecode-nvim is group- or world-writable" XUM_SCRATCH_DIR="$TMP/acl"
   # chmod does not touch a default ACL, so this dir passes both checks, and its files would get group access.
   mkdir -m 700 "$TMP/acl-out" "$TMP/no-setfacl"
   setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl-out"
@@ -111,7 +123,7 @@ if command -v setfacl >/dev/null && setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl
   refused out-acl-unremovable "a new file in $TMP/acl-out gets mode 660, not 600" \
     PATH="$TMP/no-setfacl:$PATH" VERIFY_OUT="$TMP/acl-out"
 else
-  echo "SKIP parent-made-unsafe, out-acl-unremovable, out-acl, out-made: setfacl cannot set a default ACL on $TMP/acl"
+  echo "SKIP out-acl-unremovable, out-acl, out-made: setfacl cannot set a default ACL on $TMP/acl"
 fi
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
@@ -139,9 +151,10 @@ if [[ -d $TMP/acl-out ]]; then
   chmod 500 "$TMP/acl-out"
   private out-acl "$TMP/acl-out"
   echo "PASS out-acl: launch made the 0500 $TMP/acl-out a 0700 dir without its default ACL, and all $(find "$TMP/acl-out" -type f | wc -l) evidence files are 0600"
-  # The second safety check reads the mode right after mkdir, so a dir that mkdir made group-writable is refused.
-  private out-made "$TMP/acl/out"
-  echo "PASS out-made: launch created $TMP/acl/out as 0700 in a dir with a default ACL, and all $(find "$TMP/acl/out" -type f | wc -l) evidence files are 0600"
+  # A new default parent dir (XUM_SCRATCH_DIR=$TMP/acl) is made by the same code as $TMP/acl/mid.
+  private out-made "$TMP/acl/mid/out"
+  [[ $(stat -c %a -- "$TMP/acl/mid") == 700 ]] || fail "out-made: $TMP/acl/mid is not a 0700 dir"
+  echo "PASS out-made: launch created $TMP/acl/mid and $TMP/acl/mid/out as 0700 in a dir with a default ACL, and all $(find "$TMP/acl/mid/out" -type f | wc -l) evidence files are 0600"
 fi
 
 init_out=$(mktemp -d)

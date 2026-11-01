@@ -20,7 +20,8 @@ describe("visual_commands in Select mode", function()
     vim.api.nvim_get_mode, vim.api.nvim_feedkeys, vim.schedule = saved.get_mode, saved.feedkeys, saved.schedule
   end)
 
-  for name, mode in pairs({ charwise = "s", linewise = "S", blockwise = "\19" }) do
+  for _, case in ipairs({ { "charwise", "s" }, { "linewise", "S" }, { "blockwise", "\19" } }) do
+    local name, mode = case[1], case[2]
     it("runs the visual handler for a " .. name .. " Select-mode selection", function()
       vim.api.nvim_get_mode = function()
         return { mode = mode }
