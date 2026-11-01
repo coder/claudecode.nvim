@@ -168,6 +168,8 @@ if not _G.vim then
       -- `\_.` matches the character that starts there. `^\_.*\%<Nc\_.` matches up to the end of the last character
       -- that starts before byte N, scanning from the line start.
       matchend = function(line, pattern, start)
+        -- Like Neovim, vim.fn passes a Lua string with a NUL byte as a Blob.
+        assert(not line:find("%z"), "Vim:E976: Using a Blob as a String")
         if pattern == "\\_." and start then
           return start < #line and mock_char_last_byte(line, start + 1) or -1
         end
@@ -1158,6 +1160,13 @@ describe("Range Selection Tests", function()
         local sel = from_marks({ "a😀b" }, "v", 1, 1, 1, 2)
         assert.are.equal("a😀", sel.text)
         assert.are.equal(5, sel.selection["end"].character)
+      end)
+
+      it("handles a line with a NUL byte", function()
+        -- nvim_buf_get_lines returns NUL as "\0".
+        local sel = from_marks({ "a\0b" }, "v", 1, 1, 1, 2)
+        assert.are.equal("a\0", sel.text)
+        assert.are.equal(2, sel.selection["end"].character)
       end)
 
       it("keeps the contiguous span of a blockwise selection on character boundaries", function()
