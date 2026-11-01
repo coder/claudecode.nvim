@@ -86,6 +86,17 @@ describe("openDiff with several tabs", function()
     assert.equal(user_tab, vim.api.nvim_win_get_tabpage(diff_data.new_window))
   end)
 
+  it("uses the current tab's editor window before a window in another tab that shows the file", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/proposed.txt"))
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    local user_tab = vim.api.nvim_get_current_tabpage()
+
+    local diff_data = open_diff()
+
+    assert.equal(user_tab, vim.api.nvim_get_current_tabpage(), "the user stays in their tab")
+    assert.equal(user_tab, vim.api.nvim_win_get_tabpage(diff_data.new_window))
+  end)
+
   it("opens in another tab when the current tab has no window it can use", function()
     local editor_tab = vim.api.nvim_get_current_tabpage()
     vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
