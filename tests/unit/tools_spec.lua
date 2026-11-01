@@ -42,6 +42,13 @@ describe("Tools Module", function()
       },
       cmd = function() end,
       api = {
+        -- openFile creates its BufNewFile autocommands when it loads.
+        nvim_create_augroup = function()
+          return 1
+        end,
+        nvim_create_autocmd = function()
+          return 1
+        end,
         nvim_list_bufs = function()
           return { 1, 2 }
         end,
