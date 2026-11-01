@@ -796,8 +796,8 @@ local vim = {
       local path = command:sub(6)
       -- Remove surrounding quotes if any
       path = path:gsub("^'", ""):gsub("'$", "")
-      -- Undo fnameescape(), as :edit does.
-      path = path:gsub("\\(.)", "%1")
+      -- Undo the mock's fnameescape(), which escapes only spaces. A literal backslash stays.
+      path = path:gsub("\\ ", " ")
       -- Find or create buffer for this path
       local bufnr = -1
       for id, b in pairs(vim._buffers) do
