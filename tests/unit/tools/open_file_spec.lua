@@ -543,9 +543,10 @@ describe("Tool: open_file", function()
     -- which keeps its own buffer (10), while :edit shows it in the current window. Both re-read the file when the
     -- window they edit in already shows it, which fails with E37 on unsaved changes, and both end Visual mode.
     -- {N}split, nvim_win_set_buf, bufadd and bufload do neither. Marks, the cursor and gv act in the current
-    -- window, or in the window that nvim_win_call runs in.
-    local current_win, win_buf, win_cursor, preview_flag, buffers, mark_pos, visual
-    local original_win_get_tabpage, original_tabpage_list_wins
+    -- window, or in the window that nvim_win_call runs in. nvim_win_set_buf refuses a window with 'winfixbuf' set,
+    -- which a split does not copy.
+    local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual
+    local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
 
     local function buf_of(buf)
       return buf == 0 and win_buf[call_win or current_win] or buf
@@ -572,8 +573,10 @@ describe("Tool: open_file", function()
     before_each(function()
       original_win_get_tabpage = _G.vim.api.nvim_win_get_tabpage
       original_tabpage_list_wins = _G.vim.api.nvim_tabpage_list_wins
+      original_win_is_valid = _G.vim.api.nvim_win_is_valid
       buffer_lines = { "alpha", "beta", "gamma", "delta", "epsilon" }
-      current_win, win_buf, win_cursor, preview_flag, mark_pos, visual = 1000, { [1000] = 10 }, {}, {}, {}, nil
+      current_win, win_buf, win_cursor, preview_flag, fixed_buf, mark_pos, visual =
+        1000, { [1000] = 10 }, {}, {}, {}, {}, nil
       buffers = {
         [10] = { lines = { "one", "two", "three", "four" }, filetype = "text" },
         [30] = { lines = buffer_lines, filetype = "lua" },
@@ -617,15 +620,27 @@ describe("Tool: open_file", function()
         return win_buf[3000] and { 1000, 3000 } or { 1000 }
       end)
       _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
-        return option == "previewwindow" and preview_flag[win == 0 and (call_win or current_win) or win] == true
+        win = win == 0 and (call_win or current_win) or win
+        return (option == "previewwindow" and preview_flag[win] or option == "winfixbuf" and fixed_buf[win]) == true
       end)
       _G.vim.api.nvim_win_set_option = spy.new(function(win, option, value)
         if option == "previewwindow" then
           preview_flag[win] = value
+        elseif option == "winfixbuf" then
+          fixed_buf[win] = value
         end
       end)
       _G.vim.api.nvim_win_set_buf = spy.new(function(win, buf)
+        if fixed_buf[win] and win_buf[win] ~= buf then
+          error("E1513: Cannot switch buffer. 'winfixbuf' is enabled")
+        end
         win_buf[win] = buf
+      end)
+      _G.vim.api.nvim_win_is_valid = spy.new(function(win)
+        return win_buf[win] ~= nil
+      end)
+      _G.vim.fn.exists = spy.new(function(name)
+        return (name == "*state" or name == "+winfixbuf") and 1 or 0
       end)
       _G.vim.api.nvim_buf_set_option = spy.new(function() end)
       _G.vim.fn.bufexists = spy.new(function(path)
@@ -672,6 +687,7 @@ describe("Tool: open_file", function()
     after_each(function()
       _G.vim.api.nvim_win_get_tabpage = original_win_get_tabpage
       _G.vim.api.nvim_tabpage_list_wins = original_tabpage_list_wins
+      _G.vim.api.nvim_win_is_valid = original_win_is_valid
       _G.vim.o.previewheight = nil
     end)
 
@@ -698,6 +714,26 @@ describe("Tool: open_file", function()
       expect(parsed.languageId).to_be("lua")
       expect(parsed.lineCount).to_be(5)
       expect(current_win).to_be(1000)
+    end)
+
+    it("shows the file in a preview window with 'winfixbuf' set and keeps the option, as :pedit does", function()
+      win_buf[3000], preview_flag[3000], fixed_buf[3000] = 10, true, true
+      expect(open({ startLine = 2 })).to_be("Opened file and selected lines 2 to 2")
+      assert.are.same({ 30, true, true }, { win_buf[3000], preview_flag[3000], fixed_buf[3000] })
+    end)
+
+    it("fails when an autocommand clears 'previewwindow' as the window gets the file", function()
+      local set_buf = _G.vim.api.nvim_win_set_buf
+      _G.vim.api.nvim_win_set_buf = spy.new(function(win, buf)
+        set_buf(win, buf)
+        preview_flag[win] = false -- autocmd BufWinEnter * setlocal nopreviewwindow
+      end)
+      local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true, startLine = 2 })
+      expect(success).to_be_false()
+      assert.are.same(
+        { code = -32000, message = "File operation error", data = "No preview window shows the file" },
+        err
+      )
     end)
 
     describe("when the window already shows the file with unsaved changes", function()
