@@ -48,12 +48,13 @@ describe("WebSocket client messages", function()
   end
 
   ---@return integer|nil code The status of the Close frame the plugin wrote while the socket was still open
+  ---@return string|nil reason The reason text of that Close frame
   local function close_code()
     for _, w in ipairs(writes) do
       local parsed = frame.parse_frame(w.data)
       if parsed and parsed.opcode == frame.OPCODE.CLOSE then
         assert.is_false(w.closing, "the Close frame was written after the socket closed")
-        return parsed.payload:byte(1) * 256 + parsed.payload:byte(2)
+        return parsed.payload:byte(1) * 256 + parsed.payload:byte(2), parsed.payload:sub(3)
       end
     end
   end
@@ -154,6 +155,54 @@ describe("WebSocket client messages", function()
 
     assert.same({}, messages)
     assert.equals(1002, close_code())
+  end)
+
+  it("closes with 1002 when a binary frame comes inside a fragmented text message", function()
+    receive(frames({ TEXT, request:sub(1, 10), false }, { BINARY, request }))
+
+    assert.same({}, messages)
+    assert.equals(1002, close_code())
+  end)
+
+  -- RFC 6455 section 7.4.1 names each status. The reason text tells the client which rule its data broke.
+  for _, case in ipairs({
+    { 1002, "Protocol error", "a continuation frame with no message", { CONTINUATION, "{}" } },
+    { 1003, "Unsupported data", "a binary message", { BINARY, "{}" } },
+    { 1007, "Invalid frame payload data", "a text message that is not UTF-8", { TEXT, "\255" } },
+  }) do
+    it("sends the reason text " .. case[2] .. " with " .. case[1] .. " for " .. case[3], function()
+      receive(frames(case[4]))
+
+      assert.same({ case[1], case[2] }, { close_code() })
+    end)
+  end
+
+  it("sends the reason text Invalid frame payload data with 1007 for a close reason that is not UTF-8", function()
+    receive(frames({ frame.OPCODE.CLOSE, "\3\232\255" }))
+
+    assert.same({ 1007, "Invalid frame payload data" }, { close_code() })
+  end)
+
+  it("sends the reason text Message too big with 1009 for a frame over the limit", function()
+    -- A BINARY frame header with a 64-bit length of 200 MiB. The limit applies before any payload arrives.
+    receive(string.char(0x82, 0x7F) .. string.rep("\0", 4) .. string.char(0x0C, 0x80, 0x00, 0x00))
+
+    assert.same({ 1009, "Message too big" }, { close_code() })
+  end)
+
+  it("handles many small frames in one read with memory linear in their number", function()
+    local count = 2000
+    collectgarbage("collect")
+    collectgarbage("stop")
+    local before = collectgarbage("count")
+    local ok, err = pcall(receive, string.rep(frames({ TEXT, "{}" }), count))
+    local allocated_kib = collectgarbage("count") - before
+    collectgarbage("restart")
+    assert(ok, err)
+
+    assert.equals(count, #messages)
+    -- The 16 KB read itself is small. Cutting the rest of it off after each frame allocates about 44 MiB here.
+    assert.is_true(allocated_kib < 4096, string.format("allocated %.0f KiB", allocated_kib))
   end)
 
   it("closes with 1002 when a new text message starts inside a fragmented one", function()
