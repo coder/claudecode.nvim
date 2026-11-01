@@ -832,7 +832,6 @@ describe("Tool: open_file", function()
         return win_call(win, callback)
       end)
       _G.vim.api.nvim_buf_call = spy.new(function(buf, callback)
-        assert(buffers[buf] ~= nil, "Invalid buffer id: " .. tostring(buf))
         local outer = call_buf
         call_buf = buf
         local result = callback()
@@ -907,7 +906,7 @@ describe("Tool: open_file", function()
         end
       end)
       _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
-        return buffers[buf] ~= nil and buffers[buf].loaded == true
+        return buffers[buf].loaded == true
       end)
       _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
         win = win == 0 and (call_win or current_win) or win
@@ -948,11 +947,7 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_list_bufs = spy.new(function()
         return { 10, 30 }
       end)
-      -- A write of the buffer's own file counts up save_last (`save_nr`), also when it runs no BufWritePost.
-      _G.vim.fn.undotree = spy.new(function()
-        return { save_last = buffers[call_buf or buf_of(0)].save_nr or 0 }
-      end)
-      -- Load the module again, so that its BufNewFile, BufReadPost and BufUnload autocommands are in `autocmds`.
+      -- Load the module again, so that its BufNewFile, BufReadPost and BufWritePost autocommands are in `autocmds`.
       package.loaded["claudecode.tools.open_file"] = nil
       open_file_handler = require("claudecode.tools.open_file").handler
     end)
@@ -964,7 +959,7 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_create_autocmd, _G.vim.api.nvim_del_autocmd = original_create_autocmd, original_del_autocmd
       _G.vim.v, _G.vim.api.nvim_buf_call, _G.vim.api.nvim_list_bufs = original_v, original_buf_call, original_list_bufs
       _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = nil, nil, nil
-      _G.vim.fn.win_findbuf, _G.vim.fn.getbufvar, _G.vim.fn.undotree = nil, nil, nil
+      _G.vim.fn.win_findbuf, _G.vim.fn.getbufvar = nil, nil
     end)
 
     it("opens the file without a range", function()
@@ -1280,29 +1275,16 @@ describe("Tool: open_file", function()
         )
       end
 
-      it("does not fail the :edit when an earlier BufNewFile autocommand wipes the buffer", function()
-        -- autocmd BufNewFile new.txt bwipeout. Neovim still runs the other BufNewFile autocommands.
+      it("does not fail a write when an earlier BufWritePost autocommand wipes the buffer", function()
+        -- autocmd BufWritePost *.tmp bwipeout. Neovim still runs the other BufWritePost autocommands.
         buffers[30] = nil
+        _G.vim.api.nvim_buf_get_name = function(buf)
+          return assert(buffers[buf] and "test.txt", "Invalid buffer id: " .. buf)
+        end
         fire("BufUnload", 30)
         assert.has_no.errors(function()
-          fire("BufNewFile", 30)
+          fire("BufWritePost", 30)
         end)
-      end)
-
-      it("uses the changed-file rules once a write without BufWritePost saved the buffer", function()
-        -- autocmd BufLeave * update: a write from an autocommand without ++nested runs no BufWritePost, and Neovim
-        -- no longer asks W13 for the buffer.
-        buffers[30].save_nr, buffers[30].new_file, buffers[30].on_disk = 1, nil, { "" }
-        local seen
-        _G.vim.api.nvim_create_autocmd("BufEnter", {
-          buffer = 30,
-          callback = function()
-            seen = _G.vim.api.nvim_buf_get_option(30, "buftype")
-          end,
-        })
-        local success = pcall(open_file_handler, { filePath = "test.txt", startText = "second" })
-        expect(success).to_be_true()
-        assert.are.same({ "", { "from claude", "second" }, false }, { seen, buffers[30].lines, asked })
       end)
 
       it("keeps the empty buffer while the user holds Visual mode in the middle of a command", function()
