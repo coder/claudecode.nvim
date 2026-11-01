@@ -45,7 +45,12 @@ Run the check. `covered.lock` records a hash of every Lua and Vimscript file und
 
 To show where to look, the record also hashes each block the model describes and lists every non-comment line that resolves, closes, registers or answers a diff, names the diff table (`active_diffs`, `_get_active_diffs`), or assigns a `.status`, with its enclosing top-level statement. The STALE output prints a `was:`/`now:` pair per changed file, block or call site. A new one prints only `now:`, and a removed one only `was:`. Control bytes in those lines print as `?`, so a source line cannot rewrite the terminal.
 
-The record has one group of lines per file: a `== <file>` header, the file's hash, the hashes of the covered blocks in that file, and its call sites. Only adding or removing the file changes its header, so two branches that edit different files and each re-record merge `covered.lock` without a conflict, and the merged record matches the merged code. Two branches that edit the same file, or that add or remove files whose groups sit next to each other, conflict there. Resolve the code, then follow "Update after an intended change" on the merged result.
+The record has one group of lines per file: a `== <file>` header, the file's hash, the hashes of the covered blocks in that file, and its call sites. Only adding or removing the file changes its header, so two branches that edit different files and each re-record merge `covered.lock` without a conflict, and the merged record matches the merged code. Two branches that edit the same file, or that add or remove files whose groups sit next to each other, conflict there once one of them merges. The same-file conflict is wanted: no line merge can produce the merged file's hash. A `merge=union` attribute or a custom merge driver would hide it, and `main` would read STALE after both branches merge. Adding or removing a Lua file is rare, so the record stays one file rather than one lock file per source file. To resolve the conflict:
+
+1. Merge `origin/main` into the branch (`git fetch origin && git merge origin/main`) and resolve any conflicts in the code.
+2. If the merged code can reach diff state, an openDiff answer, a disconnect or a diff command, follow "Update after an intended change" on the merged result first.
+3. Run `check.sh --record`. It writes the whole record, so it needs no hand edit of the conflict markers.
+4. `git add .agents/skills/verify-diff-lifecycle/covered.lock`, then commit the merge.
 
 Covered blocks:
 
