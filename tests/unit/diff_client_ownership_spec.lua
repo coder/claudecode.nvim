@@ -263,7 +263,9 @@ describe("a diff the user accepted for one Claude client", function()
       assert.is_truthy(msg:find("E325: ATTENTION", 1, true), msg)
       assert.is_truthy(
         msg:find(
-          "open it with :e " .. file .. " (answer the swap file prompt if Neovim shows one), then run the command again",
+          "open it with :split "
+            .. file
+            .. " (answer the swap file prompt if Neovim shows one), then run the command again",
           1,
           true
         ),

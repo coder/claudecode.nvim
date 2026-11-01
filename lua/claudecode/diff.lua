@@ -1972,9 +1972,9 @@ local function put_accepted_text_in_buffer(diff_data)
   if problem:match("^E325:") then
     -- Neovim deals with a swap file only when the user opens the file: it asks, or, from 0.10 on, it skips the swap
     -- file of a running Neovim by default.
-    -- A bare :e in the proposal window would reload the proposal, so name the file.
+    -- The user is in the diff window, whose modified buffer :e cannot leave (E37) in the unified layout, so split.
     problem = (
-      "%s. Another Neovim may be editing the file: open it with :e %s (answer the swap file prompt if Neovim "
+      "%s. Another Neovim may be editing the file: open it with :split %s (answer the swap file prompt if Neovim "
       .. "shows one), then run the command again"
     ):format(problem, vim.fn.fnameescape(vim.fn.fnamemodify(path, ":~:.")))
   end
