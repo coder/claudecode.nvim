@@ -191,7 +191,32 @@ jobs:
         with:
           persist-credentials: false
 
+      # The cache key comes from the version and sha256 that check.sh pins, so a new pin gets a new
+      # entry. check.sh checks that sha256 on every run, a restored jar included.
+      - name: Read the TLC jar that check.sh pins
+        id: tlc
+        run: |
+          check=.agents/skills/verify-diff-lifecycle/check.sh
+          version=$(sed -n 's/^TLC_VERSION=//p' "$check")
+          sha256=$(sed -n 's/^TLC_SHA256=//p' "$check")
+          if [[ ! $version =~ ^[0-9.]+$ || ! $sha256 =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $check"
+            exit 1
+          fi
+          {
+            echo "key=tla2tools-$version-$sha256"
+            echo "jar=$HOME/.cache/claudecode-nvim-tla/tla2tools-$version.jar"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Cache the TLC jar
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ steps.tlc.outputs.jar }}
+          key: ${{ steps.tlc.outputs.key }}
+
       - name: Model-check the openDiff lifecycle and compare covered.lock
+        env:
+          TLC_JAR: ${{ steps.tlc.outputs.jar }}
         run: .agents/skills/verify-diff-lifecycle/check.sh
 
   required:
