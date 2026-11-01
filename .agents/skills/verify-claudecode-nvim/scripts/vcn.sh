@@ -316,7 +316,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir made
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
@@ -345,14 +345,24 @@ cmd_launch() {
     rmdir "$state"
     die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
+  # The dirs mkdir -p is about to make, deepest first, so a refusal below can remove them again.
+  made=()
+  dir=$out
+  while [[ ! -e $dir && ! -L $dir ]]; do
+    made+=("$dir")
+    dir=$(dirname -- "$dir")
+  done
   if ! mkdir -p "$out"; then
     rmdir "$state"
     die "cannot create $out; set VERIFY_OUT to a fresh dir you own"
   fi
-  # Check again: another user could have made the dir between the first check and mkdir.
+  # Check again: another user could have made the dir between the first check and mkdir, and a
+  # default ACL can make a new dir group-writable whatever the umask.
   why=$(unsafe_dir "$guard")
   if [[ -n $why ]]; then
     rmdir "$state"
+    # rmdir removes only empty dirs, so this never deletes anything another process put there.
+    ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
     die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   fi
   mkdir -p "$state"/{home,claude,work}
