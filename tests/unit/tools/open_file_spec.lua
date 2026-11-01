@@ -380,6 +380,33 @@ describe("Tool: open_file", function()
     expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
   end)
 
+  it("does not open into the preview window, which nvim_list_wins lists first after :pedit", function()
+    _G.vim.api.nvim_list_wins = spy.new(function()
+      return { 1000, 2000 }
+    end)
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      return option == "previewwindow" and win == 1000
+    end)
+    local called_win
+    _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+      called_win = win
+      return callback()
+    end)
+
+    expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
+    expect(called_win).to_be(2000)
+    expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+  end)
+
+  it("splits instead of editing into the preview window when no other editor window exists", function()
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      return option == "previewwindow" and win == 1000
+    end)
+
+    expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
+    assert.are.same({ "wincmd t", "wincmd l", "vsplit", "diffoff", "edit test.txt" }, _G.vim.cmd_history)
+  end)
+
   it("splits instead of editing into a diff window when every window is a diff (issue #277)", function()
     -- All windows are in diff mode, so the finder returns nil and the fallback
     -- runs. It must create a split rather than :edit over a diff window.
