@@ -315,7 +315,7 @@ end
 ---Neovim loads the file without FileChangedShell. Without it, when 'eventignore' or 'eventignorewin' ignores the
 ---event, nothing is checked, because Neovim would ask the user. A buffer opened before its file existed reads the
 ---file with `:edit` in `win`, as W13's "Load File" would, except while the user holds Visual or Select mode in the
----middle of a command (`keep_mode`), which `:edit` ends.
+---middle of a command (`keep_mode`), which `:edit` ends, or when an autocommand made `win` show another buffer.
 ---@param buf integer
 ---@param win integer A window that shows `buf`, or will show it
 ---@param keep_mode boolean
@@ -325,7 +325,11 @@ local function check_file_on_disk(buf, win, keep_mode)
     return
   end
   if new_file_buffers[buf] then
-    if not (keep_mode and vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]")) then
+    -- `:edit` re-reads the buffer of `win`, and it empties a 'nofile' buffer.
+    if
+      vim.api.nvim_win_get_buf(win) == buf
+      and not (keep_mode and vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]"))
+    then
       vim.api.nvim_win_call(win, function()
         run_reload_command(buf, "edit")
       end)
