@@ -492,24 +492,6 @@ local function get_selection_coordinates()
   end
 end
 
----Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
----byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
----@param line string
----@param col integer
----@return integer
-local function code_point_start(line, col)
-  local start = col
-  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
-  while start > 1 and col - start < 3 do
-    local byte = line:byte(start)
-    if not byte or byte < 0x80 or byte > 0xBF then
-      break
-    end
-    start = start - 1
-  end
-  return start
-end
-
 ---Returns the length of the well-formed UTF-8 sequence at byte i of text. For an ill-formed sequence, returns
 ---nil and the length of its longest valid prefix (at least 1), which a decoder replaces with one U+FFFD.
 ---@param text string
@@ -545,6 +527,28 @@ local function utf8_sequence_length(text, i)
     low, high = 0x80, 0xBF
   end
   return length
+end
+
+---Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
+---byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
+---A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
+---@param line string
+---@param col integer
+---@return integer
+local function code_point_start(line, col)
+  local byte = line:byte(col)
+  if not byte or byte < 0x80 or byte > 0xBF then
+    return col
+  end
+  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
+  for lead = col - 1, math.max(col - 3, 1), -1 do
+    byte = line:byte(lead)
+    if byte < 0x80 or byte > 0xBF then
+      local length = utf8_sequence_length(line, lead)
+      return (length and lead + length > col) and lead or col
+    end
+  end
+  return col
 end
 
 ---Returns text with each ill-formed UTF-8 sequence replaced by U+FFFD. A buffer line can hold any bytes, and
