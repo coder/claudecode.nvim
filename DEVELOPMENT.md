@@ -89,8 +89,11 @@ claudecode.nvim/
 Run tests using:
 
 ```bash
-# Run all tests
+# Run all tests, in a random order whose seed the run prints
 mise run test
+
+# Repeat the order of an earlier run
+BUSTED_SEED=<seed> mise run test
 
 # Run specific test file
 nvim --headless -u tests/minimal_init.lua -c "lua require('tests.unit.config_spec')"
