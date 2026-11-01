@@ -13,13 +13,28 @@
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
+#   out-made-unsafe     mkdir makes a new VERIFY_OUT group-writable (a default ACL)
+#   parent-made-unsafe  mkdir makes a new default parent dir group-writable (a default ACL)
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
-# Prints PASS <case> per case, or FAIL: <reason> and exits 1.
+# A refused launch must also leave the files under the proof's temp dir as it found them.
+# Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
+# deleted when every case passes, and kept with its path printed when one fails.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+init_out=""
+finish() {
+  local rc=$?
+  rm -rf "$TMP"
+  [[ -n $init_out ]] || return 0
+  if ((rc == 0)); then
+    rm -rf "$init_out"
+  else
+    echo "init evidence kept in $init_out" >&2
+  fi
+}
+trap finish EXIT
 
 fail() {
   echo "FAIL: $*" >&2
@@ -41,11 +56,15 @@ launch() {
 
 # refused <case> <stderr text> [VAR=value...]: launch exits 1 with that text before it starts a run.
 refused() {
-  local name=$1 want=$2
+  local name=$1 want=$2 before after
   shift 2
+  before=$(find "$TMP" | sort)
   launch "$name" "$@"
   [[ $err == *"$want"* ]] || fail "$name: stderr lacks '$want': $err"
   [[ $err != *VCN_STATE=* ]] || fail "$name: launch started a run before it refused: $err"
+  after=$(find "$TMP" | sort)
+  [[ $after == "$before" ]] ||
+    fail "$name: launch changed $TMP (< removed, > added): $(diff <(echo "$before") <(echo "$after") | grep '^[<>]' | tr '\n' ' ')"
   echo "PASS $name: $err"
 }
 
@@ -77,6 +96,15 @@ refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-pro
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
 refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCRATCH_DIR=/proc
+# A default ACL makes mkdir create a group-writable dir despite the harness's umask 077, so only
+# the check after mkdir sees it.
+mkdir "$TMP/acl"
+if command -v setfacl >/dev/null && setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl" 2>/dev/null; then
+  refused out-made-unsafe "$TMP/acl/out is group- or world-writable" VERIFY_OUT="$TMP/acl/out"
+  refused parent-made-unsafe "$TMP/acl/verify-claudecode-nvim is group- or world-writable" XUM_SCRATCH_DIR="$TMP/acl"
+else
+  echo "SKIP out-made-unsafe, parent-made-unsafe: setfacl cannot set a default ACL on $TMP/acl"
+fi
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
 vcn=$(cd "$(dirname "$V")" && pwd)/vcn.sh
@@ -87,7 +115,8 @@ VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
 [[ -e $TMP/cwd/-dash/session.webm ]] || fail "out-dash: cleanup from another directory did not save session.webm there"
 echo "PASS out-dash: launched with VERIFY_OUT=-dash from $TMP/cwd; cleanup from $PWD saved its evidence there"
 
-launch init VCN_INIT_JSONRPC=1.0 VERIFY_OUT="$(mktemp -d)"
+init_out=$(mktemp -d)
+launch init VCN_INIT_JSONRPC=1.0 VERIFY_OUT="$init_out"
 state=$(sed -n 's/^vcn: launch failed (VCN_STATE=\([^)]*\)).*/\1/p' <<<"$err")
 out=$(sed -n 's/^vcn: cleanup ok, no processes left; evidence kept in //p' <<<"$err")
 [[ -n $state && -n $out ]] || fail "init: launch did not start a run and tear it down: $err"
@@ -100,4 +129,4 @@ jq -e 'select(.id == "init") | .error.code == -32600 and .result == null' "$out/
 [[ ! -e $state ]] || fail "init: $state still exists"
 pids=$(grep -lzxF "VCN_RUN_TAG=$state" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
 [[ -z $pids ]] || fail "init: processes tagged $state still alive: $pids"
-echo "PASS init: launch exited 1 on the plugin's -32600 answer; $state is gone, no tagged process; evidence in $out"
+echo "PASS init: launch exited 1 on the plugin's -32600 answer; $state is gone, no tagged process"
