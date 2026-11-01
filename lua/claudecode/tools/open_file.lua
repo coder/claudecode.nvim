@@ -180,19 +180,31 @@ do
   end
 end
 
----Runs the Ex command `command`, which can load a file again, under `:silent!`. Run from Lua, an error in a user's
----autocommand stops the reload halfway: the buffer keeps wrong text but takes the file as read, so a later `:w`
----overwrites the file without a warning. Under `:silent!` the reload ends, as for a command the user types, and the
----error is raised after it.
+---Runs the Ex command `command`, which can load the file of `buf` again. Run from Lua, an error in a user's
+---autocommand stops that reload halfway: the buffer keeps its old text with empty lines added, but takes the file as
+---read, so a later `:w` writes that text over the file without a warning. When `command` fails after the reload began,
+---the buffer reads its file again under `:silent!`, which lets the read end as for a command the user types, and then
+---the error is raised. Only then, because `:silent!` also hides errors from autocommands that check for them.
+---@param buf integer
 ---@param command string
-local function run_reload_command(command)
-  local errmsg = vim.v.errmsg
-  vim.v.errmsg = ""
-  vim.cmd("silent! " .. command)
-  if vim.v.errmsg ~= "" then
-    error(vim.v.errmsg, 0)
+local function run_reload_command(buf, command)
+  local reading = false
+  local autocmd = vim.api.nvim_create_autocmd("BufReadPre", {
+    buffer = buf,
+    callback = function()
+      reading = true
+    end,
+  })
+  local ok, err = pcall(vim.cmd, command)
+  pcall(vim.api.nvim_del_autocmd, autocmd)
+  if not ok then
+    if reading and vim.api.nvim_buf_is_loaded(buf) and not vim.api.nvim_buf_get_option(buf, "modified") then
+      vim.api.nvim_buf_call(buf, function()
+        vim.cmd("silent! edit")
+      end)
+    end
+    error(err, 0)
   end
-  vim.v.errmsg = errmsg
 end
 
 ---Runs `fn`, which can enter `buf` or run `:checktime` for it, so that Neovim does not ask the user about a file that
@@ -308,13 +320,14 @@ end
 ---@param win integer A window that shows `buf`, or will show it
 ---@param keep_mode boolean
 local function check_file_on_disk(buf, win, keep_mode)
-  if vim.api.nvim_buf_get_option(buf, "modified") then
+  -- Neovim checks the file only of a buffer whose 'buftype' is empty.
+  if vim.api.nvim_buf_get_option(buf, "modified") or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
     return
   end
   if new_file_buffers[buf] then
     if not (keep_mode and vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]")) then
       vim.api.nvim_win_call(win, function()
-        run_reload_command("edit")
+        run_reload_command(buf, "edit")
       end)
     end
     return
@@ -323,7 +336,7 @@ local function check_file_on_disk(buf, win, keep_mode)
     return
   end
   without_file_changed_question(buf, function()
-    run_reload_command("checktime " .. buf)
+    run_reload_command(buf, "checktime " .. buf)
   end)
 end
 
@@ -337,12 +350,15 @@ end
 ---@param keep_mode boolean
 ---@param fn fun()
 local function show_buffer(buf, win, keep_mode, fn)
-  if not (buf and vim.api.nvim_buf_is_loaded(buf)) then
+  if not (buf and vim.api.nvim_buf_is_loaded(buf)) or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
     return fn()
   end
   if new_file_buffers[buf] or file_changed_shell_can_be_ignored(buf, win) then
     without_neovim_file_check(buf, fn)
-    check_file_on_disk(buf, win, keep_mode)
+    -- An autocommand can close `win` as it gets the buffer. The caller reports that.
+    if vim.api.nvim_win_is_valid(win) then
+      check_file_on_disk(buf, win, keep_mode)
+    end
   else
     -- An error of a user's autocommand in the check comes after the buffer is shown.
     local ok, err = pcall(check_file_on_disk, buf, win, keep_mode)
