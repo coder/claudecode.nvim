@@ -186,7 +186,7 @@ function M._handle_new_connection(server)
 
   local accept_success, accept_err = server.server:accept(client_tcp)
   if not accept_success then
-    server.on_error("Failed to accept connection: " .. (accept_err or "unknown error"))
+    server.on_error("Accept error: " .. (accept_err or "unknown error"))
     client_tcp:close()
     return
   end
@@ -396,9 +396,10 @@ function M.start_ping_timer(server, interval)
         else
           -- Client connection timed out - log at INFO level (this is expected behavior)
           local time_since_pong = math.floor((now - client.last_pong) / 1000)
-          require("claudecode.logger").info(
+          require("claudecode.logger").one_line(
+            "info",
             "server",
-            string.format("Client %s keepalive timeout (%ds idle), closing connection", client.id, time_since_pong)
+            string.format("Closed %s: no reply for %ds", client.id, time_since_pong)
           )
           client_manager.close_client(client, 1006, "Connection timeout")
           M._disconnect_client(server, client, 1006, "Connection timeout")

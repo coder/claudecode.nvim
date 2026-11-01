@@ -142,6 +142,70 @@ describe("Logger", function()
     end)
   end)
 
+  -- The server logs from libuv callbacks while the user types. A line wider than the command line (v:echospace
+  -- cells) stops Neovim at "Press ENTER" until the user presses a key.
+  describe("one_line", function()
+    local original_echospace
+
+    before_each(function()
+      original_echospace = vim.v.echospace
+      vim.v.echospace = 50
+      logger.setup({ log_level = "info" })
+    end)
+
+    after_each(function()
+      vim.v.echospace = original_echospace
+    end)
+
+    it("cuts an error wider than the command line to its width", function()
+      logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
+
+      expect(#notify_calls).to_be(1)
+      expect(notify_calls[1].level).to_be(vim.log.levels.ERROR)
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] [server] [ERROR] Accept error: EMF...")
+    end)
+
+    it("cuts an info line, which goes to the message history", function()
+      logger.one_line("info", "server", "Closed client_7: no reply for 61s, and more text")
+
+      expect(#echo_calls).to_be(1)
+      expect(echo_calls[1].history).to_be_true()
+      expect(echo_calls[1].chunks[1][1]).to_be("[ClaudeCode] [server] [INFO] Closed client_7: n...")
+    end)
+
+    it("joins the lines of a warning into one", function()
+      vim.v.echospace = 80
+      logger.one_line("warn", "client", "Rejected client_1:\r\n  Invalid token")
+
+      expect(notify_calls[1].level).to_be(vim.log.levels.WARN)
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] [client] [WARN] Rejected client_1: Invalid token")
+    end)
+
+    it("keeps a line that fits, measured in cells and not bytes", function()
+      local text = string.rep("\195\169", 20) -- 20 cells, 40 bytes
+
+      logger.one_line("info", "server", text)
+
+      expect(echo_calls[1].chunks[1][1]).to_be("[ClaudeCode] [server] [INFO] " .. text)
+    end)
+
+    it("shows the whole line at log_level debug", function()
+      logger.setup({ log_level = "debug" })
+
+      logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
+
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] [server] [ERROR] Accept error: EMFILE: too many open files")
+    end)
+
+    it("shows nothing below the log level", function()
+      logger.setup({ log_level = "warn" })
+
+      logger.one_line("info", "server", "Closed client_7: no reply for 61s")
+
+      expect(#echo_calls).to_be(0)
+    end)
+  end)
+
   describe("fast event context safety", function()
     it("should not call vim API functions directly", function()
       -- Simulate a fast event context by removing the mocked functions

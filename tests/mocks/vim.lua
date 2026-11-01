@@ -559,6 +559,19 @@ local vim = {
       return 12345
     end,
 
+    -- Every code point is one cell wide here. Real Neovim gives most CJK characters two.
+    strdisplaywidth = function(text)
+      return select(2, text:gsub("[^\128-\191]", ""))
+    end,
+
+    strcharpart = function(text, start, len)
+      local chars = {}
+      for char in text:gmatch("[^\128-\191][\128-\191]*") do
+        table.insert(chars, char)
+      end
+      return table.concat(chars, "", start + 1, math.min(start + len, #chars))
+    end,
+
     expand = function(path)
       return path:gsub("~", "/home/user")
     end,
@@ -1166,6 +1179,9 @@ local vim = {
   --- Stub for the `vim.loop` module.
   --- Provides minimal implementations for TCP and timer functionalities
   --- required by some plugin tests.
+  -- The command line at 80 columns with 'ruler' and 'showcmd' on. A longer message stops at "Press ENTER".
+  v = { echospace = 68 },
+
   loop = {
     new_tcp = function()
       return {

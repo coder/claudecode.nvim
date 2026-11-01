@@ -39,7 +39,27 @@ function M.setup(plugin_config)
   end
 end
 
-local function log(level, component, message_parts)
+---Makes text one line no wider than the command line, ending in "..." where it was cut.
+---@param text string
+---@return string
+local function fit_command_line(text)
+  text = text:gsub("%s+", " ")
+  local width = vim.v.echospace
+  if vim.fn.strdisplaywidth(text) <= width then
+    return text
+  end
+  local room = math.max(width - 3, 0)
+  local count = room
+  local cut = vim.fn.strcharpart(text, 0, count)
+  -- A character can take two cells.
+  while vim.fn.strdisplaywidth(cut) > room do
+    count = count - 1
+    cut = vim.fn.strcharpart(text, 0, count)
+  end
+  return cut .. "..."
+end
+
+local function log(level, component, message_parts, one_line)
   if level > current_log_level_value then
     return
   end
@@ -73,14 +93,18 @@ local function log(level, component, message_parts)
   -- Wrap all vim.notify and nvim_echo calls in vim.schedule to avoid
   -- "nvim_echo must not be called in a fast event context" errors
   vim.schedule(function()
+    local text = prefix .. " " .. message
+    if one_line then
+      text = fit_command_line(text)
+    end
     if level == M.levels.ERROR then
-      vim.notify(prefix .. " " .. message, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
+      vim.notify(text, vim.log.levels.ERROR, { title = "ClaudeCode Error" })
     elseif level == M.levels.WARN then
-      vim.notify(prefix .. " " .. message, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
+      vim.notify(text, vim.log.levels.WARN, { title = "ClaudeCode Warning" })
     else
       -- For INFO, DEBUG, TRACE, use nvim_echo to avoid flooding notifications,
       -- to make them appear in :messages
-      vim.api.nvim_echo({ { prefix .. " " .. message, "Normal" } }, true, {})
+      vim.api.nvim_echo({ { text, "Normal" } }, true, {})
     end
   end)
 end
@@ -116,6 +140,18 @@ function M.info(component, ...)
   else
     log(M.levels.INFO, component, { ... })
   end
+end
+
+---Logs a line about an event the user did not start, such as a server callback. A message wider than the command
+---line stops Neovim at "Press ENTER" until the user presses a key. Below log_level debug, the line loses its line
+---breaks and is cut to the width of the command line.
+---@param level_name "error"|"warn"|"info"
+---@param component string Component/module name
+---@param message string
+function M.one_line(level_name, component, message)
+  local level = level_values[level_name]
+  assert(level and level <= M.levels.INFO, "one_line takes error, warn or info, not " .. tostring(level_name))
+  log(level, component, { message }, current_log_level_value < M.levels.DEBUG)
 end
 
 ---Check if a specific log level is enabled

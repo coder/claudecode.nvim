@@ -82,7 +82,7 @@ Module map (direct files):
 - `visual_commands.lua`: `create_visual_command_wrapper`, `exit_visual_and_schedule`, `validate_visual_mode`, `get_visual_range`, `get_tree_state`, `capture_visual_selection_data`, and `get_files_from_visual_selection` [visual_commands.lua:M.create_visual_command_wrapper]
 - `cwd.lua`: `resolve(term_cfg, ctx)` and `git_root(start_dir)` [cwd.lua:M.resolve]
 - `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `selection_type`, `utf8_sequence_length`, and `valid_utf8` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8]
-- `logger.lua`: `levels`, `setup`, `error`, `warn`, `info`, `debug`, `trace`, and `is_level_enabled` [logger.lua:M.setup]
+- `logger.lua`: `levels`, `setup`, `error`, `warn`, `info`, `one_line`, `debug`, `trace`, and `is_level_enabled` [logger.lua:M.setup]
 - `health.lua`: `check()` [health.lua:M.check]
 
 ## Invariants
@@ -154,6 +154,7 @@ Module map (direct files):
 - `diff_inline.lua` creates the `claudecode_inline_diff` namespace when the module loads. It defines the four `ClaudeCodeInlineDiff*` highlight groups (with `default = true`) [diff_inline.lua:setup_highlights] and sets extmarks [diff_inline.lua:M.render_diff_buffer]
 - The plugin runs `git rev-parse --show-toplevel` for the git root [cwd.lua:M.git_root], and `health.check` runs `<claude> --version` [health.lua:check_cli]
 - `logger` defers all output through `vim.schedule`. ERROR and WARN go to `vim.notify`. Other levels go to `nvim_echo` [logger.lua:log]
+- Below log_level debug, `one_line` replaces each run of whitespace with one space and cuts the line to `v:echospace` cells, ending in `...` [logger.lua:M.one_line]
 
 ## Verification
 
