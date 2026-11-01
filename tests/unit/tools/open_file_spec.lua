@@ -195,6 +195,9 @@ describe("Tool: open_file", function()
     end)
     _G.vim.o = _G.vim.o or {}
     _G.vim.o.selection = "inclusive"
+    _G.vim.fn.getcmdwintype = spy.new(function()
+      return ""
+    end)
   end)
 
   after_each(function()
@@ -208,6 +211,7 @@ describe("Tool: open_file", function()
     _G.vim.fn.readfile = nil
     _G.vim.fn.bufexists = nil
     _G.vim.fn.bufadd = nil
+    _G.vim.fn.getcmdwintype = nil
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
     _G.vim.api.nvim_get_mode = original_get_mode
     _G.vim.api.nvim_feedkeys = original_feedkeys
@@ -415,11 +419,22 @@ describe("Tool: open_file", function()
     expect(vsplit_idx < edit_idx).to_be_true()
   end)
 
+  it("changes nothing while the command-line window is open", function()
+    _G.vim.fn.getcmdwintype = spy.new(function()
+      return ":"
+    end)
+    local success, err = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+    expect(success).to_be_false()
+    expect(err.code).to_be(-32000)
+    assert.are.same({}, _G.vim.cmd_history)
+  end)
+
   describe("with preview", function()
     -- Like Neovim, :pedit shows the file in the preview window (3000) and leaves the cursor in the current window,
-    -- which keeps its own buffer (10). Marks, the cursor and gv act in the current window, or in the window that
-    -- nvim_win_call runs in.
-    local current_win, win_buf, buffers, mark_pos, visual
+    -- which keeps its own buffer (10), while :edit shows it in the current window. Marks, the cursor and gv act in
+    -- the current window, or in the window that nvim_win_call runs in.
+    local current_win, win_buf, win_cursor, buffers, mark_pos, visual
+    local original_win_get_tabpage, original_tabpage_list_wins
 
     local function buf_of(buf)
       return buf == 0 and win_buf[call_win or current_win] or buf
@@ -444,8 +459,10 @@ describe("Tool: open_file", function()
     end
 
     before_each(function()
+      original_win_get_tabpage = _G.vim.api.nvim_win_get_tabpage
+      original_tabpage_list_wins = _G.vim.api.nvim_tabpage_list_wins
       buffer_lines = { "alpha", "beta", "gamma", "delta", "epsilon" }
-      current_win, win_buf, mark_pos, visual = 1000, { [1000] = 10 }, {}, nil
+      current_win, win_buf, win_cursor, mark_pos, visual = 1000, { [1000] = 10 }, {}, {}, nil
       buffers = {
         [10] = { lines = { "one", "two", "three", "four" }, filetype = "text" },
         [30] = { lines = buffer_lines, filetype = "lua" },
@@ -454,6 +471,8 @@ describe("Tool: open_file", function()
       _G.vim.cmd = spy.new(function(command)
         if command:match("^pedit ") then
           win_buf[3000] = 30
+        elseif command:match("^edit ") then
+          win_buf[call_win or current_win] = 30
         elseif command == "normal! gv" then
           local lines = buffers[buf_of(0)].lines
           visual = { win = call_win or current_win, text = text_between(lines, mark_pos["<"], mark_pos[">"]) }
@@ -471,7 +490,12 @@ describe("Tool: open_file", function()
         return win_buf[3000] and { 1000, 3000 } or { 1000 }
       end)
       _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
-        return option == "previewwindow" and win == 3000
+        return option == "previewwindow" and (win == 0 and (call_win or current_win) or win) == 3000
+      end)
+      _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
+        win = win == 0 and (call_win or current_win) or win
+        assert(pos[1] >= 1 and pos[1] <= #buffers[win_buf[win]].lines, "Invalid cursor line: out of range")
+        win_cursor[win] = { pos[1], pos[2] }
       end)
       _G.vim.api.nvim_get_current_win = spy.new(function()
         return call_win or current_win
@@ -495,6 +519,11 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
         return option == "filetype" and buffers[buf].filetype or ""
       end)
+    end)
+
+    after_each(function()
+      _G.vim.api.nvim_win_get_tabpage = original_win_get_tabpage
+      _G.vim.api.nvim_tabpage_list_wins = original_tabpage_list_wins
     end)
 
     it("opens the file without a range", function()
@@ -521,6 +550,66 @@ describe("Tool: open_file", function()
       expect(parsed.lineCount).to_be(5)
       expect(current_win).to_be(1000)
     end)
+
+    describe("while the user is in the middle of a command", function()
+      -- The user's next keys finish the command in the current window, from where it started: an operator waits for
+      -- its motion, and Insert mode, Replace mode, CTRL-O from them and the command line wait for more keys.
+      local note = " (shown in the preview window without a selection, because the user is in the middle of a command)"
+
+      local function call(params)
+        params.filePath = "test.txt"
+        return pcall(open_file_handler, params)
+      end
+
+      for _, mode in ipairs({ "no", "nov", "niI", "i", "R", "c" }) do
+        for _, case in ipairs({
+          { params = {}, text = "Opened file: test.txt" },
+          { params = { startLine = 2, endLine = 3 }, text = "Opened file and positioned at line 2", cursor = { 2, 0 } },
+          {
+            params = { startText = "beta", endText = "gamma" },
+            text = 'Opened file and positioned at "beta"',
+            cursor = { 2, 0 },
+          },
+        }) do
+          it("keeps the current window and its cursor in mode " .. mode .. " for " .. case.text, function()
+            editor_mode = mode
+            local success, result = call(case.params)
+            expect(success).to_be_true()
+            assert.are.same({ current = 1000, buf = 10, cursor = nil, visual = nil, fed = {} }, {
+              current = current_win,
+              buf = win_buf[1000],
+              cursor = win_cursor[1000],
+              visual = visual,
+              fed = typeahead,
+            })
+            expect(win_buf[3000]).to_be(30)
+            assert.are.same(case.cursor, win_cursor[3000])
+            expect(result.content[1].text).to_be(case.text .. note)
+          end)
+        end
+      end
+
+      it("reports the previewed file with makeFrontmost = false", function()
+        editor_mode = "no"
+        local success, result = call({ startLine = 2, makeFrontmost = false })
+        expect(success).to_be_true()
+        local parsed = require("tests.busted_setup").json_decode(result.content[1].text)
+        expect(parsed.languageId).to_be("lua")
+        expect(parsed.lineCount).to_be(5)
+        expect(current_win).to_be(1000)
+        expect(win_buf[1000]).to_be(10)
+      end)
+
+      it("changes nothing when the command started in the preview window", function()
+        editor_mode, current_win, win_buf = "no", 3000, { [1000] = 10, [3000] = 10 }
+        local success, err = call({ startLine = 2 })
+        expect(success).to_be_false()
+        expect(err.code).to_be(-32000)
+        assert.are.same({ [1000] = 10, [3000] = 10 }, win_buf)
+        assert.are.same({}, win_cursor)
+        assert.are.same({}, _G.vim.cmd_history)
+      end)
+    end)
   end)
 
   describe("selection marks", function()
@@ -539,11 +628,6 @@ describe("Tool: open_file", function()
           editor_mode = "n"
         end
       end
-    end
-
-    local function user_types(key)
-      table.insert(typeahead, key)
-      read_typeahead()
     end
 
     local function open(params)
@@ -702,6 +786,15 @@ describe("Tool: open_file", function()
       end
     end)
 
+    it("selects as usual from Terminal, Visual and Select mode, which are between commands", function()
+      for _, mode in ipairs({ "t", "nt", "v", "s" }) do
+        editor_mode, _G.vim.cmd_history = mode, {}
+        expect(open({ startLine = 3, endLine = 4 })).to_be("Opened file and selected lines 3 to 4")
+        expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+        expect(editor_mode).to_be("v")
+      end
+    end)
+
     it("leaves a Select mode the user holds in another window before gv", function()
       _G.vim.api.nvim_list_wins = spy.new(function()
         return { 2000 }
@@ -724,32 +817,6 @@ describe("Tool: open_file", function()
         open({ startText = "two", endText = "three" })
         expect(editor_mode).to_be(case.want)
         assert.are.same({}, typed_over_selection)
-      end
-    end)
-
-    it("only places the cursor while an operator is pending", function()
-      for _, case in ipairs({
-        { params = { startText = "two", endText = "three" }, cursor = { 2, 0 }, text = 'positioned at "two"' },
-        { params = { startText = "two" }, cursor = { 2, 0 }, text = 'positioned at "two"' },
-        { params = { startLine = 2, endLine = 3 }, cursor = { 2, 0 }, text = "positioned at line 2" },
-      }) do
-        editor_mode = "no"
-        local text = open(case.params)
-        assert_contains(text, case.text)
-        assert_contains(text, "a pending operator was cancelled and nothing was selected")
-        assert.are.same({}, operated_on)
-        expect(editor_mode).to_be("n")
-        assert.are.same(case.cursor, cursor)
-      end
-    end)
-
-    it("cancels a pending operator before the user's next key", function()
-      for _, params in ipairs({ { startText = "two", endText = "three" }, { startLine = 4 } }) do
-        editor_mode, typeahead = "no", {}
-        open(params)
-        user_types("w")
-        assert.are.same({}, operated_on)
-        expect(editor_mode).to_be("n")
       end
     end)
 
