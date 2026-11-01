@@ -352,7 +352,10 @@ cmd_launch() {
     made+=("$dir")
     dir=$(dirname -- "$dir")
   done
-  if ! mkdir -p "$out"; then
+  # -m 700 sets the mode of the evidence dir when mkdir creates it, so a default ACL on its parent never
+  # gives the group access to it, even before the chmod below.
+  # shellcheck disable=SC2174 # Only the evidence dir needs 0700. The safety check below covers its parents.
+  if ! mkdir -p -m 700 "$out"; then
     rmdir "$state"
     die "cannot create $out; set VERIFY_OUT to a fresh dir you own"
   fi

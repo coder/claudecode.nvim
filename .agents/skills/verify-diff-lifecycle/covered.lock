@@ -1,4 +1,4 @@
-sync b57dd32fec029e36558d01935bf620186e7d70ec
+sync 87ad8f416b5989ba8cf549224c037655caa4f3e8
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -15,7 +15,7 @@ block close_tab_tool     e9d6c3aae4615ac7
 block close_all_tool     8a83fdac94646751
 block create_client      647b7523dea26af6
 block close_for_client   330cc91666bc7884
-block close_active       6a6f96cdea5ff8e6
+block close_active       6ddacfe111d52eba
 block cleanup_all        43e7b595cf106229
 block inline_saved       53e3ff9a47388fc9
 block inline_rejected    3a098216eef4b774
@@ -35,7 +35,7 @@ block deny_current       94385d781b70d50c
 block user_close_all     c8691f39ecf603f4
 file lua/claudecode/config.lua dfb93bd69a6198ec
 file lua/claudecode/cwd.lua 55d26ea362173afa
-file lua/claudecode/diff.lua 0a8be745ea456397
+file lua/claudecode/diff.lua 64e55860a30bce3d
 file lua/claudecode/diff_inline.lua b6b304df990b724d
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 file lua/claudecode/init.lua 78358592898e260f
@@ -49,7 +49,7 @@ file lua/claudecode/server/handshake.lua 3eca35d572094a55
 file lua/claudecode/server/init.lua ea24c13556dcd2a9
 file lua/claudecode/server/mock.lua 47986b9e1060acd8
 file lua/claudecode/server/tcp.lua 763cf0912217f5c9
-file lua/claudecode/server/utils.lua ee730723c5843430
+file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 file lua/claudecode/terminal.lua a797eb121b1499bf
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 file lua/claudecode/terminal/native.lua 0bc15bb161cde253
@@ -117,12 +117,12 @@ site lua/claudecode/diff.lua: function M.close_diff_by_tab_name(tab_name, client
 site lua/claudecode/diff.lua: function M.close_diffs_for_client(client_id, reason) @ function M.close_diffs_for_client(client_id, reason)
 site lua/claudecode/diff.lua: function M.close_pending_diffs(reason) @ function M.close_pending_diffs(reason)
 site lua/claudecode/diff.lua: function M.close_saved_diffs(reason) @ function M.close_saved_diffs(reason)
-site lua/claudecode/diff.lua: if (matches(diff_data) or rejected) and M.close_diff_by_tab_name(tab_name, client_id) then @ local function close_active_diffs(filter_fn, reason, client_id)
 site lua/claudecode/diff.lua: if _G.claude_deferred_responses and _G.claude_deferred_responses[co_key] then @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: if active_diffs[tab_name] then @ function M._setup_blocking_diff(params, resolution_callback)
 site lua/claudecode/diff.lua: if active_diffs[tab_name] then @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: if diff_data.resolution_callback then @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: if diff_data.resolution_callback then @ function M._resolve_diff_as_saved(tab_name, buffer_id)
+site lua/claudecode/diff.lua: if matches(active_diffs[tab_name]) and M.close_diff_by_tab_name(tab_name, client_id) then @ local function close_active_diffs(filter_fn, reason, client_id)
 site lua/claudecode/diff.lua: inline.resolve_inline_as_rejected(tab_name, diff_data) @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: inline.resolve_inline_as_saved(tab_name, diff_data) @ function M._resolve_diff_as_saved(tab_name, buffer_id)
 site lua/claudecode/diff.lua: inline.setup_inline_diff(params, resolution_callback, config) @ function M._setup_blocking_diff(params, resolution_callback)
@@ -132,7 +132,6 @@ site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ functio
 site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M._resolve_diff_as_saved(tab_name, buffer_id)
 site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ function M.close_diff_by_tab_name(tab_name, client_id)
-site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ local function close_active_diffs(filter_fn, reason, client_id)
 site lua/claudecode/diff.lua: local existing_diff = active_diffs[tab_name] @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: local function close_active_diffs(filter_fn, reason, client_id) @ local function close_active_diffs(filter_fn, reason, client_id)
 site lua/claudecode/diff.lua: local state = active_diffs[tab_name] @ function M._setup_blocking_diff(params, resolution_callback)

@@ -120,6 +120,27 @@ function M.parse_command(cmd)
   return argv
 end
 
+-- The selection type (v, V or CTRL-V) of each mode that has a selection. Select mode (s, S, CTRL-S) has the same
+-- selection as Visual mode, and so does Visual mode for one command after CTRL-O in Select mode (vs, Vs, CTRL-Vs).
+local SELECTION_TYPE = {
+  v = "v",
+  V = "V",
+  ["\22"] = "\22",
+  s = "v",
+  S = "V",
+  ["\19"] = "\22",
+  vs = "v",
+  Vs = "V",
+  ["\22s"] = "\22",
+}
+
+---Returns the selection type (v, V or CTRL-V) of a mode from nvim_get_mode(), or nil when it has no selection.
+---@param mode string|nil
+---@return string|nil
+function M.selection_type(mode)
+  return SELECTION_TYPE[mode]
+end
+
 ---Returns the length of the well-formed UTF-8 sequence at byte i of text. For an ill-formed sequence, returns
 ---nil and the length of its longest valid prefix (at least 1), which a decoder replaces with one U+FFFD.
 ---@param text string

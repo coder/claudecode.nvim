@@ -3,6 +3,7 @@
 ---@module 'claudecode.visual_commands'
 local M = {}
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 ---Get current vim mode with fallback for test environments
 ---@param full_mode? boolean Whether to get full mode info (passed to vim.fn.mode)
@@ -70,7 +71,8 @@ end
 function M.validate_visual_mode()
   local current_mode = get_current_mode(true)
 
-  local is_visual = current_mode == "v" or current_mode == "V" or current_mode == "\022"
+  -- Select mode has the same selection as Visual mode.
+  local is_visual = utils.selection_type(current_mode) ~= nil
 
   -- Additional debugging: check visual marks and cursor position
   if is_visual then
@@ -98,7 +100,7 @@ function M.get_visual_range()
   local range_success = pcall(function()
     -- Check if we're currently in visual mode
     local current_mode = get_current_mode(true)
-    local is_visual = current_mode == "v" or current_mode == "V" or current_mode == "\022"
+    local is_visual = utils.selection_type(current_mode) ~= nil
 
     if is_visual then
       -- In visual mode, ALWAYS use cursor + anchor (marks are stale until exit)
@@ -216,7 +218,7 @@ function M.create_visual_command_wrapper(normal_handler, visual_handler)
   return function(...)
     local current_mode = get_current_mode(true)
 
-    if current_mode == "v" or current_mode == "V" or current_mode == "\022" then
+    if utils.selection_type(current_mode) then
       -- Use the neo-tree pattern: exit visual mode, then schedule execution
       M.exit_visual_and_schedule(visual_handler, ...)
     else

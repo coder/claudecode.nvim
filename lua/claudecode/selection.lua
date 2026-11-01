@@ -8,25 +8,11 @@ local utils = require("claudecode.utils")
 
 local uv = vim.uv or vim.loop
 
--- The selection type (v, V or CTRL-V) of each mode that has a selection. Select mode (s, S, CTRL-S) has the same
--- selection as Visual mode, and so does Visual mode for one command after CTRL-O in Select mode (vs, Vs, CTRL-Vs).
-local SELECTION_TYPE = {
-  v = "v",
-  V = "V",
-  ["\22"] = "\22",
-  s = "v",
-  S = "V",
-  ["\19"] = "\22",
-  vs = "v",
-  Vs = "V",
-  ["\22s"] = "\22",
-}
-
 ---Returns true if the given mode string has a visual selection (Visual or Select mode).
 ---@param mode string|nil
 ---@return boolean
 local function is_visual_mode(mode)
-  return SELECTION_TYPE[mode] ~= nil
+  return utils.selection_type(mode) ~= nil
 end
 
 ---Returns true if the cursor is still at the position captured by the most recent flush
@@ -465,7 +451,7 @@ end
 ---See issue #246.
 ---@return string|nil - the visual mode character or nil if invalid
 local function get_effective_visual_mode()
-  local live_type = SELECTION_TYPE[vim.api.nvim_get_mode().mode]
+  local live_type = utils.selection_type(vim.api.nvim_get_mode().mode)
   if live_type then
     return live_type
   end
@@ -519,12 +505,6 @@ local function code_point_start(line, col)
   return col
 end
 
----@param byte integer|nil
----@return boolean
-local function is_ascii_control(byte)
-  return byte ~= nil and (byte < 0x20 or byte == 0x7F)
-end
-
 ---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.
 ---Cutting inside a multibyte character would put invalid UTF-8 into selection_changed, so the selection takes
 ---the whole end character. With 'selection' set to exclusive, a selection of more than one position ends after
@@ -538,27 +518,23 @@ local function selection_end_byte(line, start_coords, end_coords)
   local one_position = start_coords.lnum == end_coords.lnum and start_coords.col == col
   -- vim.fn passes a Lua string with a NUL byte as a Blob. Neovim keeps NUL as NL in a line, and both are one byte.
   line = line:gsub("%z", "\n")
-  -- On Neovim 0.11+ an ASCII control character, such as a TAB, a NUL or an ESC, is a character of its own, and a
-  -- composing character after it is the next character. The patterns below join the two.
-  local control_alone = vim.fn.has("nvim-0.11") == 1
+  -- byteidx and charidx count characters the way the cursor and `y` do: a code point with its composing
+  -- characters, and on Neovim 0.11+ a grapheme cluster, where a control such as a TAB, U+0085 or U+200B is a
+  -- character of its own. A regex such as `\_.` still joins a composing character to a control.
   if vim.o.selection == "exclusive" and not one_position then
-    if control_alone and is_ascii_control(line:byte(col - 1)) then
-      return col - 1
+    -- Neovim ends after the character that holds byte col - 1. On 0.11+ that can be a cluster that reaches past
+    -- col, such as स्ते when col is its त. Without a character before col, the selection ends at the line start.
+    if col <= 1 then
+      return 0
     end
-    -- Neovim ends after the character before col. On 0.11+ that can be a cluster that reaches past col, such as
-    -- स्ते when col is its त. Without a character before col, the selection ends at the line start.
-    return math.max(vim.fn.matchend(line, "^\\_.*\\%<" .. col .. "c\\_."), 0)
+    return vim.fn.byteidx(line, vim.fn.charidx(line, col - 2) + 1)
   end
   if col > #line then
     return col
   end
-  if control_alone and is_ascii_control(line:byte(col)) then
-    return col
-  end
-  -- Match the character that starts at byte col, with its composing characters, and end after it. A pattern
-  -- anchored at the column, like `\%13c.`, matches nothing when Neovim 0.11+ sees col inside a cluster, such
-  -- as the त of स्ते, although the cursor can stand there. `\_.` also matches the NL.
-  return vim.fn.matchend(line, "\\_.", col - 1)
+  -- The character that starts at byte col, counted from col: the cursor can stand on the त of स्ते on 0.11+, and
+  -- `y` then takes ते.
+  return col - 1 + vim.fn.byteidx(line:sub(col), 1)
 end
 
 ---Handles an end past the last character of its line, which `v$` and `l` past the last character make. A charwise
