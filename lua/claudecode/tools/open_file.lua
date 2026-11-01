@@ -293,8 +293,7 @@ end
 ---Runs `fn` while Neovim does not check the file of `buf`: it checks only a buffer whose 'buftype' is empty. The
 ---BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "acwrite". Not "nowrite": Neovim reads
 ---'modified' as off for a nowrite buffer, so an autocommand that loads an unmodified buffer again would drop unsaved
----changes. They also see 'write' off: :write of an acwrite buffer skips the E13 and changed-file checks and runs
----BufWriteCmd, so a user's handler would write the buffer over the file. With 'write' off every write fails (E142).
+---changes.
 ---@param buf integer
 ---@param fn fun()
 local function without_neovim_file_check(buf, fn)
@@ -304,12 +303,7 @@ local function without_neovim_file_check(buf, fn)
     end)
   end
   set_buftype("acwrite")
-  local write = vim.o.write
-  vim.cmd("noautocmd set nowrite")
   local ok, err = pcall(fn)
-  if write then
-    vim.cmd("noautocmd set write")
-  end
   if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "acwrite" then
     set_buftype("")
   end
