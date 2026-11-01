@@ -356,6 +356,7 @@ if not _G.vim then
     o = { ---@type vim_options_table
       columns = 80,
       lines = 24,
+      virtualedit = "",
     }, -- Mock for vim.o
     bo = setmetatable({}, { -- Mock for vim.bo and vim.bo[bufnr]
       __index = function(t, k)
@@ -951,6 +952,15 @@ describe("Range Selection Tests", function()
       assert(mock_server.last_broadcast.params.lineEnd == 0)
     end)
 
+    it("keeps an explicit range's last line when that line is empty", function()
+      _G.vim._buffers[1].lines[3] = ""
+
+      assert.is_true(selection.send_at_mention_for_visual_selection(2, 3))
+
+      assert.are.equal(1, mock_server.last_broadcast.params.lineStart)
+      assert.are.equal(2, mock_server.last_broadcast.params.lineEnd)
+    end)
+
     it("ends the mention on the line before when the tracked selection ends at character 0 of a line", function()
       -- `v$` on line 0 includes its line break and ends at the start of line 1.
       selection.state.latest_selection = {
@@ -1390,6 +1400,15 @@ describe("Range Selection Tests", function()
           local sel = from_marks({ "abc", "def", "ghi" }, "\22", 1, 1, 2, 4)
           assert.are.equal("abc\ndef", sel.text)
           assert.are.same({ line = 1, character = 3 }, sel.selection["end"])
+        end)
+
+        it("leaves the line break out when 'virtualedit' contains all", function()
+          -- There `v$y` yanks a virtual space after the last character, not the line break.
+          _G.vim.o.virtualedit = "all"
+          local sel = from_marks({ "abc", "def" }, "v", 1, 1, 1, 4)
+          _G.vim.o.virtualedit = ""
+          assert.are.equal("abc", sel.text)
+          assert.are.same({ line = 0, character = 3 }, sel.selection["end"])
         end)
 
         it("leaves the line break out with 'selection' set to exclusive", function()
