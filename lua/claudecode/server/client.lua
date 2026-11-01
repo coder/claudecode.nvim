@@ -2,6 +2,7 @@
 local frame = require("claudecode.server.frame")
 local handshake = require("claudecode.server.handshake")
 local logger = require("claudecode.logger")
+local server_utils = require("claudecode.server.utils")
 local utils = require("claudecode.utils")
 
 local M = {}
@@ -15,6 +16,7 @@ local M = {}
 ---@field tcp_handle table The vim.loop TCP handle
 ---@field state string Connection state: "connecting", "connected", "closing", "closed"
 ---@field buffer string Incoming data buffer
+---@field fragments table|nil Payloads of the text message whose last fragment has not arrived, and their total `size`
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
@@ -37,6 +39,41 @@ function M.create_client(tcp_handle)
   }
 
   return client
+end
+
+---Adds a data frame to the message the client is sending. A text message arrives as one TEXT frame with FIN set, or
+---as fragments: a TEXT frame with FIN clear, then CONTINUATION frames up to one with FIN set. A fragment may end
+---inside a code point, so only the whole text is checked for UTF-8.
+---@param client WebSocketClient
+---@param data_frame WebSocketFrame A TEXT, BINARY or CONTINUATION frame
+---@return string|nil message The whole text message, once its last fragment arrived
+---@return integer|nil status The RFC 6455 status to close with when the frame breaks the protocol
+---@return string|nil problem What broke it, short enough for one line of :messages
+local function add_data_frame(client, data_frame)
+  local fragments = client.fragments
+  if data_frame.opcode == frame.OPCODE.BINARY then
+    return nil, 1003, "Binary messages not supported"
+  elseif data_frame.opcode == frame.OPCODE.TEXT and fragments then
+    return nil, 1002, "Text frame inside another message"
+  elseif data_frame.opcode == frame.OPCODE.CONTINUATION and not fragments then
+    return nil, 1002, "Unexpected continuation frame"
+  end
+  fragments = fragments or { size = 0 }
+  fragments.size = fragments.size + #data_frame.payload
+  if fragments.size > frame.MAX_PAYLOAD_LENGTH then
+    return nil, 1009, "WebSocket message too big"
+  end
+  table.insert(fragments, data_frame.payload)
+  if not data_frame.fin then
+    client.fragments = fragments
+    return nil
+  end
+  client.fragments = nil
+  local message = table.concat(fragments)
+  if not server_utils.is_valid_utf8(message) then
+    return nil, 1007, "Invalid UTF-8 in text message"
+  end
+  return message
 end
 
 ---Process incoming data for a client
@@ -149,21 +186,24 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       break -- No close_code means the frame is incomplete; wait for more bytes.
     end
 
-    -- Frame validation is now handled entirely within frame.parse_frame.
-    -- If frame.parse_frame returns a frame, it's considered valid.
-
     client.buffer = client.buffer:sub(bytes_consumed + 1)
 
-    if parsed_frame.opcode == frame.OPCODE.TEXT then
-      vim.schedule(function()
-        on_message(client, parsed_frame.payload)
-      end)
-    elseif parsed_frame.opcode == frame.OPCODE.BINARY then
-      -- Binary message (treat as text for JSON-RPC)
-      vim.schedule(function()
-        on_message(client, parsed_frame.payload)
-      end)
-    elseif parsed_frame.opcode == frame.OPCODE.CLOSE then
+    local opcode = parsed_frame.opcode
+    if opcode == frame.OPCODE.TEXT or opcode == frame.OPCODE.BINARY or opcode == frame.OPCODE.CONTINUATION then
+      local message, status, problem = add_data_frame(client, parsed_frame)
+      if message then
+        vim.schedule(function()
+          on_message(client, message)
+        end)
+      elseif status then
+        -- Same teardown as a fatal frame above: on_error runs only after the Close frame is written.
+        client.buffer = ""
+        M.close_client(client, status, status == 1003 and "Unsupported data" or "Protocol error", function()
+          on_error(client, problem)
+        end)
+        break
+      end
+    elseif opcode == frame.OPCODE.CLOSE then
       local code = 1000
       local reason = ""
 
@@ -190,24 +230,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       -- other termination branches.
       client.buffer = ""
       break
-    elseif parsed_frame.opcode == frame.OPCODE.PING then
+    elseif opcode == frame.OPCODE.PING then
       local pong_frame = frame.create_pong_frame(parsed_frame.payload)
       client.tcp_handle:write(pong_frame)
-    elseif parsed_frame.opcode == frame.OPCODE.PONG then
+    elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
-    elseif parsed_frame.opcode == frame.OPCODE.CONTINUATION then
-      -- Continuation frame - for simplicity, we don't support fragmentation.
-      -- Run on_error from close_client's write callback (so the Close frame is
-      -- flushed before teardown), then clear the buffer and break so we stop
-      -- iterating over a connection that is being torn down. See the fatal-frame
-      -- branch above for the rationale.
-      M.close_client(client, 1003, "Unsupported data", function()
-        on_error(client, "Fragmented messages not supported")
-      end)
-      client.buffer = ""
-      break
     else
-      local opcode = parsed_frame.opcode
       M.close_client(client, 1002, "Protocol error", function()
         on_error(client, "Unknown WebSocket opcode: " .. opcode)
       end)
