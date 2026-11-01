@@ -124,7 +124,7 @@ Module map (direct files):
 ### Diffs
 
 - `open_diff_blocking` must run inside a non-main coroutine. Otherwise it raises `-32000` [diff.lua:M.open_diff_blocking]
-- A diff starts from a window that shows the old file, or from the main editor window. Neither is a diff window or the preview window [diff.lua:M._setup_blocking_diff] [diff.lua:find_main_editor_window]
+- A diff opens in a new tab when `diff_opts.open_in_new_tab` is set or when the tab of the window it would use already has a diff window. Otherwise it starts from a window that shows the old file or from the main editor window, neither of which is a diff window or the preview window. When neither exists, it splits the current window [diff.lua:M._setup_blocking_diff] [diff.lua:find_main_editor_window]
 - A new diff with an existing tab name first rejects the old diff (if pending), then cleans it up [diff.lua:M.open_diff_blocking]
 - A diff that resolves before `open_diff_blocking` yields, for example from a `ClaudeCodeDiffOpened` handler that runs `:ClaudeCodeDiffDeny`, is returned at once as the openDiff reply instead of a deferred one [diff.lua:M.open_diff_blocking]
 - When the target buffer is dirty, diff setup raises `-32000` with message "Diff setup failed". Its `data` holds the inner error, which contains "Cannot create diff: file has unsaved changes" [diff.lua:M._setup_blocking_diff]
