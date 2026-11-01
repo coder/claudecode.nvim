@@ -565,14 +565,16 @@ end
 ---selection then includes the line break and ends at the start of the next line: Neovim yanks that line break, and
 ---VS Code ends such a selection there. Neovim yanks no line break after the buffer's last line, a blockwise
 ---selection never includes one, and with 'virtualedit' containing `all` the end is a virtual space instead, so
----those end at the end of the line.
+---those end at the end of the line. On an empty line that is character 1, and so is the end of a block whose last
+---row is empty: Claude Code counts an end at character 0 as the line before, which would leave the line out.
 ---@param bufnr integer
 ---@param visual_mode string
 ---@param lines_content string[] the selection's lines. The next line is appended when the end moves there.
 ---@param end_coords table
 local function end_past_line(bufnr, visual_mode, lines_content, end_coords)
   local last_line = lines_content[#lines_content]
-  if end_coords.col <= #last_line then
+  local block_on_empty_row = visual_mode == "\22" and last_line == ""
+  if end_coords.col <= #last_line and not block_on_empty_row then
     return
   end
   local line_break = visual_mode == "v" and not vim.o.virtualedit:find("all", 1, true)
@@ -581,13 +583,14 @@ local function end_past_line(bufnr, visual_mode, lines_content, end_coords)
     end_coords.col = 0
     table.insert(lines_content, vim.api.nvim_buf_get_lines(bufnr, end_coords.lnum - 1, end_coords.lnum, false)[1])
   else
-    end_coords.col = #last_line
+    end_coords.col = math.max(#last_line, 1)
   end
 end
 
 ---Extracts text for linewise visual selection and sets its end to the end of the last line. When the last line is
 ---empty, the end moves to the start of the next line and the text gets that line break: Claude Code counts an end
----at character 0 as the line before, which would leave the empty line out.
+---at character 0 as the line before, which would leave the empty line out. The buffer's last line has no next
+---line, so an empty one ends at character 1.
 ---@param bufnr integer
 ---@param lines_content table - array of line strings
 ---@param start_coords table - start coordinates
@@ -597,9 +600,12 @@ local function extract_linewise_text(bufnr, lines_content, start_coords, end_coo
   start_coords.col = 1 -- Linewise selection effectively starts at column 1
   local text = table.concat(lines_content, "\n")
   end_coords.col = #lines_content[#lines_content]
-  if end_coords.col == 0 and end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
-    end_coords.lnum = end_coords.lnum + 1
-    return text .. "\n"
+  if end_coords.col == 0 then
+    if end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
+      end_coords.lnum = end_coords.lnum + 1
+      return text .. "\n"
+    end
+    end_coords.col = 1
   end
   return text
 end
