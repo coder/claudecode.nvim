@@ -569,6 +569,23 @@ local vim = {
       return 1
     end,
 
+    resolve = function(path)
+      return path
+    end,
+
+    getfperm = function(path)
+      local file = io.open(path, "rb")
+      if not file then
+        return ""
+      end
+      file:close()
+      return "rw-r--r--"
+    end,
+
+    setfperm = function(path, mode)
+      return 1
+    end,
+
     getpos = function(mark)
       if mark == "'<" then
         return { 0, 1, 1, 0 }
@@ -1135,6 +1152,13 @@ local vim = {
     end,
     now = function()
       return os.time() * 1000
+    end,
+    fs_rename = function(from, to)
+      local ok, err = os.rename(from, to)
+      if not ok then
+        return nil, err
+      end
+      return true
     end,
     timer_stop = function(timer)
       return true

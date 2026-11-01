@@ -1826,11 +1826,22 @@ local function write_accepted_text(diff_data)
   if file_holds_accepted_text(diff_data) or read_file(path) ~= diff_data.file_at_accept or is_buffer_dirty(path) then
     return
   end
-  vim.fn.mkdir(vim.fn.fnamemodify(path, ":h"), "p")
-  local file = io.open(path, "wb")
-  if file then
-    file:write(diff_data.result_content.content[2].text)
-    file:close()
+  -- A temp file renamed over the target, so a failed write (a full disk) leaves the file whole. resolve() writes
+  -- through a symlink to the file it names, and the temp file gets the target's permissions.
+  local target = vim.fn.resolve(path)
+  vim.fn.mkdir(vim.fn.fnamemodify(target, ":h"), "p")
+  local tmp = target .. ".claudecode-" .. vim.fn.getpid() .. ".tmp"
+  local file = io.open(tmp, "wb")
+  if not file then
+    return
+  end
+  local written = file:write(diff_data.result_content.content[2].text)
+  local closed = file:close()
+  local perm = vim.fn.getfperm(target)
+  if
+    not (written and closed and (perm == "" or vim.fn.setfperm(tmp, perm) == 1) and vim.loop.fs_rename(tmp, target))
+  then
+    os.remove(tmp)
   end
 end
 
