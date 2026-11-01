@@ -19,8 +19,8 @@
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
-#   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700, so
-#                  every evidence file is 0600
+#   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700 and
+#                  without an ACL, so every evidence file is 0600
 # A refused launch must also leave the files under the proof's temp dir as it found them.
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
 # deleted when every case passes, and kept with its path printed when one fails.
@@ -154,7 +154,9 @@ if [[ -d $TMP/acl-out ]]; then
   # A new default parent dir (XUM_SCRATCH_DIR=$TMP/acl) is made by the same code as $TMP/acl/mid.
   private out-made "$TMP/acl/mid/out"
   [[ $(stat -c %a -- "$TMP/acl/mid") == 700 ]] || fail "out-made: $TMP/acl/mid is not a 0700 dir"
-  echo "PASS out-made: launch created $TMP/acl/mid and $TMP/acl/mid/out as 0700 in a dir with a default ACL, and all $(find "$TMP/acl/mid/out" -type f | wc -l) evidence files are 0600"
+  acl=$(getfacl --skip-base -- "$TMP/acl/mid" 2>/dev/null | grep -v '^#' || true)
+  [[ -z $acl ]] || fail "out-made: $TMP/acl/mid keeps the ACL it inherited: $(tr '\n' ' ' <<<"$acl")"
+  echo "PASS out-made: launch created $TMP/acl/mid and $TMP/acl/mid/out as 0700 without an ACL in a dir with a default ACL, and all $(find "$TMP/acl/mid/out" -type f | wc -l) evidence files are 0600"
 fi
 
 init_out=$(mktemp -d)
