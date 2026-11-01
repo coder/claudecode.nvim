@@ -114,6 +114,10 @@ if not _G.vim then
         return { mode = _G.vim._current_mode }
       end,
 
+      nvim_buf_line_count = function(bufnr)
+        return _G.vim._buffers[bufnr] and #_G.vim._buffers[bufnr].lines or 0
+      end,
+
       nvim_buf_get_changedtick = function(_)
         return _G.vim._changedtick or 0
       end,
@@ -186,6 +190,10 @@ if not _G.vim then
           i = last + 1
         end
         return last
+      end,
+      -- Tests set _G.vim._has["nvim-0.11"] to model a Neovim version.
+      has = function(feature)
+        return _G.vim._has and _G.vim._has[feature] and 1 or 0
       end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
@@ -348,6 +356,7 @@ if not _G.vim then
     o = { ---@type vim_options_table
       columns = 80,
       lines = 24,
+      virtualedit = "",
     }, -- Mock for vim.o
     bo = setmetatable({}, { -- Mock for vim.bo and vim.bo[bufnr]
       __index = function(t, k)
@@ -943,6 +952,34 @@ describe("Range Selection Tests", function()
       assert(mock_server.last_broadcast.params.lineEnd == 0)
     end)
 
+    it("keeps an explicit range's last line when that line is empty", function()
+      _G.vim._buffers[1].lines[3] = ""
+
+      assert.is_true(selection.send_at_mention_for_visual_selection(2, 3))
+
+      assert.are.equal(1, mock_server.last_broadcast.params.lineStart)
+      assert.are.equal(2, mock_server.last_broadcast.params.lineEnd)
+    end)
+
+    it("ends the mention on the line before when the tracked selection ends at character 0 of a line", function()
+      -- `v$` on line 0 includes its line break and ends at the start of line 1.
+      selection.state.latest_selection = {
+        text = "abc\n",
+        filePath = "/test/file.lua",
+        fileUrl = "file:///test/file.lua",
+        selection = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 1, character = 0 },
+          isEmpty = false,
+        },
+      }
+
+      assert.is_true(selection.send_at_mention_for_visual_selection())
+
+      assert.are.equal(0, mock_server.last_broadcast.params.lineStart)
+      assert.are.equal(0, mock_server.last_broadcast.params.lineEnd)
+    end)
+
     it("should fail when server is not available", function()
       mock_claudecode_main.state.server = nil
       local result = selection.send_at_mention_for_visual_selection(2, 4)
@@ -1297,6 +1334,249 @@ describe("Range Selection Tests", function()
         local sel = from_marks({ "naïve café", "日本語 テキスト" }, "V", 1, 1, 2, 2147483647)
         assert.are.equal("naïve café\n日本語 テキスト", sel.text)
         assert.are.equal(#"日本語 テキスト", sel.selection["end"].character)
+      end)
+
+      describe("a linewise selection whose last line is empty", function()
+        -- Claude Code counts `end.line - start.line + 1` lines, one fewer when `end.character` is 0. An end on the
+        -- empty line itself would leave that line out of the count.
+        it("ends at the start of the next line, with the empty line's line break", function()
+          local sel = from_marks({ "abc", "", "def" }, "V", 1, 1, 2, 2147483647)
+          assert.are.equal("abc\n\n", sel.text)
+          assert.are.same({ line = 2, character = 0 }, sel.selection["end"])
+        end)
+
+        it("sends one empty line as its line break, not as an empty selection", function()
+          local sel = from_marks({ "", "def" }, "V", 1, 1, 1, 2147483647)
+          assert.are.equal("\n", sel.text)
+          assert.are.same({ line = 1, character = 0 }, sel.selection["end"])
+          assert.is_false(sel.selection.isEmpty)
+        end)
+
+        it("ends at character 1 of the empty line when it is the buffer's last line", function()
+          -- There is no next line to end on, and character 0 would read as the end of the line before.
+          local sel = from_marks({ "abc", "" }, "V", 1, 1, 2, 2147483647)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+        end)
+      end)
+
+      describe("an end on an empty line, without its line break", function()
+        -- Claude Code counts an end at character 0 as the line before, so such an end is character 1.
+        local mentions
+        local saved_claudecode
+
+        before_each(function()
+          mentions = {}
+          saved_claudecode = package.loaded["claudecode"]
+          package.loaded["claudecode"] = {
+            state = { server = {} },
+            send_at_mention = function(_, start_line, end_line)
+              table.insert(mentions, { start_line, end_line })
+              return true
+            end,
+          }
+          selection.state.tracking_enabled = true
+        end)
+
+        after_each(function()
+          package.loaded["claudecode"] = saved_claudecode
+          selection.state.tracking_enabled = false
+          _G.vim.o.selection = nil
+          _G.vim.o.virtualedit = ""
+        end)
+
+        local function mention_of(sel)
+          selection.state.latest_selection = sel
+          assert.is_true(selection.send_at_mention_for_visual_selection())
+          return mentions[#mentions]
+        end
+
+        it("keeps a blockwise selection onto an empty row on that row", function()
+          -- `1G0<C-v>j$` onto the empty line 2.
+          local sel = from_marks({ "abc", "", "x" }, "\22", 1, 1, 2, 2147483647)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+
+        it("keeps an exclusive blockwise selection onto an empty row on that row", function()
+          -- Neovim yanks the empty row as part of the block.
+          _G.vim.o.selection = "exclusive"
+          local sel = from_marks({ "abc", "", "x" }, "\22", 1, 1, 2, 1)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+
+        it("keeps a charwise selection onto the buffer's empty last line on that line", function()
+          -- `10G0vj` when the file ends in an empty line.
+          local sel = from_marks({ "abc", "" }, "v", 1, 1, 2, 1)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+
+        it("keeps a selection onto an empty line on that line when 'virtualedit' contains all", function()
+          _G.vim.o.virtualedit = "all"
+          local sel = from_marks({ "abc", "", "x" }, "v", 1, 1, 2, 1)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+        end)
+
+        it("keeps the mention of a linewise selection onto the buffer's empty last line", function()
+          local sel = from_marks({ "abc", "" }, "V", 1, 1, 2, 2147483647)
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+      end)
+
+      describe("past the end of a line", function()
+        -- `v$` and `l` past the last character put the end on the line break. Neovim yanks it, except after the
+        -- buffer's last line. VS Code ends such a selection at the start of the next line.
+        it("includes the line break and ends at the start of the next line", function()
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "abc", "def" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 1, 0 } }
+          _G.vim.test.set_cursor(0, 1, 3)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.are.equal("abc\n", sent.text)
+          assert.are.same({ line = 0, character = 0 }, sent.selection.start)
+          assert.are.same({ line = 1, character = 0 }, sent.selection["end"])
+        end)
+
+        it("includes the line break of a multi-line selection's last line", function()
+          local sel = from_marks({ "abc", "def", "ghi" }, "v", 1, 1, 2, 4)
+          assert.are.equal("abc\ndef\n", sel.text)
+          assert.are.same({ line = 2, character = 0 }, sel.selection["end"])
+        end)
+
+        it("sends the line break of an empty line", function()
+          local sel = from_marks({ "", "def" }, "v", 1, 1, 1, 1)
+          assert.are.equal("\n", sel.text)
+          assert.are.same({ line = 1, character = 0 }, sel.selection["end"])
+          assert.is_false(sel.selection.isEmpty)
+        end)
+
+        it("ends at the end of the buffer's last line, without a line break", function()
+          local sel = from_marks({ "abc", "def" }, "v", 2, 1, 2, 4)
+          assert.are.equal("def", sel.text)
+          assert.are.same({ line = 1, character = 3 }, sel.selection["end"])
+        end)
+
+        it("ends a blockwise selection at the end of the line", function()
+          local sel = from_marks({ "abc", "def", "ghi" }, "\22", 1, 1, 2, 4)
+          assert.are.equal("abc\ndef", sel.text)
+          assert.are.same({ line = 1, character = 3 }, sel.selection["end"])
+        end)
+
+        it("leaves the line break out when 'virtualedit' contains all", function()
+          -- There `v$y` yanks a virtual space after the last character, not the line break.
+          _G.vim.o.virtualedit = "all"
+          local sel = from_marks({ "abc", "def" }, "v", 1, 1, 1, 4)
+          _G.vim.o.virtualedit = ""
+          assert.are.equal("abc", sel.text)
+          assert.are.same({ line = 0, character = 3 }, sel.selection["end"])
+        end)
+
+        it("leaves the line break out with 'selection' set to exclusive", function()
+          _G.vim.o.selection = "exclusive"
+          local sel = from_marks({ "abc", "def" }, "v", 1, 1, 1, 4)
+          _G.vim.o.selection = nil
+          assert.are.equal("abc", sel.text)
+          assert.are.same({ line = 0, character = 3 }, sel.selection["end"])
+        end)
+      end)
+
+      describe("after a control character", function()
+        -- U+0947 DEVANAGARI VOWEL SIGN E is a composing character. On Neovim 0.11+ it is a character of its own
+        -- after a TAB, a NUL or an ESC, and `0lvy` on this line yanks only the TAB. Earlier versions join them.
+        local line = "x\t\224\165\135y"
+
+        after_each(function()
+          _G.vim._has = nil
+          _G.vim.o.selection = nil
+        end)
+
+        it("ends after the control character alone on Neovim 0.11+", function()
+          _G.vim._has = { ["nvim-0.11"] = true }
+          local sel = from_marks({ line }, "v", 1, 2, 1, 2)
+          assert.are.equal("\t", sel.text)
+          assert.are.equal(2, sel.selection["end"].character)
+        end)
+
+        it("leaves the composing character out of an exclusive selection on Neovim 0.11+", function()
+          _G.vim._has = { ["nvim-0.11"] = true }
+          _G.vim.o.selection = "exclusive"
+          local sel = from_marks({ line }, "v", 1, 2, 1, 3)
+          assert.are.equal("\t", sel.text)
+          assert.are.equal(2, sel.selection["end"].character)
+        end)
+
+        it("keeps the composing character with the control character before Neovim 0.11", function()
+          local sel = from_marks({ line }, "v", 1, 2, 1, 2)
+          assert.are.equal("\t\224\165\135", sel.text)
+          assert.are.equal(5, sel.selection["end"].character)
+        end)
+      end)
+    end)
+
+    describe("Select mode", function()
+      -- With 'selectmode' containing `cmd`, `v`, `V` and CTRL-V start Select mode, and `gh` always does. It has the
+      -- same selection as Visual mode.
+      it("sends a charwise Select-mode selection", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("s")
+        _G.vim._marks = { v = { 0, 1, 1, 0 } }
+        _G.vim.test.set_cursor(0, 1, 2)
+
+        selection.update_selection()
+
+        local sent = mock_server.last_broadcast.data
+        assert.are.equal("alp", sent.text)
+        assert.are.same({ line = 0, character = 3 }, sent.selection["end"])
+      end)
+
+      it("sends whole lines for a linewise Select-mode selection", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta", "gamma" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("S")
+        _G.vim._marks = { v = { 0, 1, 3, 0 } }
+        _G.vim.test.set_cursor(0, 1, 3)
+
+        selection.update_selection()
+
+        assert.are.equal("alpha beta", mock_server.last_broadcast.data.text)
+      end)
+
+      it("flushes the selection when Select mode ends", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta" })
+        selection.enable(mock_server)
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 2)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 3, 0 } }
+        _G.vim.v.event = { old_mode = "s", new_mode = "n" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert.are.equal("alp", mock_server.last_broadcast.data.text)
+      end)
+
+      it("does not flush when CTRL-O in Select mode switches to Visual mode for one command", function()
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta" })
+        selection.enable(mock_server)
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 3, 0 } }
+        _G.vim.v.event = { old_mode = "v", new_mode = "vs" }
+        mock_server.last_broadcast = nil
+
+        selection.on_mode_changed()
+
+        assert.is_nil(mock_server.last_broadcast)
       end)
     end)
 
