@@ -950,6 +950,25 @@ describe("Range Selection Tests", function()
       assert(mock_server.last_broadcast.params.lineEnd == 0)
     end)
 
+    it("ends the mention on the line before when the tracked selection ends at character 0 of a line", function()
+      -- `v$` on line 0 includes its line break and ends at the start of line 1.
+      selection.state.latest_selection = {
+        text = "abc\n",
+        filePath = "/test/file.lua",
+        fileUrl = "file:///test/file.lua",
+        selection = {
+          start = { line = 0, character = 0 },
+          ["end"] = { line = 1, character = 0 },
+          isEmpty = false,
+        },
+      }
+
+      assert.is_true(selection.send_at_mention_for_visual_selection())
+
+      assert.are.equal(0, mock_server.last_broadcast.params.lineStart)
+      assert.are.equal(0, mock_server.last_broadcast.params.lineEnd)
+    end)
+
     it("should fail when server is not available", function()
       mock_claudecode_main.state.server = nil
       local result = selection.send_at_mention_for_visual_selection(2, 4)
@@ -1304,6 +1323,29 @@ describe("Range Selection Tests", function()
         local sel = from_marks({ "naïve café", "日本語 テキスト" }, "V", 1, 1, 2, 2147483647)
         assert.are.equal("naïve café\n日本語 テキスト", sel.text)
         assert.are.equal(#"日本語 テキスト", sel.selection["end"].character)
+      end)
+
+      describe("a linewise selection whose last line is empty", function()
+        -- Claude Code counts `end.line - start.line + 1` lines, one fewer when `end.character` is 0. An end on the
+        -- empty line itself would leave that line out of the count.
+        it("ends at the start of the next line, with the empty line's line break", function()
+          local sel = from_marks({ "abc", "", "def" }, "V", 1, 1, 2, 2147483647)
+          assert.are.equal("abc\n\n", sel.text)
+          assert.are.same({ line = 2, character = 0 }, sel.selection["end"])
+        end)
+
+        it("sends one empty line as its line break, not as an empty selection", function()
+          local sel = from_marks({ "", "def" }, "V", 1, 1, 1, 2147483647)
+          assert.are.equal("\n", sel.text)
+          assert.are.same({ line = 1, character = 0 }, sel.selection["end"])
+          assert.is_false(sel.selection.isEmpty)
+        end)
+
+        it("ends on the empty line when it is the buffer's last line", function()
+          local sel = from_marks({ "abc", "" }, "V", 1, 1, 2, 2147483647)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 0 }, sel.selection["end"])
+        end)
       end)
 
       describe("past the end of a line", function()
