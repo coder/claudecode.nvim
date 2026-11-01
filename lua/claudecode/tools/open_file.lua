@@ -180,10 +180,15 @@ local function handler(params)
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
 
-  -- An operator the user typed (d, c, y, ...) still waits for its motion. It would act on any selection made now,
-  -- and the next motion would act from where the user typed it, so openFile selects nothing and cancels it.
-  local operator_pending = vim.api.nvim_get_mode().mode:sub(1, 2) == "no"
-  local nothing_selected = " (a pending operator was cancelled and nothing was selected)"
+  if vim.fn.getcmdwintype() ~= "" then
+    error({ code = -32000, message = "File operation error", data = "The command-line window is open" })
+  end
+  -- The user is in the middle of a command: an operator (d, c, y, ...) waits for its motion, or Insert mode, Replace
+  -- mode, CTRL-O from them, or the command line is on. The user's next keys finish that command in the current
+  -- window, from where it started, so openFile must not change that window, its cursor or the mode. No key can
+  -- cancel the command reliably, because a key reader in an autocommand can take the key first.
+  local mode = vim.api.nvim_get_mode().mode
+  local mid_command = mode:match("^n[oi]") ~= nil or mode:match("^[iRc]") ~= nil
 
   local start_line, end_line
   if params.startLine ~= nil or params.endLine ~= nil then
@@ -234,8 +239,20 @@ local function handler(params)
 
   local message = "Opened file: " .. file_path
 
-  -- Find the main editor window
-  local target_win = find_main_editor_window()
+  local target_win
+  if mid_command then
+    -- :pedit keeps the current window and its cursor, unless the current window is the preview window.
+    if vim.api.nvim_win_get_option(0, "previewwindow") then
+      error({
+        code = -32000,
+        message = "File operation error",
+        data = "The user is in the middle of a command in the preview window",
+      })
+    end
+    preview, target_win = true, vim.api.nvim_get_current_win()
+  else
+    target_win = find_main_editor_window()
+  end
 
   if target_win then
     -- Open file in the target window
@@ -279,7 +296,7 @@ local function handler(params)
   if preview then
     target_win = preview_window_of(target_win)
   end
-  if make_frontmost then
+  if make_frontmost and not mid_command then
     vim.api.nvim_set_current_win(target_win)
   end
 
@@ -301,9 +318,9 @@ local function handler(params)
       -- line break: gv selects the character under '>, and on an empty line that is the line break. Ending
       -- on the line above instead would move '> and the selection Claude receives off endLine.
       local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1]
-      if operator_pending then
+      if mid_command then
         vim.api.nvim_win_set_cursor(0, { start_line, 0 })
-        message = "Opened file and positioned at line " .. start_line .. nothing_selected
+        message = "Opened file and positioned at line " .. start_line
       else
         select_range(start_line, 0, end_line, math.max(#end_line_text - 1, 0))
         message = "Opened file and selected lines " .. start_line .. " to " .. end_line
@@ -366,8 +383,8 @@ local function handler(params)
         vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
         vim.cmd("normal! zz") -- Center the match before gv, which must be the last key
         -- When endText is not found, only the cursor moves, as in the VS Code extension.
-        if end_line_idx and operator_pending then
-          message = 'Opened file and positioned at "' .. start_text .. '"' .. nothing_selected
+        if end_line_idx and mid_command then
+          message = 'Opened file and positioned at "' .. start_text .. '"'
         elseif end_line_idx then
           select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
         end
@@ -377,9 +394,9 @@ local function handler(params)
     end)
   end
 
-  if operator_pending then
-    -- "i" puts <Esc> before any key the user types next, and "n" skips the user's mappings.
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "ni", false)
+  if mid_command then
+    message = message
+      .. " (shown in the preview window without a selection, because the user is in the middle of a command)"
   end
 
   -- Return format based on makeFrontmost parameter
