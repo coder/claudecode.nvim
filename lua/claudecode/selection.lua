@@ -518,9 +518,9 @@ local function selection_end_byte(line, start_coords, end_coords)
   local one_position = start_coords.lnum == end_coords.lnum and start_coords.col == col
   -- vim.fn passes a Lua string with a NUL byte as a Blob. Neovim keeps NUL as NL in a line, and both are one byte.
   line = line:gsub("%z", "\n")
-  -- byteidx and charidx count characters the way the cursor and `y` do: a code point with its composing
-  -- characters, and on Neovim 0.11+ a grapheme cluster, where a control such as a TAB, U+0085 or U+200B is a
-  -- character of its own. A regex such as `\_.` still joins a composing character to a control.
+  -- byteidx and charidx count characters the way `y` does: a code point with its composing characters, and on
+  -- Neovim 0.11+ a grapheme cluster, where a control such as a TAB, U+0085 or U+200B is a character of its own.
+  -- A regex such as `\_.` still joins a composing character to a control.
   if vim.o.selection == "exclusive" and not one_position then
     -- Neovim ends after the character that holds byte col - 1. On 0.11+ that can be a cluster that reaches past
     -- col, such as स्ते when col is its त. Without a character before col, the selection ends at the line start.

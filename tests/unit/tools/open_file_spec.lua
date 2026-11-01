@@ -412,7 +412,7 @@ describe("Tool: open_file", function()
 
   describe("with no suitable editor window", function()
     -- Like Neovim, wincmd t and l move to the top-left window and to its right, wincmd j to the window below, and
-    -- vsplit makes a new current window next to the current one, showing the same buffer.
+    -- vsplit and {N}split make a new current window next to or above the current one, showing the same buffer.
     local order, windows, current, edited_in
 
     local function layout(list)
@@ -440,6 +440,20 @@ describe("Tool: open_file", function()
           table.insert(order, at + 1, id)
           windows[id] = { id = id, buf = windows[current].buf, split_from = current }
           current = id
+        elseif command == "12split" then
+          local from, id = call_win or current, 4000 + #order
+          for i, win in ipairs(order) do
+            if win == from then
+              table.insert(order, i, id)
+              break
+            end
+          end
+          windows[id] = { id = id, buf = windows[from].buf, split_from = from }
+          if call_win then
+            call_win = id
+          else
+            current = id
+          end
         elseif command:match("^edit ") then
           edited_in = call_win or current
         end
@@ -463,6 +477,30 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
         return option == "previewwindow" and windows[win == 0 and (call_win or current) or win].preview == true
       end)
+      _G.vim.api.nvim_win_set_option = spy.new(function(win, option, value)
+        if option == "previewwindow" then
+          windows[win].preview = value
+        end
+      end)
+      _G.vim.api.nvim_win_set_buf = spy.new(function(win, buf)
+        windows[win].buf = buf
+      end)
+      _G.vim.api.nvim_win_is_valid = spy.new(function(win)
+        return windows[win] ~= nil
+      end)
+      _G.vim.api.nvim_win_get_tabpage = spy.new(function(win)
+        return 1
+      end)
+      _G.vim.api.nvim_tabpage_list_wins = spy.new(function(tab)
+        return order
+      end)
+      _G.vim.api.nvim_buf_set_option = spy.new(function() end)
+      edit_buffers["test.txt"] = 50
+      _G.vim.o.previewheight = 12
+    end)
+
+    after_each(function()
+      _G.vim.o.previewheight = nil
     end)
 
     it("edits into a split of the preview window when it is the only window", function()
@@ -487,6 +525,29 @@ describe("Tool: open_file", function()
       expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
       expect(current).to_be(edited_in)
     end)
+
+    for _, case in ipairs({
+      {
+        name = "the preview window and a terminal",
+        list = { { id = 3000, buf = 20, preview = true }, { id = 1000, buf = 10 } },
+      },
+      { name = "only a terminal", list = { { id = 1000, buf = 10 } } },
+    }) do
+      it("shows a preview in the preview window and leaves one window on the terminal, with " .. case.name, function()
+        layout(case.list)
+        expect(pcall(open_file_handler, { filePath = "test.txt", preview = true })).to_be_true()
+        local on_terminal, previews = {}, {}
+        for _, id in ipairs(order) do
+          if windows[id].buf == 10 then
+            on_terminal[#on_terminal + 1] = id
+          end
+          if windows[id].preview then
+            previews[#previews + 1] = windows[id].buf
+          end
+        end
+        assert.are.same({ { 1000 }, { 50 } }, { on_terminal, previews })
+      end)
+    end
   end)
 
   it("splits instead of editing into a diff window when every window is a diff (issue #277)", function()
@@ -547,11 +608,13 @@ describe("Tool: open_file", function()
     -- which a split does not copy.
     -- A window that enters a loaded buffer and :checktime load the file again when it changed on disk (`disk`), the
     -- buffer has no unsaved changes and 'autoread' is set. Otherwise a FileChangedShell autocommand for the buffer
-    -- decides with v:fcs_choice, unless 'eventignore' ignores it, and without one Neovim asks the user, whose next key
-    -- answers. Deleting a deleted autocommand fails. :edit re-reads the
+    -- decides with v:fcs_choice, unless 'eventignore' ignores it, or 'eventignorewin' (`ignore_win`) of the window
+    -- that enters the buffer, of the current window when it shows the buffer, or else of every window that shows it.
+    -- Without one Neovim asks the user, whose next key answers. Deleting a deleted autocommand fails. :edit re-reads the
     -- buffer that its window shows without asking. A buffer loads, with its BufReadPost, FileType and BufEnter
     -- autocommands (`events`), in the window that enters it, or for bufload() in a hidden autocommand window.
     local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked, events, autocmds
+    local ignore_win
     local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
     local original_create_autocmd, original_del_autocmd, original_v
 
@@ -584,8 +647,8 @@ describe("Tool: open_file", function()
       original_create_autocmd, original_del_autocmd = _G.vim.api.nvim_create_autocmd, _G.vim.api.nvim_del_autocmd
       original_v = _G.vim.v
       buffer_lines = { "alpha", "beta", "gamma", "delta", "epsilon" }
-      current_win, win_buf, win_cursor, preview_flag, fixed_buf, mark_pos, visual =
-        1000, { [1000] = 10 }, {}, {}, {}, {}, nil
+      current_win, win_buf, win_cursor, preview_flag, fixed_buf, mark_pos, visual, ignore_win =
+        1000, { [1000] = 10 }, {}, {}, {}, {}, nil, {}
       buffers = {
         [10] = { lines = { "one", "two", "three", "four" }, filetype = "text" },
         [30] = { lines = buffer_lines, filetype = "lua" },
@@ -606,14 +669,36 @@ describe("Tool: open_file", function()
       local function read_disk(buf)
         buffers[buf].lines, buffers[buf].disk = buffers[buf].disk or buffers[buf].lines, nil
       end
-      local function check_disk(buf)
+      local function ignored_in(buf, entering_win)
+        if _G.vim.o.eventignore == "all" or _G.vim.o.eventignore == "FileChangedShell" then
+          return true
+        end
+        local current = call_win or current_win
+        local wins = {}
+        if entering_win or win_buf[current] == buf then
+          wins = { entering_win or current }
+        else
+          for win, shown in pairs(win_buf) do
+            if shown == buf then
+              wins[#wins + 1] = win
+            end
+          end
+        end
+        for _, win in ipairs(wins) do
+          if ignore_win[win] ~= "FileChangedShell" then
+            return false
+          end
+        end
+        return #wins > 0
+      end
+      local function check_disk(buf, entering_win)
         if not buffers[buf].disk then
           return
         elseif _G.vim.o.autoread and not buffers[buf].modified then
           return read_disk(buf)
         end
         local handled = false
-        local ignored = _G.vim.o.eventignore == "all" or _G.vim.o.eventignore == "FileChangedShell"
+        local ignored = ignored_in(buf, entering_win)
         _G.vim.v.fcs_reason, _G.vim.v.fcs_choice = buffers[buf].modified and "conflict" or "changed", ""
         for _, autocmd in pairs(autocmds) do
           if autocmd and autocmd.event == "FileChangedShell" and autocmd.buffer == buf and not ignored then
@@ -633,7 +718,7 @@ describe("Tool: open_file", function()
           read_disk(buf)
           events[#events + 1] = "load@" .. where
         elseif win_buf[win] ~= buf then
-          check_disk(buf)
+          check_disk(buf, win)
         end
         win_buf[win] = buf
         events[#events + 1] = "enter@" .. where
@@ -682,6 +767,9 @@ describe("Tool: open_file", function()
       end)
       _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
         win = win == 0 and (call_win or current_win) or win
+        if option == "eventignorewin" then
+          return ignore_win[win] or ""
+        end
         return (option == "previewwindow" and preview_flag[win] or option == "winfixbuf" and fixed_buf[win]) == true
       end)
       _G.vim.api.nvim_win_set_option = spy.new(function(win, option, value)
@@ -703,7 +791,21 @@ describe("Tool: open_file", function()
         return win_buf[win] ~= nil
       end)
       _G.vim.fn.exists = spy.new(function(name)
-        return (name == "*state" or name == "+winfixbuf") and 1 or 0
+        return (name == "*state" or name == "+winfixbuf" or name == "+eventignorewin") and 1 or 0
+      end)
+      _G.vim.fn.getbufvar = spy.new(function(buf, name)
+        assert(name == "&autoread", name)
+        return _G.vim.o.autoread and 1 or 0
+      end)
+      _G.vim.fn.win_findbuf = spy.new(function(buf)
+        local wins = {}
+        for win, shown in pairs(win_buf) do
+          if shown == buf then
+            wins[#wins + 1] = win
+          end
+        end
+        table.sort(wins)
+        return wins
       end)
       _G.vim.api.nvim_buf_set_option = spy.new(function() end)
       _G.vim.fn.bufexists = spy.new(function(path)
@@ -762,6 +864,7 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_create_autocmd, _G.vim.api.nvim_del_autocmd = original_create_autocmd, original_del_autocmd
       _G.vim.v = original_v
       _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = nil, nil, nil
+      _G.vim.fn.win_findbuf, _G.vim.fn.getbufvar = nil, nil
     end)
 
     it("opens the file without a range", function()
@@ -823,6 +926,35 @@ describe("Tool: open_file", function()
       -- Claude can write the file before it asks to open it.
       before_each(function()
         buffers[30].loaded, buffers[30].disk = true, { "alpha", "beta", "fresh" }
+        _G.vim.fn.readfile = spy.new(function(path, flags, max)
+          local lines = buffers[30].disk or buffers[30].lines
+          return { unpack(lines, 1, math.min(max or #lines, #lines)) }
+        end)
+      end)
+
+      local grown = { "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta" }
+      for _, case in ipairs({
+        { name = "the window shows it", win = 1000 },
+        { name = "the preview window shows it", win = 3000, preview = true },
+        { name = "the buffer is hidden" },
+      }) do
+        it("accepts a startLine that only the grown file has when " .. case.name, function()
+          buffers[30].disk = grown
+          if case.win then
+            win_buf[case.win], preview_flag[case.win] = 30, case.win == 3000 or nil
+          end
+          local success, result =
+            pcall(open_file_handler, { filePath = "test.txt", preview = case.preview, startLine = 7 })
+          expect(success).to_be_true()
+          assert.are.same({ "Opened file and selected lines 7 to 7", "eta" }, { result.content[1].text, visual.text })
+        end)
+      end
+
+      it("rejects a startLine that only the grown file has when the buffer keeps unsaved changes", function()
+        buffers[30].disk, buffers[30].modified, win_buf[1000] = grown, true, 30
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", startLine = 7 })
+        expect(success).to_be_false()
+        expect(err.code).to_be(-32602)
       end)
 
       for _, autoread in ipairs({ true, false }) do
@@ -885,6 +1017,45 @@ describe("Tool: open_file", function()
         local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
         expect(success).to_be_true()
         assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
+      end)
+
+      it(
+        "does not check the file when 'eventignorewin' of the current window that shows it ignores the event",
+        function()
+          _G.vim.o.autoread, win_buf[1000], ignore_win[1000] = false, 30, "FileChangedShell"
+          local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+          expect(success).to_be_true()
+          assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
+        end
+      )
+
+      it("does not check the file when 'eventignorewin' of every window that shows it ignores the event", function()
+        _G.vim.o.autoread, win_buf[3000], preview_flag[3000], ignore_win[3000] = false, 30, true, "FileChangedShell"
+        local success = pcall(open_file_handler, { filePath = "test.txt", preview = true, startLine = 2 })
+        expect(success).to_be_true()
+        assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
+      end)
+
+      for _, option in ipairs({ "eventignore", "eventignorewin" }) do
+        it("loads the file again with 'autoread' when '" .. option .. "' ignores the event", function()
+          win_buf[1000] = 30
+          if option == "eventignore" then
+            _G.vim.o.eventignore = "FileChangedShell"
+          else
+            ignore_win[1000] = "FileChangedShell"
+          end
+          local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+          expect(success).to_be_true()
+          assert.are.same({ { "alpha", "beta", "fresh" }, false }, { buffers[30].lines, asked })
+        end)
+      end
+
+      it("loads the file again when another window that shows it does not ignore the event", function()
+        _G.vim.o.autoread, win_buf[3000], preview_flag[3000], ignore_win[3000] = false, 30, true, "FileChangedShell"
+        win_buf[2000] = 30 -- in another tab page
+        local success = pcall(open_file_handler, { filePath = "test.txt", preview = true, startLine = 2 })
+        expect(success).to_be_true()
+        assert.are.same({ { "alpha", "beta", "fresh" }, false }, { buffers[30].lines, asked })
       end)
 
       it("answers when a user's FileChangedShell autocommand deletes openFile's", function()

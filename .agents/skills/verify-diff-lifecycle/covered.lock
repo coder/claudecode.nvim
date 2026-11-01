@@ -1,4 +1,4 @@
-sync c9e48a375576c0e6949f48662010a871b4be5e3e
+sync 7e40b89d6438919888dedd023e13e1a565dce7e3
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -30,22 +30,22 @@ block cleanup_state      032ae25f4d7ce499
 block diff_autocmds      675566664a1546fb
 block handle_invoke      0999461f45a3444b
 block open_diff_tool     f4bee70e46ded9af
-block setup_inline       404a7166f827b172
+block setup_inline       dd54373a523481e5
 block accept_current     7577efa33506569e
 block deny_current       94385d781b70d50c
 block user_close_all     10e024fd8ada1c16
 file lua/claudecode/config.lua dfb93bd69a6198ec
 file lua/claudecode/cwd.lua 55d26ea362173afa
-file lua/claudecode/diff.lua 44e19277d52bd77f
-file lua/claudecode/diff_inline.lua b6b304df990b724d
+file lua/claudecode/diff.lua d691536057edc530
+file lua/claudecode/diff_inline.lua 2455b567689247e0
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 file lua/claudecode/init.lua d216e0f31e907072
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
 file lua/claudecode/logger.lua eacf2556921ab1b2
 file lua/claudecode/selection.lua f37829d12cb7e8b7
-file lua/claudecode/server/client.lua 70c3f4f9b6a33366
-file lua/claudecode/server/frame.lua 437e978cbfd82ed4
+file lua/claudecode/server/client.lua d16ad16f5a17f662
+file lua/claudecode/server/frame.lua ab054d6538add76b
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 file lua/claudecode/server/init.lua ea24c13556dcd2a9
 file lua/claudecode/server/mock.lua 47986b9e1060acd8
