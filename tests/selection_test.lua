@@ -1352,10 +1352,79 @@ describe("Range Selection Tests", function()
           assert.is_false(sel.selection.isEmpty)
         end)
 
-        it("ends on the empty line when it is the buffer's last line", function()
+        it("ends at character 1 of the empty line when it is the buffer's last line", function()
+          -- There is no next line to end on, and character 0 would read as the end of the line before.
           local sel = from_marks({ "abc", "" }, "V", 1, 1, 2, 2147483647)
           assert.are.equal("abc\n", sel.text)
-          assert.are.same({ line = 1, character = 0 }, sel.selection["end"])
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+        end)
+      end)
+
+      describe("an end on an empty line, without its line break", function()
+        -- Claude Code counts an end at character 0 as the line before, so such an end is character 1.
+        local mentions
+        local saved_claudecode
+
+        before_each(function()
+          mentions = {}
+          saved_claudecode = package.loaded["claudecode"]
+          package.loaded["claudecode"] = {
+            state = { server = {} },
+            send_at_mention = function(_, start_line, end_line)
+              table.insert(mentions, { start_line, end_line })
+              return true
+            end,
+          }
+          selection.state.tracking_enabled = true
+        end)
+
+        after_each(function()
+          package.loaded["claudecode"] = saved_claudecode
+          selection.state.tracking_enabled = false
+          _G.vim.o.selection = nil
+          _G.vim.o.virtualedit = ""
+        end)
+
+        local function mention_of(sel)
+          selection.state.latest_selection = sel
+          assert.is_true(selection.send_at_mention_for_visual_selection())
+          return mentions[#mentions]
+        end
+
+        it("keeps a blockwise selection onto an empty row on that row", function()
+          -- `1G0<C-v>j$` onto the empty line 2.
+          local sel = from_marks({ "abc", "", "x" }, "\22", 1, 1, 2, 2147483647)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+
+        it("keeps an exclusive blockwise selection onto an empty row on that row", function()
+          -- Neovim yanks the empty row as part of the block.
+          _G.vim.o.selection = "exclusive"
+          local sel = from_marks({ "abc", "", "x" }, "\22", 1, 1, 2, 1)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+
+        it("keeps a charwise selection onto the buffer's empty last line on that line", function()
+          -- `10G0vj` when the file ends in an empty line.
+          local sel = from_marks({ "abc", "" }, "v", 1, 1, 2, 1)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+          assert.are.same({ 0, 1 }, mention_of(sel))
+        end)
+
+        it("keeps a selection onto an empty line on that line when 'virtualedit' contains all", function()
+          _G.vim.o.virtualedit = "all"
+          local sel = from_marks({ "abc", "", "x" }, "v", 1, 1, 2, 1)
+          assert.are.equal("abc\n", sel.text)
+          assert.are.same({ line = 1, character = 1 }, sel.selection["end"])
+        end)
+
+        it("keeps the mention of a linewise selection onto the buffer's empty last line", function()
+          local sel = from_marks({ "abc", "" }, "V", 1, 1, 2, 2147483647)
+          assert.are.same({ 0, 1 }, mention_of(sel))
         end)
       end)
 
