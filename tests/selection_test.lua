@@ -35,7 +35,7 @@ end
 -- (here U+0300 to U+036F and the Devanagari signs U+093A to U+094F). As on Neovim 0.11 and later, a virama also
 -- joins the next consonant, so स्ते is one character from स, while the cursor can still stand on त.
 -- With own_controls, a control (see mock_is_grapheme_control) is a character of its own, as Neovim 0.11+ counts
--- characters for the cursor and `y`. Its regex engine still joins a composing character to it.
+-- characters for the cursor and `y`.
 local function mock_char_last_byte(line, i, own_controls)
   local last_cp, len = mock_code_point(line, i)
   local stop = i + len
@@ -190,24 +190,6 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
-      -- Models Neovim for the two regex calls selection.lua makes (see mock_char_last_byte). From byte start,
-      -- `\_.` matches the character that starts there. `^\_.*\%<Nc\_.` matches up to the end of the last character
-      -- that starts before byte N, scanning from the line start.
-      matchend = function(line, pattern, start)
-        -- Like Neovim, vim.fn passes a Lua string with a NUL byte as a Blob.
-        assert(not line:find("%z"), "Vim:E976: Using a Blob as a String")
-        if pattern == "\\_." and start then
-          return start < #line and mock_char_last_byte(line, start + 1) or -1
-        end
-        local before = tonumber(pattern:match("^%^\\_%.%*\\%%<(%d+)c\\_%.$"))
-        assert(before and not start, "unexpected matchend call " .. pattern)
-        local i, last = 1, -1
-        while i <= #line and i < before do
-          last = mock_char_last_byte(line, i)
-          i = last + 1
-        end
-        return last
-      end,
       -- byteidx and charidx count characters the way the cursor and `y` do, so on Neovim 0.11+ (tests set
       -- _G.vim._has["nvim-0.11"]) a control is a character of its own.
       byteidx = function(str, nr)
@@ -234,10 +216,6 @@ if not _G.vim then
           i, index = last + 1, index + 1
         end
         return -1
-      end,
-      -- Tests set _G.vim._has["nvim-0.11"] to model a Neovim version.
-      has = function(feature)
-        return _G.vim._has and _G.vim._has[feature] and 1 or 0
       end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
