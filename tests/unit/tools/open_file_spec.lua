@@ -951,7 +951,7 @@ describe("Tool: open_file", function()
       _G.vim.fn.undotree = spy.new(function()
         return { save_last = buffers[call_buf or buf_of(0)].save_nr or 0 }
       end)
-      -- Load the module again, so that its BufNewFile, BufReadPost and BufWritePost autocommands are in `autocmds`.
+      -- Load the module again, so that its BufNewFile, BufReadPost and BufUnload autocommands are in `autocmds`.
       package.loaded["claudecode.tools.open_file"] = nil
       open_file_handler = require("claudecode.tools.open_file").handler
     end)
@@ -1293,18 +1293,6 @@ describe("Tool: open_file", function()
         local success = pcall(open_file_handler, { filePath = "test.txt", startText = "second" })
         expect(success).to_be_true()
         assert.are.same({ "", { "from claude", "second" }, false }, { seen, buffers[30].lines, asked })
-      end)
-
-      it("does not fail a write when an earlier BufWritePost autocommand wipes the buffer", function()
-        -- autocmd BufWritePost *.tmp bwipeout. Neovim still runs the other BufWritePost autocommands.
-        buffers[30] = nil
-        _G.vim.api.nvim_buf_get_name = function(buf)
-          return assert(buffers[buf] and "test.txt", "Invalid buffer id: " .. buf)
-        end
-        fire("BufUnload", 30)
-        assert.has_no.errors(function()
-          fire("BufWritePost", 30)
-        end)
       end)
 
       it("keeps the empty buffer while the user holds Visual mode in the middle of a command", function()

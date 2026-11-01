@@ -139,32 +139,33 @@ local function loaded_buffer(file_path)
   return nil
 end
 
+---Returns how often `buf` was written to its own file (undotree()'s save_last). Every such write counts, also one
+---that runs no BufWritePost: from an autocommand without ++nested, or through a BufWriteCmd handler.
+---@param buf integer
+---@return integer
+local function save_count(buf)
+  return vim.api.nvim_buf_call(buf, function()
+    return vim.fn.undotree().save_last
+  end)
+end
+
 -- Buffers whose file did not exist when Neovim read them, and that Neovim has not read or written since (BF_NEW in
--- Neovim). After the file is created, Neovim asks W13 about such a buffer when a window enters it or `:checktime` checks
--- it, and no FileChangedShell autocommand can answer W13. A buffer loaded before this module counts when its file is
--- missing.
+-- Neovim), each with its save_count() at that time. After the file is created, Neovim asks W13 about such a buffer when
+-- a window enters it or `:checktime` checks it, and no FileChangedShell autocommand can answer W13. A buffer loaded
+-- before this module counts when its file is missing.
 local new_file_buffers = {}
 do
   local group = vim.api.nvim_create_augroup("ClaudeCodeOpenFileNewFiles", { clear = true })
   vim.api.nvim_create_autocmd("BufNewFile", {
     group = group,
     callback = function(args)
-      new_file_buffers[args.buf] = true
+      new_file_buffers[args.buf] = save_count(args.buf)
     end,
   })
   vim.api.nvim_create_autocmd({ "BufReadPost", "BufUnload" }, {
     group = group,
     callback = function(args)
       new_file_buffers[args.buf] = nil
-    end,
-  })
-  vim.api.nvim_create_autocmd("BufWritePost", {
-    group = group,
-    callback = function(args)
-      -- Writing another file (`:w {file}`) keeps BF_NEW. An earlier BufWritePost autocommand can wipe the buffer.
-      if vim.api.nvim_buf_is_valid(args.buf) and args.match == vim.api.nvim_buf_get_name(args.buf) then
-        new_file_buffers[args.buf] = nil
-      end
     end,
   })
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -175,9 +176,17 @@ do
       and vim.api.nvim_buf_get_option(buf, "buftype") == ""
       and vim.fn.filereadable(name) == 0
     then
-      new_file_buffers[buf] = true
+      new_file_buffers[buf] = save_count(buf)
     end
   end
+end
+
+---Returns whether `buf` is still a buffer opened before its file existed. A write of its own file ends that, as it
+---ends BF_NEW. A write to another file (`:w {file}`) does not.
+---@param buf integer
+---@return boolean
+local function is_new_file_buffer(buf)
+  return new_file_buffers[buf] ~= nil and save_count(buf) == new_file_buffers[buf]
 end
 
 ---Runs the Ex command `command`, which can load the file of `buf` again. Run from Lua, an error in a user's
@@ -326,7 +335,7 @@ local function check_file_on_disk(buf, win, keep_mode)
   if vim.api.nvim_buf_get_option(buf, "modified") or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
     return
   end
-  if new_file_buffers[buf] then
+  if is_new_file_buffer(buf) then
     -- `:edit` re-reads the buffer of `win`, and it empties a 'nofile' buffer.
     if
       vim.api.nvim_win_get_buf(win) == buf
@@ -359,7 +368,7 @@ local function show_buffer(buf, win, keep_mode, fn)
   if not (buf and vim.api.nvim_buf_is_loaded(buf)) or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
     return fn()
   end
-  if new_file_buffers[buf] or file_changed_shell_can_be_ignored(buf, win) then
+  if is_new_file_buffer(buf) or file_changed_shell_can_be_ignored(buf, win) then
     without_neovim_file_check(buf, fn)
     -- An autocommand can close `win` as it gets the buffer. The caller reports that.
     if vim.api.nvim_win_is_valid(win) then
