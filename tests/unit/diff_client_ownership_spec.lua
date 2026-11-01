@@ -43,6 +43,8 @@ describe("a diff the user accepted for one Claude client", function()
     end
     diff._resolve_diff_as_saved(tab, diff._get_active_diffs()[tab].new_buffer)
     assert.equal("FILE_SAVED", answer.content[1].text)
+    assert.is_truthy(answer.content[2].text:find("accepted line", 1, true))
+    return answer.content[2].text
   end
 
   local function assert_kept()
@@ -135,25 +137,25 @@ describe("a diff the user accepted for one Claude client", function()
     end
 
     it("is written and closed by :ClaudeCodeCloseAllDiffs, freeing its tab_name", function()
-      open_and_accept()
+      local accepted = open_and_accept()
       owner_exits()
 
       user_closes_all_diffs()
 
-      assert.equal("line 1\nline 2\naccepted line\n", read_file())
+      assert.equal(accepted, read_file())
       assert.is_nil(diff._get_active_diffs()[tab])
       local response = call_tool(other, "openDiff", open_diff_args("line 1\nfrom another session\n"))
       assert.is_true(response._deferred, "the tab_name must be free for a new diff")
     end)
 
     it("is closed by :ClaudeCodeCloseAllDiffs when the file already holds the accepted text", function()
-      open_and_accept()
-      write_file("line 1\nline 2\naccepted line\n")
+      local accepted = open_and_accept()
+      write_file(accepted)
       owner_exits()
 
       user_closes_all_diffs()
 
-      assert.equal("line 1\nline 2\naccepted line\n", read_file())
+      assert.equal(accepted, read_file())
       assert.is_nil(diff._get_active_diffs()[tab])
     end)
 

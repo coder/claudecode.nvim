@@ -137,6 +137,13 @@ local vim = {
 
       local lines = vim._buffers[bufnr].lines or {}
       local result = {}
+      -- Negative indexes count from the end, as in Neovim: end_line = -1 means through the last line.
+      if start < 0 then
+        start = #lines + 1 + start
+      end
+      if end_line < 0 then
+        end_line = #lines + 1 + end_line
+      end
 
       for i = start + 1, end_line do
         table.insert(result, lines[i] or "")
