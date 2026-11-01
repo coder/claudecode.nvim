@@ -15,8 +15,10 @@
 #   parent-uncreatable  mkdir cannot create the default parent dir
 #   out-made-unsafe     mkdir makes a new VERIFY_OUT group-writable (a default ACL)
 #   parent-made-unsafe  mkdir makes a new default parent dir group-writable (a default ACL)
+#   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
+#   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 # A refused launch must also leave the files under the proof's temp dir as it found them.
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
 # deleted when every case passes, and kept with its path printed when one fails.
@@ -102,8 +104,15 @@ mkdir "$TMP/acl"
 if command -v setfacl >/dev/null && setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl" 2>/dev/null; then
   refused out-made-unsafe "$TMP/acl/out is group- or world-writable" VERIFY_OUT="$TMP/acl/out"
   refused parent-made-unsafe "$TMP/acl/verify-claudecode-nvim is group- or world-writable" XUM_SCRATCH_DIR="$TMP/acl"
+  # chmod does not touch a default ACL, so this dir passes both checks, and its files would get group access.
+  mkdir -m 700 "$TMP/acl-out" "$TMP/no-setfacl"
+  setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl-out"
+  printf '#!/bin/sh\nexit 1\n' >"$TMP/no-setfacl/setfacl"
+  chmod +x "$TMP/no-setfacl/setfacl"
+  refused out-acl-unremovable "a new file in $TMP/acl-out gets mode 660, not 600" \
+    PATH="$TMP/no-setfacl:$PATH" VERIFY_OUT="$TMP/acl-out"
 else
-  echo "SKIP out-made-unsafe, parent-made-unsafe: setfacl cannot set a default ACL on $TMP/acl"
+  echo "SKIP out-made-unsafe, parent-made-unsafe, out-acl-unremovable, out-acl: setfacl cannot set a default ACL on $TMP/acl"
 fi
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
@@ -114,6 +123,18 @@ VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
 [[ $(stat -c %a -- "$TMP/cwd/-dash") == 700 ]] || fail "out-dash: $TMP/cwd/-dash is not a 0700 dir"
 [[ -e $TMP/cwd/-dash/session.webm ]] || fail "out-dash: cleanup from another directory did not save session.webm there"
 echo "PASS out-dash: launched with VERIFY_OUT=-dash from $TMP/cwd; cleanup from $PWD saved its evidence there"
+
+if [[ -d $TMP/acl-out ]]; then
+  # 0500 is safe too, but the owner cannot create files there until launch makes it 0700.
+  chmod 500 "$TMP/acl-out"
+  err=$(env -u XUM_SCRATCH_DIR VERIFY_OUT="$TMP/acl-out" "$vcn" launch 2>&1) || fail "out-acl: launch failed: $err"
+  VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
+  shared=$(find "$TMP/acl-out" -type f ! -perm 600 -printf '%m %P, ')
+  [[ -z $shared ]] || fail "out-acl: evidence files that are not 0600: $shared"
+  [[ -e $TMP/acl-out/session.webm ]] || fail "out-acl: cleanup did not save session.webm"
+  [[ $(stat -c %a -- "$TMP/acl-out") == 700 ]] || fail "out-acl: $TMP/acl-out is not a 0700 dir"
+  echo "PASS out-acl: launch made the 0500 $TMP/acl-out a 0700 dir without its default ACL, and all $(find "$TMP/acl-out" -type f | wc -l) evidence files are 0600"
+fi
 
 init_out=$(mktemp -d)
 launch init VCN_INIT_JSONRPC=1.0 VERIFY_OUT="$init_out"

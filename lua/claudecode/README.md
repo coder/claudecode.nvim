@@ -25,7 +25,7 @@ Module map (direct files):
 | `integrations.lua`    | File-explorer selection readers (nvim-tree, neo-tree, oil, mini.files, netrw, snacks picker) |
 | `visual_commands.lua` | Visual-mode command wrapper and tree-explorer line-to-path mapping                           |
 | `cwd.lua`             | Terminal working-directory resolution and git root lookup                                    |
-| `utils.lua`           | Shell-free argv parsing and tilde expansion                                                  |
+| `utils.lua`           | Shell-free argv parsing, tilde expansion, and UTF-8 repair                                   |
 | `logger.lua`          | Level-filtered logging to `vim.notify` and `nvim_echo`                                       |
 | `health.lua`          | `:checkhealth claudecode`                                                                    |
 | `types.lua`           | LuaLS `@class` and `@alias` declarations. Its only runtime code is `return {}`               |
@@ -81,7 +81,7 @@ Module map (direct files):
 - `integrations.lua`: `get_selected_files_from_tree()` dispatches on filetype to `_get_nvim_tree_selection`, `_get_neotree_selection`, `_get_oil_selection`, `_get_mini_files_selection`, `_get_mini_files_selection_with_range(start_line, end_line)`, `_get_netrw_selection`, and `_get_snacks_picker_selection` [integrations.lua:M.get_selected_files_from_tree]
 - `visual_commands.lua`: `create_visual_command_wrapper`, `exit_visual_and_schedule`, `validate_visual_mode`, `get_visual_range`, `get_tree_state`, `capture_visual_selection_data`, and `get_files_from_visual_selection` [visual_commands.lua:M.create_visual_command_wrapper]
 - `cwd.lua`: `resolve(term_cfg, ctx)` and `git_root(start_dir)` [cwd.lua:M.resolve]
-- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, and `normalize_focus` [utils.lua:M.parse_command]
+- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `utf8_sequence_length`, and `valid_utf8` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8]
 - `logger.lua`: `levels`, `setup`, `error`, `warn`, `info`, `debug`, `trace`, and `is_level_enabled` [logger.lua:M.setup]
 - `health.lua`: `check()` [health.lua:M.check]
 
@@ -114,8 +114,8 @@ Module map (direct files):
 - Selection tracking is a no-op unless it is enabled. Updates are debounced by 100 ms. Claude terminal buffers are skipped [selection.lua:M.update_selection]
 - The automatic paths send `selection_changed` only when the selection differs from the last one sent [selection.lua:M.update_selection] [selection.lua:M.flush_visual_selection]. `send_current_selection` sends with no change check [selection.lua:M.send_current_selection]
 - A visual selection is flushed on visual exit. The flush is skipped if the buffer changed during visual mode [selection.lua:M.flush_visual_selection]
-- `selection_changed` positions are 0-based lines and 0-based byte offsets into the buffer line. A position inside a multibyte code point, such as a stale mark after an edit and `gv`, moves back to the code point's first byte [selection.lua:code_point_start]. A charwise or blockwise selection ends after the character that starts at its end position, the way Neovim selects it. That character includes its composing characters, and on Neovim 0.11+ the rest of its grapheme cluster. With `'selection'` set to `exclusive`, a selection of more than one position ends after the character before that position instead [selection.lua:selection_end_byte]
-- Selection text sent to Claude is always valid UTF-8. Each invalid byte sequence in the buffer becomes U+FFFD, so the text can be longer than the byte range of its positions [selection.lua:valid_utf8]
+- `selection_changed` positions are 0-based lines and 0-based UTF-8 byte offsets into the buffer line, not VS Code's UTF-16 code units. `end` is exclusive. A linewise selection ends on its last line at that line's byte length, and `v$` ends at the line's byte length + 1 [selection.lua:calculate_lsp_positions]. A position inside a multibyte code point, such as a stale mark after an edit and `gv`, moves back to the code point's first byte [selection.lua:code_point_start]. A charwise or blockwise selection ends after the character that starts at its end position, the way Neovim selects it. That character includes its composing characters, and on Neovim 0.11+ the rest of its grapheme cluster. With `'selection'` set to `exclusive`, a selection of more than one position ends after the character before that position instead [selection.lua:selection_end_byte]
+- Selection text sent to Claude is always valid UTF-8. Each invalid byte sequence in the buffer becomes U+FFFD, so the text can be longer than the byte range of its positions [utils.lua:M.valid_utf8]
 
 ### Diffs
 

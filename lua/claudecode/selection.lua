@@ -4,6 +4,7 @@ local M = {}
 
 local logger = require("claudecode.logger")
 local terminal = require("claudecode.terminal")
+local utils = require("claudecode.utils")
 
 local uv = vim.uv or vim.loop
 
@@ -492,43 +493,6 @@ local function get_selection_coordinates()
   end
 end
 
----Returns the length of the well-formed UTF-8 sequence at byte i of text. For an ill-formed sequence, returns
----nil and the length of its longest valid prefix (at least 1), which a decoder replaces with one U+FFFD.
----@param text string
----@param i integer
----@return integer|nil length, integer? invalid_length
-local function utf8_sequence_length(text, i)
-  local lead = text:byte(i)
-  local length, low, high
-  if lead < 0x80 then
-    return 1
-  elseif lead >= 0xC2 and lead <= 0xDF then
-    length, low, high = 2, 0x80, 0xBF
-  elseif lead == 0xE0 then
-    length, low, high = 3, 0xA0, 0xBF -- no overlong forms
-  elseif lead == 0xED then
-    length, low, high = 3, 0x80, 0x9F -- no surrogates
-  elseif lead >= 0xE1 and lead <= 0xEF then
-    length, low, high = 3, 0x80, 0xBF
-  elseif lead == 0xF0 then
-    length, low, high = 4, 0x90, 0xBF -- no overlong forms
-  elseif lead >= 0xF1 and lead <= 0xF3 then
-    length, low, high = 4, 0x80, 0xBF
-  elseif lead == 0xF4 then
-    length, low, high = 4, 0x80, 0x8F -- nothing above U+10FFFF
-  else
-    return nil, 1
-  end
-  for offset = 1, length - 1 do
-    local byte = text:byte(i + offset)
-    if not byte or byte < low or byte > high then
-      return nil, offset
-    end
-    low, high = 0x80, 0xBF
-  end
-  return length
-end
-
 ---Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
 ---byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
 ---A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
@@ -544,33 +508,11 @@ local function code_point_start(line, col)
   for lead = col - 1, math.max(col - 3, 1), -1 do
     byte = line:byte(lead)
     if byte < 0x80 or byte > 0xBF then
-      local length = utf8_sequence_length(line, lead)
+      local length = utils.utf8_sequence_length(line, lead)
       return (length and lead + length > col) and lead or col
     end
   end
   return col
-end
-
----Returns text with each ill-formed UTF-8 sequence replaced by U+FFFD. A buffer line can hold any bytes, and
----the client drops the connection when a message is not valid UTF-8.
----@param text string
----@return string
-local function valid_utf8(text)
-  local parts = {}
-  local valid_from, i = 1, 1
-  while i <= #text do
-    local length, invalid_length = utf8_sequence_length(text, i)
-    if length then
-      i = i + length
-    else
-      table.insert(parts, text:sub(valid_from, i - 1))
-      table.insert(parts, "\239\191\189")
-      i = i + invalid_length
-      valid_from = i
-    end
-  end
-  table.insert(parts, text:sub(valid_from))
-  return table.concat(parts)
 end
 
 ---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.
@@ -715,7 +657,7 @@ function M.get_visual_selection()
   local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
 
   return {
-    text = valid_utf8(final_text),
+    text = utils.valid_utf8(final_text),
     filePath = file_path,
     fileUrl = "file://" .. file_path,
     selection = {
@@ -791,7 +733,7 @@ function M.get_visual_selection_from_marks()
   local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
 
   return {
-    text = valid_utf8(final_text),
+    text = utils.valid_utf8(final_text),
     filePath = file_path,
     fileUrl = "file://" .. file_path,
     selection = {

@@ -107,6 +107,19 @@ local function find_main_editor_window()
   return nil
 end
 
+---Returns the preview window in the tab page of `win`. `:pedit` run in `win` shows the file there and leaves the
+---cursor in `win`.
+---@param win integer
+---@return integer win_id
+local function preview_window_of(win)
+  for _, tab_win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
+    if vim.api.nvim_win_get_option(tab_win, "previewwindow") then
+      return tab_win
+    end
+  end
+  error({ code = -32000, message = "File operation error", data = ":pedit left no preview window" })
+end
+
 ---Ends Visual or Select mode, if one is on. Select mode replaces the selected text with typed keys, so this runs
 ---before openFile sends `:normal!` keys.
 local function leave_visual_or_select_mode()
@@ -233,10 +246,6 @@ local function handler(params)
         vim.cmd("edit " .. vim.fn.fnameescape(file_path))
       end
     end)
-    -- Focus the window after opening if makeFrontmost is true
-    if make_frontmost then
-      vim.api.nvim_set_current_win(target_win)
-    end
   else
     -- Fallback: Create a new window if no suitable window found
     -- Try to move to a better position
@@ -265,6 +274,13 @@ local function handler(params)
       vim.cmd("edit " .. vim.fn.fnameescape(file_path))
     end
     target_win = vim.api.nvim_get_current_win()
+  end
+
+  if preview then
+    target_win = preview_window_of(target_win)
+  end
+  if make_frontmost then
+    vim.api.nvim_set_current_win(target_win)
   end
 
   local function run_in_target_window(callback)

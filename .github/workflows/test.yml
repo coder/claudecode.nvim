@@ -135,7 +135,8 @@ jobs:
     needs: unit-tests
     strategy:
       matrix:
-        # v0.8.0 is the minimum that README.md and plugin/claudecode.lua support.
+        # v0.8.0 is the minimum that README.md and plugin/claudecode.lua support. Its release
+        # binary reports `v0.8.0-1210-gd367ed9b2`: d367ed9b2 is the commit the v0.8.0 tag points to.
         neovim-version: ["stable", "v0.8.0"]
 
     steps:
@@ -154,8 +155,16 @@ jobs:
           version: ${{ matrix.neovim-version }}
 
       - name: Install test dependencies
+        env:
+          # plenary.nvim's master head since 2026-04-10, which the unpinned clone fetched until now.
+          # Pinned so a new plenary commit cannot change or break CI (for example by dropping 0.8).
+          PLENARY_SHA: 74b06c6c75e4eeb3108ec01852001636d85a932b
         run: |
-          git clone --depth 1 https://github.com/nvim-lua/plenary.nvim ~/.local/share/nvim/site/pack/vendor/start/plenary.nvim
+          plenary=~/.local/share/nvim/site/pack/vendor/start/plenary.nvim
+          git init -q "$plenary"
+          git -C "$plenary" fetch -q --depth 1 https://github.com/nvim-lua/plenary.nvim "$PLENARY_SHA"
+          git -C "$plenary" checkout -q FETCH_HEAD
+          git -C "$plenary" log -1 --format='plenary.nvim %H %cs'
           ln -s "$(pwd)" ~/.local/share/nvim/site/pack/vendor/start/claudecode.nvim
 
       - name: Run integration tests
