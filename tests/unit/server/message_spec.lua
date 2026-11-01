@@ -190,6 +190,60 @@ describe("WebSocket client messages", function()
     assert.same({ 1009, "Message too big" }, { close_code() })
   end)
 
+  -- The rule goes to on_error, which the server logs as the disconnect reason at debug level.
+  local PING, CLOSE = frame.OPCODE.PING, frame.OPCODE.CLOSE
+  for _, case in ipairs({
+    { "Reserved opcode 0x3", frame.create_frame(0x3, "", true, true) },
+    { "Reserved bits set", string.char(0xC1, 0x80) .. "\0\0\0\0" },
+    { "Fragmented control frame", frame.create_frame(PING, "", false, true) },
+    { "Control frame over 125 bytes", frame.create_frame(PING, string.rep("a", 126), true, true) },
+    { "WebSocket frame too big", string.char(0x82, 0x7F) .. string.rep("\0", 4) .. string.char(0x0C, 0, 0, 0) },
+    { "Close frame with a 1-byte payload", frame.create_frame(CLOSE, "\3", true, true) },
+    { "Invalid UTF-8 in close reason", frame.create_frame(CLOSE, "\3\232\255", true, true) },
+  }) do
+    it("names the broken rule " .. case[1] .. " when it closes for a frame", function()
+      receive(case[2])
+
+      assert.same({ case[1] }, errors)
+    end)
+  end
+
+  it("receives a large frame in many reads with memory linear in its size", function()
+    local payload = '{"jsonrpc":"2.0","id":1,"method":"tools/list"' .. string.rep(" ", 512 * 1024) .. "}"
+    local data = frame.create_frame(TEXT, payload, true, true)
+    local reads = {}
+    for i = 1, #data, 1024 do
+      table.insert(reads, data:sub(i, i + 1023))
+    end
+    -- JIT traces and the coverage line hook allocate too. Without them, the count is what the server allocates.
+    local hook, mask, hook_count = debug.gethook()
+    local jit_was_on = jit and jit.status()
+    debug.sethook()
+    if jit then
+      jit.off()
+    end
+    collectgarbage("collect")
+    collectgarbage("stop")
+    local before = collectgarbage("count")
+    local ok, err = pcall(function()
+      for _, read in ipairs(reads) do
+        receive(read)
+      end
+    end)
+    local allocated_kib = collectgarbage("count") - before
+    collectgarbage("restart")
+    if jit_was_on then
+      jit.on()
+    end
+    debug.sethook(hook, mask, hook_count)
+    assert(ok, err)
+
+    assert.same({ payload }, messages)
+    -- Unmasking costs about 16 bytes per payload byte, 8 MiB here. Joining each 1 KiB read onto the bytes before it
+    -- copies 128 MiB.
+    assert.is_true(allocated_kib < 32768, string.format("allocated %.0f KiB", allocated_kib))
+  end)
+
   it("handles many small frames in one read with memory linear in their number", function()
     local count = 4000
     local data = string.rep(frames({ TEXT, "{}" }), count)

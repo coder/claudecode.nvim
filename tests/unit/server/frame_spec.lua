@@ -284,6 +284,10 @@ describe("WebSocket client malformed frame handling", function()
     assert.spy(on_error).was_not_called()
 
     -- The bytes remain buffered, waiting for the rest of the frame.
-    assert.equals(incomplete, c.buffer)
+    local messages = {}
+    client.process_data(c, "defghij", function(_, message)
+      table.insert(messages, message)
+    end, noop, on_error)
+    assert.same({ "abcdefghij" }, messages)
   end)
 end)
