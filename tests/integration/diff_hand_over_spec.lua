@@ -13,7 +13,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   local diff = require("claudecode.diff")
   local tools = require("claudecode.tools.init")
   local owner = { id = "hand_over_spec_client" }
-  local dir, notes, real_notify
+  local dir, notes, real_notify, real_bufload
 
   before_each(function()
     dir = vim.fn.tempname()
@@ -22,6 +22,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     require("claudecode")._create_commands()
     _G.claude_deferred_responses = {}
     notes = {}
+    real_bufload = vim.fn.bufload
     real_notify = vim.notify
     vim.notify = function(msg)
       notes[#notes + 1] = msg
@@ -30,6 +31,8 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
 
   after_each(function()
     vim.notify = real_notify
+    vim.fn.bufload = real_bufload
+    diff.setup(nil)
     diff._cleanup_all_active_diffs("test cleanup")
     vim.cmd("silent! %bwipeout!")
     vim.fn.delete(dir, "rf")
@@ -207,6 +210,65 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     assert.equal(0, vim.fn.bufexists(path), "the command leaves no buffer the user did not have")
     assert.equal("alpha\n", read_bytes(path))
   end)
+
+  -- After the accept, the user is in the diff's own window. A unified diff buffer cannot be abandoned while it is
+  -- modified, so the swap file step must not replace the buffer in that window.
+  local swap_layouts = {
+    { "vertical", { layout = "vertical" } },
+    { "vertical new-tab", { layout = "vertical", open_in_new_tab = true } },
+  }
+  if vim.fn.has("nvim-0.9") == 1 then
+    swap_layouts[#swap_layouts + 1] = { "unified", { layout = "unified" } }
+  end
+  for _, case in ipairs(swap_layouts) do
+    local layout, diff_opts = case[1], case[2]
+    it("names a swap file step that works from the " .. layout .. " diff window", function()
+      local config = vim.deepcopy(require("claudecode.config").defaults)
+      diff.setup(vim.tbl_deep_extend("force", config, { diff_opts = diff_opts }))
+      local path = dir .. "/swapped.txt"
+      write_bytes(path, "alpha\n")
+      local tab = "✻ [Claude Code] swapped.txt ⧉"
+      local call = tools.handle_invoke(owner, {
+        name = "openDiff",
+        arguments = {
+          old_file_path = path,
+          new_file_path = path,
+          new_file_contents = "alpha accepted\n",
+          tab_name = tab,
+        },
+      })
+      assert.is_true(call._deferred, vim.inspect(call.error))
+      _G.claude_deferred_responses[tostring(call.coroutine)] = function() end
+      local diff_win = diff._get_active_diffs()[tab].new_window
+      vim.api.nvim_set_current_win(diff_win)
+      vim.cmd("write")
+      diff.close_diffs_for_client(owner.id, "client disconnected")
+      if vim.fn.bufexists(path) == 1 then
+        vim.cmd("bwipeout! " .. vim.fn.fnameescape(path))
+      end
+      vim.api.nvim_set_current_win(diff_win)
+      -- Another Neovim edits the file, so loading it fails until the user answers the swap file prompt.
+      local swap_answered = false
+      vim.fn.bufload = function(buf)
+        if not swap_answered then
+          error("Vim:E325: ATTENTION")
+        end
+        return real_bufload(buf)
+      end
+
+      vim.cmd("ClaudeCodeCloseAllDiffs")
+
+      assert.equal("saved", diff._get_active_diffs()[tab].status)
+      local step = notes[#notes]:match("open it with :(%S+ %S+) %(answer the swap file prompt")
+      assert.is_not_nil(step, notes[#notes])
+      assert.equal(diff_win, vim.api.nvim_get_current_win(), "the user is still in the diff window")
+      swap_answered = true
+      vim.cmd(step)
+      vim.cmd("ClaudeCodeCloseAllDiffs")
+      assert.is_nil(diff._get_active_diffs()[tab], notes[#notes])
+      assert.are.same({ "alpha accepted" }, vim.api.nvim_buf_get_lines(vim.fn.bufnr(path), 0, -1, false))
+    end)
+  end
 
   it("closes a diff the user rejected after its client exited", function()
     local path = dir .. "/rejected.txt"
