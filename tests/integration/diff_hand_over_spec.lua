@@ -142,15 +142,17 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     assert.is_truthy(notes[#notes]:find(":set fileencoding=utf-8 (latin1 cannot hold them), then :w", 1, true))
   end)
 
-  it("names :w ++p when the accepted file's folder does not exist yet", function()
+  it("names a write that creates the accepted file's folder when it does not exist yet", function()
     local path = dir .. "/new folder/created.txt"
     accept_then_client_exits(path, "created\n")
 
     vim.cmd("ClaudeCodeCloseAllDiffs")
 
-    assert.is_truthy(notes[#notes]:find(":w ++p writes them", 1, true), notes[#notes])
+    -- Neovim 0.8 has no :w ++p.
+    local write = vim.fn.has("nvim-0.9") == 1 and ":w ++p" or ":call mkdir(expand('%:p:h'), 'p') | w"
+    assert.is_truthy(notes[#notes]:find(": " .. write .. " writes them", 1, true), notes[#notes])
     vim.api.nvim_buf_call(vim.fn.bufnr(path), function()
-      vim.cmd("silent write ++p")
+      vim.cmd("silent " .. write:sub(2))
     end)
     assert.equal("created\n", read_bytes(path))
   end)
