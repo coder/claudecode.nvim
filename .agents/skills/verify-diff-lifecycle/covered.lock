@@ -1,4 +1,4 @@
-sync 79ac7cecc8c4723d2fe4fbae854d9334b4accf9c
+sync cf958499cefa3dd493817c6eb1bd7ffd3e6c6ff2
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -30,14 +30,14 @@ block cleanup_state      032ae25f4d7ce499
 block diff_autocmds      675566664a1546fb
 block handle_invoke      0999461f45a3444b
 block open_diff_tool     f4bee70e46ded9af
-block setup_inline       404a7166f827b172
+block setup_inline       270f5dc2c2283e2a
 block accept_current     7577efa33506569e
 block deny_current       94385d781b70d50c
 block user_close_all     10e024fd8ada1c16
 file lua/claudecode/config.lua dfb93bd69a6198ec
 file lua/claudecode/cwd.lua 55d26ea362173afa
-file lua/claudecode/diff.lua 8267aac024628924
-file lua/claudecode/diff_inline.lua b6b304df990b724d
+file lua/claudecode/diff.lua 9410353f53d1dd38
+file lua/claudecode/diff_inline.lua 5b1dae8556452373
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 file lua/claudecode/init.lua d216e0f31e907072
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
