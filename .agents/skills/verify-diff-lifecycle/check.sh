@@ -174,11 +174,12 @@ fact[CloseRechecksFilter]=$(as_bool in_order 'local function matches\(diff_data\
   'for _, tab_name in ipairs\(tab_names\) do' \
   'if matches\(active_diffs\[tab_name\]\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
 # A saved diff outlives its client's connection, so a later connection must never get that client's id.
+# The counter is a global so a reload of server/client.lua keeps it, and only create_client may set it.
 FACTS+=(ClientIdsUnique)
 client_ids_unique() {
-  grep -qE '^local clients_created = 0$' "$CLIENT" &&
-    in_order '^  clients_created = clients_created \+ 1$' '^  local client_id = "client_" \.\. clients_created$' \
-      '^    id = client_id,$' <<<"$create_client"
+  [[ $(grep -rEo '_G(\.claudecode_clients_created|\["claudecode_clients_created"\]) *=([^=]|$)|rawset\(_G, *"claudecode_clients_created"' lua plugin | wc -l) == 1 ]] &&
+    in_order '^  _G\.claudecode_clients_created = \(_G\.claudecode_clients_created or 0\) \+ 1$' \
+      '^  local client_id = "client_" \.\. _G\.claudecode_clients_created$' '^    id = client_id,$' <<<"$create_client"
 }
 fact[ClientIdsUnique]=$(as_bool client_ids_unique)
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \

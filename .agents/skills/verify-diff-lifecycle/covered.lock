@@ -1,4 +1,4 @@
-sync b60eacbbc03c829758ecca322239baa76ac3942e
+sync 4aa133b08d8903d7bb76b9d4945b0d6ec98a9c06
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      ad0582b66659af81
@@ -9,7 +9,7 @@ block close_all          393c1c35d27d3e31
 block held_for_other     3d1e2911d5310cc2
 block close_tab_tool     e9d6c3aae4615ac7
 block close_all_tool     8a83fdac94646751
-block create_client      3478155c14993023
+block create_client      647b7523dea26af6
 block close_for_client   330cc91666bc7884
 block close_active       6ddacfe111d52eba
 block cleanup_all        43e7b595cf106229
@@ -38,8 +38,8 @@ file lua/claudecode/init.lua 3bd963094f2cbb60
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
 file lua/claudecode/logger.lua eacf2556921ab1b2
-file lua/claudecode/selection.lua 82ec9632d05721ac
-file lua/claudecode/server/client.lua c47565f4f88b1b9b
+file lua/claudecode/selection.lua 02a3546f5f8d9553
+file lua/claudecode/server/client.lua d16ad16f5a17f662
 file lua/claudecode/server/frame.lua ab054d6538add76b
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 file lua/claudecode/server/init.lua ea24c13556dcd2a9
@@ -62,10 +62,10 @@ file lua/claudecode/tools/get_open_editors.lua 96392f05d7af7521
 file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 file lua/claudecode/tools/init.lua f33aada98120acbe
 file lua/claudecode/tools/open_diff.lua 1637b47e7a5d6c35
-file lua/claudecode/tools/open_file.lua 59f7b7a94c30c1e9
+file lua/claudecode/tools/open_file.lua 456c76357da64001
 file lua/claudecode/tools/save_document.lua 5fd303da9fac9d23
 file lua/claudecode/types.lua 08aa28a9c192d17a
-file lua/claudecode/utils.lua 09c600279d4053c4
+file lua/claudecode/utils.lua 097e462fb7e469a5
 file lua/claudecode/visual_commands.lua 20d9de4ecbdf9b76
 file plugin/claudecode.lua 804894ad7b515ef8
 site lua/claudecode/diff.lua: M._cleanup_all_active_diffs("shutdown") @ vim.api.nvim_create_autocmd("VimLeavePre", {

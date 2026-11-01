@@ -78,7 +78,7 @@ The bulk closes, the Claude close tools, and client ids add four facts:
 | `CloseRechecksFilter`     | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                      |
 | `CloseKeepsOthersSaved`   | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on |
 | `ReplaceKeepsOthersSaved` | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                     |
-| `ClientIdsUnique`         | `create_client` in `server/client.lua` builds each id from the module counter `clients_created`, not from the handle address                                              |
+| `ClientIdsUnique`         | `create_client` in `server/client.lua` builds each id from the counter `_G.claudecode_clients_created`, which survives a module reload, not from the handle address       |
 
 On `BROKEN`, the script prints the TLC trace as action names. Read it with the pstack `/statechart` skill:
 
