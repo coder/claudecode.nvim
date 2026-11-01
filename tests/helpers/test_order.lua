@@ -85,6 +85,23 @@ return function(busted)
     return nil, true
   end, { priority = 1 })
 
+  ---@param fn function A test's body
+  ---@param message string The report
+  ---@return function body The test's body, which then fails with the report, also when the test fails on its own
+  local function fail_after(fn, message)
+    return function(...)
+      local ok, err = pcall(fn, ...)
+      local kind = not ok and (debug.getmetatable(err) or {}).__type
+      if ok or kind == "pending" then
+        busted.fail(message, 0)
+      elseif kind == "failure" then
+        err.message = message .. "\n" .. tostring(err.message)
+        error(err, 0)
+      end
+      error(message .. "\n" .. tostring(err), 0)
+    end
+  end
+
   local reported = {}
   local registering = false
   for _, descriptor in ipairs({ "describe", "it", "pending" }) do
@@ -101,11 +118,12 @@ return function(busted)
         -- Register the test once more, to fail after its body runs, and stop this event, so every output marks this
         -- test as failed.
         registering = true
-        busted.publish({ "register", descriptor }, name, function(...)
-          fn(...)
-          error(message, 0)
-        end, trace, attributes)
+        local ok, err =
+          pcall(busted.publish, { "register", descriptor }, name, fail_after(fn, message), trace, attributes)
         registering = false
+        if not ok then
+          error(err, 0)
+        end
         return nil, false
       end
       -- A failing block would not run its tests. An error event fails the run without raising, so the rest of the

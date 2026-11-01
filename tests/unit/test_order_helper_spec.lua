@@ -78,6 +78,7 @@ describe("the test order helper", function()
   ---@return integer passed The number of fixture tests that ran and passed
   ---@return integer failed The number of fixture tests that failed
   ---@return string status The exit status of busted
+  ---@return string output What busted printed
   local function run(command, file)
     local pipe = assert(io.popen(command .. " 2>&1; echo status=$?"))
     -- A newline first, so the first TAP line matches the patterns below too.
@@ -93,7 +94,18 @@ describe("the test order helper", function()
     for _ in output:gmatch("\nnot ok %d+ %- block ") do
       failed = failed + 1
     end
-    return flagged, passed, failed, output:match("status=(%d+)")
+    return flagged, passed, failed, output:match("status=(%d+)"), output
+  end
+
+  ---@param name string A file name in the fixture directory
+  ---@param lines string[]
+  ---@return string path
+  local function write_spec(name, lines)
+    local path = dir .. "/" .. name
+    local file = assert(io.open(path, "w"))
+    file:write(table.concat(lines, "\n"), "\n")
+    file:close()
+    return path
   end
 
   local expected = {}
@@ -186,5 +198,63 @@ describe("the test order helper", function()
 
     assert.same({ 3 }, flagged)
     assert.same({ 0, 1 }, { passed, failed })
+  end)
+
+  it("still reports later loops after the second registration of a flagged test raises", function()
+    local spec = write_spec("raise_spec.lua", {
+      "local seen = {}",
+      "-- Another subscriber, which raises when the first test registers again, as the helper does to fail it.",
+      'require("busted").subscribe({ "register", "it" }, function(name)',
+      '  if seen[name] and name:find("^raises") then error("second registration of " .. name) end',
+      "  seen[name] = true",
+      "  return nil, true",
+      "end, { priority = 1 })",
+      'describe("first", function()',
+      "  for name in pairs({ a = 1 }) do",
+      '    it("raises " .. name, function() end)',
+      "  end",
+      "end)",
+      'describe("block", function()',
+      "  for name in pairs({ b = 1 }) do",
+      '    it("later " .. name, function() end) -- flagged',
+      "  end",
+      "end)",
+    })
+
+    local flagged, _, failed, _, output = run(busted .. " -o TAP " .. quote(spec), "raise_spec%.lua")
+
+    assert.same({ 15 }, flagged)
+    assert.equals(1, failed)
+    assert_contains(output, "second registration of raises a")
+  end)
+
+  it("shows the report and the test's own failure for a flagged test that fails", function()
+    local spec = write_spec("own_failure_spec.lua", {
+      'describe("block", function()',
+      "  for name in pairs({ a = 1 }) do",
+      '    it("fails " .. name, function() assert.equals(1, 2) end) -- flagged',
+      "  end",
+      "end)",
+    })
+
+    local flagged, passed, failed, _, output = run(busted .. " -o TAP " .. quote(spec), "own_failure_spec%.lua")
+
+    assert.same({ 3 }, flagged)
+    assert.same({ 0, 1 }, { passed, failed })
+    assert_contains(output, "Expected objects to be equal.")
+  end)
+
+  it("counts a flagged test that passes as a failure, not an error, in the default output", function()
+    local spec = write_spec("count_spec.lua", {
+      'describe("block", function()',
+      "  for name in pairs({ a = 1 }) do",
+      '    it("passes " .. name, function() end)',
+      "  end",
+      "end)",
+    })
+
+    local _, _, _, _, output = run(busted .. " " .. quote(spec))
+
+    assert_contains(output, "0 successes / 1 failure / 0 errors / 0 pending")
   end)
 end)
