@@ -495,7 +495,7 @@ end
 ---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.
 ---Marks and the cursor point at a character's first byte. Cutting inside a multibyte character would put
 ---invalid UTF-8 into selection_changed, so the selection takes the whole end character. With 'selection'
----set to exclusive, a selection of more than one position leaves that character out.
+---set to exclusive, a selection of more than one position ends after the character before it instead.
 ---@param line string the selection's last line
 ---@param start_coords table
 ---@param end_coords table
@@ -504,14 +504,16 @@ local function selection_end_byte(line, start_coords, end_coords)
   local col = end_coords.col
   local one_position = start_coords.lnum == end_coords.lnum and start_coords.col == col
   if vim.o.selection == "exclusive" and not one_position then
-    return col - 1
+    -- Neovim ends after the character before col. On 0.11+ that can be a cluster that reaches past col, such as
+    -- स्ते when col is its त. Without a character before col, the selection ends at the line start.
+    return math.max(vim.fn.matchend(line, "^\\_.*\\%<" .. col .. "c\\_."), 0)
   end
   if col > #line then
     return col
   end
-  -- Match the character that starts at byte col, with its composing characters, and end after it. A match
-  -- anchored with \%<col>c fails when Neovim 0.11+ sees col inside a cluster, such as the त of स्ते, although
-  -- the cursor can stand there. `\_.` also matches the NL that stands for a NUL byte.
+  -- Match the character that starts at byte col, with its composing characters, and end after it. A pattern
+  -- anchored at the column, like `\%13c.`, matches nothing when Neovim 0.11+ sees col inside a cluster, such
+  -- as the त of स्ते, although the cursor can stand there. `\_.` also matches the NL that stands for a NUL.
   return vim.fn.matchend(line, "\\_.", col - 1)
 end
 
