@@ -4,7 +4,8 @@
 # Usage: check.sh [--mutants] [--keep] [--record] | check.sh --hash-only
 #   exit 0 pass, 1 rule broken, 2 tool or script error, 3 stale (the covered code
 #   changed since the model was last confirmed against it: unverified)
-#   --hash-only compares covered.lock with the code and runs no TLC: exit 0 fresh, 2 error, 3 stale
+#   --hash-only compares covered.lock with the code and runs no TLC: exit 0 fresh, 2 error, 3 stale.
+#   --record and --hash-only run no TLC, so they do not download it.
 set -euo pipefail
 export LC_ALL=C
 
@@ -44,6 +45,9 @@ if [[ $hash_only == 1 && $mutants$keep$record != 000 ]]; then
   exit 2
 fi
 
+tlc=1
+[[ $hash_only == 0 && $record == 0 ]] || tlc=0
+
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-diff-lifecycle.XXXXXX")
 if [[ $keep == 1 ]]; then
   echo "work dir: $work"
@@ -51,7 +55,7 @@ else
   trap 'rm -rf "$work"' EXIT
 fi
 
-if [[ $hash_only == 0 && ! -f $TLC_JAR ]]; then
+if [[ $tlc == 1 && ! -f $TLC_JAR ]]; then
   mkdir -p "$(dirname "$TLC_JAR")" || exit 2
   curl -fsSL -o "$TLC_JAR.tmp" "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar" || {
     echo "ERROR: could not download TLC $TLC_VERSION to $TLC_JAR" >&2
@@ -62,7 +66,7 @@ fi
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi
 }
-if [[ $hash_only == 0 && $(sha256 <"$TLC_JAR" | cut -d' ' -f1) != "$TLC_SHA256" ]]; then
+if [[ $tlc == 1 && $(sha256 <"$TLC_JAR" | cut -d' ' -f1) != "$TLC_SHA256" ]]; then
   echo "ERROR: $TLC_JAR does not match sha256 $TLC_SHA256" >&2
   exit 2
 fi
@@ -328,7 +332,7 @@ if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >
 fi
 if [[ $hash_only == 1 ]]; then
   if [[ $stale == 1 ]]; then
-    echo "== RESULT: STALE. Follow \"Update after an intended change\" in .agents/skills/verify-diff-lifecycle/SKILL.md, then commit covered.lock"
+    echo "== RESULT: STALE. Run .agents/skills/verify-diff-lifecycle/check.sh --record and commit covered.lock, or ask a maintainer to"
     exit 3
   fi
   echo "== RESULT: covered.lock matches the code"
