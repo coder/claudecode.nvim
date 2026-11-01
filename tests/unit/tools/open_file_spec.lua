@@ -620,21 +620,26 @@ describe("Tool: open_file", function()
     -- :silent! the read ends and v:errmsg keeps the error. An autocommand can also set v:errmsg for an error it hides
     -- itself (`handled_error`). The file on disk stays readable after a read (`on_disk`). A window that enters a buffer
     -- runs its BufEnter autocommands. 'modified' reads false while 'buftype' is nofile, nowrite, terminal or prompt
-    -- (bt_dontwrite() in Neovim), and then :edit re-reads the buffer without E37.
+    -- (bt_dontwrite() in Neovim), and then :edit re-reads the buffer without E37. :write fails with E142 while 'write'
+    -- is off. An acwrite buffer is written only by BufWriteCmd autocommands, which skip the E13 check that a normal
+    -- buffer opened before its file existed gets.
     local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked, events, autocmds
     local ignore_win, silenced, call_buf
     local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
     local original_create_autocmd, original_del_autocmd, original_v, original_buf_call, original_list_bufs
 
     local function fire(event, buf)
+      local ran = 0
       for _, autocmd in pairs(autocmds) do
         local events_of = type(autocmd and autocmd.event) == "table" and autocmd.event or { autocmd and autocmd.event }
         for _, name in ipairs(events_of) do
           if name == event and (autocmd.buffer == nil or autocmd.buffer == buf) then
+            ran = ran + 1
             autocmd.callback({ buf = buf, match = "test.txt" })
           end
         end
       end
+      return ran
     end
 
     local function buf_of(buf)
@@ -665,6 +670,30 @@ describe("Tool: open_file", function()
       })
     end
 
+    -- autocmd BufEnter test.txt ++nested silent! write
+    -- autocmd BufWriteCmd * call writefile(getline(1, '$'), expand('<afile>')) | setlocal nomodified
+    local function write_on_enter_through_user_handler()
+      _G.vim.api.nvim_create_autocmd("BufEnter", {
+        buffer = 30,
+        callback = function()
+          _G.vim.api.nvim_buf_call(30, function()
+            pcall(_G.vim.cmd, "write")
+          end)
+        end,
+      })
+      _G.vim.api.nvim_create_autocmd("BufWriteCmd", {
+        callback = function(args)
+          local written = buffers[args.buf]
+          written.on_disk, written.disk, written.new_file = { unpack(written.lines) }, nil, nil
+          written.modified = false
+        end,
+      })
+    end
+
+    local function file_text()
+      return buffers[30].disk or buffers[30].on_disk
+    end
+
     local function open(params)
       params.filePath = "test.txt"
       params.preview = true
@@ -686,7 +715,7 @@ describe("Tool: open_file", function()
         [10] = { lines = { "one", "two", "three", "four" }, filetype = "text" },
         [30] = { lines = buffer_lines, filetype = "lua" },
       }
-      _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = 12, true, ""
+      _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore, _G.vim.o.write = 12, true, "", true
       asked, events, autocmds = false, {}, {}
       _G.vim.v = {}
       _G.vim.api.nvim_create_autocmd = spy.new(function(event, opts)
@@ -795,8 +824,24 @@ describe("Tool: open_file", function()
         silenced = command:match("^silent! ") ~= nil
         command = command:gsub("^silent! ", "")
         local buftype = command:match("^noautocmd setlocal buftype=(.*)$")
+        local write_option = command:match("^noautocmd set (n?o?write)$")
         if buftype then
           buffers[call_buf].buftype = buftype
+        elseif write_option then
+          _G.vim.o.write = write_option == "write"
+        elseif command == "write" then
+          local written = buffers[call_buf or win_buf[call_win or current_win]]
+          if not _G.vim.o.write then
+            error("Vim(write):E142: File not written: Writing is disabled by 'write' option")
+          elseif written.buftype == "acwrite" then
+            if fire("BufWriteCmd", call_buf or win_buf[call_win or current_win]) == 0 then
+              error("Vim(write):E676: No matching autocommands for buftype=acwrite buffer")
+            end
+          elseif written.new_file and written.disk then
+            error("Vim(write):E13: File exists (add ! to override)")
+          else
+            written.on_disk, written.disk, written.new_file, written.modified = { unpack(written.lines) }, nil, nil, false
+          end
         elseif command == "edit" and call_buf then
           read_disk(call_buf)
         elseif command == "edit" and win_buf[call_win or current_win] ~= 30 then
@@ -958,7 +1003,7 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_win_is_valid = original_win_is_valid
       _G.vim.api.nvim_create_autocmd, _G.vim.api.nvim_del_autocmd = original_create_autocmd, original_del_autocmd
       _G.vim.v, _G.vim.api.nvim_buf_call, _G.vim.api.nvim_list_bufs = original_v, original_buf_call, original_list_bufs
-      _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = nil, nil, nil
+      _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore, _G.vim.o.write = nil, nil, nil, nil
       _G.vim.fn.win_findbuf, _G.vim.fn.getbufvar = nil, nil
     end)
 
@@ -1105,6 +1150,23 @@ describe("Tool: open_file", function()
             )
           end
         end
+      end
+
+      for _, unsaved in ipairs({ false, true }) do
+        it(
+          "keeps the changed file when a BufEnter autocommand writes the buffer through a BufWriteCmd handler, when "
+            .. "'eventignore' ignores FileChangedShell, "
+            .. (unsaved and "with" or "without")
+            .. " unsaved changes",
+          function()
+            _G.vim.o.eventignore, buffers[30].modified = "FileChangedShell", unsaved
+            write_on_enter_through_user_handler()
+            local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+            expect(success).to_be_true()
+            local lines = unsaved and { "alpha", "beta", "gamma", "delta", "epsilon" } or { "alpha", "beta", "fresh" }
+            assert.are.same({ { "alpha", "beta", "fresh" }, lines }, { file_text(), buffers[30].lines })
+          end
+        )
       end
 
       for _, preview in ipairs({ false, true }) do
@@ -1259,6 +1321,25 @@ describe("Tool: open_file", function()
           pcall(open_file_handler, { filePath = "test.txt", preview = case.preview, startLine = 1 })
           assert.are.same({ { "plugin text" }, { "" } }, { buffers[40].lines, buffers[30].lines })
         end)
+      end
+
+      for _, unsaved in ipairs({ false, true }) do
+        for _, preview in ipairs({ false, true }) do
+          it(
+            ("keeps Claude's file when a BufEnter autocommand writes the buffer through a BufWriteCmd handler, %s "
+              .. "unsaved changes%s"):format(unsaved and "with" or "without", preview and ", with preview = true" or ""),
+            function()
+              if unsaved then
+                buffers[30].lines, buffers[30].modified = { "MY NOTES" }, true
+              end
+              write_on_enter_through_user_handler()
+              local success = pcall(open_file_handler, { filePath = "test.txt", preview = preview, startLine = 1 })
+              expect(success).to_be_true()
+              local lines = unsaved and { "MY NOTES" } or { "from claude", "second" }
+              assert.are.same({ { "from claude", "second" }, lines }, { file_text(), buffers[30].lines })
+            end
+          )
+        end
       end
 
       for _, preview in ipairs({ false, true }) do
