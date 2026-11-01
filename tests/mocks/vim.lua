@@ -309,12 +309,20 @@ local vim = {
     end,
 
     nvim_list_wins = function()
-      -- Return a list of window IDs for the current tab
+      -- As in Neovim, the windows of every tab, in tab order.
       local wins = {}
-      local list = vim._tab_windows[vim._current_tabpage] or {}
-      for _, winid in ipairs(list) do
-        if vim._windows[winid] then
-          table.insert(wins, winid)
+      local tabs = {}
+      for tab in pairs(vim._tab_windows) do
+        if vim._tabs[tab] then
+          tabs[#tabs + 1] = tab
+        end
+      end
+      table.sort(tabs)
+      for _, tab in ipairs(tabs) do
+        for _, winid in ipairs(vim._tab_windows[tab]) do
+          if vim._windows[winid] then
+            table.insert(wins, winid)
+          end
         end
       end
       if #wins == 0 then

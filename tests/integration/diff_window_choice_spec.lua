@@ -121,6 +121,30 @@ describe("unified diff window choice", function()
     assert.equal(math.floor(vim.o.columns * 0.20), vim.api.nvim_win_get_width(terminal_win))
   end)
 
+  it("sizes the Claude terminal in its new tab with terminal.diff_split_width_percentage", function()
+    use({ layout = "unified", open_in_new_tab = true }, { diff_split_width_percentage = 0.20 })
+    open_terminal()
+    vim.cmd("wincmd p")
+
+    open_diff()
+
+    local terminal_win = vim.fn.bufwinid(terminal.get_active_terminal_bufnr())
+    assert.are_not.equal(-1, terminal_win, "the new tab shows the Claude terminal")
+    assert.equal(math.floor(vim.o.columns * 0.20), vim.api.nvim_win_get_width(terminal_win))
+  end)
+
+  it("leaves the width of the Claude terminal in its new tab alone when auto_resize_terminal is false", function()
+    use({ layout = "unified", open_in_new_tab = true, auto_resize_terminal = false })
+    open_terminal()
+    vim.cmd("wincmd p")
+
+    open_diff()
+
+    local terminal_win = vim.fn.bufwinid(terminal.get_active_terminal_bufnr())
+    assert.are_not.equal(-1, terminal_win, "the new tab shows the Claude terminal")
+    assert.are_not.equal(math.floor(vim.o.columns * 0.30), vim.api.nvim_win_get_width(terminal_win))
+  end)
+
   it("opens next to an editor window when terminal.split_width_percentage is not a number", function()
     use({ layout = "unified" }, { split_width_percentage = "wide" })
     open_terminal()
