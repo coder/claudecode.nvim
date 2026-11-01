@@ -1,15 +1,20 @@
+-- Like Neovim, a byte that does not start a complete UTF-8 sequence is a character of its own.
 local function mock_code_point(line, i)
   local b = line:byte(i)
   if not b then
     return nil, 0
   end
-  if b < 0x80 then
+  if b < 0xC0 or b >= 0xF8 then
     return b, 1
   end
   local len = b < 0xE0 and 2 or b < 0xF0 and 3 or 4
   local cp = b - (len == 2 and 0xC0 or len == 3 and 0xE0 or 0xF0)
   for j = i + 1, i + len - 1 do
-    cp = cp * 64 + (line:byte(j) - 0x80)
+    local next_byte = line:byte(j)
+    if not next_byte or next_byte < 0x80 or next_byte >= 0xC0 then
+      return b, 1
+    end
+    cp = cp * 64 + (next_byte - 0x80)
   end
   return cp, len
 end
@@ -1167,6 +1172,66 @@ describe("Range Selection Tests", function()
         local sel = from_marks({ "a\0b" }, "v", 1, 1, 1, 2)
         assert.are.equal("a\0", sel.text)
         assert.are.equal(2, sel.selection["end"].character)
+      end)
+
+      describe("when a stale position falls inside a character", function()
+        -- Marks keep their byte column when text is inserted before them on the line. Select `cd` on `abcdef`,
+        -- then insert `aé` at the line start: '< (column 3) is now the second byte of é.
+        it("starts at the first byte of the character, from the marks", function()
+          local sel = from_marks({ "aéabcdef" }, "v", 1, 3, 1, 4)
+          assert.are.equal("éa", sel.text)
+          assert.are.same({ line = 0, character = 1 }, sel.selection.start)
+          assert.are.same({ line = 0, character = 4 }, sel.selection["end"])
+        end)
+
+        it("starts at the first byte of the character for a live selection after gv", function()
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "aéabcdef" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 3, 0 } }
+          _G.vim.test.set_cursor(0, 1, 3)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.is_true(is_valid_utf8(sent.text))
+          assert.are.equal("éa", sent.text)
+          assert.are.same({ line = 0, character = 1 }, sent.selection.start)
+        end)
+
+        it("ends after the whole character", function()
+          -- Select `abc` backward, so the anchor is the c (column 3), then insert `x日`: column 3 is inside 日.
+          local sel = from_marks({ "x日abcdef" }, "v", 1, 1, 1, 3)
+          assert.are.equal("x日", sel.text)
+          assert.are.same({ line = 0, character = #"x日" }, sel.selection["end"])
+        end)
+      end)
+
+      describe("on a line that is not valid UTF-8", function()
+        local replacement = "\239\191\189" -- U+FFFD REPLACEMENT CHARACTER
+
+        it("sends U+FFFD for an invalid byte and keeps the buffer's byte columns", function()
+          -- `:e ++bad=keep` keeps the byte 255 of a file that is not valid UTF-8.
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "abc\255def" })
+          selection.enable(mock_server)
+          _G.vim.test.set_mode("v")
+          _G.vim._marks = { v = { 0, 1, 1, 0 } }
+          _G.vim.test.set_cursor(0, 1, 6)
+
+          selection.update_selection()
+
+          local sent = mock_server.last_broadcast.data
+          assert.are.equal("abc" .. replacement .. "def", sent.text)
+          assert.are.same({ line = 0, character = 0 }, sent.selection.start)
+          assert.are.same({ line = 0, character = 7 }, sent.selection["end"])
+          assert.are.equal(sent.text, selection.get_latest_selection().text)
+        end)
+
+        it("sends one U+FFFD for each invalid sequence, as a UTF-8 decoder does", function()
+          -- 日 cut after two bytes, a lone continuation byte, an overlong `/`, and an encoded surrogate half.
+          local sel = from_marks({ "é\230\151b\128", "\192\175\237\160\128" }, "V", 1, 1, 2, 2147483647)
+          assert.are.equal("é" .. replacement .. "b" .. replacement .. "\n" .. string.rep(replacement, 5), sel.text)
+        end)
       end)
 
       it("keeps the contiguous span of a blockwise selection on character boundaries", function()
