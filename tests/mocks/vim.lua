@@ -439,6 +439,10 @@ local vim = {
       return (vim._windows[winid] and vim._windows[winid].width) or 80
     end,
 
+    nvim_win_get_height = function(winid)
+      return (vim._windows[winid] and vim._windows[winid].height) or 24
+    end,
+
     nvim_get_current_tabpage = function()
       return vim._current_tabpage
     end,
@@ -724,13 +728,13 @@ local vim = {
       vim._tab_windows[new_tab] = { winid }
       vim._current_window = winid
     elseif command:match("vsplit") then
-      -- Split current window vertically; new window shows same buffer
+      -- Split current window vertically; new window shows same buffer and, sharing its row, has its height
       local cur = vim._current_window
       local curtab = vim._current_tabpage
       local bufnr = vim._windows[cur] and vim._windows[cur].buf or 1
       local winid = vim._next_winid
       vim._next_winid = vim._next_winid + 1
-      vim._windows[winid] = { buf = bufnr, width = 80 }
+      vim._windows[winid] = { buf = bufnr, width = 80, height = vim._windows[cur] and vim._windows[cur].height }
       vim._win_tab[winid] = curtab
       local list = vim._tab_windows[curtab] or {}
       table.insert(list, winid)

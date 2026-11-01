@@ -112,17 +112,146 @@ local function find_main_editor_window()
   return nil
 end
 
----Returns the preview window in the tab page of `win`. `:pedit` run in `win` shows the file there and leaves the
----cursor in `win`.
+---Returns the preview window in the tab page of `win`, or nil.
 ---@param win integer
----@return integer win_id
-local function preview_window_of(win)
+---@return integer? win_id
+local function preview_window_in_tab(win)
   for _, tab_win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
     if vim.api.nvim_win_get_option(tab_win, "previewwindow") then
       return tab_win
     end
   end
-  error({ code = -32000, message = "File operation error", data = ":pedit left no preview window" })
+  return nil
+end
+
+---Returns the loaded buffer that `:edit` would show for `file_path`, or nil. bufexists() and bufadd() find it the way
+---`:edit` does, by name or by the inode Neovim cached for it, so a symlink, a symlinked directory, or a hard link
+---finds it. bufexists() comes first because bufadd() creates a buffer when none exists.
+---@param file_path string
+---@return integer? bufnr
+local function loaded_buffer(file_path)
+  if vim.fn.bufexists(file_path) == 1 then
+    local buf = vim.fn.bufadd(file_path)
+    if vim.api.nvim_buf_is_loaded(buf) then
+      return buf
+    end
+  end
+  return nil
+end
+
+---Runs `fn`, which can enter `buf` or run `:checktime` for it, so that Neovim does not ask the user about a file that
+---changed on disk. Neovim asks for a buffer with unsaved changes, and with 'noautoread' for any buffer, and the user's
+---next key answers: `l` loads the file and drops the unsaved changes. A FileChangedShell autocommand replaces that
+---question, so openFile adds one, after the user's, that loads a buffer without unsaved changes again and keeps one
+---with unsaved changes as it is.
+---@param buf integer? A buffer that is not loaded has no file to check
+---@param fn fun()
+local function without_file_changed_question(buf, fn)
+  if not (buf and vim.api.nvim_buf_is_loaded(buf)) then
+    return fn()
+  end
+  local autocmd = vim.api.nvim_create_autocmd("FileChangedShell", {
+    buffer = buf,
+    callback = function()
+      vim.v.fcs_choice = vim.api.nvim_buf_get_option(buf, "modified") and "" or "reload"
+    end,
+  })
+  local ok, err = pcall(fn)
+  -- A user's `autocmd! FileChangedShell` can delete it first.
+  pcall(vim.api.nvim_del_autocmd, autocmd)
+  if not ok then
+    error(err, 0)
+  end
+end
+
+---Returns whether 'eventignore' ignores FileChangedShell. Neovim 0.12 takes "all,-FileChangedShell".
+---@return boolean
+local function file_changed_shell_ignored()
+  local ignored = false
+  for item in vim.o.eventignore:lower():gmatch("[^,]+") do
+    if item == "-filechangedshell" then
+      return false
+    end
+    ignored = ignored or item == "all" or item == "filechangedshell"
+  end
+  return ignored
+end
+
+---Loads `buf` again when its file changed on disk and it has no unsaved changes, as `:edit` does in a window that shows
+---it. A buffer with unsaved changes keeps them, and a later `:w` still warns that the file changed. When 'eventignore'
+---ignores FileChangedShell, nothing is checked, because Neovim would ask the user.
+---@param buf integer
+local function check_file_on_disk(buf)
+  if vim.api.nvim_buf_get_option(buf, "modified") or file_changed_shell_ignored() then
+    return
+  end
+  without_file_changed_question(buf, function()
+    vim.cmd("checktime " .. buf)
+  end)
+end
+
+---Shows `file_path` from `win`, like `:edit`, or like `:pedit` when `preview` is set, and returns the window that
+---shows it. A window that already shows the loaded buffer keeps it, and only a changed file on disk is loaded again,
+---because `:edit` and `:pedit` re-read the buffer there: that fails on unsaved changes (E37) and resets folds in every
+---window on that buffer. The preview path does not run `:pedit` at all, because `:pedit` also ends the user's Visual
+---mode.
+---@param win integer
+---@param file_path string
+---@param preview boolean
+---@return integer win_id
+local function open_from(win, file_path, preview)
+  if not preview then
+    local buf = loaded_buffer(file_path)
+    if buf and vim.api.nvim_win_get_buf(win) == buf then
+      check_file_on_disk(buf)
+    else
+      without_file_changed_question(buf, function()
+        vim.api.nvim_win_call(win, function()
+          vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+        end)
+      end)
+    end
+    return win
+  end
+  -- nvim_win_set_buf() loads the buffer in the preview window, so BufReadPost, FileType and BufEnter run once, there.
+  local buf = vim.fn.bufadd(file_path)
+  vim.api.nvim_buf_set_option(buf, "buflisted", true)
+  local preview_win = preview_window_in_tab(win)
+    or vim.api.nvim_win_call(win, function()
+      -- The window :pedit makes (prepare_tagpreview() in Neovim).
+      vim.cmd(vim.o.previewheight .. "split")
+      local new_win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_option(new_win, "previewwindow", true)
+      vim.api.nvim_win_set_option(new_win, "winfixheight", true)
+      vim.api.nvim_win_set_option(new_win, "scrollbind", false)
+      vim.api.nvim_win_set_option(new_win, "cursorbind", false)
+      vim.api.nvim_win_set_option(new_win, "diff", false)
+      vim.api.nvim_win_set_option(new_win, "foldcolumn", "0")
+      return new_win
+    end)
+  local shown = vim.api.nvim_win_get_buf(preview_win) == buf
+  -- :pedit shows the file even when the preview window has 'winfixbuf' set, and keeps the option.
+  local fixed = vim.fn.exists("+winfixbuf") == 1 and vim.api.nvim_win_get_option(preview_win, "winfixbuf")
+  if fixed then
+    vim.api.nvim_win_set_option(preview_win, "winfixbuf", false)
+  end
+  local ok, err = pcall(without_file_changed_question, buf, function()
+    vim.api.nvim_win_set_buf(preview_win, buf)
+  end)
+  if fixed and vim.api.nvim_win_is_valid(preview_win) then
+    vim.api.nvim_win_set_option(preview_win, "winfixbuf", true)
+  end
+  if not ok then
+    error(err, 0)
+  end
+  -- An autocommand can clear 'previewwindow' or close the window as it gets the buffer.
+  if not vim.api.nvim_win_is_valid(preview_win) or not vim.api.nvim_win_get_option(preview_win, "previewwindow") then
+    error({ code = -32000, message = "File operation error", data = "No preview window shows the file" })
+  end
+  if shown then
+    check_file_on_disk(buf)
+  end
+  return preview_win
 end
 
 ---Ends Visual or Select mode, if one is on. Select mode replaces the selected text with typed keys, so this runs
@@ -158,19 +287,14 @@ local function select_range(start_row, start_col, end_row, last_col)
 end
 
 ---Returns how many lines `file_path` will show once opened, counting at most `max` lines of the file on disk.
----A loaded buffer for the file can hold unsaved lines, and `:edit` shows that buffer, so its count wins.
----bufexists() and bufadd() find that buffer the way `:edit` does, by name or by the inode Neovim cached for it,
----so a symlink, a symlinked directory, or a hard link finds it. bufexists() comes first because bufadd()
----creates a buffer when none exists.
+---A loaded buffer for the file can hold unsaved lines, and openFile shows that buffer, so its count wins.
 ---@param file_path string Path of the file to open
 ---@param max integer Lines to read from disk at most
 ---@return integer count
 local function line_count_before_open(file_path, max)
-  if vim.fn.bufexists(file_path) == 1 then
-    local buf = vim.fn.bufadd(file_path)
-    if vim.api.nvim_buf_is_loaded(buf) then
-      return vim.api.nvim_buf_line_count(buf)
-    end
+  local buf = loaded_buffer(file_path)
+  if buf then
+    return vim.api.nvim_buf_line_count(buf)
   end
   -- readfile() returns no lines for an empty file, which opens as one empty line.
   return math.max(#vim.fn.readfile(file_path, "", max), 1)
@@ -193,7 +317,12 @@ local function handler(params)
   -- window, from where it started, so openFile must not change that window, its cursor or the mode. No key can
   -- cancel the command reliably, because a key reader in an autocommand can take the key first.
   local mode = vim.api.nvim_get_mode().mode
-  local mid_command = mode:match("^n[oi]") ~= nil or mode:match("^[iRc]") ~= nil
+  -- Visual or Select mode that CTRL-O started from Insert or Replace mode goes back there after one command. Only
+  -- state() tells it from plain Visual mode, with "S", and only on Neovim 0.10 and later.
+  local ctrl_o_visual = mode:match("^[vVsS\22\19]") ~= nil
+    and vim.fn.exists("*state") == 1
+    and vim.fn.state():find("S", 1, true) ~= nil
+  local mid_command = mode:match("^n[oi]") ~= nil or mode:match("^[iRc]") ~= nil or ctrl_o_visual
 
   local start_line, end_line
   if params.startLine ~= nil or params.endLine ~= nil then
@@ -246,7 +375,8 @@ local function handler(params)
 
   local target_win
   if mid_command then
-    -- :pedit keeps the current window and its cursor, unless the current window is the preview window.
+    -- The preview window takes the file, so the current window keeps its buffer and cursor, unless it is the
+    -- preview window.
     if vim.api.nvim_win_get_option(0, "previewwindow") then
       error({
         code = -32000,
@@ -260,19 +390,17 @@ local function handler(params)
   end
 
   if target_win then
-    -- Open file in the target window
-    vim.api.nvim_win_call(target_win, function()
-      if preview then
-        vim.cmd("pedit " .. vim.fn.fnameescape(file_path))
-      else
-        vim.cmd("edit " .. vim.fn.fnameescape(file_path))
-      end
-    end)
+    target_win = open_from(target_win, file_path, preview)
   else
     -- Fallback: Create a new window if no suitable window found
     -- Try to move to a better position
+    local origin_win = vim.api.nvim_get_current_win()
     vim.cmd("wincmd t") -- Go to top-left
     vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
+    if vim.api.nvim_win_get_option(0, "previewwindow") then
+      -- A split of the preview window gets its 'previewheight' lines, so split the window below it.
+      vim.cmd("wincmd j")
+    end
 
     -- If we're still in a special window (a diff window — issue #277 — or the preview window), create
     -- a new split so we don't :edit over a terminal, sidebar, someone's diff, or the preview window.
@@ -295,17 +423,12 @@ local function handler(params)
       vim.cmd("diffoff")
     end
 
-    if preview then
-      vim.cmd("pedit " .. vim.fn.fnameescape(file_path))
-    else
-      vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+    target_win = open_from(vim.api.nvim_get_current_win(), file_path, preview)
+    if not make_frontmost then
+      vim.api.nvim_set_current_win(origin_win)
     end
-    target_win = vim.api.nvim_get_current_win()
   end
 
-  if preview then
-    target_win = preview_window_of(target_win)
-  end
   if make_frontmost and not mid_command then
     vim.api.nvim_set_current_win(target_win)
   end
@@ -387,16 +510,23 @@ local function handler(params)
           message = 'Opened file and selected text "' .. start_text .. '"'
         end
 
-        -- A line range earlier in this call can leave Visual or Select mode on, and moving the cursor in it
-        -- would stretch that selection.
-        leave_visual_or_select_mode()
-        vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
-        vim.cmd("normal! zz") -- Center the match before gv, which must be the last key
-        -- When endText is not found, only the cursor moves, as in the VS Code extension.
-        if end_line_idx and mid_command then
-          message = 'Opened file and positioned at "' .. start_text .. '"'
-        elseif end_line_idx then
-          select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
+        -- When endText is not found, only the cursor moves, as in the VS Code extension. In the middle of a command
+        -- openFile sends no keys: the user's own Visual or Select mode can be on, and Select mode replaces the
+        -- selection with any key.
+        if mid_command then
+          vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+          if end_line_idx then
+            message = 'Opened file and positioned at "' .. start_text .. '"'
+          end
+        else
+          -- A line range earlier in this call can leave Visual or Select mode on, and moving the cursor in it
+          -- would stretch that selection.
+          leave_visual_or_select_mode()
+          vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+          vim.cmd("normal! zz") -- Center the match before gv, which must be the last key
+          if end_line_idx then
+            select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
+          end
         end
       else
         message = 'Opened file, but text "' .. start_text .. '" not found'

@@ -148,7 +148,8 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
-    -- Skip the preview window: it is small, keeps its height, and openFile's :pedit replaces the file in it.
+    -- Skip the preview window: 'winfixheight' keeps it at its 'previewheight' lines, and the next :pedit
+    -- shows another file in it and turns off its 'diff'.
     if is_suitable and vim.api.nvim_win_get_option(win, "previewwindow") then
       is_suitable = false
     end
@@ -237,8 +238,26 @@ local function find_claudecode_terminal_window()
   return floating_fallback
 end
 
----Create a split based on configured layout
+---When the preview window is current, make the Claude terminal's window current if it is a tiled window in
+---this tab. A split of the preview window shares its row, which 'winfixheight' keeps at 'previewheight' lines.
+local function leave_preview_window()
+  if not vim.api.nvim_win_get_option(vim.api.nvim_get_current_win(), "previewwindow") then
+    return
+  end
+  local terminal_win = find_claudecode_terminal_window()
+  if
+    terminal_win
+    and vim.api.nvim_win_get_tabpage(terminal_win) == vim.api.nvim_get_current_tabpage()
+    and (vim.api.nvim_win_get_config(terminal_win).relative or "") == ""
+  then
+    vim.api.nvim_set_current_win(terminal_win)
+  end
+end
+
+---Split the current window per the configured layout, or the Claude terminal's window when the preview
+---window is current (see leave_preview_window)
 local function create_split()
+  leave_preview_window()
   if config and config.diff_opts and config.diff_opts.layout == "horizontal" then
     -- Ensure the new window is created below the current one regardless of user 'splitbelow' setting
     vim.cmd("belowright split")
@@ -751,10 +770,10 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   else
     vim.cmd("wincmd t")
     vim.cmd("wincmd l")
-    local buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
-    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+    local win = vim.api.nvim_get_current_win()
+    local buftype = vim.api.nvim_buf_get_option(vim.api.nvim_win_get_buf(win), "buftype")
 
-    if buftype == "terminal" or buftype == "nofile" then
+    if buftype == "terminal" or buftype == "nofile" or vim.api.nvim_win_get_option(win, "previewwindow") then
       create_split()
     end
   end
