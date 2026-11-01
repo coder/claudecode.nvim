@@ -1,4 +1,13 @@
 -- Real-Neovim check that openFile sends Claude only the selection it makes, through the plugin's own tracker.
+-- It needs real autocommands, so under busted's mock vim it is pending; scripts/run_integration_tests_individually.sh
+-- runs it in Neovim.
+if vim == nil or vim.fn.has("nvim") ~= 1 then
+  describe("openFile with selection tracking", function()
+    pending("needs a real Neovim")
+  end)
+  return
+end
+
 describe("openFile with selection tracking", function()
   local selection = require("claudecode.selection")
   local open_file = require("claudecode.tools.open_file")
