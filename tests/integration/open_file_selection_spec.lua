@@ -46,4 +46,23 @@ describe("openFile with selection tracking", function()
     assert.are.same({ "n>v" }, mode_changes)
     assert.are.same("v", vim.api.nvim_get_mode().mode)
   end)
+
+  it("selects in the preview window with preview = true", function()
+    local main_path = vim.fn.tempname() .. ".txt"
+    local preview_path = vim.fn.tempname() .. ".txt"
+    vim.fn.writefile({ "one", "two", "three", "four" }, main_path)
+    vim.fn.writefile({ "alpha", "beta", "gamma", "delta" }, preview_path)
+    vim.cmd("edit " .. vim.fn.fnameescape(main_path))
+
+    local result = open_file.handler({ filePath = preview_path, preview = true, startLine = 2, endLine = 3 })
+    local mode = vim.api.nvim_get_mode().mode
+    local in_preview_window = vim.wo.previewwindow
+    vim.cmd('normal! "zy')
+    vim.cmd("pclose")
+
+    assert.are.same("Opened file and selected lines 2 to 3", result.content[1].text)
+    assert.are.same("v", mode)
+    assert.is_true(in_preview_window)
+    assert.are.same("beta\ngamma", vim.fn.getreg("z"))
+  end)
 end)
