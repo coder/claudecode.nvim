@@ -114,7 +114,7 @@ Module map (direct files):
 - Selection tracking is a no-op unless it is enabled. Updates are debounced by 100 ms. Claude terminal buffers are skipped [selection.lua:M.update_selection]
 - The automatic paths send `selection_changed` only when the selection differs from the last one sent [selection.lua:M.update_selection] [selection.lua:M.flush_visual_selection]. `send_current_selection` sends with no change check [selection.lua:M.send_current_selection]
 - A visual selection is flushed on visual exit. The flush is skipped if the buffer changed during visual mode [selection.lua:M.flush_visual_selection]
-- `selection_changed` positions are 0-based lines and 0-based UTF-8 byte offsets. A charwise or blockwise selection ends after the whole last character, composing characters included, so the text is valid UTF-8. With `'selection'` set to `exclusive`, a selection of more than one position leaves that character out [selection.lua:selection_end_byte]
+- `selection_changed` positions are 0-based lines and 0-based UTF-8 byte offsets. A charwise or blockwise selection ends after the character that starts at its end position, the way Neovim selects it. That character includes its composing characters, and on Neovim 0.11+ the rest of its grapheme cluster. With `'selection'` set to `exclusive`, a selection of more than one position ends after the character before that position instead. Both ends fall on code point boundaries, so the text is valid UTF-8 when the buffer line is [selection.lua:selection_end_byte]
 
 ### Diffs
 
