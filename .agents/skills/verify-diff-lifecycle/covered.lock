@@ -1,4 +1,4 @@
-sync 080139d7ac11042aab5d9cc048575c53992ac2e2
+sync 24c027cb9b763e6c6436c55053523eaa17a1c2f8
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -42,7 +42,7 @@ file lua/claudecode/health.lua 5ab73bf388f3ac97
 file lua/claudecode/init.lua d216e0f31e907072
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
-file lua/claudecode/logger.lua fc3ce5a3c43c25b1
+file lua/claudecode/logger.lua 647629c85e38771d
 file lua/claudecode/selection.lua f9cd61cbc71b82bb
 file lua/claudecode/server/client.lua 08a497f2cccc49ca
 file lua/claudecode/server/frame.lua 3c50766875878d56
