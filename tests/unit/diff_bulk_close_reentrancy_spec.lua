@@ -4,10 +4,18 @@
 --- handler that rejects another diff leaves nothing to keep, so the loop closes it too (#363).
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("bulk close with a ClaudeCodeDiffClosed handler that resolves another diff", function()
-  local file_a = "/tmp/issue342_a.txt"
-  local file_b = "/tmp/issue342_b.txt"
+  local dir, file_a, file_b
+  setup(function()
+    dir = temp_dir.new()
+    file_a = dir .. "/issue342_a.txt"
+    file_b = dir .. "/issue342_b.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local original_exec_autocmds
 
   before_each(function()

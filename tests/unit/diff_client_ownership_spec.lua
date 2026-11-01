@@ -3,10 +3,18 @@
 --- down: if the owner died before writing, nothing else holds those edits (issue #342).
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
+local temp_dir = require("tests.helpers.temp_dir")
 local tools = require("claudecode.tools.init")
 
 describe("a diff the user accepted for one Claude client", function()
-  local file = "/tmp/issue342_owned.txt"
+  local dir, file
+  setup(function()
+    dir = temp_dir.new()
+    file = dir .. "/issue342_owned.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local tab = "✻ [Claude Code] issue342_owned.txt (a1) ⧉"
   local owner = { id = "clientA" }
   local other = { id = "clientB" }
@@ -274,7 +282,7 @@ describe("a diff the user accepted for one Claude client", function()
     end)
 
     it("names a forced write that keeps the change check for a read-only buffer in a missing folder", function()
-      local gone = "/tmp/issue393_gone_dir/readonly.txt"
+      local gone = dir .. "/issue393_gone_dir/readonly.txt"
       local tab_gone = "✻ [Claude Code] readonly.txt ⧉"
       finally(function()
         if vim.fn.bufnr(gone) ~= -1 then
@@ -321,8 +329,8 @@ describe("a diff the user accepted for one Claude client", function()
 
     it("hands the text to the file the diff showed, after a :cd while the diff was open", function()
       local real_getcwd = vim.fn.getcwd
-      local shown = "/tmp/issue363_open_dir/issue363_relative.txt"
-      local elsewhere = "/tmp/issue363_other_dir/issue363_relative.txt"
+      local shown = dir .. "/issue363_open_dir/issue363_relative.txt"
+      local elsewhere = dir .. "/issue363_other_dir/issue363_relative.txt"
       local relative_tab = "✻ [Claude Code] issue363_relative.txt ⧉"
       finally(function()
         vim.fn.getcwd = real_getcwd
@@ -333,7 +341,7 @@ describe("a diff the user accepted for one Claude client", function()
         end
       end)
       vim.fn.getcwd = function()
-        return "/tmp/issue363_open_dir"
+        return dir .. "/issue363_open_dir"
       end
       local deferred = call_tool(owner, "openDiff", {
         old_file_path = "issue363_relative.txt",
@@ -344,7 +352,7 @@ describe("a diff the user accepted for one Claude client", function()
       assert.is_true(deferred._deferred, "openDiff should wait for the user")
       _G.claude_deferred_responses[tostring(deferred.coroutine)] = function() end
       vim.fn.getcwd = function()
-        return "/tmp/issue363_other_dir"
+        return dir .. "/issue363_other_dir"
       end
       diff._resolve_diff_as_saved(relative_tab, diff._get_active_diffs()[relative_tab].new_buffer)
       diff.close_diffs_for_client(owner.id, "client disconnected")

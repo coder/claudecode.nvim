@@ -2,10 +2,18 @@
 --- without a diff must never close or delete a buffer the user opened.
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
+local temp_dir = require("tests.helpers.temp_dir")
 local tools = require("claudecode.tools.init")
 
 describe("close_tab", function()
-  local file = "/tmp/close_tab_spec.txt"
+  local dir, file
+  setup(function()
+    dir = temp_dir.new()
+    file = dir .. "/close_tab_spec.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local user_buffer = 41
   local client = { id = "client-1" }
 

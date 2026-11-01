@@ -1,5 +1,9 @@
 -- Tests for lockfile module
 
+local temp_dir = require("tests.helpers.temp_dir")
+-- The home folder of the mock below: a private folder, so test runs that run at once keep their lock files apart.
+local home
+
 -- Load mock vim if needed
 local real_vim = _G.vim
 if not _G.vim then
@@ -24,9 +28,7 @@ if not _G.vim then
     fs = { remove = function() end }, ---@type vim_fs_module
     fn = { ---@type vim_fn_table
       expand = function(path)
-        -- Use a temp directory that actually exists
-        local temp_dir = os.getenv("TMPDIR") or "/tmp"
-        return select(1, path:gsub("~", temp_dir .. "/claude_test"))
+        return select(1, path:gsub("~", home))
       end,
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
@@ -329,10 +331,8 @@ describe("Lockfile Module", function()
       return "/mock/cwd"
     end
 
-    -- Create test directory
-    local temp_dir = os.getenv("TMPDIR") or "/tmp"
-    local test_dir = temp_dir .. "/claude_test/.claude/ide"
-    os.execute("mkdir -p '" .. test_dir .. "'")
+    home = temp_dir.new()
+    os.execute("mkdir -p '" .. home .. "/.claude/ide'")
 
     -- Load the lockfile module for all tests
     package.loaded["claudecode.lockfile"] = nil -- Clear any previous requires
@@ -340,10 +340,7 @@ describe("Lockfile Module", function()
   end)
 
   teardown(function()
-    -- Clean up test files
-    local temp_dir = os.getenv("TMPDIR") or "/tmp"
-    local test_dir = temp_dir .. "/claude_test"
-    os.execute("rm -rf '" .. test_dir .. "'")
+    temp_dir.remove(home)
 
     -- Restore original vim
     if real_vim then

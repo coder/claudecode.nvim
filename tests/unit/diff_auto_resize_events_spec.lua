@@ -1,4 +1,5 @@
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("Diff auto_resize_terminal flag", function()
   local diff = require("claudecode.diff")
@@ -117,7 +118,14 @@ describe("Diff lifecycle User events", function()
   local diff = require("claudecode.diff")
   local open_diff_tool = require("claudecode.tools.open_diff")
 
-  local test_old_file = "/tmp/claudecode_events_old.lua"
+  local dir, test_old_file
+  setup(function()
+    dir = temp_dir.new()
+    test_old_file = dir .. "/claudecode_events_old.lua"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
 
   -- Capture ONLY the nvim_exec_autocmds calls made during `action`. This is
   -- hermetic: it does not depend on the shared mock recorder or on spec ordering

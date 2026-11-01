@@ -1,13 +1,21 @@
 -- Issue #325: a ClaudeCodeDiffOpened handler that accepts or denies the diff must still answer
 -- Claude's openDiff call, exactly once.
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("a ClaudeCodeDiffOpened handler that resolves the diff (#325)", function()
   local diff = require("claudecode.diff")
   local server = require("claudecode.server.init")
   local tools = require("claudecode.tools.init")
 
-  local old_file = "/tmp/claudecode_opened_handler_325.lua"
+  local dir, old_file
+  setup(function()
+    dir = temp_dir.new()
+    old_file = dir .. "/claudecode_opened_handler_325.lua"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local client = { id = "client-325" }
   local responses
   local orig_send_response, orig_exec_autocmds, orig_get_current_buf

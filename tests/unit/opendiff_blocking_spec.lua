@@ -1,9 +1,18 @@
 -- Unit test for openDiff blocking behavior
 -- This test directly calls the openDiff handler to verify blocking behavior
 
+local temp_dir = require("tests.helpers.temp_dir")
+
 describe("openDiff blocking behavior", function()
   local open_diff_module
   local mock_logger
+  local dir
+  setup(function()
+    dir = temp_dir.new()
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
 
   before_each(function()
     -- Set up minimal vim mock
@@ -56,7 +65,7 @@ describe("openDiff blocking behavior", function()
 
   it("should block in coroutine context", function()
     -- Create test file
-    local test_file = "/tmp/opendiff_test.txt"
+    local test_file = dir .. "/opendiff_test.txt"
     local file = io.open(test_file, "w")
     file:write("original content\n")
     file:close()

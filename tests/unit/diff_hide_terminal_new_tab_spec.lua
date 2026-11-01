@@ -1,11 +1,19 @@
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("Diff new-tab with hidden terminal", function()
   local open_diff_tool = require("claudecode.tools.open_diff")
   local diff = require("claudecode.diff")
 
-  local test_old_file = "/tmp/claudecode_diff_hide_old.txt"
-  local test_new_file = "/tmp/claudecode_diff_hide_new.txt"
+  local dir, test_old_file, test_new_file
+  setup(function()
+    dir = temp_dir.new()
+    test_old_file = dir .. "/claudecode_diff_hide_old.txt"
+    test_new_file = dir .. "/claudecode_diff_hide_new.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local test_tab_name = "hide-term-in-new-tab"
 
   before_each(function()
