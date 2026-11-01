@@ -1,55 +1,101 @@
---- tests/helpers/test_order.lua, which `.busted` loads for every run, must refuse a test registered inside a pairs()
---- loop and accept every other registration.
+--- tests/helpers/test_order.lua must report every test that a spec registers inside a pairs() loop, fail the run, and
+--- still let the rest of the spec register and run. The spec below runs busted on a fixture spec, the way a user does.
 require("tests.busted_setup")
 
+-- Each line marked "flagged" registers inside a pairs() loop: directly, through a coroutine, or through a function.
+local FIXTURE = {
+  "local function register(name)",
+  '  it("helper " .. name, function() end)',
+  "end",
+  'describe("block", function()',
+  "  for name in pairs({ a = 1, b = 2 }) do",
+  '    it("first loop " .. name, function() end) -- flagged',
+  "  end",
+  "  for name in pairs({ c = 1 }) do",
+  '    it("second loop " .. name, function() end) -- flagged',
+  "  end",
+  '  it("after the loops", function() end)',
+  '  for _, name in ipairs({ "x" }) do',
+  '    it("ipairs " .. name, function() end)',
+  "  end",
+  "  for name in pairs({ d = 1 }) do",
+  '    assert(coroutine.resume(coroutine.create(function() it("coroutine " .. name, function() end) end))) -- flagged',
+  "  end",
+  "  for name in pairs({ e = 1 }) do",
+  '    coroutine.wrap(function() it("wrap " .. name, function() end) end)() -- flagged',
+  "  end",
+  "  for name in pairs({ f = 1 }) do",
+  "    register(name) -- flagged",
+  "  end",
+  "end)",
+}
+local TESTS = 8
+
 describe("the test order helper", function()
-  local register_it
+  local root = assert(io.popen("pwd")):read("*l")
+  local dir, fixture
 
-  before_each(function()
-    local subscribers = {}
-    local busted = {
-      subscribe = function(channel, fn)
-        subscribers[channel[2]] = fn
-      end,
-    }
-    assert.is_true(dofile("tests/helpers/test_order.lua")(busted))
-    register_it = subscribers.it
+  setup(function()
+    dir = os.tmpname()
+    os.remove(dir)
+    local made = os.execute("mkdir " .. dir)
+    assert(made == 0 or made == true, "cannot create " .. dir)
+    fixture = dir .. "/fixture_spec.lua"
+    local file = assert(io.open(fixture, "w"))
+    file:write(table.concat(FIXTURE, "\n"), "\n")
+    file:close()
   end)
 
-  it("refuses a registration inside a pairs() loop and names the loop's file", function()
-    for _ in pairs({ a = 1 }) do
-      local ok, err = pcall(register_it, "case")
-      assert.is_false(ok)
-      assert.matches('test_order_helper_spec%.lua:%d+ registers "case" inside a pairs%(%) loop', err)
-    end
+  teardown(function()
+    os.execute("rm -rf " .. dir)
   end)
 
-  it("refuses a registration from a function that a pairs() loop calls", function()
-    local function register()
-      return pcall(register_it, "case")
+  ---@param command string The shell command that runs busted with TAP output
+  ---@return integer[] flagged The fixture lines the helper reports, in order
+  ---@return integer passed The number of fixture tests that ran and passed
+  ---@return string status The exit status of busted
+  local function run(command)
+    local pipe = assert(io.popen(command .. " 2>&1; echo status=$?"))
+    local output = pipe:read("*a")
+    pipe:close()
+    local flagged, passed = {}, 0
+    for line in output:gmatch("fixture_spec%.lua:(%d+) registers ") do
+      table.insert(flagged, tonumber(line))
     end
-    for _ in pairs({ a = 1 }) do
-      assert.is_false(register())
+    for _ in output:gmatch("\nok %d+ %- block ") do
+      passed = passed + 1
     end
+    return flagged, passed, output:match("status=(%d+)")
+  end
+
+  local expected = {}
+  for number, line in ipairs(FIXTURE) do
+    if line:find("%-%- flagged$") then
+      table.insert(expected, number)
+    end
+  end
+
+  it("reports each pairs() loop once, runs every test, and fails the run for a spec given by absolute path", function()
+    local flagged, passed, status = run(".luarocks/bin/busted -o TAP " .. fixture)
+
+    table.sort(flagged)
+    assert.same(expected, flagged)
+    assert.equals(TESTS, passed)
+    assert.are_not.equal("0", status)
   end)
 
-  it("ignores a pairs() loop in code outside this repository's tests dir", function()
-    -- Busted's own event loop iterates with pairs(). A checkout below another dir named tests must not count it.
-    local outside = assert(
-      load(
-        "local register = ... for _ in pairs({ a = 1 }) do local value, continue = register('case') return value, continue end",
-        "@/tmp/tests/claudecode.nvim/.luarocks/share/lua/5.1/mediator.lua"
+  it("checks a spec when busted starts in another directory with --helper", function()
+    local flagged = run(
+      string.format(
+        "cd %s && %s/.luarocks/bin/busted --helper=%s/tests/helpers/test_order.lua -o TAP %s",
+        dir,
+        root,
+        root,
+        fixture
       )
     )
-    assert.same({ nil, true }, { outside(register_it) })
-  end)
 
-  it("accepts a registration inside an ipairs() loop, and after a pairs() loop", function()
-    for _ in ipairs({ 1 }) do
-      assert.same({ nil, true }, { register_it("case") })
-    end
-    for _ in pairs({ a = 1 }) do
-    end
-    assert.same({ nil, true }, { register_it("case") })
+    table.sort(flagged)
+    assert.same(expected, flagged)
   end)
 end)
