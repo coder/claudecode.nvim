@@ -15,6 +15,9 @@ describe("Tool: open_file", function()
   local call_win
   local last_visual
   local operated_on
+  local typeahead
+  local original_feedkeys
+  local original_replace_termcodes
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -67,6 +70,16 @@ describe("Tool: open_file", function()
         last_visual = kind_of[editor_mode]
         editor_mode = "n"
       end
+    end)
+    -- Like Neovim, keys fed with the "i" flag go before keys the user types next.
+    typeahead = {}
+    original_feedkeys = _G.vim.api.nvim_feedkeys
+    original_replace_termcodes = _G.vim.api.nvim_replace_termcodes
+    _G.vim.api.nvim_replace_termcodes = spy.new(function(str)
+      return (str:gsub("<Esc>", "\27"))
+    end)
+    _G.vim.api.nvim_feedkeys = spy.new(function(keys, flags, escape_ks)
+      table.insert(typeahead, flags:find("i", 1, true) and 1 or #typeahead + 1, keys)
     end)
     original_get_mode = _G.vim.api.nvim_get_mode
     _G.vim.api.nvim_get_mode = spy.new(function()
@@ -196,6 +209,8 @@ describe("Tool: open_file", function()
     _G.vim.fn.bufadd = nil
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
     _G.vim.api.nvim_get_mode = original_get_mode
+    _G.vim.api.nvim_feedkeys = original_feedkeys
+    _G.vim.api.nvim_replace_termcodes = original_replace_termcodes
     _G.vim.o.selection = nil
   end)
 
@@ -602,10 +617,33 @@ describe("Tool: open_file", function()
         editor_mode = "no"
         local text = open(case.params)
         assert_contains(text, case.text)
-        assert_contains(text, "an operator is pending, so nothing was selected")
+        assert_contains(text, "a pending operator was cancelled and nothing was selected")
         assert.are.same({}, operated_on)
         expect(editor_mode).to_be("no")
         assert.are.same(case.cursor, cursor)
+      end
+    end)
+
+    it("cancels a pending operator before the user's next key", function()
+      -- A pending operator takes the next key as its motion and acts from where the user typed the operator.
+      local function user_types(key)
+        table.insert(typeahead, key)
+        while #typeahead > 0 do
+          local next_key = table.remove(typeahead, 1)
+          if editor_mode:match("^no") then
+            if next_key ~= "\27" then
+              table.insert(operated_on, next_key)
+            end
+            editor_mode = "n"
+          end
+        end
+      end
+      for _, params in ipairs({ { startText = "two", endText = "three" }, { startLine = 4 } }) do
+        editor_mode, typeahead = "no", {}
+        open(params)
+        user_types("w")
+        assert.are.same({}, operated_on)
+        expect(editor_mode).to_be("n")
       end
     end)
 
