@@ -22,8 +22,12 @@ describe("unified diff window choice", function()
   local tab = "✻ [Claude Code] b.txt ⧉"
   local dir, path
 
-  local function use(diff_opts)
-    local terminal_opts = { provider = "native", split_side = "right", split_width_percentage = 0.30 }
+  local function use(diff_opts, terminal_overrides)
+    local terminal_opts = vim.tbl_extend(
+      "force",
+      { provider = "native", split_side = "right", split_width_percentage = 0.30 },
+      terminal_overrides or {}
+    )
     diff.setup({ terminal = terminal_opts, diff_opts = diff_opts })
     terminal.setup(terminal_opts, "sh -c 'sleep 600'")
   end
@@ -105,6 +109,26 @@ describe("unified diff window choice", function()
     local width = vim.api.nvim_win_get_width(open_diff())
 
     assert.is_true(width >= math.floor(vim.o.columns / 3) - 1, "the diff is " .. width .. " columns wide")
+  end)
+
+  it("sizes a Claude terminal it splits with terminal.diff_split_width_percentage", function()
+    use({ layout = "unified" }, { diff_split_width_percentage = 0.20 })
+    local terminal_win = open_terminal()
+    vim.cmd("only")
+
+    open_diff()
+
+    assert.equal(math.floor(vim.o.columns * 0.20), vim.api.nvim_win_get_width(terminal_win))
+  end)
+
+  it("opens next to an editor window when terminal.split_width_percentage is not a number", function()
+    use({ layout = "unified" }, { split_width_percentage = "wide" })
+    open_terminal()
+    vim.cmd("wincmd p")
+
+    local diff_win = open_diff()
+
+    assert.is_true(vim.api.nvim_win_is_valid(diff_win))
   end)
 
   it("splits the Claude terminal's window, not the preview window above it", function()
