@@ -148,6 +148,11 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
+    -- Skip the preview window: it is small, keeps its height, and openFile's :pedit replaces the file in it.
+    if is_suitable and vim.api.nvim_win_get_option(win, "previewwindow") then
+      is_suitable = false
+    end
+
     if
       is_suitable
       and (
@@ -1352,8 +1357,13 @@ function M._setup_blocking_diff(params, resolution_callback)
           for _, win in ipairs(vim.api.nvim_list_wins()) do
             -- Don't reuse a window that is already in diff mode (e.g. the old
             -- file shown inside the user's diffview/vimdiff): diffing into it
-            -- would join and corrupt that diff (issue #277).
-            if vim.api.nvim_win_get_buf(win) == existing_buffer and not vim.api.nvim_win_get_option(win, "diff") then
+            -- would join and corrupt that diff (issue #277). Skip the preview
+            -- window too, as find_main_editor_window does.
+            if
+              vim.api.nvim_win_get_buf(win) == existing_buffer
+              and not vim.api.nvim_win_get_option(win, "diff")
+              and not vim.api.nvim_win_get_option(win, "previewwindow")
+            then
               target_window = win
               break
             end

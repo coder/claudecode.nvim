@@ -81,6 +81,11 @@ local function find_main_editor_window()
       is_suitable = false
     end
 
+    -- Skip the preview window: it is small, keeps its height, and the next :pedit replaces the file in it.
+    if is_suitable and vim.api.nvim_win_get_option(win, "previewwindow") then
+      is_suitable = false
+    end
+
     -- Skip known sidebar filetypes
     if
       is_suitable
@@ -269,13 +274,18 @@ local function handler(params)
     vim.cmd("wincmd t") -- Go to top-left
     vim.cmd("wincmd l") -- Move right (to middle if layout is left|middle|right)
 
-    -- If we're still in a special window (or a diff window — issue #277), create
-    -- a new split so we don't :edit over a terminal, sidebar, or someone's diff.
+    -- If we're still in a special window (a diff window — issue #277 — or the preview window), create
+    -- a new split so we don't :edit over a terminal, sidebar, someone's diff, or the preview window.
     local cur_win = vim.api.nvim_get_current_win()
     local buf = vim.api.nvim_win_get_buf(cur_win)
     local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
 
-    if buftype == "terminal" or buftype == "nofile" or vim.api.nvim_win_get_option(cur_win, "diff") then
+    if
+      buftype == "terminal"
+      or buftype == "nofile"
+      or vim.api.nvim_win_get_option(cur_win, "diff")
+      or vim.api.nvim_win_get_option(cur_win, "previewwindow")
+    then
       vim.cmd("vsplit")
       -- The new split inherits window-local options (including 'diff') from the
       -- window we split off. Clear diff on it so the file we open never joins the
