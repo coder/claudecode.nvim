@@ -7,14 +7,16 @@
 set -euo pipefail
 (($#)) || set -- tests
 find "$@" -name '*.lua' -type f -print0 | xargs -0 awk '
-  FNR == 1 { loop_indent = "" }
+  FNR == 1 { in_loop = 0 }
   { match($0, /^[ \t]*/); indent = substr($0, 1, RLENGTH) }
-  loop_indent == "" && /^[ \t]*for .* in pairs\(/ && !/[ \t]end$/ { loop_indent = indent; loop_line = FNR; next }
-  loop_indent != "" && $0 == loop_indent "end" { loop_indent = ""; next }
-  loop_indent != "" && /^[ \t]*(it|describe|pending)\(/ {
+  !in_loop && /^[ \t]*for .* in pairs\(/ && !/[ \t]end([ \t]*--.*)?$/ {
+    in_loop = 1; loop_indent = indent; loop_line = FNR; next
+  }
+  in_loop && indent == loop_indent && substr($0, length(indent) + 1) ~ /^end[ \t]*(--.*)?$/ { in_loop = 0; next }
+  in_loop && /^[ \t]*(it|describe|pending)\(/ {
     print FILENAME ":" loop_line ": registers tests in pairs() order, which differs between runs; loop over an array with ipairs"
     found = 1
-    loop_indent = ""
+    in_loop = 0
   }
   END { exit found }
 '
