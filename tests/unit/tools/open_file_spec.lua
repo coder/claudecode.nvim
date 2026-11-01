@@ -793,6 +793,10 @@ describe("Tool: open_file", function()
       _G.vim.fn.exists = spy.new(function(name)
         return (name == "*state" or name == "+winfixbuf" or name == "+eventignorewin") and 1 or 0
       end)
+      _G.vim.fn.getbufvar = spy.new(function(buf, name)
+        assert(name == "&autoread", name)
+        return _G.vim.o.autoread and 1 or 0
+      end)
       _G.vim.fn.win_findbuf = spy.new(function(buf)
         local wins = {}
         for win, shown in pairs(win_buf) do
@@ -860,7 +864,7 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_create_autocmd, _G.vim.api.nvim_del_autocmd = original_create_autocmd, original_del_autocmd
       _G.vim.v = original_v
       _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = nil, nil, nil
-      _G.vim.fn.win_findbuf = nil
+      _G.vim.fn.win_findbuf, _G.vim.fn.getbufvar = nil, nil
     end)
 
     it("opens the file without a range", function()
@@ -1031,6 +1035,20 @@ describe("Tool: open_file", function()
         expect(success).to_be_true()
         assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
       end)
+
+      for _, option in ipairs({ "eventignore", "eventignorewin" }) do
+        it("loads the file again with 'autoread' when '" .. option .. "' ignores the event", function()
+          win_buf[1000] = 30
+          if option == "eventignore" then
+            _G.vim.o.eventignore = "FileChangedShell"
+          else
+            ignore_win[1000] = "FileChangedShell"
+          end
+          local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+          expect(success).to_be_true()
+          assert.are.same({ { "alpha", "beta", "fresh" }, false }, { buffers[30].lines, asked })
+        end)
+      end
 
       it("loads the file again when another window that shows it does not ignore the event", function()
         _G.vim.o.autoread, win_buf[3000], preview_flag[3000], ignore_win[3000] = false, 30, true, "FileChangedShell"
