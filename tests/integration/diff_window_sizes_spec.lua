@@ -23,6 +23,7 @@ describe("openDiff window sizes", function()
       vim.fn.writefile({ "alpha" }, dir .. "/" .. name)
     end
     tools.register_all()
+    require("claudecode")._create_commands()
     _G.claude_deferred_responses = {}
   end)
 
@@ -37,9 +38,9 @@ describe("openDiff window sizes", function()
     _G.claude_deferred_responses = nil
   end)
 
-  local function use_layout(layout)
+  local function use_layout(layout, diff_opts)
     local config = vim.deepcopy(require("claudecode.config").defaults)
-    config.diff_opts.layout = layout
+    config.diff_opts = vim.tbl_extend("force", config.diff_opts, diff_opts or {}, { layout = layout })
     config.terminal = { provider = "native", split_side = "right", split_width_percentage = 0.30 }
     diff.setup(config)
     terminal.setup(config.terminal, "sh -c 'sleep 600'")
@@ -279,6 +280,85 @@ describe("openDiff window sizes", function()
 
     local diff_data = open_diff("a.txt")
     assert.are_not.equal(vim.api.nvim_win_get_tabpage(user_win), vim.api.nvim_win_get_tabpage(diff_data.new_window))
+    close_tab()
+
+    assert.equal(user_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("keeps the width the user gave the Claude terminal after a diff in its own tab", function()
+    use_layout("vertical", { open_in_new_tab = true })
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    open_terminal(60)
+    local before = window_sizes()
+
+    assert.is_true(open_diff("a.txt").created_new_tab)
+    close_tab()
+
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("leaves the width of a Claude terminal in another tab alone after a diff in its own tab", function()
+    use_layout("vertical", { open_in_new_tab = true })
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/b.txt"))
+    local user_tab = vim.api.nvim_get_current_tabpage()
+    vim.cmd("tabprevious")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    open_terminal(60)
+    local terminal_tab = vim.api.nvim_get_current_tabpage()
+    local before = window_sizes()
+    vim.api.nvim_set_current_tabpage(user_tab)
+
+    assert.is_true(open_diff("b.txt").created_new_tab)
+    close_tab()
+
+    vim.api.nvim_set_current_tabpage(terminal_tab)
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("gives a Claude terminal it had to show again the idle width after a diff in its own tab", function()
+    use_layout("vertical", { open_in_new_tab = true })
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    open_terminal(60)
+
+    open_diff("a.txt")
+    vim.api.nvim_win_close(vim.fn.win_findbuf(terminal.get_active_terminal_bufnr())[1], true)
+    close_tab()
+
+    local terminal_win = vim.fn.bufwinid(terminal.get_active_terminal_bufnr())
+    assert.are_not.equal(-1, terminal_win, "the Claude terminal is shown again")
+    assert.equal(math.floor(vim.o.columns * 0.30), vim.api.nvim_win_get_width(terminal_win))
+  end)
+
+  -- Opens a diff next to the user's window and a second one, which gets its own tab because the user's tab now has a
+  -- diff, then runs :ClaudeCodeCloseAllDiffs. The two names make pairs() list the diffs in different orders.
+  local function assert_close_all_returns_cursor(first_name, second_name)
+    use_layout("vertical")
+    two_editors()
+    local user_win = vim.api.nvim_get_current_win()
+
+    open_diff("a.txt", first_name)
+    assert.is_true(open_diff("b.txt", second_name).created_new_tab)
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+
+    assert.equal(0, vim.tbl_count(diff._get_active_diffs()), "every diff closed")
+    assert.equal(user_win, vim.api.nvim_get_current_win(), "the cursor is back where it was before the first diff")
+  end
+
+  it("puts the cursor back where it was before the first diff after :ClaudeCodeCloseAllDiffs", function()
+    assert_close_all_returns_cursor("✻ [Claude Code] first.txt ⧉", "✻ [Claude Code] second.txt ⧉")
+  end)
+
+  it("puts the cursor back where it was before the first diff after :ClaudeCodeCloseAllDiffs, names swapped", function()
+    assert_close_all_returns_cursor("✻ [Claude Code] second.txt ⧉", "✻ [Claude Code] first.txt ⧉")
+  end)
+
+  it("puts the cursor back in its window with keep_terminal_focus and no Claude terminal shown", function()
+    use_layout("vertical", { keep_terminal_focus = true })
+    two_editors()
+    local user_win = vim.api.nvim_get_current_win()
+
+    open_diff("a.txt")
+    vim.wait(50)
     close_tab()
 
     assert.equal(user_win, vim.api.nvim_get_current_win())

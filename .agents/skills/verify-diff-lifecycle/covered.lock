@@ -3,7 +3,7 @@ file lua/claudecode/config.lua dfb93bd69a6198ec
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua a40bf716d289350c
+file lua/claudecode/diff.lua 08952ad63c1ab278
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -18,12 +18,12 @@ block file_holds         3cac24d43bd9c5e5
 block buffer_holds       367269eda82431d2
 block put_in_buffer      c5dedfca8261379b
 block held_for_other     3d1e2911d5310cc2
-block close_active       6a6f96cdea5ff8e6
+block close_active       446fbed632748300
 block cleanup_all        43e7b595cf106229
 block accept_current     7577efa33506569e
 block fire_event         ef778bb39419d91a
-block register_state     dd8024e262a26c38
-block cleanup_state      5c9bdb89dcfbe720
+block register_state     8cf78b6711a9ecc6
+block cleanup_state      59a774610e703d64
 block diff_autocmds      675566664a1546fb
 block deny_current       94385d781b70d50c
 site lua/claudecode/diff.lua: M._cleanup_all_active_diffs("shutdown") @ vim.api.nvim_create_autocmd("VimLeavePre", {
