@@ -1866,16 +1866,11 @@ local function accepted_lines(diff_data, buf)
   if eol then
     table.remove(lines)
   end
-  -- :w ends each line of a dos buffer with CRLF and starts a 'bomb' buffer with a BOM, so the text's own CRs and BOM
-  -- would be written twice. Like Neovim's read, take the CRs only when every line break in the text is CRLF.
-  local breaks = eol and #lines or #lines - 1
-  local crlf = breaks > 0 and vim.api.nvim_buf_get_option(buf, "fileformat") == "dos"
-  for i = 1, breaks do
-    crlf = crlf and lines[i]:sub(-1) == "\r"
-  end
-  if crlf then
-    for i = 1, breaks do
-      lines[i] = lines[i]:sub(1, -2)
+  -- :w ends each line of a dos buffer with CRLF and starts a 'bomb' buffer with a BOM, so the text's own CRs before
+  -- a line break and its BOM would be written twice.
+  if vim.api.nvim_buf_get_option(buf, "fileformat") == "dos" then
+    for i = 1, eol and #lines or #lines - 1 do
+      lines[i] = lines[i]:gsub("\r$", "")
     end
   end
   if vim.api.nvim_buf_get_option(buf, "bomb") and lines[1]:sub(1, 3) == "\239\187\191" then
@@ -1970,7 +1965,15 @@ local function put_accepted_text_in_buffer(diff_data)
     pcall(vim.api.nvim_buf_delete, buf, { force = true, unload = existed })
   end
   -- An API error carries the Lua position of this call, which tells the user nothing.
-  return (tostring(problem):gsub("^.-:%d+: ", ""):gsub("^Vim:", ""))
+  problem = tostring(problem):gsub("^.-:%d+: ", ""):gsub("^Vim:", "")
+  if problem:match("^E325:") then
+    -- Neovim deals with a swap file only when the user opens the file: it asks, or, from 0.10 on, it skips the swap
+    -- file of a running Neovim by default.
+    problem = problem
+      .. ". Another Neovim may be editing the file: open it with :e (answer the swap file prompt if Neovim shows one), "
+      .. "then run the command again"
+  end
+  return problem
 end
 
 ---@param diff_data table A saved active_diffs entry whose accepted_buffer holds the accepted text
@@ -1983,7 +1986,7 @@ local function describe_unsaved(diff_data)
   local lossy = fenc ~= ""
     and fenc ~= "utf-8"
     and vim.fn.iconv(vim.fn.iconv(text, "utf-8", fenc), fenc, "utf-8") ~= text
-  local write = ":w"
+  local write = vim.api.nvim_buf_get_option(buf, "readonly") and ":w!" or ":w"
   if vim.fn.isdirectory(vim.fn.fnamemodify(diff_data.old_file_path, ":h")) == 0 then
     -- Neovim 0.8 has no :w ++p.
     write = vim.fn.has("nvim-0.9") == 1 and ":w ++p" or ":call mkdir(expand('%:p:h'), 'p') | w"

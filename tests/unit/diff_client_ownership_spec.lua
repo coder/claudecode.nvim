@@ -262,7 +262,11 @@ describe("a diff the user accepted for one Claude client", function()
       local msg = notes[#notes].msg
       assert.is_truthy(msg:find("E325: ATTENTION", 1, true), msg)
       assert.is_truthy(
-        msg:find("open it with :e, answer the swap file prompt, then run the command again", 1, true),
+        msg:find(
+          "open it with :e (answer the swap file prompt if Neovim shows one), then run the command again",
+          1,
+          true
+        ),
         msg
       )
     end)
