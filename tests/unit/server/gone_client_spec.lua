@@ -107,6 +107,24 @@ describe("A request from a client that has gone", function()
     assert.same({}, handled)
   end)
 
+  it("does not run a request that came in the same read as the client's Close frame", function()
+    local client, writes = connect()
+    client.tcp_handle._read_cb(nil, upgrade)
+    writes[1].done()
+    scheduled = {}
+
+    client.tcp_handle._read_cb(
+      nil,
+      frame.create_frame(frame.OPCODE.TEXT, request, true, true)
+        .. frame.create_frame(frame.OPCODE.CLOSE, "\3\232", true, true)
+    )
+    run_scheduled()
+
+    assert.same({}, handled)
+    local close = assert(frame.parse_frame(writes[2].data))
+    assert.equals(frame.OPCODE.CLOSE, close.opcode)
+  end)
+
   it("runs a request from a client that is still connected when the main loop runs it", function()
     local client, writes = connect()
     client.tcp_handle._read_cb(nil, upgrade)
