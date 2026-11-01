@@ -11,6 +11,13 @@ describe("Tool: open_file", function()
   local editor_mode
   local gv_mode
   local original_get_mode
+  local typed_over_selection
+  local call_win
+  local last_visual
+  local operated_on
+  local typeahead
+  local original_feedkeys
+  local original_replace_termcodes
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -34,16 +41,46 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = spy.new(function(path)
       return path -- Simple pass-through
     end)
-    -- Like Neovim, gv enters Visual mode (Select mode when 'selectmode' has "cmd"), and :edit or <Esc> ends it.
+    -- Like Neovim, gv reselects in the buffer's last Visual mode (v, V or CTRL-V), as Select mode when 'selectmode'
+    -- has "cmd" (gv_mode "s"). <Esc> ends Visual or Select mode, and so does :edit in the current window. In Select
+    -- mode any other typed key replaces the selected text. A pending operator (mode "no") acts on what gv selects.
     editor_mode = "n"
     gv_mode = "v"
+    last_visual = "v"
+    typed_over_selection = {}
+    operated_on = {}
+    call_win = nil
+    local kind_of = { v = "v", s = "v", V = "V", S = "V", ["\22"] = "\22", ["\19"] = "\22" }
+    local select_of = { v = "s", V = "S", ["\22"] = "\19" }
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
-      if command == "normal! gv" then
-        editor_mode = gv_mode
-      elseif command == "normal! \27" or command:match("^p?edit ") then
+      local keys = command:match("^normal! (.*)")
+      local in_visual = kind_of[editor_mode] ~= nil
+      if keys and keys ~= "\27" and editor_mode:match("^[sS\19]") then
+        table.insert(typed_over_selection, keys)
+        editor_mode = "n"
+      elseif keys == "gv" and editor_mode:match("^no") then
+        table.insert(operated_on, "gv")
+        editor_mode = "n"
+      elseif keys == "gv" then
+        editor_mode = gv_mode == "s" and select_of[last_visual] or last_visual
+      elseif command == "noautocmd normal! v\27" and editor_mode == "n" then
+        last_visual = "v"
+      elseif in_visual and (keys == "\27" or (command:match("^p?edit ") and (call_win == nil or call_win == 1000))) then
+        last_visual = kind_of[editor_mode]
         editor_mode = "n"
       end
+    end)
+    -- Like Neovim, keys fed with the "i" flag go before keys the user types next. A pending operator takes the
+    -- next key as its motion and acts from where the user typed the operator, unless that key is <Esc>.
+    typeahead = {}
+    original_feedkeys = _G.vim.api.nvim_feedkeys
+    original_replace_termcodes = _G.vim.api.nvim_replace_termcodes
+    _G.vim.api.nvim_replace_termcodes = spy.new(function(str)
+      return (str:gsub("<Esc>", "\27"))
+    end)
+    _G.vim.api.nvim_feedkeys = spy.new(function(keys, flags, escape_ks)
+      table.insert(typeahead, flags:find("i", 1, true) and 1 or #typeahead + 1, keys)
     end)
     original_get_mode = _G.vim.api.nvim_get_mode
     _G.vim.api.nvim_get_mode = spy.new(function()
@@ -73,7 +110,11 @@ describe("Tool: open_file", function()
       return false -- No window is in diff mode by default
     end)
     _G.vim.api.nvim_win_call = spy.new(function(win, callback)
-      return callback() -- Just execute the callback
+      local outer = call_win
+      call_win = win
+      local result = callback()
+      call_win = outer
+      return result
     end)
     _G.vim.api.nvim_set_current_win = spy.new(function(win)
       -- Do nothing
@@ -169,6 +210,8 @@ describe("Tool: open_file", function()
     _G.vim.fn.bufadd = nil
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
     _G.vim.api.nvim_get_mode = original_get_mode
+    _G.vim.api.nvim_feedkeys = original_feedkeys
+    _G.vim.api.nvim_replace_termcodes = original_replace_termcodes
     _G.vim.o.selection = nil
   end)
 
@@ -386,10 +429,29 @@ describe("Tool: open_file", function()
       buffer_lines = { "one", "two", "three", "four", "alpha beta gamma" }
     end)
 
+    -- Neovim reads the keys waiting in typeahead as soon as the handler returns, then the keys the user types.
+    local function read_typeahead()
+      while #typeahead > 0 do
+        local next_key = table.remove(typeahead, 1)
+        if editor_mode:match("^no") then
+          if next_key ~= "\27" then
+            table.insert(operated_on, next_key)
+          end
+          editor_mode = "n"
+        end
+      end
+    end
+
+    local function user_types(key)
+      table.insert(typeahead, key)
+      read_typeahead()
+    end
+
     local function open(params)
       params.filePath = "test.txt"
       local success, result = pcall(open_file_handler, params)
       expect(success).to_be_true()
+      read_typeahead()
       return result.content[1].text
     end
 
@@ -523,6 +585,72 @@ describe("Tool: open_file", function()
         assert_contains(text, 'Opened file and positioned at "two"')
         expect(editor_mode).to_be("n")
         assert.are.same({ 2, 0 }, cursor)
+      end
+    end)
+
+    it("never types over a selection that gv starts in Select mode", function()
+      gv_mode = "s"
+      for _, case in ipairs({
+        { params = { startText = "two", endText = "three" }, mode = "s" },
+        { params = { startText = "three" }, mode = "s" },
+        { params = { startLine = 3, endLine = 4 }, mode = "s" },
+        { params = { startLine = 3, endLine = 4, startText = "two", endText = "three" }, mode = "s" },
+        { params = { startLine = 3, endLine = 4, startText = "two", endText = "zzz" }, mode = "n" },
+      }) do
+        open(case.params)
+        assert.are.same({}, typed_over_selection)
+        expect(editor_mode).to_be(case.mode)
+      end
+    end)
+
+    it("leaves a Select mode the user holds in another window before gv", function()
+      _G.vim.api.nvim_list_wins = spy.new(function()
+        return { 2000 }
+      end)
+      editor_mode = "s"
+      expect(open({ startLine = 3, endLine = 4 })).to_be("Opened file and selected lines 3 to 4")
+      assert.are.same({}, typed_over_selection)
+      expect(editor_mode).to_be("v")
+    end)
+
+    it("selects charwise after a linewise or blockwise Visual mode in the buffer", function()
+      for _, case in ipairs({
+        { last = "V", mode = "n", gv = "v", want = "v" },
+        { last = "\22", mode = "n", gv = "v", want = "v" },
+        { last = "v", mode = "V", gv = "v", want = "v" },
+        { last = "v", mode = "S", gv = "s", want = "s" },
+        { last = "\22", mode = "n", gv = "s", want = "s" },
+      }) do
+        last_visual, editor_mode, gv_mode = case.last, case.mode, case.gv
+        open({ startText = "two", endText = "three" })
+        expect(editor_mode).to_be(case.want)
+        assert.are.same({}, typed_over_selection)
+      end
+    end)
+
+    it("only places the cursor while an operator is pending", function()
+      for _, case in ipairs({
+        { params = { startText = "two", endText = "three" }, cursor = { 2, 0 }, text = 'positioned at "two"' },
+        { params = { startText = "two" }, cursor = { 2, 0 }, text = 'positioned at "two"' },
+        { params = { startLine = 2, endLine = 3 }, cursor = { 2, 0 }, text = "positioned at line 2" },
+      }) do
+        editor_mode = "no"
+        local text = open(case.params)
+        assert_contains(text, case.text)
+        assert_contains(text, "a pending operator was cancelled and nothing was selected")
+        assert.are.same({}, operated_on)
+        expect(editor_mode).to_be("n")
+        assert.are.same(case.cursor, cursor)
+      end
+    end)
+
+    it("cancels a pending operator before the user's next key", function()
+      for _, params in ipairs({ { startText = "two", endText = "three" }, { startLine = 4 } }) do
+        editor_mode, typeahead = "no", {}
+        open(params)
+        user_types("w")
+        assert.are.same({}, operated_on)
+        expect(editor_mode).to_be("n")
       end
     end)
 

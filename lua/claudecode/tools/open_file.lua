@@ -107,10 +107,22 @@ local function find_main_editor_window()
   return nil
 end
 
+---Ends Visual or Select mode, if one is on. Select mode replaces the selected text with typed keys, so this runs
+---before openFile sends `:normal!` keys.
+local function leave_visual_or_select_mode()
+  if vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]") then
+    vim.cmd("normal! \27")
+  end
+end
+
 ---Selects from `start_col` on `start_row` through `last_col` on `end_row` in charwise visual mode, both ends included.
 ---With 'selection' set to "exclusive", gv leaves out the character under `'>`, so `'>` goes one byte past
 ---`last_col`. The marks use setpos() because nvim_buf_set_mark on Neovim 0.8 also sets the mark's coladd,
----and gv then selects one more character.
+---and gv then selects one more character. gv reselects in the buffer's last Visual mode, so a charwise Visual
+---pass (v<Esc>) comes first, or a buffer last selected with V or CTRL-V gets a linewise or blockwise selection.
+---It runs under :noautocmd, so its own ModeChanged pair does not reach user handlers or the selection tracker.
+---gv must be the last key openFile sends: with 'selectmode' set to "cmd" it starts Select mode, where any later
+---key would replace the selection.
 ---@param start_row integer 1-based row of the first character
 ---@param start_col integer 0-based byte column of the first character
 ---@param end_row integer 1-based row of the last character
@@ -120,6 +132,8 @@ local function select_range(start_row, start_col, end_row, last_col)
   if vim.o.selection == "exclusive" then
     end_col = last_col + 1
   end
+  leave_visual_or_select_mode()
+  vim.cmd("noautocmd normal! v\27")
   vim.fn.setpos("'<", { 0, start_row, start_col + 1, 0 })
   vim.fn.setpos("'>", { 0, end_row, end_col + 1, 0 })
   vim.cmd("normal! gv")
@@ -152,6 +166,11 @@ local function handler(params)
   if not params.filePath then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
+
+  -- An operator the user typed (d, c, y, ...) still waits for its motion. It would act on any selection made now,
+  -- and the next motion would act from where the user typed it, so openFile selects nothing and cancels it.
+  local operator_pending = vim.api.nvim_get_mode().mode:sub(1, 2) == "no"
+  local nothing_selected = " (a pending operator was cancelled and nothing was selected)"
 
   local start_line, end_line
   if params.startLine ~= nil or params.endLine ~= nil then
@@ -266,9 +285,13 @@ local function handler(params)
       -- line break: gv selects the character under '>, and on an empty line that is the line break. Ending
       -- on the line above instead would move '> and the selection Claude receives off endLine.
       local end_line_text = vim.api.nvim_buf_get_lines(0, end_line - 1, end_line, false)[1]
-      select_range(start_line, 0, end_line, math.max(#end_line_text - 1, 0))
-
-      message = "Opened file and selected lines " .. start_line .. " to " .. end_line
+      if operator_pending then
+        vim.api.nvim_win_set_cursor(0, { start_line, 0 })
+        message = "Opened file and positioned at line " .. start_line .. nothing_selected
+      else
+        select_range(start_line, 0, end_line, math.max(#end_line_text - 1, 0))
+        message = "Opened file and selected lines " .. start_line .. " to " .. end_line
+      end
     end)
   end
 
@@ -321,21 +344,26 @@ local function handler(params)
           message = 'Opened file and selected text "' .. start_text .. '"'
         end
 
-        -- A line range earlier in this call can leave Visual or Select mode on. Moving the cursor in it would
-        -- stretch that selection, and keys typed in Select mode replace the selected text.
-        if vim.api.nvim_get_mode().mode:match("^[vVsS\22\19]") then
-          vim.cmd("normal! \27")
-        end
+        -- A line range earlier in this call can leave Visual or Select mode on, and moving the cursor in it
+        -- would stretch that selection.
+        leave_visual_or_select_mode()
         vim.api.nvim_win_set_cursor(0, { start_line_idx, start_col_idx })
+        vim.cmd("normal! zz") -- Center the match before gv, which must be the last key
         -- When endText is not found, only the cursor moves, as in the VS Code extension.
-        if end_line_idx then
+        if end_line_idx and operator_pending then
+          message = 'Opened file and positioned at "' .. start_text .. '"' .. nothing_selected
+        elseif end_line_idx then
           select_range(start_line_idx, start_col_idx, end_line_idx, end_col_idx)
         end
-        vim.cmd("normal! zz") -- Center the selection in the window
       else
         message = 'Opened file, but text "' .. start_text .. '" not found'
       end
     end)
+  end
+
+  if operator_pending then
+    -- "i" puts <Esc> before any key the user types next, and "n" skips the user's mappings.
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "ni", false)
   end
 
   -- Return format based on makeFrontmost parameter
