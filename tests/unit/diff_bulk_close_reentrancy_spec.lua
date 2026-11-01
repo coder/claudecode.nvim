@@ -108,12 +108,12 @@ describe("bulk close with a ClaudeCodeDiffClosed handler that resolves another d
     end)
 
     it(name .. " also closes the diff the handler rejected, and answers each call once", function()
-      local answers = {}
+      local answers = 0
       -- Every lookup finds a sender, so a second answer to either call would be counted too.
       _G.claude_deferred_responses = setmetatable({}, {
         __index = function()
-          return function(response)
-            answers[#answers + 1] = response
+          return function()
+            answers = answers + 1
           end
         end,
       })
@@ -133,7 +133,7 @@ describe("bulk close with a ClaudeCodeDiffClosed handler that resolves another d
       assert.equal("DIFF_REJECTED", handles[other].result.content[1].text)
       assert.is_nil(diff._get_active_diffs()[other], "the rejected diff must close too")
       assert.equal(2, closed)
-      assert.equal(2, #answers, "each openDiff call must get exactly one answer")
+      assert.equal(2, answers, "each openDiff call must get exactly one answer")
     end)
   end
 end)
