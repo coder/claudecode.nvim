@@ -39,7 +39,7 @@ function M.setup(plugin_config)
   end
 end
 
----Makes text one line no wider than the command line, ending in "..." where it was cut.
+---Makes text one line no wider than the command line, ending in "..." where it was cut if that fits.
 ---@param text string
 ---@return string
 local function fit_command_line(text)
@@ -48,7 +48,8 @@ local function fit_command_line(text)
   if vim.fn.strdisplaywidth(text) <= width then
     return text
   end
-  local room = math.max(width - 3, 0)
+  local ellipsis = width >= 3 and "..." or ""
+  local room = math.max(width - #ellipsis, 0)
   local count = room
   local cut = vim.fn.strcharpart(text, 0, count)
   -- A character can take two cells.
@@ -56,7 +57,7 @@ local function fit_command_line(text)
     count = count - 1
     cut = vim.fn.strcharpart(text, 0, count)
   end
-  return cut .. "..."
+  return cut .. ellipsis
 end
 
 local function log(level, component, message_parts, one_line)

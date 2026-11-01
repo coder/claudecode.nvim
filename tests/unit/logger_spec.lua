@@ -189,6 +189,14 @@ describe("Logger", function()
       expect(echo_calls[1].chunks[1][1]).to_be("[ClaudeCode] [server] [INFO] " .. text)
     end)
 
+    it("cuts without an ellipsis when the command line is narrower than one", function()
+      vim.v.echospace = 2
+
+      logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
+
+      expect(notify_calls[1].msg).to_be("[C")
+    end)
+
     it("shows the whole line at log_level debug", function()
       logger.setup({ log_level = "debug" })
 
