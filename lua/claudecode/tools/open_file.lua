@@ -173,7 +173,22 @@ local function open_from(win, file_path, preview)
       vim.api.nvim_win_set_option(new_win, "foldcolumn", "0")
       return new_win
     end)
-  vim.api.nvim_win_set_buf(preview_win, buf)
+  -- :pedit shows the file even when the preview window has 'winfixbuf' set, and keeps the option.
+  local fixed = vim.fn.exists("+winfixbuf") == 1 and vim.api.nvim_win_get_option(preview_win, "winfixbuf")
+  if fixed then
+    vim.api.nvim_win_set_option(preview_win, "winfixbuf", false)
+  end
+  local ok, err = pcall(vim.api.nvim_win_set_buf, preview_win, buf)
+  if fixed and vim.api.nvim_win_is_valid(preview_win) then
+    vim.api.nvim_win_set_option(preview_win, "winfixbuf", true)
+  end
+  if not ok then
+    error(err, 0)
+  end
+  -- An autocommand can clear 'previewwindow' or close the window as it gets the buffer.
+  if not vim.api.nvim_win_is_valid(preview_win) or not vim.api.nvim_win_get_option(preview_win, "previewwindow") then
+    error({ code = -32000, message = "File operation error", data = "No preview window shows the file" })
+  end
   return preview_win
 end
 
