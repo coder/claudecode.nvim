@@ -230,7 +230,7 @@ Configure the plugin with the detected path:
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
 - `:ClaudeCodeDiffAccept` - Accept diff changes
 - `:ClaudeCodeDiffDeny` - Reject diff changes
-- `:ClaudeCodeCloseAllDiffs` - Close Claude diffs: rejects pending ones, and closes accepted ones once their file holds the accepted text
+- `:ClaudeCodeCloseAllDiffs` - Close Claude diffs: rejects pending ones, and closes accepted ones once the file or its buffer holds the accepted text
 
 ## Sending text to the Claude terminal
 
@@ -255,7 +255,7 @@ You can edit Claude's suggestions before accepting them.
 
 If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects. If you resolve diffs remotely while the session is still connected, run `:ClaudeCodeCloseAllDiffs` to clear the leftover pending proposals.
 
-A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff: when the file does not hold the accepted text yet, the plugin writes it, then closes the diff. It keeps the diff open, and warns, when the file changed after you accepted it or its buffer has unsaved changes, so neither your accepted edits nor a later edit are lost.
+A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff. When the file does not hold the accepted text yet, the command puts the text into the file's buffer as unsaved changes and closes the diff: `:w` in that buffer writes it, and `:e!` drops it. The plugin never writes the file. A diff whose file buffer already has unsaved changes stays open, and the command warns, so neither those changes nor your accepted edits are lost.
 
 ## Events
 
@@ -999,8 +999,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 - Disk: `open_diff` writes diff temp files under `stdpath("cache")/claudecode_diffs`, or
   `stdpath("cache")/claudecode_diffs_fallback` when a directory cannot be created in the first. If both fail, it returns
   an error that names both directories [lua/claudecode/diff.lua:create_temp_file]. The `openDiff` tool writes no temp
-  files [lua/claudecode/diff.lua:M.open_diff_blocking]. `:ClaudeCodeCloseAllDiffs` writes the accepted text of a saved
-  diff to its file when the file does not hold it yet [lua/claudecode/diff.lua:M.close_saved_diffs].
+  files [lua/claudecode/diff.lua:M.open_diff_blocking].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
   `ClaudeCodeDiffCleanup`), `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
   and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2

@@ -126,11 +126,11 @@ Module map (direct files):
 - A diff resolves only from status `pending`. Save returns `FILE_SAVED` and the content. Reject returns `DIFF_REJECTED` and the tab name [diff.lua:M._resolve_diff_as_saved]
 - Saving the proposed buffer (`BufWriteCmd`) never writes the file. It only resolves the diff. Windows stay open until `close_tab` [diff.lua:register_diff_autocmds]
 - `close_pending_diffs` and `close_diffs_for_client` close only `pending` diffs. `close_all_diffs` closes every diff [diff.lua:M.close_pending_diffs]
-- `close_saved_diffs`, which `:ClaudeCodeCloseAllDiffs` runs after `close_pending_diffs`, closes a `saved` diff only once its file holds the accepted text. It writes that text first when the file still holds what it held at the accept and its buffer has no unsaved changes. It returns the count and the paths of the saved diffs it kept [diff.lua:M.close_saved_diffs]
+- `close_saved_diffs`, which `:ClaudeCodeCloseAllDiffs` runs after `close_pending_diffs`, closes a `saved` diff only once its file or the file's buffer holds the accepted text. When the file does not hold it and the buffer has no unsaved changes, it first loads the file into its buffer and sets the accepted lines there, unsaved. It never writes the file. It reads the file at the absolute path recorded at the accept. It returns the count, the paths whose buffer got the text, and the paths of the saved diffs it kept [diff.lua:M.close_saved_diffs]
 
 ## Side Effects
 
-- `:ClaudeCodeCloseAllDiffs` writes the accepted text of a saved diff to its file when the file does not hold it yet, creating missing parent directories, before it closes the diff [diff.lua:M.close_saved_diffs]
+- `:ClaudeCodeCloseAllDiffs` can load an accepted diff's file into a listed buffer and replace its lines with the accepted text, leaving the buffer modified [diff.lua:M.close_saved_diffs]
 - `start` binds a `127.0.0.1` TCP port and writes the lock file. It enables selection tracking only when `track_selection` is true. `stop` removes the lock file and stops the server [init.lua:M.start]
 - `lockfile.create` creates the lock directory with mode 0700. It then tries to chmod an existing directory to 0700 through `pcall` and ignores the result, so on platforms without `fs_chmod` the old mode stays. It writes a temp file opened `wx` with mode 0600, then renames it to `<port>.lock` [lockfile.lua:M.create]
 - The terminal env gets `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`, `CLAUDE_CODE_SSE_PORT=<port>` only while the server runs, the user `env` (merged last, so it can override these), and the merged `no_proxy`/`NO_PROXY` [terminal.lua:get_claude_command_and_env]

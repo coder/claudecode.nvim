@@ -431,19 +431,15 @@ local function is_buffer_dirty(file_path)
 end
 
 ---@param path string
----@return string|false|nil text The file's bytes, nil when the file does not exist, or false when it cannot be read
+---@return string|nil text The file's bytes, or nil when it cannot be read
 local function read_file(path)
-  local file, _, errno = io.open(path, "rb")
+  local file = io.open(path, "rb")
   if not file then
-    local enoent = 2
-    if errno == enoent then
-      return nil
-    end
-    return false
+    return nil
   end
   local text = file:read("*a")
   file:close()
-  return text or false
+  return text
 end
 
 ---Setup the diff module
@@ -822,9 +818,8 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return
   end
 
-  -- Claude writes the file only after it gets FILE_SAVED, so this is the file as it was before that write.
-  -- close_saved_diffs writes the accepted text only over this, never over a later edit.
-  diff_data.file_at_accept = read_file(diff_data.old_file_path)
+  -- Pinned now, so a later :cd does not change the buffer that close_saved_diffs gives the accepted text to.
+  diff_data.accepted_path = vim.fn.fnamemodify(diff_data.old_file_path, ":p")
 
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
@@ -1817,70 +1812,90 @@ function M.close_diffs_for_client(client_id, reason)
 end
 
 ---@param diff_data table A saved active_diffs entry
+---@return string[] lines The accepted text as buffer lines
+---@return boolean eol True when the text ends with a line break
+local function accepted_lines(diff_data)
+  local lines = vim.split(diff_data.result_content.content[2].text, "\n", { plain = true })
+  local eol = lines[#lines] == ""
+  if eol then
+    table.remove(lines)
+  end
+  return lines, eol
+end
+
+---@param diff_data table A saved active_diffs entry
 ---@return boolean
 local function file_holds_accepted_text(diff_data)
-  return read_file(diff_data.old_file_path) == diff_data.result_content.content[2].text
+  return read_file(diff_data.accepted_path) == diff_data.result_content.content[2].text
 end
 
----Write the accepted text unless the file already holds it. Never writes over a change made after the accept, over
----a file it cannot read, or under a buffer with unsaved changes.
 ---@param diff_data table A saved active_diffs entry
-local function write_accepted_text(diff_data)
-  local path = diff_data.old_file_path
-  local text = diff_data.result_content.content[2].text
-  local current = read_file(path)
-  if current == text or current == false or current ~= diff_data.file_at_accept or is_buffer_dirty(path) then
-    return
+---@return boolean
+local function buffer_holds_accepted_text(diff_data)
+  local buf = vim.fn.bufnr(diff_data.accepted_path)
+  if buf == -1 then
+    return false
   end
-  -- A temp file renamed over the target, so a failed write (a full disk) leaves the file whole. resolve() writes
-  -- through a symlink to the file it names. "wx" refuses an existing file or symlink at the temp path, and 0600
-  -- keeps the text private until the temp file gets the target's mode.
-  local uv = vim.loop
-  local target = vim.fn.resolve(path)
-  vim.fn.mkdir(vim.fn.fnamemodify(target, ":h"), "p")
-  local stat = uv.fs_stat(target)
-  local tmp = ("%s.claudecode-%d-%s.tmp"):format(target, vim.fn.getpid(), string.format("%d", uv.hrtime()))
-  local fd = uv.fs_open(tmp, "wx", stat and tonumber("600", 8) or tonumber("666", 8))
-  if not fd then
-    return
+  local lines = accepted_lines(diff_data)
+  local buffer_lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  if #buffer_lines ~= #lines then
+    return false
   end
-  local ok = not stat or uv.fs_fchmod(fd, stat.mode % 512)
-  local pos = 0
-  while ok and pos < #text do
-    local written = uv.fs_write(fd, text:sub(pos + 1), pos)
-    ok = type(written) == "number" and written > 0
-    pos = pos + (ok and written or 0)
+  for i, line in ipairs(lines) do
+    if buffer_lines[i] ~= line then
+      return false
+    end
   end
-  ok = uv.fs_close(fd) and ok
-  -- Another process can edit the target while the temp file is written, so check it again right before the rename.
-  if ok and read_file(path) == diff_data.file_at_accept and uv.fs_rename(tmp, target) then
-    return
-  end
-  uv.fs_unlink(tmp)
+  return true
 end
 
----Close every diff the user accepted, once its file holds the accepted text. The text is written first when the
----file still holds what it held at the accept, which covers a Claude client that exited, or dropped the answer,
----before it wrote the file. A diff whose text cannot be written stays open, so its edits are never lost.
+---Load the file into its buffer and replace the lines with the accepted text, as unsaved changes. The user's :w
+---writes them through Neovim's own write (backups, permissions, symlinks, the "changed since reading" check), and
+---:e! drops them. Neovim refuses to quit while they are unsaved.
+---@param diff_data table A saved active_diffs entry
+local function put_accepted_text_in_buffer(diff_data)
+  local buf = vim.fn.bufadd(diff_data.accepted_path)
+  vim.fn.bufload(buf)
+  vim.api.nvim_buf_set_option(buf, "buflisted", true)
+  local lines, eol = accepted_lines(diff_data)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  if not eol then
+    vim.api.nvim_buf_set_option(buf, "eol", false)
+    vim.api.nvim_buf_set_option(buf, "fixeol", false)
+  end
+end
+
+---Close every diff the user accepted, once its accepted text is on disk or in the file's buffer. The plugin never
+---writes the file: when the file does not hold the text yet (its Claude client exited, or dropped the answer, before
+---it wrote the file), the text goes into the file's buffer as unsaved changes. A diff whose file buffer already has
+---unsaved changes stays open, so neither those changes nor the accepted text are lost.
 ---@param reason string Human-readable reason (for logging)
 ---@return number count Number of diffs closed
----@return string[] kept File paths of the saved diffs that stay open
+---@return string[] unsaved Paths whose buffer now holds the accepted text as unsaved changes
+---@return string[] kept Paths of the saved diffs that stay open
 function M.close_saved_diffs(reason)
+  local unsaved = {}
   for _, diff_data in pairs(active_diffs) do
-    if diff_data.status == "saved" then
-      write_accepted_text(diff_data)
+    if
+      diff_data.status == "saved"
+      and not file_holds_accepted_text(diff_data)
+      and not is_buffer_dirty(diff_data.accepted_path)
+      and pcall(put_accepted_text_in_buffer, diff_data)
+    then
+      unsaved[#unsaved + 1] = diff_data.accepted_path
     end
   end
   local count = close_active_diffs(function(diff_data)
-    return diff_data.status == "saved" and file_holds_accepted_text(diff_data)
+    return diff_data.status == "saved"
+      and (file_holds_accepted_text(diff_data) or buffer_holds_accepted_text(diff_data))
   end, reason or "close saved diffs")
   local kept = {}
   for _, diff_data in pairs(active_diffs) do
     if diff_data.status == "saved" then
-      kept[#kept + 1] = diff_data.old_file_path
+      kept[#kept + 1] = diff_data.accepted_path
     end
   end
-  return count, kept
+  return count, unsaved, kept
 end
 
 ---Test helper function (only for testing)

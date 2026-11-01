@@ -99,8 +99,9 @@ close_pending=$(block "$DIFF" '^function M\.close_pending_diffs\(')
 close_for_client=$(block "$DIFF" '^function M\.close_diffs_for_client\(')
 close_all=$(block "$DIFF" '^function M\.close_all_diffs\(')
 close_saved=$(block "$DIFF" '^function M\.close_saved_diffs\(')
-holds_accepted=$(block "$DIFF" '^local function file_holds_accepted_text\(')
-write_accepted=$(block "$DIFF" '^local function write_accepted_text\(')
+file_holds=$(block "$DIFF" '^local function file_holds_accepted_text\(')
+buffer_holds=$(block "$DIFF" '^local function buffer_holds_accepted_text\(')
+put_in_buffer=$(block "$DIFF" '^local function put_accepted_text_in_buffer\(')
 held_for_other=$(block "$DIFF" '^local function holds_edits_for_other_client\(')
 close_tab_tool=$(block "$CLOSE_TAB_TOOL" '^local function handler\(params, client\)')
 close_all_tool=$(block "$CLOSE_ALL_TOOL" '^local function handler\(params, client\)')
@@ -195,16 +196,18 @@ user_close_all_pending_only() {
   grep -q 'diff\.close_pending_diffs(' <<<"$user_close_all" && ! grep -q 'close_all_diffs' <<<"$user_close_all"
 }
 fact[UserCloseAllPendingOnly]=$(as_bool user_close_all_pending_only)
-# The user's command closes a saved diff only through close_saved_diffs, whose filter reads the file.
-FACTS+=(UserCloseSavedOnDisk)
-user_close_saved_on_disk() {
+# The user's command closes a saved diff only through close_saved_diffs, whose filter reads the accepted text back
+# from the file or from the file's buffer.
+FACTS+=(UserCloseKeepsAcceptedText)
+user_close_keeps_accepted_text() {
   grep -q 'diff\.close_saved_diffs(' <<<"$user_close_all" &&
-    in_order 'close_active_diffs\(function\(diff_data\)$' \
-      '^    return diff_data\.status == "saved" and file_holds_accepted_text\(diff_data\)$' <<<"$close_saved" &&
-    grep -qE '^  return read_file\(diff_data\.old_file_path\) == diff_data\.result_content\.content\[2\]\.text$' \
-      <<<"$holds_accepted"
+    in_order 'close_active_diffs\(function\(diff_data\)$' '^    return diff_data\.status == "saved"$' \
+      '^      and \(file_holds_accepted_text\(diff_data\) or buffer_holds_accepted_text\(diff_data\)\)$' \
+      '^  end, reason or "close saved diffs"\)$' <<<"$close_saved" &&
+    grep -qE '^  return read_file\(diff_data\.accepted_path\) == diff_data\.result_content\.content\[2\]\.text$' <<<"$file_holds" &&
+    grep -q 'vim\.api\.nvim_buf_get_lines(buf, 0, -1, false)' <<<"$buffer_holds"
 }
-fact[UserCloseSavedOnDisk]=$(as_bool user_close_saved_on_disk)
+fact[UserCloseKeepsAcceptedText]=$(as_bool user_close_keeps_accepted_text)
 client_tagged() {
   grep -q 'return tool_data\.handler(input, client)' <<<"$handle_invoke" &&
     grep -q 'client and client\.id or nil' <<<"$open_diff_tool" &&
@@ -231,7 +234,7 @@ opened_event_in_setup() {
 fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 
 echo "== code facts (TRUE = guard present)"
-for f in "${FACTS[@]}"; do printf '  %-24s %s\n' "$f" "${fact[$f]}"; done
+for f in "${FACTS[@]}"; do printf '  %-26s %s\n' "$f" "${fact[$f]}"; done
 
 # The coverage record: a hash of every Lua and Vimscript file under lua/ and plugin/, so any change to the plugin's Lua makes
 # the run STALE until someone confirms the model still fits. The block hashes and call sites
@@ -240,7 +243,7 @@ SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_
 coverage() {
   local name
   for name in resolve_saved resolve_rejected open_blocking setup_blocking close_by_name close_pending \
-    close_all close_saved holds_accepted write_accepted held_for_other close_tab_tool close_all_tool create_client \
+    close_all close_saved file_holds buffer_holds put_in_buffer held_for_other close_tab_tool close_all_tool create_client \
     close_for_client close_active cleanup_all inline_saved inline_rejected server_stop on_disconnect \
     handle_request setup_deferred fire_event register_state cleanup_state diff_autocmds handle_invoke open_diff_tool setup_inline accept_current deny_current user_close_all; do
     [[ -n ${!name} ]] || {
@@ -356,7 +359,7 @@ if [[ $mutants == 1 ]]; then
     [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
     [SetupAnswerReturned]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
-    [UserCloseSavedOnDisk]=SavedDiffKept
+    [UserCloseKeepsAcceptedText]=SavedDiffKept
     [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
     [ClientIdsUnique]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered

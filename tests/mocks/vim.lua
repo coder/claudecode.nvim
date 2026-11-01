@@ -561,16 +561,37 @@ local vim = {
       return -1
     end,
 
+    bufadd = function(name)
+      local existing = vim.fn.bufnr(name)
+      if existing ~= -1 then
+        return existing
+      end
+      local bufnr = vim.api.nvim_create_buf(false, false)
+      vim.api.nvim_buf_set_name(bufnr, name)
+      return bufnr
+    end,
+
+    -- Reads the file into a buffer that has no lines yet, as loading it would.
+    bufload = function(bufnr)
+      local buf = vim._buffers[bufnr]
+      if not buf or #buf.lines > 0 then
+        return
+      end
+      local file = io.open(buf.name, "rb")
+      if not file then
+        return
+      end
+      local text = file:read("*a")
+      file:close()
+      buf.lines = vim.split((text:gsub("\n$", "")), "\n", { plain = true })
+    end,
+
     buflisted = function(bufnr)
       return vim._buffers[bufnr] and vim._buffers[bufnr].listed and 1 or 0
     end,
 
     mkdir = function(path, flags)
       return 1
-    end,
-
-    resolve = function(path)
-      return path
     end,
 
     getpos = function(mark)
@@ -1139,60 +1160,6 @@ local vim = {
     end,
     now = function()
       return os.time() * 1000
-    end,
-    fs_rename = function(from, to)
-      local ok, err = os.rename(from, to)
-      if not ok then
-        return nil, err
-      end
-      return true
-    end,
-    -- File calls backed by Lua io, with libuv's signatures and results.
-    fs_stat = function(path)
-      local file = io.open(path, "rb")
-      if not file then
-        return nil, "ENOENT: no such file or directory: " .. path
-      end
-      file:close()
-      return { type = "file", mode = tonumber("100644", 8) }
-    end,
-    fs_open = function(path, flags, mode)
-      if flags == "wx" then
-        local existing = io.open(path, "rb")
-        if existing then
-          existing:close()
-          return nil, "EEXIST: file already exists: " .. path
-        end
-      end
-      local file, err = io.open(path, "wb")
-      if not file then
-        return nil, err
-      end
-      return { file = file, path = path, mode = mode }
-    end,
-    fs_fchmod = function(fd, mode)
-      fd.mode = mode
-      return true
-    end,
-    fs_write = function(fd, data, offset)
-      local ok, err = fd.file:write(data)
-      if not ok then
-        return nil, err
-      end
-      return #data
-    end,
-    fs_close = function(fd)
-      return fd.file:close()
-    end,
-    fs_unlink = function(path)
-      local ok, err = os.remove(path)
-      if not ok then
-        return nil, err
-      end
-      return true
-    end,
-    hrtime = function()
-      return math.floor(os.clock() * 1e9)
     end,
     timer_stop = function(timer)
       return true

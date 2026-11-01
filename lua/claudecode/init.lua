@@ -1150,23 +1150,31 @@ function M._create_commands()
 
   vim.api.nvim_create_user_command("ClaudeCodeCloseAllDiffs", function()
     -- A status="saved" diff holds the user's :w'd edits in its proposed buffer
-    -- until the file holds them, so only close_saved_diffs, which writes them
-    -- first, may close it.
+    -- until the file holds them, so only close_saved_diffs, which first moves
+    -- them into the file's buffer, may close it.
     local diff = require("claudecode.diff")
     local pending = diff.close_pending_diffs("user command")
-    local saved, kept = diff.close_saved_diffs("user command")
+    local saved, unsaved, kept = diff.close_saved_diffs("user command")
     if pending > 0 then
       vim.notify(("Closed %d pending Claude diff(s)"):format(pending), vim.log.levels.INFO)
     end
-    if saved > 0 then
+    if saved > #unsaved then
       vim.notify(
-        ("Closed %d accepted Claude diff(s). Their files hold the accepted text."):format(saved),
+        ("Closed %d accepted Claude diff(s). Their files hold the accepted text."):format(saved - #unsaved),
         vim.log.levels.INFO
+      )
+    end
+    for _, path in ipairs(unsaved) do
+      vim.notify(
+        ("The accepted Claude edits for %s are in its buffer, not saved: :w writes them, :e! drops them"):format(
+          vim.fn.fnamemodify(path, ":~:.")
+        ),
+        vim.log.levels.WARN
       )
     end
     for _, path in ipairs(kept) do
       vim.notify(
-        ("Kept the accepted Claude diff for %s: the file or its buffer changed after you accepted it"):format(
+        ("Kept the accepted Claude diff for %s: save or drop the unsaved changes in its buffer first"):format(
           vim.fn.fnamemodify(path, ":~:.")
         ),
         vim.log.levels.WARN
@@ -1176,7 +1184,7 @@ function M._create_commands()
       vim.notify("No Claude diffs to close", vim.log.levels.WARN)
     end
   end, {
-    desc = "Close Claude Code diffs: reject pending ones, and close accepted ones once their file holds the accepted text",
+    desc = "Close Claude Code diffs: reject pending ones, and close accepted ones once the file or its buffer holds the accepted text",
   })
 
   vim.api.nvim_create_user_command("ClaudeCodeSelectModel", function(opts)
