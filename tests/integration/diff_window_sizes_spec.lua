@@ -10,6 +10,7 @@ end
 
 describe("openDiff window sizes", function()
   local diff = require("claudecode.diff")
+  local terminal = require("claudecode.terminal")
   local tools = require("claudecode.tools.init")
   local tab_name = "✻ [Claude Code] proposed.txt ⧉"
   local dir
@@ -28,6 +29,7 @@ describe("openDiff window sizes", function()
   after_each(function()
     pcall(vim.api.nvim_del_augroup_by_name, "window_sizes_spec")
     diff._cleanup_all_active_diffs("test cleanup")
+    terminal.close()
     vim.cmd("silent! tabonly!")
     vim.cmd("silent! only!")
     vim.cmd("silent! %bwipeout!")
@@ -38,7 +40,22 @@ describe("openDiff window sizes", function()
   local function use_layout(layout)
     local config = vim.deepcopy(require("claudecode.config").defaults)
     config.diff_opts.layout = layout
+    config.terminal = { provider = "native", split_side = "right", split_width_percentage = 0.30 }
     diff.setup(config)
+    terminal.setup(config.terminal, "sh -c 'sleep 600'")
+  end
+
+  -- Opens the Claude terminal right of the current window, `width` columns wide, and goes back to that window.
+  local function open_terminal(width)
+    terminal.open()
+    assert(
+      vim.wait(1000, function()
+        return terminal.get_active_terminal_bufnr() ~= nil
+      end),
+      "the Claude terminal started"
+    )
+    vim.api.nvim_win_set_width(vim.fn.bufwinid(terminal.get_active_terminal_bufnr()), width)
+    vim.cmd("wincmd p")
   end
 
   local function call_open_diff(file, name)
@@ -140,12 +157,14 @@ describe("openDiff window sizes", function()
     use_layout("vertical")
     two_editors()
     local before = window_sizes()
+    local user_win = vim.api.nvim_get_current_win()
     fail_when_shown("(proposed)")
 
     local call = call_open_diff("a.txt")
 
     assert.is_truthy(call.error, "the setup failed")
     assert.are.same(before, window_sizes())
+    assert.equal(user_win, vim.api.nvim_get_current_win(), "the cursor is back in the user's window")
   end)
 
   -- The sizes saved before `change` must not come back after it: they no longer fit, so Neovim's sizes stay.
@@ -183,6 +202,70 @@ describe("openDiff window sizes", function()
     end)
   end)
 
+  it("keeps the width the user gave the Claude terminal", function()
+    use_layout("vertical")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    open_terminal(60)
+    local before = window_sizes()
+
+    open_diff("a.txt")
+    close_tab()
+
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("leaves the width of a Claude terminal in another tab alone", function()
+    use_layout("vertical")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    open_terminal(60)
+    local terminal_tab = vim.api.nvim_get_current_tabpage()
+    local before = window_sizes()
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/b.txt"))
+
+    open_diff("b.txt")
+    close_tab()
+
+    vim.api.nvim_set_current_tabpage(terminal_tab)
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("puts the cursor back in the window it was in", function()
+    use_layout("vertical")
+    two_editors()
+    local user_win = vim.api.nvim_get_current_win()
+
+    open_diff("a.txt")
+    close_tab()
+
+    assert.equal(user_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("leaves the cursor in the window the user moved it to during the diff", function()
+    use_layout("vertical")
+    two_editors()
+    local other_win = vim.api.nvim_tabpage_list_wins(0)[2]
+
+    open_diff("a.txt")
+    vim.api.nvim_set_current_win(other_win)
+    close_tab()
+
+    assert.equal(other_win, vim.api.nvim_get_current_win())
+  end)
+
+  it("puts the cursor back in the tab the user was in when the diff opened in another tab", function()
+    use_layout("vertical")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    vim.cmd("tabnew")
+    vim.fn.termopen({ "sleep", "60" })
+    local user_win = vim.api.nvim_get_current_win()
+
+    local diff_data = open_diff("a.txt")
+    assert.are_not.equal(vim.api.nvim_win_get_tabpage(user_win), vim.api.nvim_win_get_tabpage(diff_data.new_window))
+    close_tab()
+
+    assert.equal(user_win, vim.api.nvim_get_current_win())
+  end)
+
   if vim.fn.has("nvim-0.9") ~= 1 then
     pending("the unified layout needs Neovim 0.9")
     return
@@ -199,6 +282,18 @@ describe("openDiff window sizes", function()
     close_tab()
 
     assert.are.same(before, window_sizes())
+  end)
+
+  it("puts the cursor back in the window of the user's own diff after a unified diff", function()
+    use_layout("unified")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/b.txt"))
+    vim.cmd("vertical diffsplit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    local user_win = vim.api.nvim_get_current_win()
+
+    open_diff("proposed.txt")
+    close_tab()
+
+    assert.equal(user_win, vim.api.nvim_get_current_win())
   end)
 
   it("gives the sizes back after two unified diffs in one tab close, the first one first", function()
@@ -218,11 +313,13 @@ describe("openDiff window sizes", function()
     use_layout("unified")
     two_editors()
     local before = window_sizes()
+    local user_win = vim.api.nvim_get_current_win()
     fail_when_shown("(unified diff)")
 
     local call = call_open_diff("a.txt")
 
     assert.is_truthy(call.error, "the setup failed")
     assert.are.same(before, window_sizes())
+    assert.equal(user_win, vim.api.nvim_get_current_win(), "the cursor is back in the user's window")
   end)
 end)
