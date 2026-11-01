@@ -46,7 +46,7 @@ describe("claudecode.terminal.native toggle behavior", function()
     local function new_buffer(listed)
       local bufnr = mock_state.next_bufnr
       mock_state.next_bufnr = mock_state.next_bufnr + 1
-      mock_state.buffers[bufnr] = { name = "", options = { modified = false, buflisted = listed } }
+      mock_state.buffers[bufnr] = { name = "", options = { modified = false, buflisted = listed, channel = 0 } }
       return bufnr
     end
 
@@ -167,7 +167,35 @@ describe("claudecode.terminal.native toggle behavior", function()
           mock_state.buffers[bufnr] = nil
         end,
         nvim_create_autocmd = function(event, opts)
-          table.insert(mock_state.autocmds, { event = event, buffer = opts.buffer, callback = opts.callback })
+          table.insert(
+            mock_state.autocmds,
+            { event = event, buffer = opts.buffer, group = opts.group, callback = opts.callback }
+          )
+        end,
+        -- Group names are global, so a reloaded module gets the same group back.
+        nvim_create_augroup = function(name, opts)
+          mock_state.augroups = mock_state.augroups or {}
+          if not mock_state.augroups[name] then
+            mock_state.next_augroup = (mock_state.next_augroup or 0) + 1
+            mock_state.augroups[name] = mock_state.next_augroup
+          end
+          local group = mock_state.augroups[name]
+          if opts and opts.clear then
+            mock_vim.api.nvim_clear_autocmds({ group = group })
+          end
+          return group
+        end,
+        nvim_clear_autocmds = function(opts)
+          local kept = {}
+          for _, autocmd in ipairs(mock_state.autocmds) do
+            local matches = (opts.group == nil or autocmd.group == opts.group)
+              and (opts.buffer == nil or autocmd.buffer == opts.buffer)
+              and (opts.event == nil or autocmd.event == opts.event)
+            if not matches then
+              table.insert(kept, autocmd)
+            end
+          end
+          mock_state.autocmds = kept
         end,
         nvim_get_current_win = function()
           return mock_state.current_win
@@ -302,6 +330,13 @@ describe("claudecode.terminal.native toggle behavior", function()
           mock_state.running_jobs[id] = nil
           table.insert(mock_state.exiting_jobs, id)
           return 1
+        end,
+        -- Neovim raises E900 for a job that exited or that jobstop already stopped.
+        jobpid = function(id)
+          if not mock_state.running_jobs[id] then
+            error("Vim:E900: Invalid channel id")
+          end
+          return 40000 + id
         end,
       },
       -- A stopped job exits only when the event loop runs. Its pending writes end first, then TermClose fires.
@@ -1068,6 +1103,83 @@ describe("claudecode.terminal.native toggle behavior", function()
         end
       )
     end
+
+    for _, auto_close in ipairs({ true, false }) do
+      it(
+        "should start a new terminal when a TermClose autocmd opens it after a module reload (auto_close="
+          .. tostring(auto_close)
+          .. ")",
+        function()
+          local mock_state = _G.get_mock_state()
+          local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = auto_close }
+          native_provider.open("claude", {}, term_config)
+          local exited_bufnr = native_provider.get_active_bufnr()
+          package.loaded["claudecode.terminal.native"] = nil
+          native_provider = require("claudecode.terminal.native")
+          native_provider.setup({ auto_close = auto_close })
+          -- The reloaded module opens for the first time here, after the exit and before the old on_exit runs.
+          mock_vim.api.nvim_create_autocmd("TermClose", {
+            callback = function(args)
+              if args.buf == exited_bufnr then
+                native_provider.open("claude", {}, term_config)
+              end
+            end,
+          })
+
+          mock_state.exit_job(exited_bufnr)
+
+          local active = native_provider.get_active_bufnr()
+          assert.are_not.equal(exited_bufnr, active)
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+        end
+      )
+    end
+
+    it("should not start a second terminal when a BufEnter autocmd calls open before termopen runs", function()
+      local mock_state = _G.get_mock_state()
+      local reentered = false
+      mock_state.bufenter_autocmd = function(_, bufnr)
+        if not reentered and bufnr ~= 0 then
+          reentered = true
+          native_provider.open("claude", {}, config)
+        end
+      end
+
+      native_provider.open("claude", {}, config)
+
+      local running = {}
+      for id in pairs(mock_state.running_jobs) do
+        table.insert(running, id)
+      end
+      assert.is_true(reentered)
+      assert.are.equal(1, #running)
+      assert.are.equal(running[1], mock_state.buffers[native_provider.get_active_bufnr()].jobid)
+    end)
+
+    it("should keep one exit handler on a terminal it adopts again after each reload", function()
+      local mock_state = _G.get_mock_state()
+      local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = true }
+      local terminal_bufnr = start_then_reload_and_adopt(term_config)
+      for _ = 1, 2 do
+        package.loaded["claudecode.terminal.native"] = nil
+        native_provider = require("claudecode.terminal.native")
+        native_provider.setup({ auto_close = true })
+        native_provider.open("claude", {}, term_config)
+        assert.are.equal(terminal_bufnr, native_provider.get_active_bufnr())
+      end
+
+      local handlers = 0
+      for _, autocmd in ipairs(mock_state.autocmds) do
+        if autocmd.event == "TermClose" and autocmd.buffer == terminal_bufnr then
+          handlers = handlers + 1
+        end
+      end
+      assert.are.equal(1, handlers)
+
+      mock_state.exit_job(terminal_bufnr)
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.are.equal(0, windows_showing(terminal_bufnr))
+    end)
 
     it("should close the window of an adopted terminal it showed again when the job exits with auto_close", function()
       local mock_state = _G.get_mock_state()

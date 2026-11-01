@@ -99,13 +99,13 @@ local function handler(params)
 
   local logger = require("claudecode.logger")
 
-  logger.debug("getDiagnostics handler called")
+  logger.debug("getDiagnostics", "getDiagnostics handler called")
 
   local diagnostics
   local fallback_path
 
   if not params.uri then
-    logger.debug("Getting diagnostics for all open buffers")
+    logger.debug("getDiagnostics", "Getting diagnostics for all open buffers")
     diagnostics = vim.diagnostic.get(nil)
   else
     local uri = params.uri
@@ -113,7 +113,7 @@ local function handler(params)
 
     local bufnr = vim.fn.bufnr(fallback_path)
     if bufnr == -1 then
-      logger.debug("File buffer must be open to get diagnostics: " .. fallback_path)
+      logger.debug("getDiagnostics", "File buffer must be open to get diagnostics: " .. fallback_path)
       error({
         code = -32001,
         message = "File not open",
@@ -121,7 +121,7 @@ local function handler(params)
       })
     end
 
-    logger.debug("Getting diagnostics for bufnr: " .. bufnr)
+    logger.debug("getDiagnostics", "Getting diagnostics for bufnr: " .. bufnr)
     diagnostics = vim.diagnostic.get(bufnr)
   end
 

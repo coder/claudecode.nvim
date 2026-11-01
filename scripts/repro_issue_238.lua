@@ -19,11 +19,12 @@
 -- window — no WebSocket / Claude CLI needed. It both reproduces the bug (on
 -- unfixed code) and verifies a fix.
 --
--- Run from the repo root:
---   nvim --headless -u NONE -l scripts/repro_issue_238.lua
+-- Run from the repo root (the same command CI uses; `nvim -l` needs Neovim 0.9 and hangs on 0.8):
+--   nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 --
 -- Exit code: 1 if the bug is reproduced (any scenario fails to reject on `:q`),
 -- 0 if `:q` rejects in every scenario (fixed). The verdict is printed either way.
+-- With the command above, exit 2 means the script raised an error before its verdict.
 
 local script_path = debug.getinfo(1, "S").source:sub(2)
 local repo_root = vim.fn.fnamemodify(script_path, ":h:h")
@@ -242,7 +243,9 @@ local function run_newfile_scenario()
 end
 
 out("== issue #238 reproduction: reject-with-:q ==")
-out(("Neovim: %s"):format(vim.version and tostring(vim.version()) or "?"))
+-- On Neovim 0.8, vim.version() is a plain table with no __tostring, so format its fields.
+local nvim_version = vim.version()
+out(("Neovim: %d.%d.%d"):format(nvim_version.major, nvim_version.minor, nvim_version.patch))
 
 local scenarios = {
   { label = "default config (open_in_new_tab=false)", new_tab = false },

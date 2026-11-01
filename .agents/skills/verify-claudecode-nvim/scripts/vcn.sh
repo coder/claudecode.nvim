@@ -335,6 +335,9 @@ cmd_launch() {
   fi
   why=$(unsafe_dir "$guard")
   [[ -z $why ]] || die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
+  if [[ -n $out && -e $out && ! -d $out ]]; then
+    die "$out is not a directory; pick a fresh VERIFY_OUT"
+  fi
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
   out=${out:-$guard/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}

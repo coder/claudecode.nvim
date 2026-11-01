@@ -5,9 +5,12 @@ describe("Tool: open_file", function()
   local buffer_lines
   local marks
   local coladds
-  local loaded_bufs
-  local original_list_bufs
   local original_buf_is_loaded
+  local edit_buffers
+  local cursor
+  local editor_mode
+  local gv_mode
+  local original_get_mode
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -31,8 +34,20 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = spy.new(function(path)
       return path -- Simple pass-through
     end)
+    -- Like Neovim, gv enters Visual mode (Select mode when 'selectmode' has "cmd"), and :edit or <Esc> ends it.
+    editor_mode = "n"
+    gv_mode = "v"
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
+      if command == "normal! gv" then
+        editor_mode = gv_mode
+      elseif command == "normal! \27" or command:match("^p?edit ") then
+        editor_mode = "n"
+      end
+    end)
+    original_get_mode = _G.vim.api.nvim_get_mode
+    _G.vim.api.nvim_get_mode = spy.new(function()
+      return { mode = editor_mode, blocking = false }
     end)
 
     -- Mock vim.json.encode
@@ -101,14 +116,17 @@ describe("Tool: open_file", function()
       coladds[expr:sub(2)] = pos[4]
       return 0
     end)
-    loaded_bufs = {}
-    original_list_bufs = _G.vim.api.nvim_list_bufs
     original_buf_is_loaded = _G.vim.api.nvim_buf_is_loaded
-    _G.vim.api.nvim_list_bufs = spy.new(function()
-      return loaded_bufs
-    end)
     _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
       return true
+    end)
+    -- bufexists() and bufadd() find the buffer that :edit would reuse for a path, by name or cached inode.
+    edit_buffers = {}
+    _G.vim.fn.bufexists = spy.new(function(path)
+      return edit_buffers[path] and 1 or 0
+    end)
+    _G.vim.fn.bufadd = spy.new(function(path)
+      return assert(edit_buffers[path], "bufadd would create a buffer for " .. path)
     end)
     _G.vim.fn.readfile = spy.new(function(path, flags, max)
       local read = {}
@@ -127,10 +145,12 @@ describe("Tool: open_file", function()
       end
       return slice
     end)
+    cursor = nil
     _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
       if pos[1] < 1 or pos[1] > #buffer_lines then
         error("Invalid cursor line: out of range")
       end
+      cursor = { pos[1], pos[2] }
     end)
     _G.vim.o = _G.vim.o or {}
     _G.vim.o.selection = "inclusive"
@@ -145,8 +165,10 @@ describe("Tool: open_file", function()
     _G.vim.cmd_history = nil
     _G.vim.fn.setpos = nil
     _G.vim.fn.readfile = nil
-    _G.vim.api.nvim_list_bufs = original_list_bufs
+    _G.vim.fn.bufexists = nil
+    _G.vim.fn.bufadd = nil
     _G.vim.api.nvim_buf_is_loaded = original_buf_is_loaded
+    _G.vim.api.nvim_get_mode = original_get_mode
     _G.vim.o.selection = nil
   end)
 
@@ -378,8 +400,11 @@ describe("Tool: open_file", function()
       expect(_G.vim.cmd_history[#_G.vim.cmd_history]).to_be("normal! gv")
     end)
 
-    it("rejects a line below 1, a fractional line, or endLine below startLine before opening the file", function()
+    it("rejects a line below 1, a fractional or false line, or endLine below startLine before opening", function()
       for _, lines in ipairs({
+        { startLine = false },
+        { startLine = false, endLine = 3 },
+        { startLine = 2, endLine = false },
         { startLine = 0 },
         { startLine = 2, endLine = 0 },
         { startLine = 1.5 },
@@ -409,11 +434,27 @@ describe("Tool: open_file", function()
     end)
 
     it("accepts a startLine that exists only in the unsaved lines of the loaded buffer", function()
-      loaded_bufs = { 1 }
+      edit_buffers["test.txt"] = 1
       _G.vim.fn.readfile = spy.new(function(path, flags, max)
         return { "one", "two" }
       end)
       expect(open({ startLine = 4, endLine = 5 })).to_be("Opened file and selected lines 4 to 5")
+    end)
+
+    it("uses the file on disk when :edit would not reuse a loaded buffer", function()
+      -- For example a buffer loaded through a symlink that was retargeted since: Neovim keeps the old inode.
+      _G.vim.fn.readfile = spy.new(function(path, flags, max)
+        return { "one", "two" }
+      end)
+      local success, err = pcall(open_file_handler, { filePath = "test.txt", startLine = 4 })
+      expect(success).to_be_false()
+      expect(err.code).to_be(-32602)
+    end)
+
+    it("keeps the end mark on an empty endLine", function()
+      buffer_lines = { "abc", "", "xyz" }
+      expect(open({ startLine = 1, endLine = 2 })).to_be("Opened file and selected lines 1 to 2")
+      assert.are.same({ 2, 0 }, marks[">"])
     end)
 
     it("sets both marks with no column offset on every path", function()
@@ -475,16 +516,29 @@ describe("Tool: open_file", function()
       assert.are.same({ 3, 5 }, marks[">"])
     end)
 
+    it("only places the cursor when one call selects lines and then misses endText", function()
+      for _, mode in ipairs({ "v", "s" }) do
+        gv_mode = mode
+        local text = open({ startLine = 3, endLine = 4, startText = "two", endText = "zzz" })
+        assert_contains(text, 'Opened file and positioned at "two"')
+        expect(editor_mode).to_be("n")
+        assert.are.same({ 2, 0 }, cursor)
+      end
+    end)
+
     it("selects only the startText match when there is no endText", function()
       expect(open({ startText = "three" })).to_be('Opened file and selected text "three"')
       assert.are.same({ 3, 0 }, marks["<"])
       assert.are.same({ 3, 4 }, marks[">"])
     end)
 
-    it("selects the startText match when endText is not found", function()
-      assert_contains(open({ startText = "two", endText = "zzz" }), 'end text "zzz" not found')
-      assert.are.same({ 2, 0 }, marks["<"])
-      assert.are.same({ 2, 2 }, marks[">"])
+    it("puts the cursor on the startText match without a selection when endText is not found", function()
+      assert_contains(open({ startText = "two", endText = "zzz" }), 'Opened file and positioned at "two"')
+      assert.are.same({ 2, 0 }, cursor)
+      assert.are.same({}, marks)
+      for _, command in ipairs(_G.vim.cmd_history) do
+        expect(command == "normal! gv").to_be_false()
+      end
     end)
   end)
 
