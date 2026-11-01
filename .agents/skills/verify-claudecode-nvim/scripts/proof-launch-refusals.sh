@@ -18,7 +18,8 @@
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
-#   out-made       a new VERIFY_OUT in a dir with a default ACL: launch creates it 0700, so every evidence file is 0600
+#   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700, so
+#                  every evidence file is 0600
 # A refused launch must also leave the files under the proof's temp dir as it found them.
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
 # deleted when every case passes, and kept with its path printed when one fails.
@@ -140,8 +141,9 @@ if [[ -d $TMP/acl-out ]]; then
   private out-acl "$TMP/acl-out"
   echo "PASS out-acl: launch made the 0500 $TMP/acl-out a 0700 dir without its default ACL, and all $(find "$TMP/acl-out" -type f | wc -l) evidence files are 0600"
   # The second safety check reads the mode right after mkdir, so a dir that mkdir made group-writable is refused.
-  private out-made "$TMP/acl/out"
-  echo "PASS out-made: launch created $TMP/acl/out as 0700 in a dir with a default ACL, and all $(find "$TMP/acl/out" -type f | wc -l) evidence files are 0600"
+  private out-made "$TMP/acl/mid/out"
+  [[ $(stat -c %a -- "$TMP/acl/mid") == 700 ]] || fail "out-made: $TMP/acl/mid is not a 0700 dir"
+  echo "PASS out-made: launch created $TMP/acl/mid and $TMP/acl/mid/out as 0700 in a dir with a default ACL, and all $(find "$TMP/acl/mid/out" -type f | wc -l) evidence files are 0600"
 fi
 
 init_out=$(mktemp -d)
