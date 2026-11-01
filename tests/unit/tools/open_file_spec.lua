@@ -832,6 +832,7 @@ describe("Tool: open_file", function()
         return win_call(win, callback)
       end)
       _G.vim.api.nvim_buf_call = spy.new(function(buf, callback)
+        assert(buffers[buf] ~= nil, "Invalid buffer id: " .. tostring(buf))
         local outer = call_buf
         call_buf = buf
         local result = callback()
@@ -1278,6 +1279,15 @@ describe("Tool: open_file", function()
           end
         )
       end
+
+      it("does not fail the :edit when an earlier BufNewFile autocommand wipes the buffer", function()
+        -- autocmd BufNewFile new.txt bwipeout. Neovim still runs the other BufNewFile autocommands.
+        buffers[30] = nil
+        fire("BufUnload", 30)
+        assert.has_no.errors(function()
+          fire("BufNewFile", 30)
+        end)
+      end)
 
       it("uses the changed-file rules once a write without BufWritePost saved the buffer", function()
         -- autocmd BufLeave * update: a write from an autocommand without ++nested runs no BufWritePost, and Neovim
