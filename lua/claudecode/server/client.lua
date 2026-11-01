@@ -22,7 +22,7 @@ local CLOSE_REASONS = {
 ---@class WebSocketClient
 ---@field id string Unique client identifier
 ---@field tcp_handle table The vim.loop TCP handle
----@field state string Connection state: "connecting", "connected", "closing", "closed"
+---@field state string Connection state: "connecting", "upgrading" (its 101 reply is being written), "connected", "closing", "closed"
 ---@field buffer string Incoming data buffer
 ---@field pending table|nil The reads of an incomplete frame, with their total length in `size` and the frame's in `needed`
 ---@field fragments table|nil Joined pieces of the text message whose last fragment has not arrived, and their total `size`
@@ -123,8 +123,13 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
   end
 
   if not client.handshake_complete then
+    -- Bytes that arrive while the 101 reply is written are frames. They wait for the write callback.
+    if client.state == "upgrading" then
+      return
+    end
     local complete, request, remaining = handshake.extract_http_request(client.buffer)
     if complete and request then
+      client.buffer = remaining
       logger.debug("client", "Processing WebSocket handshake for client:", client.id)
 
       -- Log if auth token is required
@@ -139,6 +144,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
       -- Log authentication results
       if success then
+        client.state = "upgrading"
         if auth_token then
           logger.debug("client", "Client authenticated successfully:", client.id)
         else
@@ -165,7 +171,6 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
         client.handshake_complete = true
         client.state = "connected"
-        client.buffer = remaining
         logger.debug("client", "WebSocket connection established for client:", client.id)
 
         if #client.buffer > 0 then

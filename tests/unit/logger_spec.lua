@@ -157,18 +157,19 @@ describe("Logger", function()
       vim.v.echospace = original_echospace
     end)
 
-    it("drops the component and level, then cuts, an error wider than the command line", function()
+    it("drops the component tag and shortens the level tag, then cuts, an error wider than the command line", function()
       logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
 
       expect(#notify_calls).to_be(1)
       expect(notify_calls[1].level).to_be(vim.log.levels.ERROR)
-      expect(notify_calls[1].msg).to_be("[ClaudeCode] Accept error: EMFILE: too many ope...")
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] ERROR: Accept error: EMFILE: too m...")
     end)
 
-    it("drops only the component and level when the line then fits", function()
+    it("drops the component tag and shortens the level tag when the line then fits", function()
+      vim.v.echospace = 52
       logger.one_line("warn", "client", "Rejected client_1: Invalid token")
 
-      expect(notify_calls[1].msg).to_be("[ClaudeCode] Rejected client_1: Invalid token")
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] WARN: Rejected client_1: Invalid token")
     end)
 
     it("cuts an info line, which goes to the message history", function()
@@ -200,7 +201,7 @@ describe("Logger", function()
 
       logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
 
-      expect(notify_calls[1].msg).to_be("Accept error: EMF...")
+      expect(notify_calls[1].msg).to_be("ERROR: Accept err...")
     end)
 
     it("cuts without an ellipsis when the command line is narrower than one", function()
@@ -208,7 +209,7 @@ describe("Logger", function()
 
       logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
 
-      expect(notify_calls[1].msg).to_be("Ac")
+      expect(notify_calls[1].msg).to_be("ER")
     end)
 
     it("shows the whole line at log_level debug", function()

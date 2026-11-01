@@ -157,7 +157,7 @@ describe("TCP server disconnect handling", function()
 
       assert.is_nil(server)
       assert.is_string(err)
-      assert.equals("No free port in 10000-10002 (EADDRINUSE: address already in use)", err)
+      assert.equals("No free port in 10000-10002 (EADDRINUSE)", err)
       assert.are.equal(3, #handles) -- every candidate tried exactly once
       for _, h in ipairs(handles) do
         assert.is_true(h.closed)
@@ -174,7 +174,7 @@ describe("TCP server disconnect handling", function()
 
       assert.is_nil(server)
       assert.is_string(err)
-      assert.equals("No free port in 10000-10000 (EADDRINUSE: address already in use)", err)
+      assert.equals("No free port in 10000-10000 (EADDRINUSE)", err)
       assert.is_true(handles[1].closed)
     end)
 

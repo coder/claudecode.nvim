@@ -188,6 +188,24 @@ describe("Server lines on the command line", function()
     local line = only_line()
     assert.equals(vim.log.levels.ERROR, line.level)
     assert_contains(line.text, "10000-10000")
+    assert_contains(line.text, "EADDRINUSE")
+  end)
+
+  -- Without colors (a notify plugin, or :messages read through execute()), only the text tells an error from info.
+  it("names the level of a cut error and warning in plain text", function()
+    local client = connect(start())
+    client.tcp_handle._read_cb(nil, upgrade("wrong-token-0123456789"))
+    tcp._handle_new_connection(setmetatable({
+      server = {
+        accept = function()
+          return nil, "EMFILE: too many open files"
+        end,
+      },
+    }, { __index = server.state.server }))
+
+    assert.equals(2, #lines, vim.inspect(lines))
+    assert.equals("[ClaudeCode] WARN: Rejected " .. client.id .. ": Invalid authentication token", lines[1].text)
+    assert.equals("[ClaudeCode] ERROR: Accept error: EMFILE: too many open files", lines[2].text)
   end)
 
   it("keeps a handshake reply that fails to send off the screen", function()
