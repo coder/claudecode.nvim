@@ -545,7 +545,10 @@ describe("Tool: open_file", function()
     -- {N}split, nvim_win_set_buf, bufadd and bufload do neither. Marks, the cursor and gv act in the current
     -- window, or in the window that nvim_win_call runs in. nvim_win_set_buf refuses a window with 'winfixbuf' set,
     -- which a split does not copy.
-    local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual
+    -- A window that enters a loaded buffer, :edit that re-reads it, and :checktime load the file again when it changed
+    -- on disk (`disk`) and the buffer has no unsaved changes. With unsaved changes Neovim asks the user instead, and
+    -- the user's next key answers.
+    local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked
     local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
 
     local function buf_of(buf)
@@ -582,11 +585,20 @@ describe("Tool: open_file", function()
         [30] = { lines = buffer_lines, filetype = "lua" },
       }
       _G.vim.o.previewheight = 12
+      asked = false
+      local function check_disk(buf)
+        if buffers[buf].disk and buffers[buf].modified then
+          asked = true
+        elseif buffers[buf].disk then
+          buffers[buf].lines, buffers[buf].disk = buffers[buf].disk, nil
+        end
+      end
       local function edit_file_in(win)
         if win_buf[win] == 30 and buffers[30].modified then
           error("Vim(edit):E37: No write since last change (add ! to override)")
         end
         win_buf[win], buffers[30].loaded = 30, true
+        check_disk(30)
         if editor_mode:match("^[vVsS\22\19]") then
           editor_mode = "n"
         end
@@ -600,6 +612,8 @@ describe("Tool: open_file", function()
           edit_file_in(3000)
         elseif command:match("^edit ") then
           edit_file_in(call_win or current_win)
+        elseif command:match("^checktime %d+$") then
+          check_disk(tonumber(command:match("%d+")))
         elseif command == "12split" then
           win_buf[3000] = win_buf[call_win or current_win]
           call_win = 3000
@@ -634,7 +648,11 @@ describe("Tool: open_file", function()
         if fixed_buf[win] and win_buf[win] ~= buf then
           error("E1513: Cannot switch buffer. 'winfixbuf' is enabled")
         end
+        local switched = win_buf[win] ~= buf
         win_buf[win] = buf
+        if switched then
+          check_disk(buf)
+        end
       end)
       _G.vim.api.nvim_win_is_valid = spy.new(function(win)
         return win_buf[win] ~= nil
@@ -650,7 +668,10 @@ describe("Tool: open_file", function()
         return 30
       end)
       _G.vim.fn.bufload = spy.new(function(buf)
-        buffers[buf].loaded = true
+        if not buffers[buf].loaded then
+          buffers[buf].loaded = true
+          check_disk(buf)
+        end
       end)
       _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
         return buffers[buf].loaded == true
@@ -734,6 +755,39 @@ describe("Tool: open_file", function()
         { code = -32000, message = "File operation error", data = "No preview window shows the file" },
         err
       )
+    end)
+
+    describe("when the file changed on disk", function()
+      -- Claude can write the file before it asks to open it.
+      before_each(function()
+        buffers[30].loaded, buffers[30].disk = true, { "alpha", "beta", "fresh" }
+      end)
+
+      for _, case in ipairs({
+        { name = "the window shows it", main_win = true },
+        { name = "the window shows it, with preview = true", main_win = true, preview = true },
+        { name = "the preview window shows it", preview = true },
+      }) do
+        it("loads the file again when " .. case.name, function()
+          if case.main_win then
+            win_buf[1000] = 30
+          else
+            win_buf[3000], preview_flag[3000] = 30, true
+          end
+          local success, result =
+            pcall(open_file_handler, { filePath = "test.txt", preview = case.preview, startText = "fresh" })
+          expect(success).to_be_true()
+          expect(result.content[1].text).to_be('Opened file and selected text "fresh"')
+          assert.are.same({ "alpha", "beta", "fresh" }, buffers[30].lines)
+        end)
+      end
+
+      it("keeps unsaved changes and does not ask the user", function()
+        win_buf[1000], buffers[30].modified = 30, true
+        local success = pcall(open_file_handler, { filePath = "test.txt", preview = true, startLine = 2 })
+        expect(success).to_be_true()
+        assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
+      end)
     end)
 
     describe("when the window already shows the file with unsaved changes", function()
