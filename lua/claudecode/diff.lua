@@ -1983,11 +1983,12 @@ local function describe_unsaved(diff_data)
   local lossy = fenc ~= ""
     and fenc ~= "utf-8"
     and vim.fn.iconv(vim.fn.iconv(text, "utf-8", fenc), fenc, "utf-8") ~= text
-  return {
-    path = diff_data.old_file_path,
-    write = vim.fn.isdirectory(vim.fn.fnamemodify(diff_data.old_file_path, ":h")) == 1 and ":w" or ":w ++p",
-    fileencoding = lossy and fenc or nil,
-  }
+  local write = ":w"
+  if vim.fn.isdirectory(vim.fn.fnamemodify(diff_data.old_file_path, ":h")) == 0 then
+    -- Neovim 0.8 has no :w ++p.
+    write = vim.fn.has("nvim-0.9") == 1 and ":w ++p" or ":call mkdir(expand('%:p:h'), 'p') | w"
+  end
+  return { path = diff_data.old_file_path, write = write, fileencoding = lossy and fenc or nil }
 end
 
 ---Close every diff the user accepted, once its accepted text is on disk or in the file's buffer. The plugin never
