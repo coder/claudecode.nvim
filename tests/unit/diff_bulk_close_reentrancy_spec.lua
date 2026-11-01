@@ -59,15 +59,22 @@ describe("bulk close with a ClaudeCodeDiffClosed handler that accepts another di
   end
 
   local bulk_closes = {
-    [":ClaudeCodeCloseAllDiffs and server stop (close_pending_diffs)"] = function()
-      return diff.close_pending_diffs("user command")
-    end,
-    ["client disconnect (close_diffs_for_client)"] = function()
-      return diff.close_diffs_for_client("clientA", "client disconnected")
-    end,
+    {
+      ":ClaudeCodeCloseAllDiffs and server stop (close_pending_diffs)",
+      function()
+        return diff.close_pending_diffs("user command")
+      end,
+    },
+    {
+      "client disconnect (close_diffs_for_client)",
+      function()
+        return diff.close_diffs_for_client("clientA", "client disconnected")
+      end,
+    },
   }
 
-  for name, bulk_close in pairs(bulk_closes) do
+  for _, case in ipairs(bulk_closes) do
+    local name, bulk_close = case[1], case[2]
     it(name .. " keeps the diff the handler accepted", function()
       local handles = {
         ["tab-A"] = open_pending(file_a, "tab-A", "clientA"),

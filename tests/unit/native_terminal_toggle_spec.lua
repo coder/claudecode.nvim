@@ -508,18 +508,28 @@ describe("claudecode.terminal.native toggle behavior", function()
       },
     }
     local entries = {
-      open = function(config)
-        native_provider.open("claude", {}, config, true)
-      end,
-      simple_toggle = function(config)
-        native_provider.simple_toggle("claude", {}, config)
-      end,
-      focus_toggle = function(config)
-        native_provider.focus_toggle("claude", {}, config)
-      end,
+      {
+        "open",
+        function(config)
+          native_provider.open("claude", {}, config, true)
+        end,
+      },
+      {
+        "simple_toggle",
+        function(config)
+          native_provider.simple_toggle("claude", {}, config)
+        end,
+      },
+      {
+        "focus_toggle",
+        function(config)
+          native_provider.focus_toggle("claude", {}, config)
+        end,
+      },
     }
     for _, failure in ipairs(failures) do
-      for entry_name, start in pairs(entries) do
+      for _, entry in ipairs(entries) do
+        local entry_name, start = entry[1], entry[2]
         it(
           "closes the split, deletes its buffer, and sends one notice when termopen "
             .. failure.name
@@ -955,17 +965,27 @@ describe("claudecode.terminal.native toggle behavior", function()
     end)
 
     local entries = {
-      open = function()
-        native_provider.open("claude", {}, config)
-      end,
-      simple_toggle = function()
-        native_provider.simple_toggle("claude", {}, config)
-      end,
-      focus_toggle = function()
-        native_provider.focus_toggle("claude", {}, config)
-      end,
+      {
+        "open",
+        function()
+          native_provider.open("claude", {}, config)
+        end,
+      },
+      {
+        "simple_toggle",
+        function()
+          native_provider.simple_toggle("claude", {}, config)
+        end,
+      },
+      {
+        "focus_toggle",
+        function()
+          native_provider.focus_toggle("claude", {}, config)
+        end,
+      },
     }
-    for entry_name, start in pairs(entries) do
+    for _, entry in ipairs(entries) do
+      local entry_name, start = entry[1], entry[2]
       it("should not adopt an unrelated terminal whose name contains claude (" .. entry_name .. ")", function()
         local mock_state = _G.get_mock_state()
         local shell_bufnr, shell_winid, shell_jobid = 50, 500, 5000

@@ -115,7 +115,16 @@ TEST_FILES=$(find tests -type f -name "*_test.lua" -o -name "*_spec.lua" | sort)
 echo "Found test files:"
 echo "$TEST_FILES"
 if [ -n "$TEST_FILES" ]; then
-  ./.luarocks/bin/busted --coverage -v $TEST_FILES
+  # Random file and test order catches a test that needs another to run first. The seed fixes the order.
+  SEED=${BUSTED_SEED:-$(date +%s)}
+  case $SEED in
+  '' | *[!0-9]*)
+    echo "BUSTED_SEED must be a non-negative integer, got '$SEED'" >&2
+    exit 2
+    ;;
+  esac
+  echo "Test order seed: $SEED (rerun this order with BUSTED_SEED=$SEED mise run test)"
+  ./.luarocks/bin/busted --coverage -v --shuffle --seed="$SEED" $TEST_FILES
 else
   echo "No test files found"
 fi
