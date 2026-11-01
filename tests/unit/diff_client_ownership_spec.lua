@@ -177,10 +177,10 @@ describe("a diff the user accepted for one Claude client", function()
       owner_exits()
       local real_open = io.open
       finally(function()
-        io.open = real_open
+        rawset(io, "open", real_open)
       end)
       -- A full disk: opening for writing truncates, and the write itself fails.
-      io.open = function(path, mode)
+      rawset(io, "open", function(path, mode)
         if mode == "wb" then
           local f = assert(real_open(path, mode))
           return {
@@ -193,10 +193,10 @@ describe("a diff the user accepted for one Claude client", function()
           }
         end
         return real_open(path, mode)
-      end
+      end)
 
       user_closes_all_diffs()
-      io.open = real_open
+      rawset(io, "open", real_open)
 
       assert.equal("line 1\nline 2\n", read_file())
       assert_kept()
