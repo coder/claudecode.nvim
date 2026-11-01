@@ -547,10 +547,11 @@ describe("Tool: open_file", function()
     -- which a split does not copy.
     -- A window that enters a loaded buffer and :checktime load the file again when it changed on disk (`disk`), the
     -- buffer has no unsaved changes and 'autoread' is set. Otherwise a FileChangedShell autocommand for the buffer
-    -- decides with v:fcs_choice, and without one Neovim asks the user, whose next key answers. :edit re-reads the
+    -- decides with v:fcs_choice, unless 'eventignore' ignores it, and without one Neovim asks the user, whose next key
+    -- answers. Deleting a deleted autocommand fails. :edit re-reads the
     -- buffer that its window shows without asking. A buffer loads, with its BufReadPost, FileType and BufEnter
     -- autocommands (`events`), in the window that enters it, or for bufload() in a hidden autocommand window.
-    local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked, events
+    local current_win, win_buf, win_cursor, preview_flag, fixed_buf, buffers, mark_pos, visual, asked, events, autocmds
     local original_win_get_tabpage, original_tabpage_list_wins, original_win_is_valid
     local original_create_autocmd, original_del_autocmd, original_v
 
@@ -589,15 +590,17 @@ describe("Tool: open_file", function()
         [10] = { lines = { "one", "two", "three", "four" }, filetype = "text" },
         [30] = { lines = buffer_lines, filetype = "lua" },
       }
-      _G.vim.o.previewheight, _G.vim.o.autoread = 12, true
-      asked, events = false, {}
-      local autocmds = {}
+      _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = 12, true, ""
+      asked, events, autocmds = false, {}, {}
       _G.vim.v = {}
       _G.vim.api.nvim_create_autocmd = spy.new(function(event, opts)
         autocmds[#autocmds + 1] = { event = event, buffer = opts.buffer, callback = opts.callback }
         return #autocmds
       end)
       _G.vim.api.nvim_del_autocmd = spy.new(function(id)
+        if not autocmds[id] then
+          error("Failed to delete autocmd")
+        end
         autocmds[id] = false
       end)
       local function read_disk(buf)
@@ -610,9 +613,10 @@ describe("Tool: open_file", function()
           return read_disk(buf)
         end
         local handled = false
+        local ignored = _G.vim.o.eventignore == "all" or _G.vim.o.eventignore == "FileChangedShell"
         _G.vim.v.fcs_reason, _G.vim.v.fcs_choice = buffers[buf].modified and "conflict" or "changed", ""
         for _, autocmd in pairs(autocmds) do
-          if autocmd and autocmd.event == "FileChangedShell" and autocmd.buffer == buf then
+          if autocmd and autocmd.event == "FileChangedShell" and autocmd.buffer == buf and not ignored then
             handled = true
             autocmd.callback()
           end
@@ -757,7 +761,7 @@ describe("Tool: open_file", function()
       _G.vim.api.nvim_win_is_valid = original_win_is_valid
       _G.vim.api.nvim_create_autocmd, _G.vim.api.nvim_del_autocmd = original_create_autocmd, original_del_autocmd
       _G.vim.v = original_v
-      _G.vim.o.previewheight, _G.vim.o.autoread = nil, nil
+      _G.vim.o.previewheight, _G.vim.o.autoread, _G.vim.o.eventignore = nil, nil, nil
     end)
 
     it("opens the file without a range", function()
@@ -852,7 +856,53 @@ describe("Tool: open_file", function()
           expect(success).to_be_true()
           assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
         end)
+
+        -- Entering a loaded buffer makes Neovim check its file, and the user's next key answers: `l` loads the file
+        -- and drops the unsaved changes.
+        for _, unsaved in ipairs({ false, true }) do
+          for _, preview in ipairs({ false, true }) do
+            it(
+              ("never asks when it shows the hidden buffer%s %s unsaved changes, 'autoread' %s"):format(
+                preview and " in the preview window" or "",
+                unsaved and "with" or "without",
+                tostring(autoread)
+              ),
+              function()
+                _G.vim.o.autoread, buffers[30].modified = autoread, unsaved
+                local success = pcall(open_file_handler, { filePath = "test.txt", preview = preview, startLine = 2 })
+                expect(success).to_be_true()
+                local lines = unsaved and { "alpha", "beta", "gamma", "delta", "epsilon" }
+                  or { "alpha", "beta", "fresh" }
+                assert.are.same({ lines, false }, { buffers[30].lines, asked })
+              end
+            )
+          end
+        end
       end
+
+      it("does not check the file when 'eventignore' ignores FileChangedShell, so Neovim does not ask", function()
+        _G.vim.o.autoread, _G.vim.o.eventignore, win_buf[1000] = false, "all", 30
+        local success = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+        expect(success).to_be_true()
+        assert.are.same({ { "alpha", "beta", "gamma", "delta", "epsilon" }, false }, { buffers[30].lines, asked })
+      end)
+
+      it("answers when a user's FileChangedShell autocommand deletes openFile's", function()
+        _G.vim.o.autoread, win_buf[1000] = false, 30
+        _G.vim.api.nvim_create_autocmd("FileChangedShell", {
+          buffer = 30,
+          callback = function() -- autocmd! FileChangedShell
+            for id, autocmd in pairs(autocmds) do
+              if autocmd and autocmd.event == "FileChangedShell" then
+                autocmds[id] = false
+              end
+            end
+          end,
+        })
+        local success, result = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
+        expect(success).to_be_true()
+        assert.are.same({ "Opened file and selected lines 2 to 2", false }, { result.content[1].text, asked })
+      end)
     end)
 
     describe("when the window already shows the file with unsaved changes", function()
