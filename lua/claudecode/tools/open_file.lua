@@ -139,12 +139,25 @@ local function loaded_buffer(file_path)
   return nil
 end
 
----Loads `buf` again when its file changed on disk, as Neovim does when a window enters a loaded buffer. A buffer with
----unsaved changes is left alone, because Neovim would ask the user, and the user's next key would answer.
+---Loads `buf` again when its file changed on disk, without asking, as `:edit` does in a window that shows it. A buffer
+---with unsaved changes is left alone. Neovim asks the user for one, and with 'noautoread' for any buffer, and the
+---user's next key would answer. A FileChangedShell autocommand replaces that question, so openFile adds one, after the
+---user's, that chooses "reload".
 ---@param buf integer
 local function check_file_on_disk(buf)
-  if not vim.api.nvim_buf_get_option(buf, "modified") then
-    vim.cmd("checktime " .. buf)
+  if vim.api.nvim_buf_get_option(buf, "modified") then
+    return
+  end
+  local autocmd = vim.api.nvim_create_autocmd("FileChangedShell", {
+    buffer = buf,
+    callback = function()
+      vim.v.fcs_choice = "reload"
+    end,
+  })
+  local ok, err = pcall(vim.cmd, "checktime " .. buf)
+  vim.api.nvim_del_autocmd(autocmd)
+  if not ok then
+    error(err, 0)
   end
 end
 
@@ -169,8 +182,8 @@ local function open_from(win, file_path, preview)
     end
     return win
   end
+  -- nvim_win_set_buf() loads the buffer in the preview window, so BufReadPost, FileType and BufEnter run once, there.
   local buf = vim.fn.bufadd(file_path)
-  vim.fn.bufload(buf)
   vim.api.nvim_buf_set_option(buf, "buflisted", true)
   local preview_win = preview_window_in_tab(win)
     or vim.api.nvim_win_call(win, function()
