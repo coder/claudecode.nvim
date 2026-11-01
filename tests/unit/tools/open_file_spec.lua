@@ -824,11 +824,10 @@ describe("Tool: open_file", function()
         silenced = command:match("^silent! ") ~= nil
         command = command:gsub("^silent! ", "")
         local buftype = command:match("^noautocmd setlocal buftype=(.*)$")
-        local write_option = command:match("^noautocmd set (n?o?write)$")
         if buftype then
           buffers[call_buf].buftype = buftype
-        elseif write_option then
-          _G.vim.o.write = write_option == "write"
+        elseif command == "noautocmd set nowrite" or command == "noautocmd set write" then
+          _G.vim.o.write = command == "noautocmd set write"
         elseif command == "write" then
           local written = buffers[call_buf or win_buf[call_win or current_win]]
           if not _G.vim.o.write then
