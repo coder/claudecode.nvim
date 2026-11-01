@@ -244,8 +244,9 @@ describe("TCP server disconnect handling", function()
     assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Client read error: boom")
     expect(server.clients[client.id]).to_be_nil()
 
-    assert.spy(callbacks.on_error).was_called(1)
-    assert.spy(callbacks.on_error).was_called_with("Client read error: boom")
+    -- A client's failure reaches the server only as the disconnect reason. on_error is for the server's own
+    -- failures: the plugin shows those to the user, and a long line there stops Neovim at "Press ENTER".
+    assert.spy(callbacks.on_error).was_not_called()
   end)
 
   it("should call on_disconnect when client manager reports an error", function()
@@ -273,6 +274,7 @@ describe("TCP server disconnect handling", function()
     assert.spy(callbacks.on_disconnect).was_called(1)
     assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Client error: Protocol error")
     expect(server.clients[client.id]).to_be_nil()
+    assert.spy(callbacks.on_error).was_not_called()
   end)
 
   it("should only call on_disconnect once if multiple disconnect paths fire", function()

@@ -11,7 +11,7 @@ local M = {}
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
 ---@field on_disconnect function Callback for client disconnections
----@field on_error fun(err_msg: string) Callback for errors
+---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
 
 -- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
@@ -197,10 +197,10 @@ function M._handle_new_connection(server)
 
   -- Set up data handler
   client_tcp:read_start(function(err, data)
+    -- A client's failure is reported only as its disconnect reason, which the server logs at debug level. The
+    -- user cannot act on it, and the plugin shows each on_error line, so a long one stops Neovim at "Press ENTER".
     if err then
-      local error_msg = "Client read error: " .. err
-      server.on_error(error_msg)
-      M._disconnect_client(server, client, 1006, error_msg)
+      M._disconnect_client(server, client, 1006, "Client read error: " .. err)
       return
     end
 
@@ -216,7 +216,6 @@ function M._handle_new_connection(server)
     end, function(cl, code, reason)
       M._disconnect_client(server, cl, code, reason)
     end, function(cl, error_msg)
-      server.on_error("Client " .. cl.id .. " error: " .. error_msg)
       M._disconnect_client(server, cl, 1006, "Client error: " .. error_msg)
     end, server.auth_token)
   end)
