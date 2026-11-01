@@ -641,13 +641,23 @@ local function end_past_line(bufnr, visual_mode, lines_content, end_coords)
   end
 end
 
----Extracts text for linewise visual selection
+---Extracts text for linewise visual selection and sets its end to the end of the last line. When the last line is
+---empty, the end moves to the start of the next line and the text gets that line break: Claude Code counts an end
+---at character 0 as the line before, which would leave the empty line out.
+---@param bufnr integer
 ---@param lines_content table - array of line strings
 ---@param start_coords table - start coordinates
+---@param end_coords table - end coordinates
 ---@return string text - the extracted text
-local function extract_linewise_text(lines_content, start_coords)
+local function extract_linewise_text(bufnr, lines_content, start_coords, end_coords)
   start_coords.col = 1 -- Linewise selection effectively starts at column 1
-  return table.concat(lines_content, "\n")
+  local text = table.concat(lines_content, "\n")
+  end_coords.col = #lines_content[#lines_content]
+  if end_coords.col == 0 and end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
+    end_coords.lnum = end_coords.lnum + 1
+    return text .. "\n"
+  end
+  return text
 end
 
 ---Extracts text for characterwise visual selection
@@ -680,25 +690,18 @@ end
 ---@param start_coords table - start coordinates
 ---@param end_coords table - end coordinates
 ---@param visual_mode string - the visual mode character
----@param lines_content table - array of line strings
 ---@return table position - LSP position object with start and end fields
-local function calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
+local function calculate_lsp_positions(start_coords, end_coords, visual_mode)
   local lsp_start_line = start_coords.lnum - 1
   local lsp_end_line = end_coords.lnum - 1
-  local lsp_start_char, lsp_end_char
+  local lsp_start_char
 
   if visual_mode == "V" then
     lsp_start_char = 0 -- Linewise selection always starts at character 0
-    -- For linewise, LSP end char is length of the last selected line
-    if #lines_content > 0 and lines_content[#lines_content] then
-      lsp_end_char = #lines_content[#lines_content]
-    else
-      lsp_end_char = 0
-    end
   else
     lsp_start_char = start_coords.col - 1
-    lsp_end_char = end_coords.col
   end
+  local lsp_end_char = end_coords.col
 
   return {
     start = { line = lsp_start_line, character = lsp_start_char },
@@ -738,7 +741,7 @@ function M.get_visual_selection()
 
   local final_text
   if visual_mode == "V" then
-    final_text = extract_linewise_text(lines_content, start_coords)
+    final_text = extract_linewise_text(current_buf, lines_content, start_coords, end_coords)
   elseif visual_mode == "v" or visual_mode == "\22" then
     -- Blockwise ("\22") is approximated as the contiguous charwise span: selection_changed
     -- carries a single start/end range and cannot represent a rectangular block. Proper
@@ -754,7 +757,7 @@ function M.get_visual_selection()
     return nil
   end
 
-  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
+  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode)
 
   return {
     text = valid_utf8(final_text),
@@ -815,7 +818,7 @@ function M.get_visual_selection_from_marks()
 
   local final_text
   if visual_mode == "V" then
-    final_text = extract_linewise_text(lines_content, start_coords)
+    final_text = extract_linewise_text(current_buf, lines_content, start_coords, end_coords)
   elseif visual_mode == "v" or visual_mode == "\22" then
     -- Blockwise ("\22") is approximated as the contiguous charwise span (matching
     -- get_visual_selection), since selection_changed carries a single start/end range and
@@ -831,7 +834,7 @@ function M.get_visual_selection_from_marks()
     return nil
   end
 
-  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
+  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode)
 
   return {
     text = valid_utf8(final_text),
@@ -1110,6 +1113,10 @@ function M.send_at_mention_for_visual_selection(line1, line2)
   local file_path = sel_to_send.filePath
   local start_line = sel_to_send.selection.start.line -- Already 0-indexed from selection module
   local end_line = sel_to_send.selection["end"].line -- Already 0-indexed
+  -- A selection that ends at character 0 of a line, such as `v$`, ends after the line break of the line before.
+  if sel_to_send.selection["end"].character == 0 and end_line > start_line then
+    end_line = end_line - 1
+  end
 
   local success, error_msg = claudecode_main.send_at_mention(file_path, start_line, end_line, "ClaudeCodeSend")
 
