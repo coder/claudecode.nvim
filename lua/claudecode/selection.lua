@@ -503,6 +503,8 @@ end
 local function selection_end_byte(line, start_coords, end_coords)
   local col = end_coords.col
   local one_position = start_coords.lnum == end_coords.lnum and start_coords.col == col
+  -- vim.fn passes a Lua string with a NUL byte as a Blob. Neovim keeps NUL as NL in a line, and both are one byte.
+  line = line:gsub("%z", "\n")
   if vim.o.selection == "exclusive" and not one_position then
     -- Neovim ends after the character before col. On 0.11+ that can be a cluster that reaches past col, such as
     -- स्ते when col is its त. Without a character before col, the selection ends at the line start.
@@ -513,7 +515,7 @@ local function selection_end_byte(line, start_coords, end_coords)
   end
   -- Match the character that starts at byte col, with its composing characters, and end after it. A pattern
   -- anchored at the column, like `\%13c.`, matches nothing when Neovim 0.11+ sees col inside a cluster, such
-  -- as the त of स्ते, although the cursor can stand there. `\_.` also matches the NL that stands for a NUL.
+  -- as the त of स्ते, although the cursor can stand there. `\_.` also matches the NL.
   return vim.fn.matchend(line, "\\_.", col - 1)
 end
 
