@@ -272,7 +272,7 @@ describe("a diff the user accepted for one Claude client", function()
       assert.is_truthy(
         msg:find(
           "open it with :split "
-            .. file
+            .. vim.fn.fnameescape(vim.fn.fnamemodify(file, ":~:."))
             .. " (answer the swap file prompt if Neovim shows one), then run the command again",
           1,
           true

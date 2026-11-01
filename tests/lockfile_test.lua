@@ -332,7 +332,7 @@ describe("Lockfile Module", function()
     end
 
     home = temp_dir.new()
-    os.execute("mkdir -p '" .. home .. "/.claude/ide'")
+    os.execute("mkdir -p " .. temp_dir.quote(home .. "/.claude/ide"))
 
     -- Load the lockfile module for all tests
     package.loaded["claudecode.lockfile"] = nil -- Clear any previous requires

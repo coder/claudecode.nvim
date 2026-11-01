@@ -2,21 +2,25 @@
 --- suites that run at once overwrite and delete each other's files there.
 local M = {}
 
----@return string dir A new empty folder that only this test run uses
+---@param path string
+---@return string quoted path as one POSIX shell word
+function M.quote(path)
+  return "'" .. path:gsub("'", "'\\''") .. "'"
+end
+
+---@return string dir A new empty folder that only this test run uses, under TMPDIR (default /tmp)
 function M.new()
   local pipe = assert(io.popen("mktemp -d"))
   local dir = pipe:read("*l")
   pipe:close()
-  -- Checked, so the path needs no quoting in shell commands.
-  assert(dir and dir:match("^/[%w/._-]+$"), "mktemp -d gave " .. tostring(dir))
+  assert(dir and dir:sub(1, 1) == "/", "mktemp -d gave " .. tostring(dir))
   return dir
 end
 
 ---@param dir string|nil A folder from M.new, or nil when M.new did not run
 function M.remove(dir)
   if dir then
-    assert(dir:match("^/[%w/._-]+$"), "not a folder from temp_dir.new: " .. dir)
-    os.execute("rm -rf '" .. dir .. "'")
+    os.execute("rm -rf " .. M.quote(dir))
   end
 end
 
