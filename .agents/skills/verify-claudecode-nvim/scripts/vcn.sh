@@ -345,20 +345,23 @@ cmd_launch() {
     rmdir "$state"
     die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
-  # The dirs mkdir -p is about to make, deepest first, so a refusal below can remove them again.
+  # The dirs launch is about to make, deepest first, so a refusal below can remove them again.
   made=()
   dir=$out
   while [[ ! -e $dir && ! -L $dir ]]; do
     made+=("$dir")
     dir=$(dirname -- "$dir")
   done
-  # -m 700 sets the mode of the evidence dir when mkdir creates it, so a default ACL on its parent never
-  # gives the group access to it, even before the chmod below.
-  # shellcheck disable=SC2174 # Only the evidence dir needs 0700. The safety check below covers its parents.
-  if ! mkdir -p -m 700 "$out"; then
-    rmdir "$state"
-    die "cannot create $out; set VERIFY_OUT to a fresh dir you own"
-  fi
+  # Make each one 0700 as mkdir creates it, shallowest first, so a default ACL on a parent never gives the
+  # group access to it. With mkdir -p, the dirs above the evidence dir would get the ACL's mode, and the
+  # check below would refuse them.
+  for ((i = ${#made[@]} - 1; i >= 0; i--)); do
+    if ! mkdir -m 700 -- "${made[i]}"; then
+      rmdir "$state"
+      ((i + 1 == ${#made[@]})) || rmdir -- "${made[@]:i+1}" || true
+      die "cannot create $out; set VERIFY_OUT to a fresh dir you own"
+    fi
+  done
   # Check again: another user could have made the dir between the first check and mkdir, and a
   # default ACL can make a new dir group-writable whatever the umask.
   why=$(unsafe_dir "$guard")

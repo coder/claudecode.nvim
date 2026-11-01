@@ -13,7 +13,6 @@
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
-#   parent-made-unsafe  mkdir makes a new default parent dir group-writable (a default ACL)
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
@@ -99,11 +98,9 @@ refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-pro
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
 refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCRATCH_DIR=/proc
-# A default ACL makes mkdir create a group-writable dir despite the harness's umask 077, so only
-# the check after mkdir sees it.
+# A default ACL gives a new dir or file group access whatever the harness's umask 077.
 mkdir "$TMP/acl"
 if command -v setfacl >/dev/null && setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl" 2>/dev/null; then
-  refused parent-made-unsafe "$TMP/acl/verify-claudecode-nvim is group- or world-writable" XUM_SCRATCH_DIR="$TMP/acl"
   # chmod does not touch a default ACL, so this dir passes both checks, and its files would get group access.
   mkdir -m 700 "$TMP/acl-out" "$TMP/no-setfacl"
   setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl-out"
@@ -112,7 +109,7 @@ if command -v setfacl >/dev/null && setfacl -d -m u::rwx,g::rwx,o::--- "$TMP/acl
   refused out-acl-unremovable "a new file in $TMP/acl-out gets mode 660, not 600" \
     PATH="$TMP/no-setfacl:$PATH" VERIFY_OUT="$TMP/acl-out"
 else
-  echo "SKIP parent-made-unsafe, out-acl-unremovable, out-acl, out-made: setfacl cannot set a default ACL on $TMP/acl"
+  echo "SKIP out-acl-unremovable, out-acl, out-made: setfacl cannot set a default ACL on $TMP/acl"
 fi
 [[ -z $(ls -A "$TMP/out") ]] || fail "a refused launch wrote into $TMP/out"
 
@@ -140,7 +137,7 @@ if [[ -d $TMP/acl-out ]]; then
   chmod 500 "$TMP/acl-out"
   private out-acl "$TMP/acl-out"
   echo "PASS out-acl: launch made the 0500 $TMP/acl-out a 0700 dir without its default ACL, and all $(find "$TMP/acl-out" -type f | wc -l) evidence files are 0600"
-  # The second safety check reads the mode right after mkdir, so a dir that mkdir made group-writable is refused.
+  # A new default parent dir (XUM_SCRATCH_DIR=$TMP/acl) is made by the same code as $TMP/acl/mid.
   private out-made "$TMP/acl/mid/out"
   [[ $(stat -c %a -- "$TMP/acl/mid") == 700 ]] || fail "out-made: $TMP/acl/mid is not a 0700 dir"
   echo "PASS out-made: launch created $TMP/acl/mid and $TMP/acl/mid/out as 0700 in a dir with a default ACL, and all $(find "$TMP/acl/mid/out" -type f | wc -l) evidence files are 0600"
