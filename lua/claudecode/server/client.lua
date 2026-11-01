@@ -169,6 +169,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           return
         end
 
+        -- The client hung up, or the server stopped, while the reply was written. The frames it sent with its request
+        -- must not run.
+        if client.state ~= "upgrading" or client.tcp_handle:is_closing() then
+          client.buffer, client.pending = "", nil
+          return
+        end
         client.handshake_complete = true
         client.state = "connected"
         logger.debug("client", "WebSocket connection established for client:", client.id)
@@ -224,7 +230,11 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       local message, status, problem = add_data_frame(client, parsed_frame)
       if message then
         vim.schedule(function()
-          on_message(client, message)
+          -- A client that hung up or closed before the main loop got here gets no reply, and its request must not
+          -- change the editor either.
+          if client.state == "connected" and not client.tcp_handle:is_closing() then
+            on_message(client, message)
+          end
         end)
       elseif status then
         -- Same teardown as a fatal frame above: on_error runs only after the Close frame is written.
@@ -345,7 +355,8 @@ function M.close_client(client, code, reason, on_done)
     return
   end
 
-  if client.handshake_complete then
+  -- An upgrading client gets the Close frame too: libuv writes it after the 101 reply that is still queued.
+  if client.handshake_complete or client.state == "upgrading" then
     local close_frame = frame.create_close_frame(code, reason)
     client.tcp_handle:write(close_frame, function()
       client.state = "closed"

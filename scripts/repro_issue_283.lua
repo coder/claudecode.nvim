@@ -93,7 +93,7 @@ if mode == "serve" then
     out(("INSTANCE_%s: LISTENING port=%d"):format(label, server.port))
   else
     -- Mirror the exact init.lua user-facing wording.
-    out(("INSTANCE_%s: [ClaudeCode] [init] [ERROR] %s: server not started"):format(label, tostring(err)))
+    out(("INSTANCE_%s: [ClaudeCode] [init] [ERROR] %s"):format(label, tostring(err)))
   end
   vim.wait(wait_ms, function()
     return false
