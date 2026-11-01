@@ -69,6 +69,7 @@ Layers, top to bottom:
 - Fragmentation is not supported. A CONTINUATION frame closes with 1003. An unknown opcode closes with 1002 [server/client.lua:M.process_data]
 - `parse_frame` rejects set RSV bits, invalid opcodes, fragmented control frames, and control payloads over 125 bytes with 1002. It rejects payloads over 100 MiB with 1009 and invalid UTF-8 text with 1007 [server/frame.lua:M.parse_frame]
 - `parse_frame` does not reject unmasked client frames. Server frames are unmasked by default (`masked=false`) [server/frame.lua:M.create_frame]
+- Every text frame the server sends is valid UTF-8. `send_message` replaces each ill-formed sequence with U+FFFD, so a buffer name or path with invalid bytes reaches the client as U+FFFD and does not drop the connection [server/client.lua:M.send_message]
 - JSON-RPC errors: -32700 for a parse error and -32600 unless `jsonrpc == "2.0"` [server/init.lua:M._handle_message]. -32601 for an unknown method and -32603 for a handler that raises [server/init.lua:M._handle_request]
 - When the JSON decodes to a non-table value (for example a number or a boolean), `_handle_message` replies -32600 with `"id": null`. It does not raise [server/init.lua:M._handle_message]
 - A message with a truthy `id` is a request. Any other message is a notification. A valid notification never gets a response. The -32700 and -32600 checks run before the `id` check, so a malformed notification gets an error reply [server/init.lua:M._handle_message]
