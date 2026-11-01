@@ -191,18 +191,30 @@ describe("WebSocket client messages", function()
   end)
 
   it("handles many small frames in one read with memory linear in their number", function()
-    local count = 2000
+    local count = 4000
+    local data = string.rep(frames({ TEXT, "{}" }), count)
+    -- JIT traces and the coverage line hook allocate too. Without them, the count is what the server allocates.
+    local hook, mask, hook_count = debug.gethook()
+    local jit_was_on = jit and jit.status()
+    debug.sethook()
+    if jit then
+      jit.off()
+    end
     collectgarbage("collect")
     collectgarbage("stop")
     local before = collectgarbage("count")
-    local ok, err = pcall(receive, string.rep(frames({ TEXT, "{}" }), count))
+    local ok, err = pcall(receive, data)
     local allocated_kib = collectgarbage("count") - before
     collectgarbage("restart")
+    if jit_was_on then
+      jit.on()
+    end
+    debug.sethook(hook, mask, hook_count)
     assert(ok, err)
 
     assert.equals(count, #messages)
-    -- The 16 KB read itself is small. Cutting the rest of it off after each frame allocates about 44 MiB here.
-    assert.is_true(allocated_kib < 4096, string.format("allocated %.0f KiB", allocated_kib))
+    -- About 1 KiB per frame. Cutting the rest of the 32 KB read off after each frame allocates about 66 MiB.
+    assert.is_true(allocated_kib < 8192, string.format("allocated %.0f KiB", allocated_kib))
   end)
 
   it("closes with 1002 when a new text message starts inside a fragmented one", function()
