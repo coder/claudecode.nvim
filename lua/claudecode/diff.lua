@@ -1755,15 +1755,21 @@ local function close_active_diffs(filter_fn, reason, client_id)
   -- Snapshot the tab names first: close_diff_by_tab_name nils out entries as it
   -- goes, and mutating a table while iterating it with pairs() is undefined.
   local tab_names = {}
+  local listed = {}
   for tab_name, diff_data in pairs(active_diffs) do
     if matches(diff_data) then
       tab_names[#tab_names + 1] = tab_name
+      listed[tab_name] = diff_data
     end
   end
   for _, tab_name in ipairs(tab_names) do
     -- Each close fires ClaudeCodeDiffClosed synchronously, and a user handler can
-    -- accept a later entry, so recheck the filter against the entry as it is now.
-    if matches(active_diffs[tab_name]) and M.close_diff_by_tab_name(tab_name, client_id) then
+    -- accept or reject a later entry. Recheck the filter against the entry as it is
+    -- now, so an accepted one stays. A rejected one holds no edits and has had its
+    -- answer, so it closes as it would have, unless a new diff replaced it.
+    local diff_data = active_diffs[tab_name]
+    local rejected = diff_data == listed[tab_name] and diff_data.status == "rejected"
+    if (matches(diff_data) or rejected) and M.close_diff_by_tab_name(tab_name, client_id) then
       count = count + 1
     end
   end

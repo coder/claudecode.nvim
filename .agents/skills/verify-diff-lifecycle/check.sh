@@ -173,10 +173,22 @@ fact[CloseEachByName]=$(as_bool in_order 'for _, tab_name in ipairs\(tab_names\)
 # A ClaudeCodeDiffClosed handler runs inside each close, so the loop must re-read the entry
 # and rerun the snapshot's filter on it.
 FACTS+=(CloseRechecksFilter)
-fact[CloseRechecksFilter]=$(as_bool in_order 'local function matches\(diff_data\)' \
-  'return diff_data ~= nil and \(not filter_fn or filter_fn\(diff_data\)\)' 'if matches\(diff_data\) then' \
-  'for _, tab_name in ipairs\(tab_names\) do' \
-  'if matches\(active_diffs\[tab_name\]\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
+close_rechecks_filter() {
+  local snapshot=('local function matches\(diff_data\)'
+    'return diff_data ~= nil and \(not filter_fn or filter_fn\(diff_data\)\)' 'if matches\(diff_data\) then'
+    'for _, tab_name in ipairs\(tab_names\) do')
+  in_order "${snapshot[@]}" 'if matches\(active_diffs\[tab_name\]\) and M\.close_diff_by_tab_name\(tab_name[,)]' \
+    <<<"$close_active" ||
+    in_order "${snapshot[@]}" '^    local diff_data = active_diffs\[tab_name\]$' \
+      'if \(?matches\(diff_data\)( or rejected\))? and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active"
+}
+fact[CloseRechecksFilter]=$(as_bool close_rechecks_filter)
+# An entry that a handler rejected since the snapshot holds no edits and has its answer, so the loop closes it too.
+FACTS+=(CloseTakesRejected)
+fact[CloseTakesRejected]=$(as_bool in_order '^      listed\[tab_name\] = diff_data$' \
+  'for _, tab_name in ipairs\(tab_names\) do' '^    local diff_data = active_diffs\[tab_name\]$' \
+  '^    local rejected = diff_data == listed\[tab_name\] and diff_data\.status == "rejected"$' \
+  'if \(matches\(diff_data\) or rejected\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
 # A saved diff outlives its client's connection, so a later connection must never get that client's id.
 # The counter is a global so a reload of server/client.lua keeps it, and only create_client may set it.
 FACTS+=(ClientIdsUnique)
@@ -350,7 +362,7 @@ show_trace() {
   grep -E '^State [0-9]+: |^[0-9]+: <|Back to state' "$work/$1.out" | sed 's/^/     /'
 }
 
-RULES_INV=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept)
+RULES_INV=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover)
 ALL_INV="TypeOK ${RULES_INV[*]}"
 
 if [[ $mutants == 1 ]]; then
@@ -361,6 +373,7 @@ if [[ $mutants == 1 ]]; then
     [SetupAnswerReturned]=NoStrandedCall
     [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
     [UserCloseKeepsAcceptedText]=SavedDiffKept
+    [CloseTakesRejected]=NoRejectedLeftover
     [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
     [ClientIdsUnique]=SavedDiffKept
     [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered

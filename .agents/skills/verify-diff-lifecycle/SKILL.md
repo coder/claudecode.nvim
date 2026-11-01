@@ -9,13 +9,14 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 
 ## Rules
 
-| Rule                        | Plain sentence                                                                                                                                                            | Harm when broken                                                           |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `AtMostOneAnswer`           | Claude gets at most one response per openDiff call.                                                                                                                       | Claude acts on a second, contradicting answer.                             |
-| `AnswerMatchesDiff`         | While a diff stays open, its status agrees with what Claude was told.                                                                                                     | The user sees "accepted" while Claude was told "rejected", or the reverse. |
-| `NoStrandedCall`            | A waiting call still has a pending diff and a response sender.                                                                                                            | Claude waits forever. No user action or close_tab can answer it.           |
-| `SavedDiffKept`             | Only Claude tears down a diff the user accepted with `:w`, and never after its own client is gone. The user can too, once the file or its buffer holds the accepted text. | The user's accepted edits vanish before Claude writes them.                |
-| `DisconnectedCallsAnswered` | A disconnected client's waiting calls get answered without the user.                                                                                                      | Orphaned diff windows linger (issue #248).                                 |
+| Rule                        | Plain sentence                                                                                                                                                            | Harm when broken                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `AtMostOneAnswer`           | Claude gets at most one response per openDiff call.                                                                                                                       | Claude acts on a second, contradicting answer.                                                     |
+| `AnswerMatchesDiff`         | While a diff stays open, its status agrees with what Claude was told.                                                                                                     | The user sees "accepted" while Claude was told "rejected", or the reverse.                         |
+| `NoStrandedCall`            | A waiting call still has a pending diff and a response sender.                                                                                                            | Claude waits forever. No user action or close_tab can answer it.                                   |
+| `SavedDiffKept`             | Only Claude tears down a diff the user accepted with `:w`, and never after its own client is gone. The user can too, once the file or its buffer holds the accepted text. | The user's accepted edits vanish before Claude writes them.                                        |
+| `DisconnectedCallsAnswered` | A disconnected client's waiting calls get answered without the user.                                                                                                      | Orphaned diff windows linger (issue #248).                                                         |
+| `NoRejectedLeftover`        | A bulk close also closes a diff from its list that a `ClaudeCodeDiffClosed` handler denied while the loop ran.                                                            | The denied diff's windows linger after `:ClaudeCodeCloseAllDiffs`, a disconnect, or a server stop. |
 
 ## Run
 
@@ -73,14 +74,15 @@ A changed file with no changed block or call site still needs a look. A wrapper 
 | `SetupAnswerReturned`                      | before `open_diff_blocking` yields, the resolution callback keeps its result instead of resuming the coroutine, and `open_diff_blocking` returns that result as the immediate reply (issue #325)                                    |
 | `OpenedEventInSetup`                       | `fire_diff_event` runs `nvim_exec_autocmds` directly, and `ClaudeCodeDiffOpened` fires inside setup, before the yield. Not a guard: `TRUE` lets a user handler resolve the diff during setup                                        |
 
-The bulk closes, the Claude close tools, and client ids add four facts:
+The bulk closes, the Claude close tools, and client ids add five facts:
 
-| Fact                      | Code it reads                                                                                                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CloseRechecksFilter`     | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                      |
-| `CloseKeepsOthersSaved`   | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on |
-| `ReplaceKeepsOthersSaved` | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                     |
-| `ClientIdsUnique`         | `create_client` in `server/client.lua` builds each id from the counter `_G.claudecode_clients_created`, which survives a module reload, not from the handle address       |
+| Fact                      | Code it reads                                                                                                                                                                                         |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CloseRechecksFilter`     | `close_active_diffs` runs its filter through `matches` on the snapshot and again on `active_diffs[tab_name]` right before each close                                                                  |
+| `CloseTakesRejected`      | in that recheck, `close_active_diffs` also closes an entry whose `status` is `"rejected"` when it is the entry the snapshot listed. A `ClaudeCodeDiffClosed` handler can reject it after the snapshot |
+| `CloseKeepsOthersSaved`   | `close_diff_by_tab_name(tab_name, client_id)` returns `false` on `holds_edits_for_other_client`. `handle_invoke` passes `client` to both tools, which pass `client.id` on                             |
+| `ReplaceKeepsOthersSaved` | in `open_diff_blocking`, before the replace: `holds_edits_for_other_client` (a saved diff whose `client_id` is another client) makes the call `error`                                                 |
+| `ClientIdsUnique`         | `create_client` in `server/client.lua` builds each id from the counter `_G.claudecode_clients_created`, which survives a module reload, not from the handle address                                   |
 
 On `BROKEN`, the script prints the TLC trace as action names. Read it with the pstack `/statechart` skill:
 
@@ -111,9 +113,10 @@ Then decide which kind of failure it is:
 - `SenderCleared` alone is caught by no rule, because the pending guards also stop a second answer. `--mutants` shows that `AtMostOneAnswer` breaks when both `SenderCleared` and `GuardRejected` are removed.
 - `SavedDiffKept` knows which client owns each diff, and, while `:ClaudeCodeCloseAllDiffs` runs, which files or file buffers hold the accepted text. The model has no file or buffer contents: the command's first pass leaves the accepted text in any subset of the saved diffs' files or buffers, because the code skips a diff whose file buffer already has unsaved changes, or whose buffer it cannot change. The plugin never writes the file. That the first pass leaves the file on disk and the user's unsaved changes alone is checked by the unit tests, not here. A saved diff counts as lost when the user, a disconnect cleanup or a server stop tears it down, or when a client that does not own it does so while the owner is disconnected. A close by another client while the owner is connected counts as safe, because the owner got `FILE_SAVED` and can still write the file. The code is stricter than the rule: it keeps another client's saved diff in both cases. Ownership compares client ids, so a new connection must never get an old id. With `ClientIdsUnique` off, `ClientIdReused` lets a new connection take the id of a disconnected client.
 - The split and unified layouts share the pending guards only because `resolve_inline_as_*` is reached through `_resolve_diff_as_*`. The inline functions have no guard of their own.
-- Every run assumes that the user has a `ClaudeCodeDiffClosed` handler (`ClosedHandlerResolvesOther`). Each time a bulk close closes a diff, the handler can accept or deny one other open diff, in any order of the snapshot. After a single close (`close_tab`, a replacing openDiff) the handler can touch only other diffs, the same as a later user action, so only the bulk-close loop models it.
+- Every run assumes that the user has a `ClaudeCodeDiffClosed` handler (`ClosedHandlerResolvesOther`). Each time a bulk close closes a diff, the handler can accept or deny one other open diff, in any order of the snapshot. After a single close (`close_tab`, a replacing openDiff) the handler can touch only other diffs, the same as a later user action, so only the bulk-close loop models it. `SavedDiffKept` checks that the loop keeps a diff the handler accepted, and `NoRejectedLeftover` checks that it closes one the handler denied.
 - These are not modeled:
   - a `ClaudeCodeDiffClosed` handler that starts another bulk close
+  - a `ClaudeCodeDiffClosed` handler that opens a diff under a listed `tab_name` (the code closes a rejected entry only when it is the listed one, which the unit tests check)
   - window and tab layout
   - the `keep_empty` new-file cleanup inside `_resolve_diff_as_rejected` (it runs after the answer)
   - setup errors, which answer at once
