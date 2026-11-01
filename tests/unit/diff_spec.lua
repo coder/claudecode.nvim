@@ -490,6 +490,24 @@ describe("Diff Module", function()
   end)
 
   describe("Dirty Buffer Detection", function()
+    -- These tests replace functions on the shared vim mock. Record them so teardown() restores them.
+    before_each(function()
+      for _, path in ipairs({
+        "fn.filereadable",
+        "fn.bufnr",
+        "api.nvim_list_bufs",
+        "api.nvim_list_wins",
+        "api.nvim_buf_get_option",
+        "api.nvim_create_buf",
+        "api.nvim_buf_set_name",
+        "api.nvim_buf_set_lines",
+        "api.nvim_set_option_value",
+      }) do
+        local scope, name = path:match("^(%a+)%.(.+)$")
+        original_vim_functions[path] = vim[scope][name]
+      end
+    end)
+
     it("should detect clean buffer", function()
       -- Mock vim.fn.bufnr to return a valid buffer number
       local old_bufnr = _G.vim.fn.bufnr
