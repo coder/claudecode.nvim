@@ -1,4 +1,4 @@
-sync 79ac7cecc8c4723d2fe4fbae854d9334b4accf9c
+sync f830afea86fc0f7af452278a748eb2de8200a038
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -44,8 +44,8 @@ file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
 file lua/claudecode/logger.lua eacf2556921ab1b2
 file lua/claudecode/selection.lua f37829d12cb7e8b7
-file lua/claudecode/server/client.lua d16ad16f5a17f662
-file lua/claudecode/server/frame.lua ab054d6538add76b
+file lua/claudecode/server/client.lua c12e85c58424fb9a
+file lua/claudecode/server/frame.lua 437e978cbfd82ed4
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 file lua/claudecode/server/init.lua ea24c13556dcd2a9
 file lua/claudecode/server/mock.lua 47986b9e1060acd8
