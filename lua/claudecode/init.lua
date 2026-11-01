@@ -510,9 +510,9 @@ function M.start(show_startup_notification)
     if result and result:find("auth") then
       error_msg = error_msg .. " (authentication related)"
     end
-    -- auto_start runs this while Neovim starts, where a line wider than the command line waits for a key. The
-    -- server's own reason comes first, so that a cut line keeps it.
-    logger.one_line("error", "init", (result or "unknown error") .. ": server not started")
+    -- auto_start runs this while Neovim starts, where a line wider than the command line waits for a key. The reason
+    -- alone (for example "No free port in 10000-65535 (EADDRINUSE)") fits at 80 columns and says what failed.
+    logger.one_line("error", "init", result or "Server not started")
     return false, error_msg
   end
 

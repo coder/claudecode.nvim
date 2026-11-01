@@ -170,7 +170,7 @@ describe("Server lines on the command line", function()
     end)
   end
 
-  it("shows a server whose ports are all in use as one error line that names the range", function()
+  it("shows a server whose ports are all in use as one whole error line at 80 columns", function()
     package.loaded["claudecode"] = nil
     vim.loop.new_tcp = function()
       local handle = saved.new_tcp()
@@ -187,8 +187,7 @@ describe("Server lines on the command line", function()
 
     local line = only_line()
     assert.equals(vim.log.levels.ERROR, line.level)
-    assert_contains(line.text, "10000-10000")
-    assert_contains(line.text, "EADDRINUSE")
+    assert.equals("[ClaudeCode] [init] [ERROR] No free port in 10000-10000 (EADDRINUSE)", line.text)
   end)
 
   -- Without colors (a notify plugin, or :messages read through execute()), only the text tells an error from info.
