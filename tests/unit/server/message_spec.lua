@@ -271,6 +271,18 @@ describe("WebSocket client messages", function()
     assert.is_true(allocated_kib < 8192, string.format("allocated %.0f KiB", allocated_kib))
   end)
 
+  it("frees the reads of an unfinished frame when it closes the client, and keeps none that arrive later", function()
+    local data = frame.create_frame(TEXT, string.rep(" ", 4096), true, true)
+    receive(data:sub(1, 2048))
+    assert.equals(2048, client.get_client_info(c).buffer_size)
+
+    client.close_client(c, 1000, "")
+    receive(data:sub(2049))
+
+    assert.equals(0, client.get_client_info(c).buffer_size)
+    assert.same({}, messages)
+  end)
+
   it("closes with 1002 when a new text message starts inside a fragmented one", function()
     receive(frames({ TEXT, request:sub(1, 10), false }, { TEXT, request }))
 

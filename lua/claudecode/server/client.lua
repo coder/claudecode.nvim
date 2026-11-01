@@ -101,6 +101,12 @@ end
 ---@param on_error function Callback for errors: function(client, error_msg)
 ---@param auth_token string|nil Expected authentication token for validation
 function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+  -- Nothing more is parsed from a client that is closing, so none of its bytes are kept either.
+  if client.state == "closing" or client.state == "closed" then
+    client.buffer, client.pending = "", nil
+    return
+  end
+
   -- A frame longer than one read arrives in many. Joining each read onto the bytes before it copies them all every
   -- time, so the reads of an incomplete frame wait in a list until the whole frame is there.
   local pending = client.pending
@@ -129,6 +135,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       end
 
       local success, response_from_handshake, _ = handshake.process_handshake(request, auth_token)
+      local rejection
 
       -- Log authentication results
       if success then
@@ -140,8 +147,9 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       else
         -- The body of the error response says why.
         local body = response_from_handshake:match("\r\n\r\n(.+)$") or "Bad handshake"
-        local reason = body:gsub("^Bad WebSocket upgrade request: ", "")
-        logger.one_line("warn", "client", "Rejected " .. client.id .. ": " .. reason)
+        rejection = body:gsub("^Bad WebSocket upgrade request: ", "")
+        logger.one_line("warn", "client", "Rejected " .. client.id .. ": " .. rejection)
+        client.state = "closing"
       end
 
       client.tcp_handle:write(response_from_handshake, function(err)
@@ -160,14 +168,8 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
             M.process_data(client, "", on_message, on_close, on_error, auth_token)
           end
         else
-          client.state = "closing"
-          logger.debug("client", "Closing connection for client due to failed handshake:", client.id)
-          vim.schedule(function()
-            -- A client that hung up after reading the reply had its handle closed then.
-            if not client.tcp_handle:is_closing() then
-              client.tcp_handle:close()
-            end
-          end)
+          -- on_error removes the client from the server and closes its socket.
+          on_error(client, "Rejected: " .. rejection)
         end
       end)
     end
@@ -322,6 +324,8 @@ function M.close_client(client, code, reason, on_done)
 
   code = code or 1000
   reason = reason or ""
+  -- Nothing more is parsed from a closing client, so its unparsed bytes can go now.
+  client.buffer, client.pending = "", nil
 
   -- Defensive guard for callers that don't gate on client.state: if the
   -- underlying handle is already closing (e.g. a TCP error path closed it),

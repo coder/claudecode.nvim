@@ -157,12 +157,18 @@ describe("Logger", function()
       vim.v.echospace = original_echospace
     end)
 
-    it("cuts an error wider than the command line to its width", function()
+    it("drops the component and level, then cuts, an error wider than the command line", function()
       logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
 
       expect(#notify_calls).to_be(1)
       expect(notify_calls[1].level).to_be(vim.log.levels.ERROR)
-      expect(notify_calls[1].msg).to_be("[ClaudeCode] [server] [ERROR] Accept error: EMF...")
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] Accept error: EMFILE: too many ope...")
+    end)
+
+    it("drops only the component and level when the line then fits", function()
+      logger.one_line("warn", "client", "Rejected client_1: Invalid token")
+
+      expect(notify_calls[1].msg).to_be("[ClaudeCode] Rejected client_1: Invalid token")
     end)
 
     it("cuts an info line, which goes to the message history", function()
@@ -170,7 +176,7 @@ describe("Logger", function()
 
       expect(#echo_calls).to_be(1)
       expect(echo_calls[1].history).to_be_true()
-      expect(echo_calls[1].chunks[1][1]).to_be("[ClaudeCode] [server] [INFO] Closed client_7: n...")
+      expect(echo_calls[1].chunks[1][1]).to_be("[ClaudeCode] Closed client_7: no reply for 61s,...")
     end)
 
     it("joins the lines of a warning into one", function()
@@ -189,12 +195,20 @@ describe("Logger", function()
       expect(echo_calls[1].chunks[1][1]).to_be("[ClaudeCode] [server] [INFO] " .. text)
     end)
 
+    it("drops the plugin name too when it would take half of a narrow command line", function()
+      vim.v.echospace = 20
+
+      logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
+
+      expect(notify_calls[1].msg).to_be("Accept error: EMF...")
+    end)
+
     it("cuts without an ellipsis when the command line is narrower than one", function()
       vim.v.echospace = 2
 
       logger.one_line("error", "server", "Accept error: EMFILE: too many open files")
 
-      expect(notify_calls[1].msg).to_be("[C")
+      expect(notify_calls[1].msg).to_be("Ac")
     end)
 
     it("shows the whole line at log_level debug", function()

@@ -154,7 +154,8 @@ Module map (direct files):
 - `diff_inline.lua` creates the `claudecode_inline_diff` namespace when the module loads. It defines the four `ClaudeCodeInlineDiff*` highlight groups (with `default = true`) [diff_inline.lua:setup_highlights] and sets extmarks [diff_inline.lua:M.render_diff_buffer]
 - The plugin runs `git rev-parse --show-toplevel` for the git root [cwd.lua:M.git_root], and `health.check` runs `<claude> --version` [health.lua:check_cli]
 - `logger` defers all output through `vim.schedule`. ERROR and WARN go to `vim.notify`. Other levels go to `nvim_echo` [logger.lua:log]
-- Below log_level debug, `one_line` replaces each run of whitespace with one space and cuts the line to `v:echospace` cells, ending in `...` when `v:echospace` is at least 3 [logger.lua:M.one_line]
+- Below log_level debug, `one_line` replaces each run of whitespace with one space. A line wider than `v:echospace` cells drops its component and level tags, and the `[ClaudeCode]` name too when that would take half the width. Then it is cut to the width, ending in `...` when `v:echospace` is at least 3 [logger.lua:M.one_line]
+- `M.start` logs a server that did not start through `one_line`, because `auto_start` runs it while Neovim starts [init.lua:M.start]
 
 ## Verification
 
