@@ -1,6 +1,6 @@
 -- Issue #385: with only the preview window and the Claude terminal in the tab, and the cursor in the
--- preview window, a diff must not go into the preview window or into a split of it. The preview window
--- has 'winfixheight' and 'previewheight' lines, so a vertical split of it is that short too.
+-- preview window, a side-by-side diff must not go into the preview window or into a split of it. The
+-- preview window has 'winfixheight' and 'previewheight' lines, so a vertical split of it is that short too.
 require("tests.busted_setup")
 
 describe("Diff with the preview window as the only editor window (issue #385)", function()
@@ -10,12 +10,11 @@ describe("Diff with the preview window as the only editor window (issue #385)", 
   local preview_buf, terminal_buf
   local old_file = "/tmp/claudecode_preview_window_old.txt"
 
-  local function setup_diff(layout)
+  local function setup_diff()
     package.loaded["claudecode.diff"] = nil
-    package.loaded["claudecode.diff_inline"] = nil
     diff = require("claudecode.diff")
     diff.setup({
-      diff_opts = { layout = layout, open_in_new_tab = false, keep_terminal_focus = false },
+      diff_opts = { layout = "vertical", open_in_new_tab = false, keep_terminal_focus = false },
       terminal = {},
     })
   end
@@ -58,7 +57,6 @@ describe("Diff with the preview window as the only editor window (issue #385)", 
     end
     os.remove(old_file)
     package.loaded["claudecode.diff"] = nil
-    package.loaded["claudecode.diff_inline"] = nil
     package.loaded["claudecode.terminal"] = nil
     package.loaded["claudecode.logger"] = nil
   end)
@@ -74,7 +72,7 @@ describe("Diff with the preview window as the only editor window (issue #385)", 
   end
 
   it("openDiff gives both panes the terminal's height and closes its fallback window on cleanup", function()
-    setup_diff("vertical")
+    setup_diff()
     local state = open_blocking_diff("side-by-side")
 
     assert.equals(terminal_height, vim.api.nvim_win_get_height(state.target_window))
@@ -86,18 +84,10 @@ describe("Diff with the preview window as the only editor window (issue #385)", 
     assert.same({ preview_win, terminal_win }, vim.api.nvim_tabpage_list_wins(1))
   end)
 
-  it("openDiff with the unified layout gives the diff the terminal's height", function()
-    setup_diff("unified")
-    local state = open_blocking_diff("unified")
-
-    assert.equals(terminal_height, vim.api.nvim_win_get_height(state.new_window))
-    assert.equals(preview_buf, vim.api.nvim_win_get_buf(preview_win))
-  end)
-
   -- The mock does not move the cursor for `wincmd t` and `wincmd l`. In this layout Neovim lands on the
   -- preview window too: it is the top-left window and has no window to its right.
   it("the legacy diff.open_diff keeps the preview window's file and gives the diff the terminal's height", function()
-    setup_diff("vertical")
+    setup_diff()
     -- The mock's mkdir creates no directory, so the proposed text's temp file cannot be written for real.
     local real_open = io.open
     rawset(io, "open", function(path, mode)
