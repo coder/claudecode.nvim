@@ -1845,15 +1845,41 @@ function M.close_diffs_for_client(client_id, reason)
   end, reason or ("client " .. tostring(client_id)))
 end
 
+---Close every rejected diff. Claude has its answer and the diff holds no edits. Claude closes it with close_tab,
+---but a client that exited first never will.
+---@param reason string Human-readable reason (for logging)
+---@return number count Number of diffs closed
+function M.close_rejected_diffs(reason)
+  return close_active_diffs(function(diff_data)
+    return diff_data.status == "rejected"
+  end, reason or "close rejected diffs")
+end
+
 ---@param diff_data table A saved active_diffs entry
----@return string[] lines The accepted text as buffer lines
+---@param buf integer The file's buffer
+---@return string[] lines The accepted text as lines of that buffer
 ---@return boolean eol True when the text ends with a line break
-local function accepted_lines(diff_data)
+local function accepted_lines(diff_data, buf)
   local text = diff_data.result_content.content[2].text
   local lines = vim.split(text, "\n", { plain = true })
   local eol = text:sub(-1) == "\n"
   if eol then
     table.remove(lines)
+  end
+  -- :w ends each line of a dos buffer with CRLF and starts a 'bomb' buffer with a BOM, so the text's own CRs and BOM
+  -- would be written twice. Like Neovim's read, take the CRs only when every line break in the text is CRLF.
+  local breaks = eol and #lines or #lines - 1
+  local crlf = breaks > 0 and vim.api.nvim_buf_get_option(buf, "fileformat") == "dos"
+  for i = 1, breaks do
+    crlf = crlf and lines[i]:sub(-1) == "\r"
+  end
+  if crlf then
+    for i = 1, breaks do
+      lines[i] = lines[i]:sub(1, -2)
+    end
+  end
+  if vim.api.nvim_buf_get_option(buf, "bomb") and lines[1]:sub(1, 3) == "\239\187\191" then
+    lines[1] = lines[1]:sub(4)
   end
   return lines, eol
 end
@@ -1871,7 +1897,7 @@ local function buffer_holds_accepted_text(diff_data)
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return false
   end
-  local lines, eol = accepted_lines(diff_data)
+  local lines, eol = accepted_lines(diff_data, buf)
   if vim.api.nvim_buf_get_option(buf, "eol") ~= eol then
     return false
   end
@@ -1891,48 +1917,99 @@ end
 ---writes them through Neovim's own write (backups, permissions, symlinks, the "changed since reading" check), and
 ---:e! drops them. Neovim refuses to quit while they are unsaved.
 ---@param diff_data table A saved active_diffs entry
+---@return string|nil problem Why the buffer did not get the text, or nil when it did
 local function put_accepted_text_in_buffer(diff_data)
-  local buf = vim.fn.bufadd(diff_data.old_file_path)
-  vim.fn.bufload(buf)
-  -- A BufRead autocmd can edit the buffer while it loads. Those edits are the user's to keep. A special buffer
-  -- (nofile, nowrite, acwrite, ...) cannot :w the text to this file, and Neovim can quit without asking about it.
-  if vim.api.nvim_buf_get_option(buf, "modified") or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
-    return
+  local path = diff_data.old_file_path
+  local existed = vim.fn.bufexists(path) == 1
+  local buf = vim.fn.bufadd(path)
+  local was_loaded = vim.api.nvim_buf_is_loaded(buf)
+  local ok, problem = pcall(function()
+    vim.fn.bufload(buf)
+    -- A BufRead autocmd can edit the buffer while it loads, and the text would mix with those edits. A special buffer
+    -- (nofile, nowrite, acwrite, ...) cannot :w the text to this file, and Neovim can quit without asking about it.
+    if vim.api.nvim_buf_get_option(buf, "modified") then
+      return "its buffer has unsaved changes"
+    end
+    local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
+    if buftype ~= "" then
+      return ("its buffer has 'buftype' %s, so :w cannot write the file"):format(buftype)
+    end
+    local lines, eol = accepted_lines(diff_data, buf)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(buf, "eol", eol)
+    if not eol then
+      -- Only the accepted text keeps its missing final line break. The user's later writes get 'fixeol' back.
+      local fixeol = vim.api.nvim_buf_get_option(buf, "fixeol")
+      vim.api.nvim_buf_set_option(buf, "fixeol", false)
+      -- `once` would delete only the event that fired, so the other one would reset 'fixeol' again later.
+      local restore_fixeol
+      restore_fixeol = vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost" }, {
+        buffer = buf,
+        callback = function()
+          vim.api.nvim_del_autocmd(restore_fixeol)
+          vim.api.nvim_buf_set_option(buf, "fixeol", fixeol)
+        end,
+      })
+    end
+    vim.api.nvim_buf_set_option(buf, "buflisted", true)
+    -- The diff's cleanup can close this buffer's last window, and these values would drop the unsaved text with it.
+    local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
+    if bufhidden == "wipe" or bufhidden == "delete" or bufhidden == "unload" then
+      vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
+    end
+  end)
+  if ok then
+    if not problem then
+      diff_data.accepted_buffer = buf
+    end
+    return problem
   end
-  vim.api.nvim_buf_set_option(buf, "buflisted", true)
-  -- The diff's cleanup can close this buffer's last window, and these values would drop the unsaved text with it.
-  local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
-  if bufhidden == "wipe" or bufhidden == "delete" or bufhidden == "unload" then
-    vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
+  if not was_loaded then
+    -- Leave no buffer behind that failed to load or refused the text: wipe the one bufadd made, unload the one
+    -- bufload loaded. A loaded buffer would also skip the swap file check (E325) on the next run.
+    pcall(vim.api.nvim_buf_delete, buf, { force = true, unload = existed })
   end
-  local lines, eol = accepted_lines(diff_data)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(buf, "eol", eol)
-  if not eol then
-    vim.api.nvim_buf_set_option(buf, "fixeol", false)
+  -- An API error carries the Lua position of this call, which tells the user nothing.
+  return (tostring(problem):gsub("^.-:%d+: ", ""):gsub("^Vim:", ""))
+end
+
+---@param diff_data table A saved active_diffs entry whose accepted_buffer holds the accepted text
+---@return {path: string, write: string, fileencoding: string|nil} unsaved
+local function describe_unsaved(diff_data)
+  local buf = diff_data.accepted_buffer
+  local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+  local fenc = vim.api.nvim_buf_get_option(buf, "fileencoding")
+  -- :w converts the text to 'fileencoding', and writes a replacement for each character that encoding lacks.
+  local lossy = fenc ~= ""
+    and fenc ~= "utf-8"
+    and vim.fn.iconv(vim.fn.iconv(text, "utf-8", fenc), fenc, "utf-8") ~= text
+  local write = ":w"
+  if vim.fn.isdirectory(vim.fn.fnamemodify(diff_data.old_file_path, ":h")) == 0 then
+    -- Neovim 0.8 has no :w ++p.
+    write = vim.fn.has("nvim-0.9") == 1 and ":w ++p" or ":call mkdir(expand('%:p:h'), 'p') | w"
   end
-  diff_data.accepted_buffer = buf
+  return { path = diff_data.old_file_path, write = write, fileencoding = lossy and fenc or nil }
 end
 
 ---Close every diff the user accepted, once its accepted text is on disk or in the file's buffer. The plugin never
 ---writes the file: when the file does not hold the text yet (its Claude client exited, or dropped the answer, before
----it wrote the file), the text goes into the file's buffer as unsaved changes. A diff whose file buffer already has
----unsaved changes stays open, so neither those changes nor the accepted text are lost.
+---it wrote the file), the text goes into the file's buffer as unsaved changes, in that buffer's 'fileformat' and
+---'bomb'. A diff whose file buffer cannot take the text, for example because it already has unsaved changes, stays
+---open, so neither those changes nor the accepted text are lost.
 ---@param reason string Human-readable reason (for logging)
 ---@return number count Number of diffs closed
----@return string[] unsaved Paths whose buffer now holds the accepted text as unsaved changes
----@return string[] kept Paths of the saved diffs that stay open
+---@return {path: string, write: string, fileencoding: string|nil}[] unsaved The files whose buffer now holds the
+---accepted text as unsaved changes, the command that writes it, and the buffer's 'fileencoding' if it cannot hold it
+---@return {path: string, why: string}[] kept The files of the saved diffs that stay open, and why
 function M.close_saved_diffs(reason)
   local unsaved = {}
+  local problems = {}
   for _, diff_data in pairs(active_diffs) do
-    if
-      diff_data.status == "saved"
-      and not file_holds_accepted_text(diff_data)
-      and not is_buffer_dirty(diff_data.old_file_path)
-      and pcall(put_accepted_text_in_buffer, diff_data)
-      and diff_data.accepted_buffer
-    then
-      unsaved[#unsaved + 1] = diff_data.old_file_path
+    if diff_data.status == "saved" and not file_holds_accepted_text(diff_data) then
+      problems[diff_data] = put_accepted_text_in_buffer(diff_data)
+      if not problems[diff_data] then
+        unsaved[#unsaved + 1] = describe_unsaved(diff_data)
+      end
     end
   end
   local count = close_active_diffs(function(diff_data)
@@ -1942,7 +2019,10 @@ function M.close_saved_diffs(reason)
   local kept = {}
   for _, diff_data in pairs(active_diffs) do
     if diff_data.status == "saved" then
-      kept[#kept + 1] = diff_data.old_file_path
+      kept[#kept + 1] = {
+        path = diff_data.old_file_path,
+        why = problems[diff_data] or "it changed while the command ran, so run the command again",
+      }
     end
   end
   return count, unsaved, kept

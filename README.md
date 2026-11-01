@@ -230,7 +230,7 @@ Configure the plugin with the detected path:
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
 - `:ClaudeCodeDiffAccept` - Accept diff changes
 - `:ClaudeCodeDiffDeny` - Reject diff changes
-- `:ClaudeCodeCloseAllDiffs` - Close Claude diffs: rejects pending ones, and closes accepted ones once the file or its buffer holds the accepted text
+- `:ClaudeCodeCloseAllDiffs` - Close Claude diffs: rejects pending ones, closes rejected ones, and closes accepted ones once the file or its buffer holds the accepted text
 
 ## Sending text to the Claude terminal
 
@@ -255,7 +255,7 @@ You can edit Claude's suggestions before accepting them.
 
 If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects. If you resolve diffs remotely while the session is still connected, run `:ClaudeCodeCloseAllDiffs` to clear the leftover pending proposals.
 
-A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff. When the file does not hold the accepted text yet, the command puts the text into the file's buffer as unsaved changes and closes the diff: `:w` in that buffer writes it, and `:e!` drops it. The plugin never writes the file. The command does this for a Claude session that is still connected too, and until you write or drop the text, that session's next diff on the same file fails because the buffer has unsaved changes. A diff whose file buffer already has unsaved changes, or cannot be written (a `'buftype'` such as `nofile`), stays open, and the command warns, so neither those changes nor your accepted edits are lost.
+A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff. When the file does not hold the accepted text yet, the command puts the text into the file's buffer as unsaved changes and closes the diff: `:w` in that buffer writes it (`:w ++p` for a new file whose folder does not exist yet, or on Neovim 0.8 `:call mkdir(expand('%:p:h'), 'p') | w`), and `:e!` drops it. The plugin never writes the file. In a CRLF file, `:w` writes one CR per line break even when Claude's text had CRLF, and a file with a BOM keeps one BOM. In any other file, `:w` writes the text's own line endings and BOM. When the buffer's `'fileencoding'` cannot hold the text, the command says so: run `:set fileencoding=utf-8` before `:w`. The command does this for a Claude session that is still connected too, and until you write or drop the text, that session's next diff on the same file fails because the buffer has unsaved changes. A diff whose file buffer already has unsaved changes, cannot be written (a `'buftype'` such as `nofile`), or refuses the text (for example a swap file from another Neovim, or `'nomodifiable'`), stays open, and the command names the reason, so neither those changes nor your accepted edits are lost. The command also closes a diff you rejected whose Claude session exited before it closed the diff.
 
 ## Events
 
