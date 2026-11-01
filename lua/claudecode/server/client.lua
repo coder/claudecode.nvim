@@ -7,6 +7,14 @@ local utils = require("claudecode.utils")
 
 local M = {}
 
+-- The reason text of each RFC 6455 status the server closes with (section 7.4.1).
+local CLOSE_REASONS = {
+  [1002] = "Protocol error",
+  [1003] = "Unsupported data",
+  [1007] = "Invalid frame payload data",
+  [1009] = "Message too big",
+}
+
 -- Diffs remember the id of the client that opened them after it disconnects, so an id must never
 -- come back. A handle's address can: libuv reuses the memory of a collected handle. The count lives
 -- in _G because reloading this module would reset a local while the diff module keeps the old ids.
@@ -51,10 +59,10 @@ end
 ---@return string|nil problem What broke it, short enough for one line of :messages
 local function add_data_frame(client, data_frame)
   local fragments = client.fragments
-  if data_frame.opcode == frame.OPCODE.BINARY then
+  if data_frame.opcode ~= frame.OPCODE.CONTINUATION and fragments then
+    return nil, 1002, "Data frame inside another message"
+  elseif data_frame.opcode == frame.OPCODE.BINARY then
     return nil, 1003, "Binary messages not supported"
-  elseif data_frame.opcode == frame.OPCODE.TEXT and fragments then
-    return nil, 1002, "Text frame inside another message"
   elseif data_frame.opcode == frame.OPCODE.CONTINUATION and not fragments then
     return nil, 1002, "Unexpected continuation frame"
   end
@@ -164,7 +172,10 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
     return
   end
 
-  while #client.buffer >= 2 do -- Minimum frame size
+  -- Parse from an offset and cut the buffer once at the end: cutting it after each frame copies the rest of the
+  -- buffer every time, which costs quadratic time for many small frames in one read.
+  local offset = 1
+  while #client.buffer - offset >= 1 do -- Minimum frame size is 2 bytes
     -- Stop if a prior frame (or a TCP error) already initiated teardown. The
     -- handle can still be open (Close-frame write / scheduled on_close/on_error
     -- pending) and read is not stopped, so a later TCP segment could otherwise
@@ -173,7 +184,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       break
     end
 
-    local parsed_frame, bytes_consumed, close_code = frame.parse_frame(client.buffer)
+    local parsed_frame, bytes_consumed, close_code = frame.parse_frame(client.buffer, offset)
 
     if not parsed_frame then
       if close_code then
@@ -187,14 +198,14 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- runs it from the write callback, i.e. only after the status code has
         -- been flushed, so the peer actually receives the 1002/1007/1009 close.
         client.buffer = ""
-        M.close_client(client, close_code, "Protocol error", function()
+        M.close_client(client, close_code, CLOSE_REASONS[close_code], function()
           on_error(client, "WebSocket protocol error in frame")
         end)
       end
       break -- No close_code means the frame is incomplete; wait for more bytes.
     end
 
-    client.buffer = client.buffer:sub(bytes_consumed + 1)
+    offset = offset + bytes_consumed
 
     local opcode = parsed_frame.opcode
     if opcode == frame.OPCODE.TEXT or opcode == frame.OPCODE.BINARY or opcode == frame.OPCODE.CONTINUATION then
@@ -206,7 +217,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       elseif status then
         -- Same teardown as a fatal frame above: on_error runs only after the Close frame is written.
         client.buffer = ""
-        M.close_client(client, status, status == 1003 and "Unsupported data" or "Protocol error", function()
+        M.close_client(client, status, CLOSE_REASONS[status], function()
           on_error(client, problem)
         end)
         break
@@ -244,13 +255,14 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
     elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
     else
-      M.close_client(client, 1002, "Protocol error", function()
+      M.close_client(client, 1002, CLOSE_REASONS[1002], function()
         on_error(client, "Unknown WebSocket opcode: " .. opcode)
       end)
       client.buffer = ""
       break
     end
   end
+  client.buffer = client.buffer:sub(offset)
 end
 
 ---Send a text message to a client
