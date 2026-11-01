@@ -19,12 +19,29 @@ local function mock_code_point(line, i)
   return cp, len
 end
 
+-- A few code points that Neovim 0.11+ counts as a character of their own (Grapheme_Cluster_Break=Control): C0 and
+-- C1 controls, DEL, SOFT HYPHEN, ZERO WIDTH SPACE, LINE and PARAGRAPH SEPARATOR, and ZERO WIDTH NO-BREAK SPACE.
+local function mock_is_grapheme_control(cp)
+  return cp < 0x20
+    or (cp >= 0x7F and cp <= 0x9F)
+    or cp == 0xAD
+    or cp == 0x200B
+    or cp == 0x2028
+    or cp == 0x2029
+    or cp == 0xFEFF
+end
+
 -- Last byte of the character that starts at byte i. A character is a code point and its composing characters
 -- (here U+0300 to U+036F and the Devanagari signs U+093A to U+094F). As on Neovim 0.11 and later, a virama also
 -- joins the next consonant, so स्ते is one character from स, while the cursor can still stand on त.
-local function mock_char_last_byte(line, i)
+-- With own_controls, a control (see mock_is_grapheme_control) is a character of its own, as Neovim 0.11+ counts
+-- characters for the cursor and `y`.
+local function mock_char_last_byte(line, i, own_controls)
   local last_cp, len = mock_code_point(line, i)
   local stop = i + len
+  if own_controls and last_cp and mock_is_grapheme_control(last_cp) then
+    return stop - 1
+  end
   while true do
     local cp, next_len = mock_code_point(line, stop)
     local composing = cp and ((cp >= 0x300 and cp <= 0x36F) or (cp >= 0x93A and cp <= 0x94F))
@@ -173,27 +190,32 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
-      -- Models Neovim for the two regex calls selection.lua makes (see mock_char_last_byte). From byte start,
-      -- `\_.` matches the character that starts there. `^\_.*\%<Nc\_.` matches up to the end of the last character
-      -- that starts before byte N, scanning from the line start.
-      matchend = function(line, pattern, start)
-        -- Like Neovim, vim.fn passes a Lua string with a NUL byte as a Blob.
-        assert(not line:find("%z"), "Vim:E976: Using a Blob as a String")
-        if pattern == "\\_." and start then
-          return start < #line and mock_char_last_byte(line, start + 1) or -1
+      -- byteidx and charidx count characters the way the cursor and `y` do, so on Neovim 0.11+ (tests set
+      -- _G.vim._has["nvim-0.11"]) a control is a character of its own.
+      byteidx = function(str, nr)
+        assert(not str:find("%z"), "Vim:E976: Using a Blob as a String")
+        local own_controls = _G.vim._has and _G.vim._has["nvim-0.11"]
+        local i = 1
+        for _ = 1, nr do
+          if i > #str then
+            return -1
+          end
+          i = mock_char_last_byte(str, i, own_controls) + 1
         end
-        local before = tonumber(pattern:match("^%^\\_%.%*\\%%<(%d+)c\\_%.$"))
-        assert(before and not start, "unexpected matchend call " .. pattern)
-        local i, last = 1, -1
-        while i <= #line and i < before do
-          last = mock_char_last_byte(line, i)
-          i = last + 1
-        end
-        return last
+        return i - 1
       end,
-      -- Tests set _G.vim._has["nvim-0.11"] to model a Neovim version.
-      has = function(feature)
-        return _G.vim._has and _G.vim._has[feature] and 1 or 0
+      charidx = function(str, idx)
+        assert(not str:find("%z"), "Vim:E976: Using a Blob as a String")
+        local own_controls = _G.vim._has and _G.vim._has["nvim-0.11"]
+        local i, index = 1, 0
+        while i <= #str do
+          local last = mock_char_last_byte(str, i, own_controls)
+          if idx + 1 <= last then
+            return index
+          end
+          i, index = last + 1, index + 1
+        end
+        return -1
       end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
@@ -1512,6 +1534,29 @@ describe("Range Selection Tests", function()
           local sel = from_marks({ line }, "v", 1, 2, 1, 3)
           assert.are.equal("\t", sel.text)
           assert.are.equal(2, sel.selection["end"].character)
+        end)
+
+        it("ends after a C1 control alone on Neovim 0.11+", function()
+          -- U+0085 NEXT LINE.
+          _G.vim._has = { ["nvim-0.11"] = true }
+          local sel = from_marks({ "x\194\133\224\165\135y" }, "v", 1, 2, 1, 2)
+          assert.are.equal("\194\133", sel.text)
+          assert.are.equal(3, sel.selection["end"].character)
+        end)
+
+        it("ends after U+200B ZERO WIDTH SPACE alone on Neovim 0.11+", function()
+          _G.vim._has = { ["nvim-0.11"] = true }
+          local sel = from_marks({ "x\226\128\139\224\165\135y" }, "v", 1, 2, 1, 2)
+          assert.are.equal("\226\128\139", sel.text)
+          assert.are.equal(4, sel.selection["end"].character)
+        end)
+
+        it("leaves the composing character after U+200B out of an exclusive selection on Neovim 0.11+", function()
+          _G.vim._has = { ["nvim-0.11"] = true }
+          _G.vim.o.selection = "exclusive"
+          local sel = from_marks({ "x\226\128\139\224\165\135y" }, "v", 1, 2, 1, 5)
+          assert.are.equal("\226\128\139", sel.text)
+          assert.are.equal(4, sel.selection["end"].character)
         end)
 
         it("keeps the composing character with the control character before Neovim 0.11", function()
