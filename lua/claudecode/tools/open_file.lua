@@ -139,8 +139,9 @@ local function loaded_buffer(file_path)
   return nil
 end
 
----Returns how often `buf` was written to its own file (undotree()'s save_last). Every such write counts, also one
----that runs no BufWritePost: from an autocommand without ++nested, or through a BufWriteCmd handler.
+---Returns how often `buf` was written to its own file (undotree()'s save_last). Such a write counts also when it runs
+---no BufWritePost: from an autocommand without ++nested, or through a BufWriteCmd handler. Neovim does not count a
+---BufWriteCmd write of a buffer without changes.
 ---@param buf integer
 ---@return integer
 local function save_count(buf)
@@ -159,7 +160,10 @@ do
   vim.api.nvim_create_autocmd("BufNewFile", {
     group = group,
     callback = function(args)
-      new_file_buffers[args.buf] = save_count(args.buf)
+      -- An earlier BufNewFile autocommand can unload or wipe the buffer.
+      if vim.api.nvim_buf_is_loaded(args.buf) then
+        new_file_buffers[args.buf] = save_count(args.buf)
+      end
     end,
   })
   vim.api.nvim_create_autocmd({ "BufReadPost", "BufUnload" }, {

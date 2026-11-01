@@ -907,7 +907,7 @@ describe("Tool: open_file", function()
         end
       end)
       _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
-        return buffers[buf].loaded == true
+        return buffers[buf] ~= nil and buffers[buf].loaded == true
       end)
       _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
         win = win == 0 and (call_win or current_win) or win
