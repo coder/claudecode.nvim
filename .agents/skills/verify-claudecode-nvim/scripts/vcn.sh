@@ -316,7 +316,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir made mode
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir missing made mode
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
@@ -345,20 +345,25 @@ cmd_launch() {
     rmdir "$state"
     die "$out is not empty; pick a fresh VERIFY_OUT"
   fi
-  # The dirs launch is about to make, deepest first, so a refusal below can remove them again.
-  made=()
+  missing=()
   dir=$out
   while [[ ! -e $dir && ! -L $dir ]]; do
-    made+=("$dir")
+    missing+=("$dir")
     dir=$(dirname -- "$dir")
   done
-  # Make each one 0700 as mkdir creates it, shallowest first, so a default ACL on a parent never gives the
-  # group access to it. With mkdir -p, the dirs above the evidence dir would get the ACL's mode, and the
-  # check below would refuse them.
-  for ((i = ${#made[@]} - 1; i >= 0; i--)); do
-    if ! mkdir -m 700 -- "${made[i]}"; then
+  # Make each missing dir 0700 as mkdir creates it, shallowest first, so a default ACL on a parent never gives the
+  # group access to it. With mkdir -p, the dirs above the evidence dir would get the ACL's mode, and the check below
+  # would refuse them. made lists the dirs this launch made, deepest first, so a refusal can remove them again.
+  made=()
+  for ((i = ${#missing[@]} - 1; i >= 0; i--)); do
+    if why=$(mkdir -m 700 -- "${missing[i]}" 2>&1); then
+      made=("${missing[i]}" ${made[@]+"${made[@]}"})
+    elif ((i > 0)) && [[ -d ${missing[i]} && ! -L ${missing[i]} ]]; then
+      : # Another launch made this parent dir first. Use it: the check below decides whether it is safe.
+    else
+      echo "$why" >&2
       rmdir "$state"
-      ((i + 1 == ${#made[@]})) || rmdir -- "${made[@]:i+1}" || true
+      ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
       die "cannot create $out; set VERIFY_OUT to a fresh dir you own"
     fi
   done
@@ -367,8 +372,8 @@ cmd_launch() {
   why=$(unsafe_dir "$guard")
   if [[ -n $why ]]; then
     rmdir "$state"
-    # rmdir removes only empty dirs, so this never deletes a file or a non-empty dir. It does remove an empty
-    # dir that another process made at one of these paths after the walk above.
+    # rmdir removes only empty dirs, and made holds only dirs this launch made, so this never deletes a file, a
+    # non-empty dir, or a dir that another process made.
     ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
     die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   fi
