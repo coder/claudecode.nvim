@@ -1972,9 +1972,11 @@ local function put_accepted_text_in_buffer(diff_data)
   if problem:match("^E325:") then
     -- Neovim deals with a swap file only when the user opens the file: it asks, or, from 0.10 on, it skips the swap
     -- file of a running Neovim by default.
-    problem = problem
-      .. ". Another Neovim may be editing the file: open it with :e (answer the swap file prompt if Neovim shows one), "
-      .. "then run the command again"
+    -- A bare :e in the proposal window would reload the proposal, so name the file.
+    problem = (
+      "%s. Another Neovim may be editing the file: open it with :e %s (answer the swap file prompt if Neovim "
+      .. "shows one), then run the command again"
+    ):format(problem, vim.fn.fnameescape(vim.fn.fnamemodify(path, ":~:.")))
   end
   return problem
 end
@@ -1989,10 +1991,17 @@ local function describe_unsaved(diff_data)
   local lossy = fenc ~= ""
     and fenc ~= "utf-8"
     and vim.fn.iconv(vim.fn.iconv(text, "utf-8", fenc), fenc, "utf-8") ~= text
-  local write = vim.api.nvim_buf_get_option(buf, "readonly") and ":w!" or ":w"
+  -- :w fails in a read-only buffer (E45), and :w! skips the "changed since reading" check, so check first.
+  local readonly = vim.api.nvim_buf_get_option(buf, "readonly")
+  local bang = readonly and "!" or ""
+  local write = ":w" .. bang
   if vim.fn.isdirectory(vim.fn.fnamemodify(diff_data.old_file_path, ":h")) == 0 then
     -- Neovim 0.8 has no :w ++p.
-    write = vim.fn.has("nvim-0.9") == 1 and ":w ++p" or ":call mkdir(expand('%:p:h'), 'p') | w"
+    write = vim.fn.has("nvim-0.9") == 1 and (":w%s ++p"):format(bang)
+      or (":call mkdir(expand('%%:p:h'), 'p') | w%s"):format(bang)
+  end
+  if readonly then
+    write = ":checktime, then " .. write
   end
   return { path = diff_data.old_file_path, write = write, fileencoding = lossy and fenc or nil }
 end
