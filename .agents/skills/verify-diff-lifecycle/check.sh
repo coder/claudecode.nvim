@@ -204,7 +204,7 @@ user_close_keeps_accepted_text() {
     in_order 'close_active_diffs\(function\(diff_data\)$' '^    return diff_data\.status == "saved"$' \
       '^      and \(file_holds_accepted_text\(diff_data\) or buffer_holds_accepted_text\(diff_data\)\)$' \
       '^  end, reason or "close saved diffs"\)$' <<<"$close_saved" &&
-    grep -qE '^  return read_file\(diff_data\.accepted_path\) == diff_data\.result_content\.content\[2\]\.text$' <<<"$file_holds" &&
+    grep -qE '^  return read_file\(diff_data\.old_file_path\) == diff_data\.result_content\.content\[2\]\.text$' <<<"$file_holds" &&
     grep -q 'vim\.api\.nvim_buf_get_lines(buf, 0, -1, false)' <<<"$buffer_holds"
 }
 fact[UserCloseKeepsAcceptedText]=$(as_bool user_close_keeps_accepted_text)

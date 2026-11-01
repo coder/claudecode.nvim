@@ -818,9 +818,6 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return
   end
 
-  -- Pinned now, so a later :cd does not change the buffer that close_saved_diffs gives the accepted text to.
-  diff_data.accepted_path = vim.fn.fnamemodify(diff_data.old_file_path, ":p")
-
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
     local inline = require("claudecode.diff_inline")
@@ -1577,6 +1574,8 @@ end
 ---@param client_id string|nil Id of the MCP client opening the diff (so it can be cleaned up if that client disconnects)
 ---@return table response MCP-compliant response with content array
 function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
+  -- Absolute from here on, so a later :cd cannot point this diff at another file.
+  old_file_path = vim.fn.fnamemodify(old_file_path, ":p")
   -- Check for existing diff with same tab_name
   if active_diffs[tab_name] then
     local existing_diff = active_diffs[tab_name]
@@ -1827,7 +1826,7 @@ end
 ---@param diff_data table A saved active_diffs entry
 ---@return boolean
 local function file_holds_accepted_text(diff_data)
-  return read_file(diff_data.accepted_path) == diff_data.result_content.content[2].text
+  return read_file(diff_data.old_file_path) == diff_data.result_content.content[2].text
 end
 
 ---@param diff_data table A saved active_diffs entry
@@ -1858,13 +1857,18 @@ end
 ---:e! drops them. Neovim refuses to quit while they are unsaved.
 ---@param diff_data table A saved active_diffs entry
 local function put_accepted_text_in_buffer(diff_data)
-  local buf = vim.fn.bufadd(diff_data.accepted_path)
+  local buf = vim.fn.bufadd(diff_data.old_file_path)
   vim.fn.bufload(buf)
   -- A BufRead autocmd can edit the buffer while it loads. Those edits are the user's to keep.
   if vim.api.nvim_buf_get_option(buf, "modified") then
     return
   end
   vim.api.nvim_buf_set_option(buf, "buflisted", true)
+  -- The diff's cleanup can close this buffer's last window, and these values would drop the unsaved text with it.
+  local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
+  if bufhidden == "wipe" or bufhidden == "delete" or bufhidden == "unload" then
+    vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
+  end
   local lines, eol = accepted_lines(diff_data)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.api.nvim_buf_set_option(buf, "eol", eol)
@@ -1888,11 +1892,11 @@ function M.close_saved_diffs(reason)
     if
       diff_data.status == "saved"
       and not file_holds_accepted_text(diff_data)
-      and not is_buffer_dirty(diff_data.accepted_path)
+      and not is_buffer_dirty(diff_data.old_file_path)
       and pcall(put_accepted_text_in_buffer, diff_data)
       and diff_data.accepted_buffer
     then
-      unsaved[#unsaved + 1] = diff_data.accepted_path
+      unsaved[#unsaved + 1] = diff_data.old_file_path
     end
   end
   local count = close_active_diffs(function(diff_data)
@@ -1902,7 +1906,7 @@ function M.close_saved_diffs(reason)
   local kept = {}
   for _, diff_data in pairs(active_diffs) do
     if diff_data.status == "saved" then
-      kept[#kept + 1] = diff_data.accepted_path
+      kept[#kept + 1] = diff_data.old_file_path
     end
   end
   return count, unsaved, kept

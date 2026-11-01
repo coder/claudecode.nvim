@@ -120,13 +120,14 @@ Module map (direct files):
 ### Diffs
 
 - `open_diff_blocking` must run inside a non-main coroutine. Otherwise it raises `-32000` [diff.lua:M.open_diff_blocking]
+- `open_diff_blocking` makes `old_file_path` absolute against the cwd at the call, so a later `:cd` does not change the file a diff points at [diff.lua:M.open_diff_blocking]
 - A new diff with an existing tab name first rejects the old diff (if pending), then cleans it up [diff.lua:M.open_diff_blocking]
 - A diff that resolves before `open_diff_blocking` yields, for example from a `ClaudeCodeDiffOpened` handler that runs `:ClaudeCodeDiffDeny`, is returned at once as the openDiff reply instead of a deferred one [diff.lua:M.open_diff_blocking]
 - When the target buffer is dirty, diff setup raises `-32000` with message "Diff setup failed". Its `data` holds the inner error, which contains "Cannot create diff: file has unsaved changes" [diff.lua:M._setup_blocking_diff]
 - A diff resolves only from status `pending`. Save returns `FILE_SAVED` and the content. Reject returns `DIFF_REJECTED` and the tab name [diff.lua:M._resolve_diff_as_saved]
 - Saving the proposed buffer (`BufWriteCmd`) never writes the file. It only resolves the diff. Windows stay open until `close_tab` [diff.lua:register_diff_autocmds]
 - `close_pending_diffs` and `close_diffs_for_client` close only `pending` diffs. `close_all_diffs` closes every diff [diff.lua:M.close_pending_diffs]
-- `close_saved_diffs`, which `:ClaudeCodeCloseAllDiffs` runs after `close_pending_diffs`, closes a `saved` diff only once its file or the file's buffer holds the accepted text. When the file does not hold it and the buffer has no unsaved changes, it first loads the file into its buffer and sets the accepted lines there, unsaved. It never writes the file. It reads the file at the absolute path recorded at the accept. It returns the count, the paths whose buffer got the text, and the paths of the saved diffs it kept [diff.lua:M.close_saved_diffs]
+- `close_saved_diffs`, which `:ClaudeCodeCloseAllDiffs` runs after `close_pending_diffs`, closes a `saved` diff only once its file or the file's buffer holds the accepted text. When the file does not hold it and the buffer has no unsaved changes, it first loads the file into its buffer and sets the accepted lines there, unsaved. It never writes the file. It also makes the buffer durable: a `'bufhidden'` of `wipe`, `delete`, or `unload` becomes `hide`. It returns the count, the paths whose buffer got the text, and the paths of the saved diffs it kept [diff.lua:M.close_saved_diffs]
 
 ## Side Effects
 
