@@ -1408,11 +1408,12 @@ function M._setup_blocking_diff(params, resolution_callback)
             -- Don't reuse a window that is already in diff mode (e.g. the old
             -- file shown inside the user's diffview/vimdiff): diffing into it
             -- would join and corrupt that diff (issue #277). Skip the preview
-            -- window too, as find_main_editor_window does.
+            -- window and floating windows too, as find_main_editor_window does.
             if
               vim.api.nvim_win_get_buf(win) == existing_buffer
               and not vim.api.nvim_win_get_option(win, "diff")
               and not vim.api.nvim_win_get_option(win, "previewwindow")
+              and (vim.api.nvim_win_get_config(win).relative or "") == ""
             then
               target_window = win
               break
@@ -1444,8 +1445,10 @@ function M._setup_blocking_diff(params, resolution_callback)
       -- before registration can still close the new tab.
       local dest_tab = (target_window and vim.api.nvim_win_is_valid(target_window))
           and vim.api.nvim_win_get_tabpage(target_window)
-        or vim.api.nvim_get_current_tabpage()
-      if tabpage_has_diff_window(dest_tab) then
+        or current_tab
+      -- A user in a tab with their own diff gets Claude's diff in a new tab, which close_tab leaves for that tab,
+      -- not in another tab that they would stay in.
+      if tabpage_has_diff_window(dest_tab) or tabpage_has_diff_window(current_tab) then
         original_tab_handle = vim.api.nvim_get_current_tabpage()
         original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
           display_terminal_in_new_tab()
