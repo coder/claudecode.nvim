@@ -105,7 +105,7 @@ mise run check
 mise run format
 ```
 
-Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `mise run check` refuses a `pairs()` loop that calls `it`, `describe` or `pending`.
+Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua`, which `.busted` loads for every busted run, fails a test that a spec registers inside a `pairs()` loop.
 
 ## Release Automation
 

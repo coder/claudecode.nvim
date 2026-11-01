@@ -6,11 +6,11 @@
 
 1. Shell libraries that find the plugin's WebSocket server through its lock file and speak JSON-RPC to it (`lib_claude.sh`, `lib_ws_persistent.sh`, `claude_shell_helpers.sh`).
 2. Interactive and probe clients built on those libraries (`claude_interactive.sh`, `mcp_test.sh`, `research_messages.sh`, `websocat.sh`, `test_neovim_websocket.sh`).
-3. Test harnesses and checks (`run_integration_tests_individually.sh`, `check_test_order.sh`, `test_opendiff.lua`, `test_opendiff_simple.sh`, `manual_test_helper.lua`).
+3. Test harnesses (`run_integration_tests_individually.sh`, `test_opendiff.lua`, `test_opendiff_simple.sh`, `manual_test_helper.lua`).
 4. Standalone reproductions of GitHub issues (`repro_issue_*.lua`, `repro_issue_*.sh`).
 5. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`.
 
-CI runs five of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `scripts/check_test_order.sh` (through `mise run check`), `./scripts/run_integration_tests_individually.sh` and `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"` on Neovim stable and v0.8.0, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
+CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh` and `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"` on Neovim stable and v0.8.0, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
 
 `mise.toml` provisions `websocat` and `jq` for the WebSocket scripts.
 
@@ -38,12 +38,11 @@ CI runs five of these files: `.github/workflows/release-please.yaml` runs `./scr
 - `websocat.sh` opens an interactive `websocat` session to `get_claude_ws_url` [websocat.sh:get_claude_ws_url].
 - `test_neovim_websocket.sh [-t SEC] [-l SEC] [-d DIR] [-h] [all|connect|toolslist|selection]` starts Neovim with the plugin, waits for a new lock file, and runs connection, `tools/list`, and selection-listen tests [test_neovim_websocket.sh:usage, run_tests, find_newest_lockfile].
 
-### Test harnesses and checks
+### Test harnesses
 
 - `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout 30s`, skips `command_args_spec.lua`, and prints totals [run_integration_tests_individually.sh:run_test_file].
 - `test_opendiff.lua` is a raw-socket Lua client that sends `tools/call openDiff` with an edited `README.md` [test_opendiff.lua:test_opendiff].
 - `test_opendiff_simple.sh` sends the same `openDiff` call through `websocat` or `wscat` and reports exit 124 as "blocked" [test_opendiff_simple.sh:JSON_MESSAGE].
-- `check_test_order.sh [dir...]` (default `tests`) exits non-zero and prints `file:line` for each `for ... in pairs(...)` loop whose body calls `it`, `describe` or `pending`. It finds the end of a loop by StyLua's indentation. `mise run check` runs it [check_test_order.sh:awk].
 - `manual_test_helper.lua` is run with `:luafile`. It calls the `claudecode.tools.open_diff` handler in a coroutine and reports whether it yields [manual_test_helper.lua:test_opendiff_directly].
 
 ### Issue reproductions

@@ -104,8 +104,6 @@ echo "Checking Lua files for syntax errors..."
 find lua -name "*.lua" -type f -print0 | xargs -0 -I{} luajit -e "assert(loadfile('{}'))"
 echo "Running luacheck..."
 ./.luarocks/bin/luacheck lua/ tests/ --no-unused-args --no-max-line-length
-echo "Checking that specs register tests in a fixed order..."
-scripts/check_test_order.sh tests
 '''
 
 [tasks.test]

@@ -11,9 +11,9 @@
 ## Build, Test, and Development Commands
 
 - Setup (one time): install [mise](https://mise.jdx.dev), then `mise install && mise run setup` to provision the toolchain and build the Lua test rocks. Activate mise in your shell (`eval "$(mise activate bash)"` in your rc) so bare tools like `busted`/`nvim` are on PATH; otherwise prefix with `mise exec --`. Run `mise tasks` to list all tasks.
-- `mise run check`: Syntax checks + `luacheck` on `lua/` and `tests/`, and `scripts/check_test_order.sh`, which refuses a spec that registers tests from a `pairs()` loop.
+- `mise run check`: Syntax checks + `luacheck` on `lua/` and `tests/`.
 - `mise run format`: Format the tree with treefmt (replaces the former `nix fmt`).
-- `mise run test`: Run Busted tests with coverage (outputs `luacov.stats.out`) in a random order. It prints the seed, and `BUSTED_SEED=<seed> mise run test` repeats that order.
+- `mise run test`: Run Busted tests with coverage (outputs `luacov.stats.out`) in a random order. It prints the seed, and `BUSTED_SEED=<seed> mise run test` repeats that order. A test registered inside a `pairs()` loop fails the run (`tests/helpers/test_order.lua`, loaded by `.busted`).
 - `mise run clean`: Remove coverage artifacts.
   Examples:
 - Run all tests: `mise run test`
