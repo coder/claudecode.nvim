@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2329,SC2034 # helpers run through as_bool; coverage() reads blocks by name
 # Model-check the openDiff answer lifecycle against facts read from the code.
-# Usage: check.sh [--mutants] [--keep] [--record]
+# Usage: check.sh [--mutants] [--keep] [--record] | check.sh --hash-only
 #   exit 0 pass, 1 rule broken, 2 tool or script error, 3 stale (the covered code
 #   changed since the model was last confirmed against it: unverified)
+#   --hash-only compares covered.lock with the code and runs no TLC: exit 0 fresh, 2 error, 3 stale.
+#   --record and --hash-only run no TLC, so they do not download it.
 set -euo pipefail
 export LC_ALL=C
 
@@ -20,13 +22,15 @@ JAVA="${JAVA:-java}"
 mutants=0
 keep=0
 record=0
+hash_only=0
 for arg in "$@"; do
   case "$arg" in
   --mutants) mutants=1 ;;
   --keep) keep=1 ;;
   --record) record=1 ;;
+  --hash-only) hash_only=1 ;;
   *)
-    echo "usage: $0 [--mutants] [--keep] [--record]" >&2
+    echo "usage: $0 [--mutants] [--keep] [--record] | $0 --hash-only" >&2
     exit 2
     ;;
   esac
@@ -36,6 +40,13 @@ if [[ $record == 1 && $mutants == 1 ]]; then
   echo "usage: --record cannot be combined with --mutants; run --mutants first, then --record" >&2
   exit 2
 fi
+if [[ $hash_only == 1 && $mutants$keep$record != 000 ]]; then
+  echo "usage: --hash-only takes no other option" >&2
+  exit 2
+fi
+
+tlc=1
+[[ $hash_only == 0 && $record == 0 ]] || tlc=0
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-diff-lifecycle.XXXXXX")
 if [[ $keep == 1 ]]; then
@@ -44,7 +55,7 @@ else
   trap 'rm -rf "$work"' EXIT
 fi
 
-if [[ ! -f $TLC_JAR ]]; then
+if [[ $tlc == 1 && ! -f $TLC_JAR ]]; then
   mkdir -p "$(dirname "$TLC_JAR")" || exit 2
   curl -fsSL -o "$TLC_JAR.tmp" "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar" || {
     echo "ERROR: could not download TLC $TLC_VERSION to $TLC_JAR" >&2
@@ -55,7 +66,7 @@ fi
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi
 }
-if [[ $(sha256 <"$TLC_JAR" | cut -d' ' -f1) != "$TLC_SHA256" ]]; then
+if [[ $tlc == 1 && $(sha256 <"$TLC_JAR" | cut -d' ' -f1) != "$TLC_SHA256" ]]; then
   echo "ERROR: $TLC_JAR does not match sha256 $TLC_SHA256" >&2
   exit 2
 fi
@@ -255,8 +266,10 @@ opened_event_in_setup() {
 }
 fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 
-echo "== code facts (TRUE = guard present)"
-for f in "${FACTS[@]}"; do printf '  %-26s %s\n' "$f" "${fact[$f]}"; done
+if [[ $hash_only == 0 ]]; then
+  echo "== code facts (TRUE = guard present)"
+  for f in "${FACTS[@]}"; do printf '  %-26s %s\n' "$f" "${fact[$f]}"; done
+fi
 
 # The coverage record: a hash of every Lua and Vimscript file under lua/ and plugin/, so any change to the plugin's Lua makes
 # the run STALE until someone confirms the model still fits. The block hashes and call sites
@@ -316,6 +329,14 @@ if [[ ! -f $LOCK ]] || ! diff -q <(sed 1d "$LOCK") <(printf '%s\n' "$current") >
   echo "   UNVERIFIED: no result below covers these changes until you read them and update the model."
   { diff <(sed 1d "$LOCK" 2>/dev/null) <(printf '%s\n' "$current") || true; } | grep -E '^[<>]' |
     sed -e 's/^</   was:/' -e 's/^>/   now:/' -e 's/[^[:print:]]/?/g'
+fi
+if [[ $hash_only == 1 ]]; then
+  if [[ $stale == 1 ]]; then
+    echo "== RESULT: STALE. Run .agents/skills/verify-diff-lifecycle/check.sh --record and commit covered.lock, or ask a maintainer to"
+    exit 3
+  fi
+  echo "== RESULT: covered.lock matches the code"
+  exit 0
 fi
 
 cp "$here/model/DiffLifecycle.tla" "$work/"
