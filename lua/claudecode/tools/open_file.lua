@@ -161,8 +161,8 @@ do
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = group,
     callback = function(args)
-      -- Writing another file (`:w {file}`) keeps BF_NEW.
-      if args.match == vim.api.nvim_buf_get_name(args.buf) then
+      -- Writing another file (`:w {file}`) keeps BF_NEW. An earlier BufWritePost autocommand can wipe the buffer.
+      if vim.api.nvim_buf_is_valid(args.buf) and args.match == vim.api.nvim_buf_get_name(args.buf) then
         new_file_buffers[args.buf] = nil
       end
     end,
