@@ -321,10 +321,11 @@ describe("a diff the user accepted for one Claude client", function()
         vim.fn.bufload(buf)
       end
       vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
+      local lines_before = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 
       user_closes_all_diffs()
 
-      assert.are.same({ "line 1", "line 2" }, file_buffer_lines())
+      assert.are.same(lines_before, file_buffer_lines())
       assert_kept()
     end)
 

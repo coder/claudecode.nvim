@@ -255,7 +255,7 @@ You can edit Claude's suggestions before accepting them.
 
 If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects. If you resolve diffs remotely while the session is still connected, run `:ClaudeCodeCloseAllDiffs` to clear the leftover pending proposals.
 
-A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff. When the file does not hold the accepted text yet, the command puts the text into the file's buffer as unsaved changes and closes the diff: `:w` in that buffer writes it, and `:e!` drops it. The plugin never writes the file. A diff whose file buffer already has unsaved changes stays open, and the command warns, so neither those changes nor your accepted edits are lost.
+A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff. When the file does not hold the accepted text yet, the command puts the text into the file's buffer as unsaved changes and closes the diff: `:w` in that buffer writes it, and `:e!` drops it. The plugin never writes the file. A diff whose file buffer already has unsaved changes, or cannot be written (a `'buftype'` such as `nofile`), stays open, and the command warns, so neither those changes nor your accepted edits are lost.
 
 ## Events
 

@@ -7,7 +7,7 @@ Claude can close every open diff with the `closeAllDiffTabs` tool, and the user 
 - `close-all-tool` closes every diff, answered or not, and answers `CLOSED_<n>_DIFF_TABS`.
 - `close-all-rejects` answers each pending openDiff call with `DIFF_REJECTED` when its diff is closed in bulk.
 - `close-pending-command` closes only unanswered diffs on `:ClaudeCodeCloseAllDiffs` and reports the count.
-- `close-command-hands-saved` closes an accepted (`:w`) diff on `:ClaudeCodeCloseAllDiffs` and leaves its text in the file's buffer, unsaved. It keeps the diff open while that buffer already has unsaved changes.
+- `close-command-hands-saved` closes an accepted (`:w`) diff on `:ClaudeCodeCloseAllDiffs` and leaves its text in the file's buffer, unsaved. It keeps the diff open while that buffer already has unsaved changes or cannot be written.
 - `close-keeps-other-client-saved` leaves a diff the user accepted for another client open on `closeAllDiffTabs` and `close_tab`.
 
 ## How to get to it (user POV)

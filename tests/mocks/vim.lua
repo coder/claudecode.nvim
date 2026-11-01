@@ -213,7 +213,8 @@ local vim = {
       vim._buffers[bufnr] = {
         name = "",
         lines = {},
-        options = {},
+        -- As in Neovim, a scratch buffer is 'buftype' nofile and any other buffer is a file buffer.
+        options = { buftype = scratch and "nofile" or "" },
         listed = listed,
         scratch = scratch,
       }

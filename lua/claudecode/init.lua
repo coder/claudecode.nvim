@@ -1174,7 +1174,7 @@ function M._create_commands()
     end
     for _, path in ipairs(kept) do
       vim.notify(
-        ("Kept the accepted Claude diff for %s: save or drop the unsaved changes in its buffer first"):format(
+        ("Kept the accepted Claude diff for %s: its buffer has unsaved changes or cannot be written"):format(
           vim.fn.fnamemodify(path, ":~:.")
         ),
         vim.log.levels.WARN

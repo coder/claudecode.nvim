@@ -1859,8 +1859,9 @@ end
 local function put_accepted_text_in_buffer(diff_data)
   local buf = vim.fn.bufadd(diff_data.old_file_path)
   vim.fn.bufload(buf)
-  -- A BufRead autocmd can edit the buffer while it loads. Those edits are the user's to keep.
-  if vim.api.nvim_buf_get_option(buf, "modified") then
+  -- A BufRead autocmd can edit the buffer while it loads. Those edits are the user's to keep. A special buffer
+  -- (nofile, nowrite, acwrite, ...) cannot :w the text to this file, and Neovim can quit without asking about it.
+  if vim.api.nvim_buf_get_option(buf, "modified") or vim.api.nvim_buf_get_option(buf, "buftype") ~= "" then
     return
   end
   vim.api.nvim_buf_set_option(buf, "buflisted", true)
