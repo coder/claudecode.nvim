@@ -148,16 +148,39 @@ describe("openDiff window sizes", function()
     assert.are.same(before, window_sizes())
   end)
 
-  it("does not give sizes back after the screen size changed", function()
-    two_editors()
+  -- The sizes saved before `change` must not come back after it: they no longer fit, so Neovim's sizes stay.
+  local function assert_no_restore_after(change)
     local saved = diff._save_window_sizes(vim.api.nvim_get_current_tabpage())
-    vim.o.columns = 120
-    vim.cmd("wincmd =")
-    local equalized = window_sizes()
+    change()
+    local changed = window_sizes()
 
     diff._restore_window_sizes(saved)
 
-    assert.are.same(equalized, window_sizes())
+    assert.are.same(changed, window_sizes())
+  end
+
+  it("does not give sizes back after the screen size changed", function()
+    two_editors()
+    assert_no_restore_after(function()
+      vim.o.columns = 120
+    end)
+  end)
+
+  it("does not give sizes back after a tab line appeared", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    vim.cmd("split " .. vim.fn.fnameescape(dir .. "/b.txt"))
+    vim.api.nvim_win_set_height(0, 10)
+    assert_no_restore_after(function()
+      vim.cmd("tabnew")
+      vim.cmd("tabprevious")
+    end)
+  end)
+
+  it("does not give sizes back after the user moved a window", function()
+    two_editors()
+    assert_no_restore_after(function()
+      vim.cmd("wincmd K")
+    end)
   end)
 
   if vim.fn.has("nvim-0.9") ~= 1 then

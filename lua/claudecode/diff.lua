@@ -845,24 +845,44 @@ end
 ---@type table<string, table>
 local active_diffs = {}
 
----@class DiffWindowSizes The sizes of a tab's tiled windows, in Neovim's window order, before the first open diff
----split that tab, and the screen size they were taken at.
+---@class DiffWindowSizes What a tab's tiled windows looked like before the first open diff split that tab.
 ---@field tab integer tabpage handle
----@field columns integer
----@field lines integer
----@field windows { win: NvimWin, width: integer, height: integer }[]
+---@field layout table the tab's winlayout(), which leaves out floating and external windows
+---@field width integer the columns the windows fill, as measure_layout counts them
+---@field height integer the rows the windows fill, counted the same way
+---@field windows { win: NvimWin, width: integer, height: integer }[] in winlayout() order
 
----@param tab integer tabpage handle
----@return { win: NvimWin, width: integer, height: integer }[]
-local function list_window_sizes(tab)
-  local windows = {}
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if (vim.api.nvim_win_get_config(win).relative or "") == "" then
-      windows[#windows + 1] =
-        { win = win, width = vim.api.nvim_win_get_width(win), height = vim.api.nvim_win_get_height(win) }
+---Add the size of each window in a winlayout() tree to `windows`, and return the columns and rows the tree fills,
+---leaving out separators and status lines: the same tree always has the same number of them.
+---@param node table a winlayout() node
+---@param windows { win: NvimWin, width: integer, height: integer }[]
+---@return integer width
+---@return integer height
+local function measure_layout(node, windows)
+  if node[1] == "leaf" then
+    local width, height = vim.api.nvim_win_get_width(node[2]), vim.api.nvim_win_get_height(node[2])
+    windows[#windows + 1] = { win = node[2], width = width, height = height }
+    return width, height
+  end
+  local width, height = 0, 0
+  for _, child in ipairs(node[2]) do
+    local child_width, child_height = measure_layout(child, windows)
+    if node[1] == "row" then
+      width, height = width + child_width, child_height
+    else
+      width, height = child_width, height + child_height
     end
   end
-  return windows
+  return width, height
+end
+
+---@param tab integer tabpage handle
+---@return DiffWindowSizes
+local function window_sizes_of(tab)
+  local layout = vim.fn.winlayout(vim.api.nvim_tabpage_get_number(tab))
+  local windows = {}
+  local width, height = measure_layout(layout, windows)
+  return { tab = tab, layout = layout, width = width, height = height, windows = windows }
 end
 
 ---Take the sizes a diff about to split `tab` gives back when it closes. When another open diff already split that
@@ -876,29 +896,22 @@ local function save_window_sizes(tab)
       return other.window_sizes
     end
   end
-  return { tab = tab, columns = vim.o.columns, lines = vim.o.lines, windows = list_window_sizes(tab) }
+  return window_sizes_of(tab)
 end
 
 ---Give a tab's windows back the sizes save_window_sizes took. The diff's `wincmd =` resizes every window in the tab,
 ---and closing the diff's windows shares their space out by 'equalalways' rules, so without this the user's windows
----end at other sizes. Does nothing after the screen size changed, or when the tab does not have exactly the saved
----windows (another diff's windows are still open, or the user changed the layout): the old sizes do not fit then.
+---end at other sizes. Does nothing when the tab's window tree changed (another diff's windows are still open, or the
+---user moved or added a window) or the space the windows fill changed (a resized screen, a tab line that appeared):
+---the old sizes do not fit then.
 ---@param saved DiffWindowSizes|nil
 local function restore_window_sizes(saved)
   if not saved or not vim.api.nvim_tabpage_is_valid(saved.tab) then
     return
   end
-  if vim.o.columns ~= saved.columns or vim.o.lines ~= saved.lines then
+  local now = window_sizes_of(saved.tab)
+  if not vim.deep_equal(now.layout, saved.layout) or now.width ~= saved.width or now.height ~= saved.height then
     return
-  end
-  local now = list_window_sizes(saved.tab)
-  if #now ~= #saved.windows then
-    return
-  end
-  for i, entry in ipairs(now) do
-    if entry.win ~= saved.windows[i].win then
-      return
-    end
   end
   -- Twice, as winrestcmd() does: a resize can move a window that an earlier one already set.
   for _ = 1, 2 do
