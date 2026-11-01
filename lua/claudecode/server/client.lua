@@ -153,27 +153,23 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       end
 
       client.tcp_handle:write(response_from_handshake, function(err)
-        if err then
-          on_error(client, "Failed to send handshake response: " .. err)
-          return
-        end
-
-        if success then
-          client.handshake_complete = true
-          client.state = "connected"
-          client.buffer = remaining
-          logger.debug("client", "WebSocket connection established for client:", client.id)
-
-          if #client.buffer > 0 then
-            M.process_data(client, "", on_message, on_close, on_error, auth_token)
-          end
-        else
+        if err or not success then
           -- on_error removes the client from the server and closes its socket. A server that stopped while the reply
           -- was written has already dropped the client, so the socket is closed here too.
-          on_error(client, "Rejected: " .. rejection)
+          on_error(client, err and "Failed to send handshake response: " .. err or "Rejected: " .. rejection)
           if not client.tcp_handle:is_closing() then
             client.tcp_handle:close()
           end
+          return
+        end
+
+        client.handshake_complete = true
+        client.state = "connected"
+        client.buffer = remaining
+        logger.debug("client", "WebSocket connection established for client:", client.id)
+
+        if #client.buffer > 0 then
+          M.process_data(client, "", on_message, on_close, on_error, auth_token)
         end
       end)
     end
