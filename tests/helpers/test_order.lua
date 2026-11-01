@@ -12,7 +12,7 @@ local loop_at_resume = setmetatable({}, { __mode = "k" })
 ---Finds a `pairs()` loop that runs in a spec file further up the stack, or in the code that resumed this coroutine. A
 ---generic `for` keeps its iterator in the hidden local "(for generator)", and `pairs()` returns `next` as that iterator.
 ---@param level integer The stack level to start at
----@return string|nil where "file:line" of the loop's current line
+---@return string|nil where "path:line" of the loop's current line, with the full path: short_src cuts a long one
 local function pairs_loop_above(level)
   while true do
     local info = debug.getinfo(level + 1, "Sl")
@@ -28,7 +28,7 @@ local function pairs_loop_above(level)
           break
         end
         if name == "(for generator)" and value == next then
-          return info.short_src .. ":" .. info.currentline
+          return info.source:sub(2) .. ":" .. info.currentline
         end
         index = index + 1
       end
