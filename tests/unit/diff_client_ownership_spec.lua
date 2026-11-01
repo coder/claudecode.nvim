@@ -34,8 +34,8 @@ describe("a diff the user accepted for one Claude client", function()
     return { old_file_path = file, new_file_path = file, new_file_contents = contents, tab_name = tab }
   end
 
-  local function open_and_accept(before_accept)
-    local deferred = call_tool(owner, "openDiff", open_diff_args("line 1\nline 2\naccepted line\n"))
+  local function open_and_accept(before_accept, contents)
+    local deferred = call_tool(owner, "openDiff", open_diff_args(contents or "line 1\nline 2\naccepted line\n"))
     assert.is_true(deferred._deferred, "openDiff should wait for the user")
     local answer
     _G.claude_deferred_responses[tostring(deferred.coroutine)] = function(response)
@@ -46,7 +46,7 @@ describe("a diff the user accepted for one Claude client", function()
     end
     diff._resolve_diff_as_saved(tab, diff._get_active_diffs()[tab].new_buffer)
     assert.equal("FILE_SAVED", answer.content[1].text)
-    assert.is_truthy(answer.content[2].text:find("accepted line", 1, true))
+    assert.is_truthy(contents or answer.content[2].text:find("accepted line", 1, true))
     return answer.content[2].text
   end
 
@@ -115,6 +115,11 @@ describe("a diff the user accepted for one Claude client", function()
 
     after_each(function()
       vim.notify = saved_notify
+      local buf = vim.fn.bufnr(file)
+      while buf ~= -1 do
+        vim.api.nvim_buf_delete(buf, { force = true })
+        buf = vim.fn.bufnr(file)
+      end
     end)
 
     local function owner_exits()
@@ -184,6 +189,74 @@ describe("a diff the user accepted for one Claude client", function()
         assert.is_nil(diff._get_active_diffs()[tab])
       end
     )
+
+    it("gives the buffer the accepted final newline that the file lacked", function()
+      write_file("line 1\nline 2")
+      open_and_accept(function()
+        vim.api.nvim_buf_set_option(diff._get_active_diffs()[tab].new_buffer, "eol", true)
+      end)
+      owner_exits()
+
+      user_closes_all_diffs()
+
+      assert.are.same({ "line 1", "line 2", "accepted line" }, file_buffer_lines())
+      assert.is_true(vim.api.nvim_buf_get_option(vim.fn.bufnr(file), "eol"))
+      assert.is_nil(diff._get_active_diffs()[tab])
+    end)
+
+    it("closes a diff whose accepted text is empty", function()
+      local accepted = open_and_accept(nil, "")
+      assert.equal("", accepted)
+      owner_exits()
+
+      user_closes_all_diffs()
+
+      assert.are.same({ "" }, file_buffer_lines())
+      assert.is_false(vim.api.nvim_buf_get_option(vim.fn.bufnr(file), "eol"))
+      assert.is_nil(diff._get_active_diffs()[tab])
+    end)
+
+    it("stays open when loading the file changes its buffer", function()
+      open_and_accept()
+      owner_exits()
+      local loaded = vim.fn.bufnr(file)
+      if loaded ~= -1 then
+        vim.api.nvim_buf_delete(loaded, { force = true })
+      end
+      local real_bufload = vim.fn.bufload
+      finally(function()
+        vim.fn.bufload = real_bufload
+      end)
+      -- A BufReadPost autocmd that edits the buffer while it loads.
+      vim.fn.bufload = function(buf)
+        real_bufload(buf)
+        vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "changed by a BufReadPost autocmd" })
+        vim.api.nvim_set_option_value("modified", true, { buf = buf })
+      end
+
+      user_closes_all_diffs()
+
+      assert.are.same({ "changed by a BufReadPost autocmd" }, file_buffer_lines())
+      assert_kept()
+    end)
+
+    it("stays open when it cannot change a buffer that already shows the accepted lines", function()
+      open_and_accept()
+      owner_exits()
+      local buf = vim.fn.bufnr(file)
+      if buf == -1 then
+        buf = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(buf, file)
+      end
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "line 1", "line 2", "accepted line" })
+      vim.api.nvim_set_option_value("modified", false, { buf = buf })
+      vim.api.nvim_buf_set_option(buf, "modifiable", false)
+
+      user_closes_all_diffs()
+
+      assert.equal("line 1\nline 2\n", read_file())
+      assert_kept()
+    end)
 
     it("stays open, and the buffer keeps its edits, while the file's buffer has unsaved changes", function()
       open_and_accept()

@@ -220,7 +220,11 @@ local vim = {
       if not vim._buffers[bufnr] then
         vim._buffers[bufnr] = { lines = {}, options = {} }
       end
-      vim._buffers[bufnr].lines = replacement or {}
+      if (vim._buffers[bufnr].options or {}).modifiable == false then
+        error("Vim:E21: Cannot make changes, 'modifiable' is off")
+      end
+      -- A Neovim buffer always has at least one line.
+      vim._buffers[bufnr].lines = (replacement and #replacement > 0) and replacement or { "" }
     end,
 
     nvim_buf_set_option = function(bufnr, name, value)
@@ -584,6 +588,8 @@ local vim = {
       local text = file:read("*a")
       file:close()
       buf.lines = vim.split((text:gsub("\n$", "")), "\n", { plain = true })
+      buf.options = buf.options or {}
+      buf.options.eol = text:sub(-1) == "\n"
     end,
 
     buflisted = function(bufnr)
