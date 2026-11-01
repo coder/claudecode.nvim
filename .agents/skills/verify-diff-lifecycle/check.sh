@@ -286,8 +286,9 @@ fi
 # The coverage record: one group per Lua and Vimscript file under lua/ and plugin/, so any change to the plugin's
 # Lua makes the run STALE until someone confirms the model still fits. A group holds the file's hash, the hashes of
 # the covered blocks in it, and its call sites, which point the reader at what changed. Each group starts with a
-# header line that only adding or removing the file changes, so two branches that change different files and
-# re-record merge covered.lock without a conflict: git conflicts only on changes to the same or adjacent lines.
+# header line that only adding or removing the file changes. Git conflicts only on changes to the same or adjacent
+# lines, so two branches that edit different files and re-record merge covered.lock without a conflict. Editing the
+# same file, or adding or removing files whose groups sit next to each other, still conflicts.
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 coverage() {
   local name file
@@ -335,7 +336,7 @@ if [[ ! -f $LOCK ]] || ! diff -q "$LOCK" <(printf '%s\n' "$current") >/dev/null;
   stale=1
   echo "== STALE: the covered code changed since covered.lock was recorded (git log -- covered.lock shows when)."
   echo "   UNVERIFIED: no result below covers these changes until you read them and update the model."
-  { diff "$LOCK" <(printf '%s\n' "$current") 2>/dev/null || true; } | grep -E '^[<>]' |
+  { diff <(cat -- "$LOCK" 2>/dev/null) <(printf '%s\n' "$current") || true; } | grep -E '^[<>]' |
     sed -e 's/^</   was:/' -e 's/^>/   now:/' -e 's/[^[:print:]]/?/g'
 fi
 if [[ $hash_only == 1 ]]; then
