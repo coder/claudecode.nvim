@@ -164,11 +164,13 @@ local function without_file_changed_question(buf, fn)
   end
 end
 
----Returns whether 'eventignore' ignores FileChangedShell. Neovim 0.12 takes "all,-FileChangedShell".
+---Returns whether the event list `events`, a value of 'eventignore' or 'eventignorewin', ignores FileChangedShell.
+---Neovim 0.12 takes "all,-FileChangedShell".
+---@param events string
 ---@return boolean
-local function file_changed_shell_ignored()
+local function ignores_file_changed_shell(events)
   local ignored = false
-  for item in vim.o.eventignore:lower():gmatch("[^,]+") do
+  for item in events:lower():gmatch("[^,]+") do
     if item == "-filechangedshell" then
       return false
     end
@@ -177,12 +179,37 @@ local function file_changed_shell_ignored()
   return ignored
 end
 
+---Returns whether Neovim skips FileChangedShell autocommands when openFile runs `:checktime` for `buf`. Like Neovim,
+---'eventignorewin' (Neovim 0.11 and later) counts for the current window when it shows `buf`, and otherwise only
+---when every window that shows `buf` ignores the event.
+---@param buf integer A buffer that a window shows
+---@return boolean
+local function file_changed_shell_ignored(buf)
+  if ignores_file_changed_shell(vim.o.eventignore) then
+    return true
+  end
+  if vim.fn.exists("+eventignorewin") == 0 then
+    return false
+  end
+  local wins = buf == vim.api.nvim_get_current_buf() and { vim.api.nvim_get_current_win() } or vim.fn.win_findbuf(buf)
+  for _, win in ipairs(wins) do
+    if not ignores_file_changed_shell(vim.api.nvim_win_get_option(win, "eventignorewin")) then
+      return false
+    end
+  end
+  return #wins > 0
+end
+
 ---Loads `buf` again when its file changed on disk and it has no unsaved changes, as `:edit` does in a window that shows
----it. A buffer with unsaved changes keeps them, and a later `:w` still warns that the file changed. When 'eventignore'
----ignores FileChangedShell, nothing is checked, because Neovim would ask the user.
+---it. A buffer with unsaved changes keeps them, and a later `:w` still warns that the file changed. With 'autoread'
+---Neovim loads the file without FileChangedShell. Without it, when 'eventignore' or 'eventignorewin' ignores the
+---event, nothing is checked, because Neovim would ask the user.
 ---@param buf integer
 local function check_file_on_disk(buf)
-  if vim.api.nvim_buf_get_option(buf, "modified") or file_changed_shell_ignored() then
+  if
+    vim.api.nvim_buf_get_option(buf, "modified")
+    or (vim.fn.getbufvar(buf, "&autoread") == 0 and file_changed_shell_ignored(buf))
+  then
     return
   end
   without_file_changed_question(buf, function()
@@ -286,18 +313,21 @@ local function select_range(start_row, start_col, end_row, last_col)
   vim.cmd("normal! gv")
 end
 
----Returns how many lines `file_path` will show once opened, counting at most `max` lines of the file on disk.
----A loaded buffer for the file can hold unsaved lines, and openFile shows that buffer, so its count wins.
+---Returns how many lines `file_path` can show once opened, counting at most `max` lines of the file on disk.
+---A loaded buffer for the file can hold unsaved lines, and openFile shows that buffer, so its count wins. A loaded
+---buffer without unsaved changes gets the file again when it changed on disk, so then the larger count wins, and the
+---selection is clamped if the buffer openFile shows ends up shorter.
 ---@param file_path string Path of the file to open
 ---@param max integer Lines to read from disk at most
 ---@return integer count
 local function line_count_before_open(file_path, max)
   local buf = loaded_buffer(file_path)
-  if buf then
-    return vim.api.nvim_buf_line_count(buf)
+  local count = buf and vim.api.nvim_buf_line_count(buf) or 0
+  if count < max and not (buf and vim.api.nvim_buf_get_option(buf, "modified")) then
+    -- readfile() returns no lines for an empty file, which opens as one empty line.
+    count = math.max(count, #vim.fn.readfile(file_path, "", max), 1)
   end
-  -- readfile() returns no lines for an empty file, which opens as one empty line.
-  return math.max(#vim.fn.readfile(file_path, "", max), 1)
+  return count
 end
 
 --- Handles the openFile tool invocation.
@@ -408,11 +438,16 @@ local function handler(params)
     local buf = vim.api.nvim_win_get_buf(cur_win)
     local buftype = vim.api.nvim_buf_get_option(buf, "buftype")
 
+    -- A preview goes to the preview window, which open_from() splits from this window when the tab page has none,
+    -- so this window keeps its buffer and needs no split.
     if
-      buftype == "terminal"
-      or buftype == "nofile"
-      or vim.api.nvim_win_get_option(cur_win, "diff")
-      or vim.api.nvim_win_get_option(cur_win, "previewwindow")
+      not preview
+      and (
+        buftype == "terminal"
+        or buftype == "nofile"
+        or vim.api.nvim_win_get_option(cur_win, "diff")
+        or vim.api.nvim_win_get_option(cur_win, "previewwindow")
+      )
     then
       vim.cmd("vsplit")
       -- The new split inherits window-local options (including 'diff') from the

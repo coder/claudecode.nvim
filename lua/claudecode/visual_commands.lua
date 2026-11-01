@@ -52,6 +52,9 @@ function M.exit_visual_and_schedule(callback, ...)
   end
 
   pcall(function()
+    -- A :vmap run from Select mode queues a key that reselects the area after the mapping. "gV" after <Esc> stops
+    -- that (:h gV). Both go in front of the queued keys, so feed "gV" first.
+    vim.api.nvim_feedkeys("gV", "in", false)
     vim.api.nvim_feedkeys(ESC_KEY, "i", true)
   end)
 
