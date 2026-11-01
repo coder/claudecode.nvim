@@ -33,17 +33,30 @@ local TESTS = 8
 
 describe("the test order helper", function()
   local root = assert(io.popen("pwd")):read("*l")
-  local dir, fixture
+  -- Two copies whose paths end alike for longer than Lua's 60-byte short_src, in a dir with a space and a quote.
+  local long_tail = string.rep("x", 70) .. "/fixture_spec.lua"
+  local dir, fixture, twin
 
   setup(function()
     dir = os.tmpname()
     os.remove(dir)
-    local made = os.execute("mkdir " .. dir)
-    assert(made == 0 or made == true, "cannot create " .. dir)
-    fixture = dir .. "/fixture_spec.lua"
-    local file = assert(io.open(fixture, "w"))
-    file:write(table.concat(FIXTURE, "\n"), "\n")
-    file:close()
+    dir = dir .. " it's"
+    for _, path in ipairs({
+      dir,
+      dir .. "/a",
+      dir .. "/b",
+      dir .. "/a/" .. string.rep("x", 70),
+      dir .. "/b/" .. string.rep("x", 70),
+    }) do
+      local made = os.execute("mkdir " .. path)
+      assert(made == 0 or made == true, "cannot create " .. path)
+    end
+    fixture, twin = dir .. "/a/" .. long_tail, dir .. "/b/" .. long_tail
+    for _, path in ipairs({ fixture, twin }) do
+      local file = assert(io.open(path, "w"))
+      file:write(table.concat(FIXTURE, "\n"), "\n")
+      file:close()
+    end
   end)
 
   teardown(function()
@@ -59,7 +72,7 @@ describe("the test order helper", function()
     local output = pipe:read("*a")
     pipe:close()
     local flagged, passed = {}, 0
-    for line in output:gmatch("fixture_spec%.lua:(%d+) registers ") do
+    for line in output:gmatch("/fixture_spec%.lua:(%d+) registers ") do
       table.insert(flagged, tonumber(line))
     end
     for _ in output:gmatch("\nok %d+ %- block ") do
@@ -82,6 +95,18 @@ describe("the test order helper", function()
     assert.same(expected, flagged)
     assert.equals(TESTS, passed)
     assert.are_not.equal("0", status)
+  end)
+
+  it("reports the same loop line in two spec files whose paths end alike", function()
+    local flagged = run(".luarocks/bin/busted -o TAP " .. fixture .. " " .. twin)
+
+    local both = {}
+    for _, line in ipairs(expected) do
+      table.insert(both, line)
+      table.insert(both, line)
+    end
+    table.sort(flagged)
+    assert.same(both, flagged)
   end)
 
   it("checks a spec when busted starts in another directory with --helper", function()
