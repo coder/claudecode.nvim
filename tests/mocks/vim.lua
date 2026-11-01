@@ -137,6 +137,13 @@ local vim = {
 
       local lines = vim._buffers[bufnr].lines or {}
       local result = {}
+      -- Negative indexes count from the end, as in Neovim: end_line = -1 means through the last line.
+      if start < 0 then
+        start = #lines + 1 + start
+      end
+      if end_line < 0 then
+        end_line = #lines + 1 + end_line
+      end
 
       for i = start + 1, end_line do
         table.insert(result, lines[i] or "")
@@ -150,7 +157,11 @@ local vim = {
         return nil
       end
 
-      return vim._buffers[bufnr].options and vim._buffers[bufnr].options[name] or nil
+      local options = vim._buffers[bufnr].options
+      if not options then
+        return nil
+      end
+      return options[name]
     end,
 
     nvim_buf_delete = function(bufnr, opts)
@@ -202,7 +213,8 @@ local vim = {
       vim._buffers[bufnr] = {
         name = "",
         lines = {},
-        options = {},
+        -- As in Neovim, a scratch buffer is 'buftype' nofile and any other buffer is a file buffer.
+        options = { buftype = scratch and "nofile" or "" },
         listed = listed,
         scratch = scratch,
       }
@@ -213,7 +225,11 @@ local vim = {
       if not vim._buffers[bufnr] then
         vim._buffers[bufnr] = { lines = {}, options = {} }
       end
-      vim._buffers[bufnr].lines = replacement or {}
+      if (vim._buffers[bufnr].options or {}).modifiable == false then
+        error("Vim:E21: Cannot make changes, 'modifiable' is off")
+      end
+      -- A Neovim buffer always has at least one line.
+      vim._buffers[bufnr].lines = (replacement and #replacement > 0) and replacement or { "" }
     end,
 
     nvim_buf_set_option = function(bufnr, name, value)
@@ -554,6 +570,33 @@ local vim = {
       return -1
     end,
 
+    bufadd = function(name)
+      local existing = vim.fn.bufnr(name)
+      if existing ~= -1 then
+        return existing
+      end
+      local bufnr = vim.api.nvim_create_buf(false, false)
+      vim.api.nvim_buf_set_name(bufnr, name)
+      return bufnr
+    end,
+
+    -- Reads the file into a buffer that has no lines yet, as loading it would.
+    bufload = function(bufnr)
+      local buf = vim._buffers[bufnr]
+      if not buf or #buf.lines > 0 then
+        return
+      end
+      local file = io.open(buf.name, "rb")
+      if not file then
+        return
+      end
+      local text = file:read("*a")
+      file:close()
+      buf.lines = vim.split((text:gsub("\n$", "")), "\n", { plain = true })
+      buf.options = buf.options or {}
+      buf.options.eol = text:sub(-1) == "\n"
+    end,
+
     buflisted = function(bufnr)
       return vim._buffers[bufnr] and vim._buffers[bufnr].listed and 1 or 0
     end,
@@ -586,6 +629,9 @@ local vim = {
     fnamemodify = function(path, modifier)
       if modifier == ":t" then
         return path:match("([^/]+)$") or path
+      end
+      if modifier == ":p" and path:sub(1, 1) ~= "/" then
+        return vim.fn.getcwd() .. "/" .. path
       end
       return path
     end,
