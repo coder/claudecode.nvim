@@ -31,11 +31,8 @@ local FIXTURE = {
 }
 local TESTS = 8
 
----@param text string
----@return string quoted text as one POSIX shell word
-local function quote(text)
-  return "'" .. text:gsub("'", "'\\''") .. "'"
-end
+local temp_dir = require("tests.helpers.temp_dir")
+local quote = temp_dir.quote
 
 describe("the test order helper", function()
   -- The repo root, from this file's path, so the spec runs from any directory.
@@ -44,12 +41,11 @@ describe("the test order helper", function()
   local busted = "cd " .. quote(root) .. " && " .. quote(root .. "/.luarocks/bin/busted")
   -- Two copies whose paths end alike for longer than Lua's 60-byte short_src, in a dir with a space and a quote.
   local long_tail = string.rep("x", 70) .. "/fixture_spec.lua"
-  local dir, fixture, twin
+  local parent, dir, fixture, twin
 
   setup(function()
-    dir = os.tmpname()
-    os.remove(dir)
-    dir = dir .. " it's"
+    parent = temp_dir.new()
+    dir = parent .. "/dir it's"
     for _, path in ipairs({
       dir,
       dir .. "/a",
@@ -69,7 +65,7 @@ describe("the test order helper", function()
   end)
 
   teardown(function()
-    os.execute("rm -rf " .. quote(dir))
+    temp_dir.remove(parent)
   end)
 
   ---@param command string The shell command that runs busted with TAP output

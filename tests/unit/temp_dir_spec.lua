@@ -2,25 +2,21 @@
 --- relative one. Each case runs busted in a child process with that TMPDIR.
 require("tests.busted_setup")
 
----@param text string
----@return string quoted text as one POSIX shell word
-local function quote(text)
-  return "'" .. text:gsub("'", "'\\''") .. "'"
-end
+local temp_dir = require("tests.helpers.temp_dir")
+local quote = temp_dir.quote
 
 describe("temp_dir", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
-  local parent
+  local outer, parent
 
   setup(function()
-    parent = os.tmpname()
-    os.remove(parent)
-    parent = parent .. " it's"
+    outer = temp_dir.new()
+    parent = outer .. "/dir it's"
     assert(os.execute("mkdir -p " .. quote(parent .. "/back\\slash")))
   end)
 
   teardown(function()
-    os.execute("rm -rf " .. quote(parent))
+    temp_dir.remove(outer)
   end)
 
   -- Each case gives the folder busted starts in, its TMPDIR, and the folder the new folder must be in. The paths are
