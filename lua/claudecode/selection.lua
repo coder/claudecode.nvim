@@ -506,9 +506,13 @@ local function selection_end_byte(line, start_coords, end_coords)
   if vim.o.selection == "exclusive" and not one_position then
     return col - 1
   end
-  -- In a pattern, `.` matches a character together with its composing characters.
-  local char = vim.fn.matchstr(line, "\\%" .. col .. "c.")
-  return col + math.max(#char, 1) - 1
+  if col > #line then
+    return col
+  end
+  -- Match the character that starts at byte col, with its composing characters, and end after it. A match
+  -- anchored with \%<col>c fails when Neovim 0.11+ sees col inside a cluster, such as the त of स्ते, although
+  -- the cursor can stand there. `\_.` also matches the NL that stands for a NUL byte.
+  return vim.fn.matchend(line, "\\_.", col - 1)
 end
 
 ---Extracts text for linewise visual selection

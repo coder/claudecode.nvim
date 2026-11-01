@@ -14,7 +14,9 @@ local function mock_code_point(line, i)
   return cp, len
 end
 
--- Last byte of the character that starts at byte i, in the model the matchstr and matchend mocks describe.
+-- Last byte of the character that starts at byte i. A character is a code point and its composing characters
+-- (here U+0300 to U+036F and the Devanagari signs U+093A to U+094F). As on Neovim 0.11 and later, a virama also
+-- joins the next consonant, so स्ते is one character from स, while the cursor can still stand on त.
 local function mock_char_last_byte(line, i)
   local last_cp, len = mock_code_point(line, i)
   local stop = i + len
@@ -162,19 +164,8 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
-      -- Model Neovim's regex characters for the calls selection.lua makes. A character is a code point and its
-      -- composing characters (here U+0300 to U+036F and the Devanagari signs U+093A to U+094F). As on Neovim 0.11
-      -- and later, a virama also joins the next consonant into the cluster, so a scan from the line start never
-      -- begins a character at that consonant, while the cursor can stand on it.
-      matchstr = function(line, pattern)
-        local col = tonumber(pattern:match("^\\%%(%d+)c%.$"))
-        assert(col, "unexpected matchstr pattern " .. pattern)
-        local i = 1
-        while i <= #line and i < col do
-          i = mock_char_last_byte(line, i) + 1
-        end
-        return i == col and line:sub(col, mock_char_last_byte(line, col)) or ""
-      end,
+      -- Models Neovim for the one regex call selection.lua makes. From byte start, `\_.` matches the character
+      -- that starts there (see mock_char_last_byte).
       matchend = function(line, pattern, start)
         assert(pattern == "\\_." and start, "unexpected matchend call " .. pattern)
         return start < #line and mock_char_last_byte(line, start + 1) or -1
