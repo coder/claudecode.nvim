@@ -418,8 +418,8 @@ To fully own the terminal width during diffs, set `diff_opts.auto_resize_termina
 Note this is "own the width via the events", not "freeze the width": the diff layout still
 runs `wincmd =`, which equalizes splits, so set your desired width in the `ClaudeCodeDiffOpened`
 handler — it fires after the layout is built, so it wins. When the diff closes, the windows of
-the tab it split get back the sizes they had before it (if that tab still has the same windows),
-and then `ClaudeCodeDiffClosed` fires:
+the tab it split get back the sizes they had before it (if that tab still has the same windows
+and the screen kept its size), and then `ClaudeCodeDiffClosed` fires:
 
 ```lua
 vim.api.nvim_create_autocmd("User", {

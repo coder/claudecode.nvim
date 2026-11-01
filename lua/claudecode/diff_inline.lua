@@ -210,6 +210,8 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
     if partial.fallback_window and vim.api.nvim_win_is_valid(partial.fallback_window) then
       pcall(vim.api.nvim_win_close, partial.fallback_window, true)
     end
+
+    diff._restore_window_sizes(partial.window_sizes)
   end
 
   if partial.new_buffer and vim.api.nvim_buf_is_valid(partial.new_buffer) then
@@ -368,6 +370,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
     window_sizes = diff._save_window_sizes(
       editor_win and vim.api.nvim_win_get_tabpage(editor_win) or vim.api.nvim_get_current_tabpage()
     )
+    partial_setup.window_sizes = window_sizes
     if not editor_win then
       fallback_window, fallback_split_win = guard_inline_setup(create_fallback_editor_window)
       partial_setup.fallback_window = fallback_window

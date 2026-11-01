@@ -26,6 +26,7 @@ describe("openDiff window sizes", function()
   end)
 
   after_each(function()
+    pcall(vim.api.nvim_del_augroup_by_name, "window_sizes_spec")
     diff._cleanup_all_active_diffs("test cleanup")
     vim.cmd("silent! tabonly!")
     vim.cmd("silent! only!")
@@ -40,24 +41,43 @@ describe("openDiff window sizes", function()
     diff.setup(config)
   end
 
-  local function open_diff(file)
+  local function call_open_diff(file, name)
     local path = dir .. "/" .. file
-    local call = tools.handle_invoke({ id = "window_sizes_spec" }, {
+    return tools.handle_invoke({ id = "window_sizes_spec" }, {
       name = "openDiff",
       arguments = {
         old_file_path = path,
         new_file_path = path,
         new_file_contents = "alpha accepted\n",
-        tab_name = tab_name,
+        tab_name = name or tab_name,
       },
     })
-    assert.is_true(call._deferred, vim.inspect(call.error))
-    _G.claude_deferred_responses[tostring(call.coroutine)] = function() end
-    return diff._get_active_diffs()[tab_name]
   end
 
-  local function close_tab()
-    tools.handle_invoke({ id = "window_sizes_spec" }, { name = "close_tab", arguments = { tab_name = tab_name } })
+  local function open_diff(file, name)
+    local call = call_open_diff(file, name)
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    _G.claude_deferred_responses[tostring(call.coroutine)] = function() end
+    return diff._get_active_diffs()[name or tab_name]
+  end
+
+  local function close_tab(name)
+    tools.handle_invoke(
+      { id = "window_sizes_spec" },
+      { name = "close_tab", arguments = { tab_name = name or tab_name } }
+    )
+  end
+
+  -- Makes the diff's setup fail once its proposed buffer is shown, as a user's autocmd that errors would.
+  local function fail_when_shown(suffix)
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+      group = vim.api.nvim_create_augroup("window_sizes_spec", { clear = true }),
+      callback = function(args)
+        if args.file:sub(-#suffix) == suffix then
+          error("a user's autocmd failed")
+        end
+      end,
+    })
   end
 
   local function window_sizes()
@@ -116,6 +136,30 @@ describe("openDiff window sizes", function()
     assert.are.same(before, window_sizes())
   end)
 
+  it("gives the sizes back when the diff's setup fails", function()
+    use_layout("vertical")
+    two_editors()
+    local before = window_sizes()
+    fail_when_shown("(proposed)")
+
+    local call = call_open_diff("a.txt")
+
+    assert.is_truthy(call.error, "the setup failed")
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("does not give sizes back after the screen size changed", function()
+    two_editors()
+    local saved = diff._save_window_sizes(vim.api.nvim_get_current_tabpage())
+    vim.o.columns = 120
+    vim.cmd("wincmd =")
+    local equalized = window_sizes()
+
+    diff._restore_window_sizes(saved)
+
+    assert.are.same(equalized, window_sizes())
+  end)
+
   if vim.fn.has("nvim-0.9") ~= 1 then
     pending("the unified layout needs Neovim 0.9")
     return
@@ -131,6 +175,31 @@ describe("openDiff window sizes", function()
     assert.is_false(diff_data.created_new_tab, "a unified diff opens in the tab of the user's diff")
     close_tab()
 
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("gives the sizes back after two unified diffs in one tab close, the first one first", function()
+    use_layout("unified")
+    two_editors()
+    local before = window_sizes()
+
+    open_diff("a.txt")
+    assert.is_false(open_diff("b.txt", "✻ [Claude Code] second.txt ⧉").created_new_tab)
+    close_tab()
+    close_tab("✻ [Claude Code] second.txt ⧉")
+
+    assert.are.same(before, window_sizes())
+  end)
+
+  it("gives the sizes back when the unified diff's setup fails", function()
+    use_layout("unified")
+    two_editors()
+    local before = window_sizes()
+    fail_when_shown("(unified diff)")
+
+    local call = call_open_diff("a.txt")
+
+    assert.is_truthy(call.error, "the setup failed")
     assert.are.same(before, window_sizes())
   end)
 end)
