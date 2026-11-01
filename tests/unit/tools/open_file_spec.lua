@@ -782,6 +782,12 @@ describe("Tool: open_file", function()
           buffers[call_buf].buftype = buftype
         elseif command == "edit" and call_buf then
           read_disk(call_buf)
+        elseif command == "edit" and win_buf[call_win or current_win] ~= 30 then
+          -- A bare :edit re-reads the buffer that its window shows. A 'nofile' buffer has no file, so it gets empty.
+          local shown = buffers[win_buf[call_win or current_win]]
+          if shown.buftype == "nofile" then
+            shown.lines = { "" }
+          end
         elseif command == "edit" then
           edit_file_in(call_win or current_win)
         elseif command:match("^pedit ") then
@@ -1198,6 +1204,29 @@ describe("Tool: open_file", function()
           err
         )
       end)
+
+      for _, case in ipairs({
+        { name = "the window", win = 1000 },
+        { name = "the preview window", win = 3000, preview = true },
+      }) do
+        it("does not load another buffer that an autocommand shows in " .. case.name .. " instead", function()
+          buffers[40] = { lines = { "plugin text" }, buftype = "nofile", loaded = true, filetype = "" }
+          -- autocmd BufWinEnter test.txt ++nested buffer 40
+          local run_cmd, set_buf = _G.vim.cmd, _G.vim.api.nvim_win_set_buf
+          _G.vim.cmd = function(command)
+            run_cmd(command)
+            if command == "edit test.txt" then
+              win_buf[case.win] = 40
+            end
+          end
+          _G.vim.api.nvim_win_set_buf = function(win, buf)
+            set_buf(win, buf)
+            win_buf[win] = 40
+          end
+          pcall(open_file_handler, { filePath = "test.txt", preview = case.preview, startLine = 1 })
+          assert.are.same({ { "plugin text" }, { "" } }, { buffers[40].lines, buffers[30].lines })
+        end)
+      end
 
       it("keeps the empty buffer while the user holds Visual mode in the middle of a command", function()
         editor_mode, state_flags = "v", "S"
