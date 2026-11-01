@@ -33,6 +33,17 @@ describe("the test order helper", function()
     end
   end)
 
+  it("ignores a pairs() loop in code outside this repository's tests dir", function()
+    -- Busted's own event loop iterates with pairs(). A checkout below another dir named tests must not count it.
+    local outside = assert(
+      load(
+        "local register = ... for _ in pairs({ a = 1 }) do local value, continue = register('case') return value, continue end",
+        "@/tmp/tests/claudecode.nvim/.luarocks/share/lua/5.1/mediator.lua"
+      )
+    )
+    assert.same({ nil, true }, { outside(register_it) })
+  end)
+
   it("accepts a registration inside an ipairs() loop, and after a pairs() loop", function()
     for _ in ipairs({ 1 }) do
       assert.same({ nil, true }, { register_it("case") })
