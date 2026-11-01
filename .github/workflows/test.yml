@@ -178,12 +178,27 @@ jobs:
       - name: Reject-on-quit regression gate (#238)
         run: nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 
+  # covered.lock records the lua/ and plugin/ code that the openDiff lifecycle model was last
+  # confirmed against. A change there without a re-record leaves main STALE for check.sh.
+  covered-lock:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Check that covered.lock matches the code
+        run: .agents/skills/verify-diff-lifecycle/check.sh --hash-only
+
   required:
     name: Required
     runs-on: ubuntu-latest
     needs:
       - unit-tests
       - integration-tests
+      - covered-lock
     if: ${{ always() }}
 
     steps:
@@ -191,11 +206,14 @@ jobs:
         env:
           UNIT_TESTS_RESULT: ${{ needs.unit-tests.result }}
           INTEGRATION_TESTS_RESULT: ${{ needs.integration-tests.result }}
+          COVERED_LOCK_RESULT: ${{ needs.covered-lock.result }}
         run: |
           echo "unit-tests: $UNIT_TESTS_RESULT"
           echo "integration-tests: $INTEGRATION_TESTS_RESULT"
+          echo "covered-lock: $COVERED_LOCK_RESULT"
 
-          if [ "$UNIT_TESTS_RESULT" != "success" ] || [ "$INTEGRATION_TESTS_RESULT" != "success" ]; then
+          if [ "$UNIT_TESTS_RESULT" != "success" ] || [ "$INTEGRATION_TESTS_RESULT" != "success" ] ||
+            [ "$COVERED_LOCK_RESULT" != "success" ]; then
             echo "One or more required jobs failed."
             exit 1
           fi
