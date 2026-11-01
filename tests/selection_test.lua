@@ -164,11 +164,21 @@ if not _G.vim then
         end
         return { 0, 0, 0, 0 }
       end,
-      -- Models Neovim for the one regex call selection.lua makes. From byte start, `\_.` matches the character
-      -- that starts there (see mock_char_last_byte).
+      -- Models Neovim for the two regex calls selection.lua makes (see mock_char_last_byte). From byte start,
+      -- `\_.` matches the character that starts there. `^\_.*\%<Nc\_.` matches up to the end of the last character
+      -- that starts before byte N, scanning from the line start.
       matchend = function(line, pattern, start)
-        assert(pattern == "\\_." and start, "unexpected matchend call " .. pattern)
-        return start < #line and mock_char_last_byte(line, start + 1) or -1
+        if pattern == "\\_." and start then
+          return start < #line and mock_char_last_byte(line, start + 1) or -1
+        end
+        local before = tonumber(pattern:match("^%^\\_%.%*\\%%<(%d+)c\\_%.$"))
+        assert(before and not start, "unexpected matchend call " .. pattern)
+        local i, last = 1, -1
+        while i <= #line and i < before do
+          last = mock_char_last_byte(line, i)
+          i = last + 1
+        end
+        return last
       end,
       -- Last completed visual mode; tests set _G.vim._visualmode.
       visualmode = function()
@@ -1184,6 +1194,14 @@ describe("Range Selection Tests", function()
           local sel = from_marks({ "naïve café", "日本語 テキスト" }, "v", 1, 11, 2, 4)
           assert.are.equal("é\n日", sel.text)
           assert.are.equal(#"日", sel.selection["end"].character)
+        end)
+
+        it("ends after the whole cluster before the end position, as Neovim 0.11+ does for a conjunct", function()
+          -- `$v0` on `नमस्ते`: the excluded end position is त, and the character before it is the cluster स्ते,
+          -- which reaches past त. Neovim 0.12 then yanks the whole word.
+          local sel = from_marks({ "नमस्ते" }, "v", 1, 1, 1, 13)
+          assert.are.equal("नमस्ते", sel.text)
+          assert.are.equal(#"नमस्ते", sel.selection["end"].character)
         end)
 
         it("keeps the one character of a selection that starts and ends at the same position", function()
