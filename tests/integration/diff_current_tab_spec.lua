@@ -17,7 +17,7 @@ describe("openDiff with several tabs", function()
   before_each(function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
-    for _, name in ipairs({ "proposed.txt", "other.txt" }) do
+    for _, name in ipairs({ "proposed.txt", "other.txt", "a.txt", "b.txt" }) do
       vim.fn.writefile({ "alpha" }, dir .. "/" .. name)
     end
     tools.register_all()
@@ -95,6 +95,46 @@ describe("openDiff with several tabs", function()
 
     assert.equal(user_tab, vim.api.nvim_get_current_tabpage(), "the user stays in their tab")
     assert.equal(user_tab, vim.api.nvim_win_get_tabpage(diff_data.new_window))
+  end)
+
+  it("does not start from a floating window that shows the file", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    local float = vim.api.nvim_open_win(vim.fn.bufadd(dir .. "/proposed.txt"), false, {
+      relative = "editor",
+      row = 2,
+      col = 2,
+      width = 40,
+      height = 5,
+    })
+    vim.fn.bufload(vim.api.nvim_win_get_buf(float))
+
+    local diff_data = open_diff()
+
+    assert.equal(
+      "",
+      vim.api.nvim_win_get_config(diff_data.target_window).relative,
+      "the diff starts from a tiled window"
+    )
+    assert.equal("", vim.api.nvim_win_get_config(diff_data.new_window).relative)
+  end)
+
+  it("opens in a new tab, and returns there on close_tab, when the current tab has only a user's diff", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/a.txt"))
+    vim.cmd("vertical diffsplit " .. vim.fn.fnameescape(dir .. "/b.txt"))
+    local user_tab = vim.api.nvim_get_current_tabpage()
+    local user_windows = vim.api.nvim_tabpage_list_wins(user_tab)
+
+    local diff_data = open_diff()
+
+    assert.is_true(diff_data.created_new_tab, "the diff gets its own tab")
+    assert.equal(3, #vim.api.nvim_list_tabpages())
+    close_tab()
+    assert.equal(user_tab, vim.api.nvim_get_current_tabpage(), "the user is back in their diff tab")
+    for _, win in ipairs(user_windows) do
+      assert.is_true(vim.wo[win].diff, "the user's diff windows keep 'diff'")
+    end
+    assert.equal(2, #vim.api.nvim_list_tabpages())
   end)
 
   it("opens in another tab when the current tab has no window it can use", function()

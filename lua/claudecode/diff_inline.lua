@@ -324,6 +324,14 @@ function M.setup_inline_diff(params, resolution_callback, config)
     return finish(pcall(action))
   end
 
+  -- Save the terminal window width so we can restore it after the diff closes. Do it before a new tab exists: the
+  -- new tab goes right after the current one, so its terminal window can come first in the window list.
+  local term_win = diff._find_claudecode_terminal_window()
+  local term_width = nil
+  if term_win and vim.api.nvim_win_is_valid(term_win) then
+    term_width = vim.api.nvim_win_get_width(term_win)
+  end
+
   if config and config.diff_opts and config.diff_opts.open_in_new_tab then
     original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle = guard_inline_setup(
       function()
@@ -334,13 +342,6 @@ function M.setup_inline_diff(params, resolution_callback, config)
     partial_setup.new_tab_number = new_tab_handle
     partial_setup.had_terminal_in_original = had_terminal_in_original
     created_new_tab = true
-  end
-
-  -- Save terminal window width so we can restore it after the diff closes
-  local term_win = diff._find_claudecode_terminal_window()
-  local term_width = nil
-  if term_win and vim.api.nvim_win_is_valid(term_win) then
-    term_width = vim.api.nvim_win_get_width(term_win)
   end
 
   -- Open a vsplit for the inline diff buffer
