@@ -16,7 +16,7 @@ local M = {}
 ---@field tcp_handle table The vim.loop TCP handle
 ---@field state string Connection state: "connecting", "connected", "closing", "closed"
 ---@field buffer string Incoming data buffer
----@field fragments table|nil Payloads of the text message whose last fragment has not arrived, and their total `size`
+---@field fragments table|nil Joined pieces of the text message whose last fragment has not arrived, and their total `size`
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
@@ -63,7 +63,15 @@ local function add_data_frame(client, data_frame)
   if fragments.size > frame.MAX_PAYLOAD_LENGTH then
     return nil, 1009, "WebSocket message too big"
   end
+  -- Join each piece onto the one below it while that one is not longer, as a binary counter carries. Many tiny
+  -- or empty fragments then keep O(log n) strings, not one table entry each.
   table.insert(fragments, data_frame.payload)
+  for i = #fragments - 1, 1, -1 do
+    if #fragments[i] > #fragments[i + 1] then
+      break
+    end
+    fragments[i] = fragments[i] .. table.remove(fragments)
+  end
   if not data_frame.fin then
     client.fragments = fragments
     return nil
