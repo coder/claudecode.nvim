@@ -52,7 +52,7 @@ describe("a ClaudeCodeDiffOpened handler that resolves the diff (#325)", functio
         vim.api.nvim_get_current_buf = function()
           return vim.api.nvim_win_get_buf(opts.data.diff_window)
         end
-        command()
+        command(opts.data)
         vim.api.nvim_get_current_buf = orig_get_current_buf
       end
       return orig_exec_autocmds(event, opts)
@@ -108,4 +108,51 @@ describe("a ClaudeCodeDiffOpened handler that resolves the diff (#325)", functio
       end)
     end
   end
+
+  -- Stands in for a `nested = true` handler that runs `nvim_win_close(args.data.diff_window, true)`. Nested, the
+  -- close fires WinClosed, and Neovim runs it before the window leaves the layout. The unified layout has no
+  -- WinClosed handler, so closing its window resolves nothing.
+  local function close_proposal_window_nested(data)
+    for _, entry in ipairs(vim._autocmds["ClaudeCodeMCPDiff"].events) do
+      if entry.events == "WinClosed" then
+        entry.opts.callback({ match = tostring(data.diff_window) })
+      end
+    end
+    vim.api.nvim_win_close(data.diff_window, true)
+  end
+
+  it("answers DIFF_REJECTED once when a nested handler closes the proposal window", function()
+    local saved_win_findbuf = vim.fn.win_findbuf
+    finally(function()
+      vim.fn.win_findbuf = saved_win_findbuf
+    end)
+    vim.fn.win_findbuf = function(bufnr)
+      local wins = {}
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == bufnr then
+          wins[#wins + 1] = win
+        end
+      end
+      return wins
+    end
+    diff.setup({ terminal = {}, diff_opts = { layout = "vertical" } })
+    on_diff_opened(close_proposal_window_nested)
+    local tab_name = "✻ [Claude Code] opened-handler (nested close) ⧉"
+
+    claude_calls(1, "openDiff", {
+      old_file_path = old_file,
+      new_file_path = old_file,
+      new_file_contents = "local a = 2\n",
+      tab_name = tab_name,
+    })
+
+    local answers = answers_for(1)
+    assert.are.equal(1, #answers, "openDiff must be answered without any further action")
+    assert.is_nil(answers[1].error)
+    assert.are.equal("DIFF_REJECTED", answers[1].result.content[1].text)
+
+    claude_calls(2, "close_tab", { tab_name = tab_name })
+    assert.are.equal(1, #answers_for(1), "close_tab must not answer openDiff a second time")
+    assert.is_nil(diff._get_active_diffs()[tab_name])
+  end)
 end)
