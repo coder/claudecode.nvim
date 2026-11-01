@@ -1,4 +1,4 @@
-sync 3eb298f003954299996b6710d11144e1a76d51ae
+sync 9f7a91cb996f6e3416ce0fe4633f600c124b4297
 block resolve_saved      5eeea81ac74a902f
 block resolve_rejected   0d1b8ae047185ddb
 block open_blocking      92067df7f9d4d4d9
@@ -67,7 +67,7 @@ file lua/claudecode/tools/get_open_editors.lua 96392f05d7af7521
 file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 file lua/claudecode/tools/init.lua f33aada98120acbe
 file lua/claudecode/tools/open_diff.lua 1637b47e7a5d6c35
-file lua/claudecode/tools/open_file.lua c3834dd4d90b0302
+file lua/claudecode/tools/open_file.lua e528390bbc078af6
 file lua/claudecode/tools/save_document.lua 5fd303da9fac9d23
 file lua/claudecode/types.lua 08aa28a9c192d17a
 file lua/claudecode/utils.lua fec39728f0301703
