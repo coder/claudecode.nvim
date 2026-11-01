@@ -31,6 +31,12 @@ local FIXTURE = {
 }
 local TESTS = 8
 
+---@param text string
+---@return string quoted text as one POSIX shell word
+local function quote(text)
+  return "'" .. text:gsub("'", "'\\''") .. "'"
+end
+
 describe("the test order helper", function()
   local root = assert(io.popen("pwd")):read("*l")
   -- Two copies whose paths end alike for longer than Lua's 60-byte short_src, in a dir with a space and a quote.
@@ -48,7 +54,7 @@ describe("the test order helper", function()
       dir .. "/a/" .. string.rep("x", 70),
       dir .. "/b/" .. string.rep("x", 70),
     }) do
-      local made = os.execute("mkdir " .. path)
+      local made = os.execute("mkdir " .. quote(path))
       assert(made == 0 or made == true, "cannot create " .. path)
     end
     fixture, twin = dir .. "/a/" .. long_tail, dir .. "/b/" .. long_tail
@@ -60,7 +66,7 @@ describe("the test order helper", function()
   end)
 
   teardown(function()
-    os.execute("rm -rf " .. dir)
+    os.execute("rm -rf " .. quote(dir))
   end)
 
   ---@param command string The shell command that runs busted with TAP output
@@ -89,7 +95,7 @@ describe("the test order helper", function()
   end
 
   it("reports each pairs() loop once, runs every test, and fails the run for a spec given by absolute path", function()
-    local flagged, passed, status = run(".luarocks/bin/busted -o TAP " .. fixture)
+    local flagged, passed, status = run(".luarocks/bin/busted -o TAP " .. quote(fixture))
 
     table.sort(flagged)
     assert.same(expected, flagged)
@@ -98,7 +104,7 @@ describe("the test order helper", function()
   end)
 
   it("reports the same loop line in two spec files whose paths end alike", function()
-    local flagged = run(".luarocks/bin/busted -o TAP " .. fixture .. " " .. twin)
+    local flagged = run(".luarocks/bin/busted -o TAP " .. quote(fixture) .. " " .. quote(twin))
 
     local both = {}
     for _, line in ipairs(expected) do
@@ -112,11 +118,11 @@ describe("the test order helper", function()
   it("checks a spec when busted starts in another directory with --helper", function()
     local flagged = run(
       string.format(
-        "cd %s && %s/.luarocks/bin/busted --helper=%s/tests/helpers/test_order.lua -o TAP %s",
-        dir,
-        root,
-        root,
-        fixture
+        "cd %s && %s -o TAP --helper=%s %s",
+        quote(dir),
+        quote(root .. "/.luarocks/bin/busted"),
+        quote(root .. "/tests/helpers/test_order.lua"),
+        quote(fixture)
       )
     )
 
