@@ -12,7 +12,7 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
   local saved
 
   -- Build a fake window layout and stub the five vim.api calls the function uses.
-  -- `wins` is an ordered list of { ft=, bt=, floating=, diff= } describing each window.
+  -- `wins` is an ordered list of { ft=, bt=, floating=, diff=, preview= } describing each window.
   local function with_layout(wins)
     local win_ids, buf_of, opt_of, cfg_of, winopt_of = {}, {}, {}, {}, {}
     for i, w in ipairs(wins) do
@@ -22,7 +22,7 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
       buf_of[win_id] = buf_id
       opt_of[buf_id] = { buftype = w.bt or "", filetype = w.ft or "" }
       cfg_of[win_id] = { relative = w.floating and "editor" or "" }
-      winopt_of[win_id] = { diff = w.diff or false }
+      winopt_of[win_id] = { diff = w.diff or false, previewwindow = w.preview or false }
     end
 
     _G.vim.api.nvim_list_wins = function()
@@ -121,6 +121,15 @@ describe("diff.find_main_editor_window sidebar exclusion", function()
     })
 
     expect(diff._find_main_editor_window()).to_be(wins[3])
+  end)
+
+  it("skips the preview window, which nvim_list_wins lists first after :pedit", function()
+    local wins = with_layout({
+      { ft = "lua", bt = "", preview = true },
+      { ft = "lua", bt = "" },
+    })
+
+    expect(diff._find_main_editor_window()).to_be(wins[2])
   end)
 
   it("returns nil when every window is a diff window -- issue #277", function()
