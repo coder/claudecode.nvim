@@ -81,7 +81,8 @@ return function(busted)
         reported[loop] = true
         -- An error event fails the run without raising, so the rest of the block still registers and runs.
         local context = busted.context.get()
-        local message = string.format("%s registers %q inside a pairs() loop; loop over an array with ipairs", loop, name)
+        local message =
+          string.format("%s registers %q inside a pairs() loop; loop over an array with ipairs", loop, name)
         busted.publish({ "error", context.descriptor }, context, busted.context.parent(context), message, {})
       end
       return nil, true
