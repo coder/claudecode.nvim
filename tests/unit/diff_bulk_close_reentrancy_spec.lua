@@ -88,6 +88,32 @@ describe("bulk close with a ClaudeCodeDiffClosed handler that resolves another d
     end,
   }
 
+  it("client disconnect leaves a rejected diff that replaced a listed one for another client", function()
+    open_pending(file_a, "tab-A", "clientA")
+    open_pending(file_b, "tab-B", "clientA")
+    local replaced = false
+    -- On the first close, the handler replaces tab-B with a diff for clientB, and that diff is rejected at once.
+    vim.api.nvim_exec_autocmds = function(event, opts)
+      if event ~= "User" or opts.pattern ~= "ClaudeCodeDiffClosed" or replaced then
+        return
+      end
+      replaced = true
+      local other = opts.data.tab_name == "tab-A" and "tab-B" or "tab-A"
+      open_pending(other == "tab-A" and file_a or file_b, other, "clientB")
+      diff._resolve_diff_as_rejected(other)
+    end
+
+    diff.close_diffs_for_client("clientA", "client disconnected")
+
+    assert.is_true(replaced, "the handler should have replaced the other diff")
+    local left = {}
+    for tab_name, diff_data in pairs(diff._get_active_diffs()) do
+      left[#left + 1] = tab_name .. " " .. diff_data.client_id .. " " .. diff_data.status
+    end
+    assert.equal(1, #left, "clientB's diff is not on clientA's list, so it must stay")
+    assert.truthy(left[1]:find(" clientB rejected$"))
+  end)
+
   for name, bulk_close in pairs(bulk_closes) do
     it(name .. " keeps the diff the handler accepted", function()
       local handles = {
