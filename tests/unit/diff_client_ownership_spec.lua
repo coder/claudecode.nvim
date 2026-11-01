@@ -34,12 +34,15 @@ describe("a diff the user accepted for one Claude client", function()
     return { old_file_path = file, new_file_path = file, new_file_contents = contents, tab_name = tab }
   end
 
-  local function open_and_accept()
+  local function open_and_accept(before_accept)
     local deferred = call_tool(owner, "openDiff", open_diff_args("line 1\nline 2\naccepted line\n"))
     assert.is_true(deferred._deferred, "openDiff should wait for the user")
     local answer
     _G.claude_deferred_responses[tostring(deferred.coroutine)] = function(response)
       answer = response
+    end
+    if before_accept then
+      before_accept()
     end
     diff._resolve_diff_as_saved(tab, diff._get_active_diffs()[tab].new_buffer)
     assert.equal("FILE_SAVED", answer.content[1].text)
@@ -200,6 +203,74 @@ describe("a diff the user accepted for one Claude client", function()
 
       assert.equal("line 1\nline 2\n", read_file())
       assert_kept()
+    end)
+
+    it("is not written while the file cannot be read", function()
+      local real_open = io.open
+      finally(function()
+        rawset(io, "open", real_open)
+      end)
+
+      open_and_accept(function()
+        rawset(io, "open", function(path, mode)
+          if path == file and mode == "rb" then
+            return nil, path .. ": Permission denied", 13
+          end
+          return real_open(path, mode)
+        end)
+      end)
+      owner_exits()
+      user_closes_all_diffs()
+      rawset(io, "open", real_open)
+
+      assert.equal("line 1\nline 2\n", read_file())
+      assert_kept()
+    end)
+
+    it("keeps an edit that lands while the accepted text is being written", function()
+      open_and_accept()
+      owner_exits()
+      local real_open = io.open
+      finally(function()
+        rawset(io, "open", real_open)
+      end)
+      rawset(io, "open", function(path, mode)
+        if mode == "wb" and path ~= file then
+          local f = assert(real_open(file, "wb"))
+          f:write("edited meanwhile\n")
+          f:close()
+        end
+        return real_open(path, mode)
+      end)
+
+      user_closes_all_diffs()
+      rawset(io, "open", real_open)
+
+      assert.equal("edited meanwhile\n", read_file())
+      assert_kept()
+    end)
+
+    it("creates its temp file exclusively, readable only by the user", function()
+      open_and_accept()
+      owner_exits()
+      local opened = {}
+      local real_fs_open = vim.loop.fs_open
+      finally(function()
+        vim.loop.fs_open = real_fs_open
+      end)
+      vim.loop.fs_open = function(path, flags, mode)
+        opened[#opened + 1] = { path = path, flags = flags, mode = mode }
+        return real_fs_open(path, flags, mode)
+      end
+
+      user_closes_all_diffs()
+
+      assert.equal(1, #opened, "the accepted text must go through one new temp file")
+      assert.are_not.equal(file, opened[1].path)
+      assert.equal("wx", opened[1].flags)
+      assert.equal(tonumber("600", 8), opened[1].mode)
+      assert.is_nil(io.open(opened[1].path, "rb"), "the temp file must be gone")
+      assert.is_nil(diff._get_active_diffs()[tab])
     end)
 
     it("stays open, and the file is not written, while the file's buffer has unsaved changes", function()
