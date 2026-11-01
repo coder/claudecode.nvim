@@ -162,9 +162,6 @@ end
 ---@param text string
 ---@return string
 function M.valid_utf8(text)
-  if not text:find("[\128-\255]") then
-    return text -- ASCII, the common case
-  end
   local parts = {}
   local valid_from, i = 1, 1
   while i <= #text do
