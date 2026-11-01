@@ -1,0 +1,5 @@
+return {
+  default = {
+    helper = "tests/helpers/test_order.lua",
+  },
+}
