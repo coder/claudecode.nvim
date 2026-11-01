@@ -18,7 +18,7 @@
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
-#   out-acl        a 0700 VERIFY_OUT with a default ACL: launch removes the ACL, so every evidence file is 0600
+#   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 # A refused launch must also leave the files under the proof's temp dir as it found them.
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
 # deleted when every case passes, and kept with its path printed when one fails.
@@ -125,12 +125,15 @@ VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
 echo "PASS out-dash: launched with VERIFY_OUT=-dash from $TMP/cwd; cleanup from $PWD saved its evidence there"
 
 if [[ -d $TMP/acl-out ]]; then
+  # 0500 is safe too, but the owner cannot create files there until launch makes it 0700.
+  chmod 500 "$TMP/acl-out"
   err=$(env -u XUM_SCRATCH_DIR VERIFY_OUT="$TMP/acl-out" "$vcn" launch 2>&1) || fail "out-acl: launch failed: $err"
   VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
   shared=$(find "$TMP/acl-out" -type f ! -perm 600 -printf '%m %P, ')
   [[ -z $shared ]] || fail "out-acl: evidence files that are not 0600: $shared"
   [[ -e $TMP/acl-out/session.webm ]] || fail "out-acl: cleanup did not save session.webm"
-  echo "PASS out-acl: launch removed the default ACL from $TMP/acl-out, and all $(find "$TMP/acl-out" -type f | wc -l) evidence files are 0600"
+  [[ $(stat -c %a -- "$TMP/acl-out") == 700 ]] || fail "out-acl: $TMP/acl-out is not a 0700 dir"
+  echo "PASS out-acl: launch made the 0500 $TMP/acl-out a 0700 dir without its default ACL, and all $(find "$TMP/acl-out" -type f | wc -l) evidence files are 0600"
 fi
 
 init_out=$(mktemp -d)
