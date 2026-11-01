@@ -240,6 +240,33 @@ describe("a diff the user accepted for one Claude client", function()
       assert_kept()
     end)
 
+    it("stays open on a swap file from another Neovim, and names the next step", function()
+      open_and_accept()
+      owner_exits()
+      local loaded = vim.fn.bufnr(file)
+      if loaded ~= -1 then
+        vim.api.nvim_buf_delete(loaded, { force = true })
+      end
+      local real_bufload = vim.fn.bufload
+      finally(function()
+        vim.fn.bufload = real_bufload
+      end)
+      vim.fn.bufload = function()
+        error("Vim:E325: ATTENTION")
+      end
+
+      user_closes_all_diffs()
+
+      assert_kept()
+      assert.equal(-1, vim.fn.bufnr(file), "the command leaves no buffer behind")
+      local msg = notes[#notes].msg
+      assert.is_truthy(msg:find("E325: ATTENTION", 1, true), msg)
+      assert.is_truthy(
+        msg:find("open it with :e, answer the swap file prompt, then run the command again", 1, true),
+        msg
+      )
+    end)
+
     it("stays open when it cannot change a buffer that already shows the accepted lines", function()
       open_and_accept()
       owner_exits()

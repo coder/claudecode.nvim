@@ -99,6 +99,35 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     assert.equal("alpha\r\nBETA accepted\r\n", read_bytes(path))
   end)
 
+  it("writes one CR per line break to a dos file when the proposal mixes CRLF and LF breaks", function()
+    local path = dir .. "/mixed.txt"
+    write_bytes(path, "alpha\r\nbeta\r\n")
+    vim.cmd.edit(path)
+    assert.equal("dos", vim.bo.fileformat)
+    accept_then_client_exits(path, "alpha\r\nBETA accepted\ngamma\r\n")
+
+    close_all_then_write(path)
+
+    assert.equal("alpha\r\nBETA accepted\r\ngamma\r\n", read_bytes(path))
+  end)
+
+  it("names :w! when the file's buffer is read-only", function()
+    local path = dir .. "/readonly.txt"
+    write_bytes(path, "alpha\n")
+    vim.fn.setfperm(path, "r--r--r--")
+    vim.cmd.edit(path)
+    assert.is_true(vim.bo.readonly)
+    accept_then_client_exits(path, "alpha accepted\n")
+
+    vim.cmd("ClaudeCodeCloseAllDiffs")
+
+    assert.is_truthy(notes[#notes]:find(": :w! writes them", 1, true), notes[#notes])
+    vim.api.nvim_buf_call(vim.fn.bufnr(path), function()
+      vim.cmd("silent write!")
+    end)
+    assert.equal("alpha accepted\n", read_bytes(path))
+  end)
+
   it("writes one BOM when the proposal for a 'bomb' file starts with one", function()
     local path = dir .. "/bom.txt"
     write_bytes(path, "\239\187\191alpha\n")

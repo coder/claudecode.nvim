@@ -247,8 +247,8 @@ local vim = {
     end,
 
     nvim_buf_is_loaded = function(bufnr)
-      -- In our mock, all valid buffers are considered loaded
-      return vim._buffers[bufnr] ~= nil
+      -- Every buffer is loaded, except one that bufadd() created and bufload() has not loaded yet, as in Neovim.
+      return vim._buffers[bufnr] ~= nil and vim._buffers[bufnr].unloaded ~= true
     end,
 
     nvim_list_bufs = function()
@@ -581,12 +581,16 @@ local vim = {
       end
       local bufnr = vim.api.nvim_create_buf(false, false)
       vim.api.nvim_buf_set_name(bufnr, name)
+      vim._buffers[bufnr].unloaded = true
       return bufnr
     end,
 
     -- Reads the file into a buffer that has no lines yet, as loading it would.
     bufload = function(bufnr)
       local buf = vim._buffers[bufnr]
+      if buf then
+        buf.unloaded = nil
+      end
       if not buf or #buf.lines > 0 then
         return
       end
