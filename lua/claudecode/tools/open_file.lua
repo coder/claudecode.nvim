@@ -166,10 +166,10 @@ local function handler(params)
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
 
-  -- An operator the user typed (d, c, y, ...) still waits for its motion and would act on any selection made
-  -- now, so openFile then only places the cursor.
+  -- An operator the user typed (d, c, y, ...) still waits for its motion. It would act on any selection made now,
+  -- and the next motion would act from where the user typed it, so openFile selects nothing and cancels it.
   local operator_pending = vim.api.nvim_get_mode().mode:sub(1, 2) == "no"
-  local nothing_selected = " (an operator is pending, so nothing was selected)"
+  local nothing_selected = " (a pending operator was cancelled and nothing was selected)"
 
   local start_line, end_line
   if params.startLine ~= nil or params.endLine ~= nil then
@@ -358,6 +358,11 @@ local function handler(params)
         message = 'Opened file, but text "' .. start_text .. '" not found'
       end
     end)
+  end
+
+  if operator_pending then
+    -- "i" puts <Esc> before any key the user types next, and "n" skips the user's mappings.
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "ni", false)
   end
 
   -- Return format based on makeFrontmost parameter
