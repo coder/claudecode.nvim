@@ -13,6 +13,8 @@ describe("Tool: open_file", function()
   local original_get_mode
   local typed_over_selection
   local call_win
+  local last_visual
+  local operated_on
 
   before_each(function()
     -- Reset mocks and require the module under test
@@ -36,21 +38,33 @@ describe("Tool: open_file", function()
     _G.vim.fn.fnameescape = spy.new(function(path)
       return path -- Simple pass-through
     end)
-    -- Like Neovim, gv enters Visual mode (Select mode when 'selectmode' has "cmd"). <Esc> ends it, and so does
-    -- :edit in the current window. In Select mode any other typed key replaces the selected text.
+    -- Like Neovim, gv reselects in the buffer's last Visual mode (v, V or CTRL-V), as Select mode when 'selectmode'
+    -- has "cmd" (gv_mode "s"). <Esc> ends Visual or Select mode, and so does :edit in the current window. In Select
+    -- mode any other typed key replaces the selected text. A pending operator (mode "no") acts on what gv selects.
     editor_mode = "n"
     gv_mode = "v"
+    last_visual = "v"
     typed_over_selection = {}
+    operated_on = {}
     call_win = nil
+    local kind_of = { v = "v", s = "v", V = "V", S = "V", ["\22"] = "\22", ["\19"] = "\22" }
+    local select_of = { v = "s", V = "S", ["\22"] = "\19" }
     _G.vim.cmd = spy.new(function(command)
       table.insert(_G.vim.cmd_history, command)
       local keys = command:match("^normal! (.*)")
+      local in_visual = kind_of[editor_mode] ~= nil
       if keys and keys ~= "\27" and editor_mode:match("^[sS\19]") then
         table.insert(typed_over_selection, keys)
         editor_mode = "n"
+      elseif keys == "gv" and editor_mode:match("^no") then
+        table.insert(operated_on, "gv")
+        editor_mode = "n"
       elseif keys == "gv" then
-        editor_mode = gv_mode
-      elseif keys == "\27" or (command:match("^p?edit ") and (call_win == nil or call_win == 1000)) then
+        editor_mode = gv_mode == "s" and select_of[last_visual] or last_visual
+      elseif keys == "v\27" and editor_mode == "n" then
+        last_visual = "v"
+      elseif in_visual and (keys == "\27" or (command:match("^p?edit ") and (call_win == nil or call_win == 1000))) then
+        last_visual = kind_of[editor_mode]
         editor_mode = "n"
       end
     end)
@@ -562,6 +576,37 @@ describe("Tool: open_file", function()
       expect(open({ startLine = 3, endLine = 4 })).to_be("Opened file and selected lines 3 to 4")
       assert.are.same({}, typed_over_selection)
       expect(editor_mode).to_be("v")
+    end)
+
+    it("selects charwise after a linewise or blockwise Visual mode in the buffer", function()
+      for _, case in ipairs({
+        { last = "V", mode = "n", gv = "v", want = "v" },
+        { last = "\22", mode = "n", gv = "v", want = "v" },
+        { last = "v", mode = "V", gv = "v", want = "v" },
+        { last = "v", mode = "S", gv = "s", want = "s" },
+        { last = "\22", mode = "n", gv = "s", want = "s" },
+      }) do
+        last_visual, editor_mode, gv_mode = case.last, case.mode, case.gv
+        open({ startText = "two", endText = "three" })
+        expect(editor_mode).to_be(case.want)
+        assert.are.same({}, typed_over_selection)
+      end
+    end)
+
+    it("only places the cursor while an operator is pending", function()
+      for _, case in ipairs({
+        { params = { startText = "two", endText = "three" }, cursor = { 2, 0 }, text = 'positioned at "two"' },
+        { params = { startText = "two" }, cursor = { 2, 0 }, text = 'positioned at "two"' },
+        { params = { startLine = 2, endLine = 3 }, cursor = { 2, 0 }, text = "positioned at line 2" },
+      }) do
+        editor_mode = "no"
+        local text = open(case.params)
+        assert_contains(text, case.text)
+        assert_contains(text, "an operator is pending, so nothing was selected")
+        assert.are.same({}, operated_on)
+        expect(editor_mode).to_be("no")
+        assert.are.same(case.cursor, cursor)
+      end
     end)
 
     it("selects only the startText match when there is no endText", function()
