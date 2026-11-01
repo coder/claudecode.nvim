@@ -949,10 +949,14 @@ M._save_window_sizes = save_window_sizes
 M._restore_window_sizes = restore_window_sizes
 M._restore_cursor = restore_cursor
 
+local diffs_registered = 0
+
 ---Register diff state for tracking
 ---@param tab_name string Unique identifier for the diff
 ---@param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
+  diffs_registered = diffs_registered + 1
+  diff_data.open_order = diffs_registered
   active_diffs[tab_name] = diff_data
 end
 
@@ -1338,10 +1342,10 @@ function M._cleanup_diff_state(tab_name, reason)
     -- Optionally ensure the Claude terminal remains visible in the original tab
     local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
     if terminal_ok and diff_data.had_terminal_in_original then
+      -- No idle resize: the diff resized only the terminal window in its own tab, which closed with that tab, so a
+      -- terminal window that stayed open keeps its width, a width the user chose included. One that ensure_visible
+      -- has to open gets split_width_percentage from the provider.
       pcall(terminal_module.ensure_visible)
-      -- Restore the idle terminal width if it is visible (unless the user opted
-      -- out via auto_resize_terminal). Floating terminals are skipped.
-      resize_terminal_for_diff(find_claudecode_terminal_window(), "idle")
     end
   else
     local cursor_window = vim.api.nvim_get_current_win()
@@ -1929,6 +1933,11 @@ local function close_active_diffs(filter_fn, reason, client_id)
       listed[tab_name] = diff_data
     end
   end
+  -- Newest first, not in pairs() order: each close puts the cursor back where that diff opened, so the cursor ends
+  -- where it was before the oldest of them opened, whatever the tab names.
+  table.sort(tab_names, function(a, b)
+    return listed[a].open_order > listed[b].open_order
+  end)
   for _, tab_name in ipairs(tab_names) do
     -- Each close fires ClaudeCodeDiffClosed synchronously, and a user handler can
     -- accept or reject a later entry. Recheck the filter against the entry as it is
