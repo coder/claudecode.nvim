@@ -316,7 +316,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir made
+  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir made mode
   nvim_exe=$(bin nvim)
   att_exe=$(bin agent-tty)
   node_exe=$(bin node)
@@ -361,16 +361,30 @@ cmd_launch() {
   why=$(unsafe_dir "$guard")
   if [[ -n $why ]]; then
     rmdir "$state"
-    # rmdir removes only empty dirs, so this never deletes anything another process put there.
+    # rmdir removes only empty dirs, so this never deletes a file or a non-empty dir. It does remove an empty
+    # dir that another process made at one of these paths after the walk above.
     ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
     die "refusing evidence dir: $why; set VERIFY_OUT to a fresh dir you own"
   fi
-  mkdir -p "$state"/{home,claude,work}
+  # A default ACL on the evidence dir, which mkdir copies from its parent and chmod leaves alone, gives every
+  # file made in it group access whatever the umask. Remove all ACLs, make the dir 0700 (a 0500 VERIFY_OUT is
+  # safe but not writable), then check that a new file is private.
+  if command -v setfacl >/dev/null; then
+    setfacl -b -k -- "$out" 2>/dev/null || true
+  fi
   chmod 700 "$out"
+  : >"$out/ws-in.jsonl"
+  mode=$(stat -c %a -- "$out/ws-in.jsonl")
+  if [[ $mode != 600 ]]; then
+    rm -f -- "$out/ws-in.jsonl"
+    rmdir "$state"
+    ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
+    die "a new file in $out gets mode $mode, not 600; remove its default ACL (setfacl -k) or set VERIFY_OUT to another dir"
+  fi
+  mkdir -p "$state"/{home,claude,work}
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"
   : >"$out/ws-out.jsonl"
-  : >"$out/ws-in.jsonl"
   {
     env_line VCN_STATE "$state"
     env_line OUT "$out"

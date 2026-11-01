@@ -25,8 +25,10 @@
 --
 -- Usage (from repo root):
 --   source fixtures/nvim-aliases.sh
---   vv issue-238 example/target.txt
---   #   or: NVIM_APPNAME=issue-238 XDG_CONFIG_HOME=fixtures nvim fixtures/issue-238/example/target.txt
+--   vv issue-238 issue-238/example/target.txt
+--   #   or: NVIM_APPNAME=issue-238 XDG_CONFIG_HOME="$PWD/fixtures" nvim fixtures/issue-238/example/target.txt
+--   #   Neovim 0.8 ignores NVIM_APPNAME; there, run:
+--   #   XDG_CONFIG_HOME="$PWD/fixtures" nvim -u fixtures/issue-238/init.lua fixtures/issue-238/example/target.txt
 --
 -- Then drive the MCP side (play the role of Claude) with:
 --   scripts/repro_issue_238.sh
