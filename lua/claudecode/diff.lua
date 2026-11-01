@@ -2101,6 +2101,7 @@ end
 -- Expose internal utilities for use by diff_inline.lua
 M._find_main_editor_window = find_main_editor_window
 M._find_claudecode_terminal_window = find_claudecode_terminal_window
+M._leave_preview_window = leave_preview_window
 M._is_buffer_dirty = is_buffer_dirty
 M._detect_filetype = detect_filetype
 M._get_autocmd_group = get_autocmd_group
