@@ -133,17 +133,50 @@ describe("unified diff window choice", function()
     assert.equal(math.floor(vim.o.columns * 0.20), vim.api.nvim_win_get_width(terminal_win))
   end)
 
-  it("leaves the width of the Claude terminal in its new tab alone when auto_resize_terminal is false", function()
+  it("sets no width on the Claude terminal in its new tab when auto_resize_terminal is false", function()
     use({ layout = "unified", open_in_new_tab = true, auto_resize_terminal = false })
     open_terminal()
     vim.cmd("wincmd p")
+    local widths_set = {}
+    local real_set_width = vim.api.nvim_win_set_width
+    vim.api.nvim_win_set_width = function(win, width)
+      widths_set[#widths_set + 1] = { buf = vim.api.nvim_win_get_buf(win), width = width }
+      return real_set_width(win, width)
+    end
 
-    open_diff()
+    local ok, err = pcall(open_diff)
+    vim.api.nvim_win_set_width = real_set_width
 
-    local terminal_win = vim.fn.bufwinid(terminal.get_active_terminal_bufnr())
-    assert.are_not.equal(-1, terminal_win, "the new tab shows the Claude terminal")
-    assert.are_not.equal(math.floor(vim.o.columns * 0.30), vim.api.nvim_win_get_width(terminal_win))
+    assert.is_true(ok, err)
+    assert.are_not.equal(-1, vim.fn.bufwinid(terminal.get_active_terminal_bufnr()), "the new tab shows the terminal")
+    for _, call in ipairs(widths_set) do
+      assert.are_not.equal(terminal.get_active_terminal_bufnr(), call.buf, "set the terminal to " .. call.width)
+    end
   end)
+
+  -- The user is in a tab with only the preview window, and the Claude terminal is in a later tab. The new tab goes
+  -- between them, so it comes first in the window list.
+  for _, case in ipairs({
+    { "with terminal.diff_split_width_percentage", {}, { diff_split_width_percentage = 0.5 } },
+    { "with auto_resize_terminal = false", { auto_resize_terminal = false }, {} },
+  }) do
+    local name, extra_diff_opts, terminal_overrides = case[1], case[2], case[3]
+    it("keeps the width of the Claude terminal in another tab after close_tab " .. name, function()
+      use(vim.tbl_extend("force", { layout = "unified", open_in_new_tab = true }, extra_diff_opts), terminal_overrides)
+      vim.cmd("tabnew")
+      local terminal_win = open_terminal()
+      local terminal_width = vim.api.nvim_win_get_width(terminal_win)
+      vim.cmd("tabprevious")
+      vim.cmd("pedit " .. vim.fn.fnameescape(path))
+      vim.cmd("wincmd P")
+      vim.cmd("only")
+
+      open_diff()
+      close_tab()
+
+      assert.equal(terminal_width, vim.api.nvim_win_get_width(terminal_win))
+    end)
+  end
 
   it("opens next to an editor window when terminal.split_width_percentage is not a number", function()
     use({ layout = "unified" }, { split_width_percentage = "wide" })
