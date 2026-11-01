@@ -131,6 +131,18 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     assert.equal("alpha accepted\n", read_bytes(path))
   end)
 
+  it("writes CRLF line breaks to a dos file when the proposal has only LF breaks", function()
+    local path = dir .. "/lf.txt"
+    write_bytes(path, "alpha\r\nbeta\r\n")
+    vim.cmd.edit(path)
+    assert.equal("dos", vim.bo.fileformat)
+    accept_then_client_exits(path, "alpha\nBETA accepted\n")
+
+    close_all_then_write(path)
+
+    assert.equal("alpha\r\nBETA accepted\r\n", read_bytes(path))
+  end)
+
   it("writes one BOM when the proposal for a 'bomb' file starts with one", function()
     local path = dir .. "/bom.txt"
     write_bytes(path, "\239\187\191alpha\n")
