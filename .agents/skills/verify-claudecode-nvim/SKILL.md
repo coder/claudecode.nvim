@@ -145,11 +145,12 @@ This checks that the real Claude Code CLI accepts the plugin's WebSocket server.
 ```bash
 source "$VCN_STATE/run.env"
 cfg=$(mktemp -d)
-json=$(jq -c --arg u "ws://127.0.0.1:$PORT" '{type: "ws", url: $u, headers: {"x-claude-code-ide-authorization": .authToken}}' "$VCN_STATE/claude/ide/$PORT.lock")
+helper="jq -c '{\"x-claude-code-ide-authorization\": .authToken}' $VCN_STATE/claude/ide/$PORT.lock"
+json=$(jq -nc --arg u "ws://127.0.0.1:$PORT" --arg h "$helper" '{type: "ws", url: $u, headersHelper: $h}')
 cli() { env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$cfg" claude "$@" </dev/null; }
 cli mcp add-json -s user nvim "$json"
 cli mcp get nvim | grep Status
 rm -rf "$cfg"
 ```
 
-`claude mcp get nvim` must print `Status: ✔ Connected`. A wrong token prints `Status: ✘ Failed to connect`. The CLI refuses to store `type: "ws-ide"`. The run's token goes into argv and `$cfg/.claude.json`, and `mcp get` prints it, so keep only the `Status` line. Checks never start the claude TUI or `claude -p` with host credentials.
+`claude mcp get nvim` must print `Status: ✔ Connected`. A wrong token prints `Status: ✘ Failed to connect`. The CLI refuses to store `type: "ws-ide"`. The `headersHelper` reads the token from the `0600` lock file when the CLI connects, so the token stays out of argv, the CLI config, and the `mcp get` output. Checks never start the claude TUI or `claude -p` with host credentials.
