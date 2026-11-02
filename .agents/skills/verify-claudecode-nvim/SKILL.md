@@ -1,6 +1,6 @@
 ---
 name: verify-claudecode-nvim
-description: Drive the real claudecode.nvim plugin in a real Neovim (an agent-tty terminal) while a scripted WebSocket client (scripts/ws-client.mjs) plays the Claude Code CLI over the plugin's WebSocket MCP server, and capture screen text, PNG screenshots, WebM video, JSON-RPC traffic, and file state as evidence. Use to prove a claudecode.nvim feature works end to end (openDiff accept/reject, openFile, selection tracking, :ClaudeCodeSend at-mentions, closing diffs) without the claude CLI or network.
+description: Drive the real claudecode.nvim plugin in a real Neovim (an agent-tty terminal) while a scripted WebSocket client (scripts/ws-client.mjs) plays the Claude Code CLI over the plugin's WebSocket MCP server, and capture screen text, PNG screenshots, WebM video, JSON-RPC traffic, and file state as evidence. Use to prove a claudecode.nvim feature works end to end (openDiff accept/reject, openFile, selection tracking, :ClaudeCodeSend at-mentions, closing diffs) without the claude CLI or network. Also use it to reproduce a bug report, and for any change that can raise a prompt or change the editor mode.
 ---
 
 # Verify claudecode.nvim
@@ -46,6 +46,7 @@ Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json
   - CI does not run the harness, on 0.8 or any other version. A run needs `agent-tty` from npm and Playwright Chromium (about 400 MB unpacked), and CI installs neither. Node is not the obstacle: the `unit-tests` job already gets the repo's Node 26 from mise. The two would add minutes and two more downloads to every PR. CI's `integration-tests (v0.8.0)` job already runs the plugin's integration tests on Neovim 0.8. After a change to `vcn.sh`, check the 0.8 path by hand: do the full run at the end of this file, with `VCN_NVIM=<0.8 nvim> $V launch` as its launch step.
 - `VCN_INIT_JSONRPC=<version>` sets the `jsonrpc` field of the `initialize` request (default `2.0`). Only `scripts/proof-launch-refusals.sh` sets it, to get an error answer from the plugin.
 - `VCN_SETUP='<json>'` is deep-merged into `require("claudecode").setup()` over the base `{ terminal = { provider = "none" } }`. Example: `VCN_SETUP='{"diff_opts":{"layout":"unified"}}' $V launch`.
+- For a `log_level = "debug"` run, launch with `VCN_SETUP='{"log_level":"debug"}' $V launch --cmd 'set messagesopt=wait:0,history:10000' hello.txt`. Without it, one openDiff call at debug level parks Neovim at `Press ENTER`, and RPC stops answering. Launch arguments replace the default file, so name `hello.txt`. Neovim 0.8 has no `messagesopt`, so plain `set` fails launch with E518. Use `--cmd 'silent! set messagesopt=wait:0,history:10000'` there. Launch then works, but debug echoes still stop at `Press ENTER` (see Doctor).
 
 ## Doctor
 
@@ -103,6 +104,7 @@ A proof:
 - Checks side effects directly: `sha256sum "$WORK/<file>"` before and after, buffer text through `$V expr`.
 - Replaces nothing but the Claude CLI, and only at its WebSocket boundary. No stubbed plugin modules, no internal setters.
 - Names the feature ID from `features/` and the entry point (key, command, or tool) next to each artifact it cites. A path that was not driven is reported as not verified, never covered by a different entry point.
+- Proves a change that can raise a prompt or change the editor mode in a live run. After the call, it types the user's next keys with `$V keys` and checks the buffer text. A headless `nvim -u NONE` run answers a file-changed dialog at once with its default choice and hides the bug. Before #408, headless openFile kept the user's unsaved text, while live the W13 dialog (the file appeared after its buffer was opened) held the reply and the user's next `l` loaded the file over that text.
 
 ## Cleanup
 
@@ -135,3 +137,21 @@ $V doctor
 .agents/skills/verify-claudecode-nvim/scripts/journey-opendiff-accept.sh
 $V cleanup
 ```
+
+## Real CLI handshake
+
+This checks that the real Claude Code CLI accepts the plugin's WebSocket server. It registers the run's server in a scratch CLI config and asks the CLI for its status. Run it in any shell, with the `VCN_STATE` value launch printed in the first line:
+
+```bash
+export VCN_STATE=/tmp/vcn.AbC123
+source "$VCN_STATE/run.env"
+cfg=$(mktemp -d)
+helper="jq -c '{\"x-claude-code-ide-authorization\": .authToken}' \"$VCN_STATE/claude/ide/$PORT.lock\""
+json=$(jq -nc --arg u "ws://127.0.0.1:$PORT" --arg h "$helper" '{type: "ws", url: $u, headersHelper: $h}')
+cli() { env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$cfg" claude "$@" </dev/null; }
+cli mcp add-json -s user nvim "$json"
+cli mcp get nvim | grep Status
+rm -rf "$cfg"
+```
+
+`claude mcp get nvim` must print `Status: ✔ Connected`. A wrong token prints `Status: ✘ Failed to connect`. The CLI refuses to store `type: "ws-ide"`. The `headersHelper` reads the token from the `0600` lock file when the CLI connects, so the token stays out of argv, the CLI config, and the `mcp get` output. Checks never start the claude TUI or `claude -p` with host credentials.
