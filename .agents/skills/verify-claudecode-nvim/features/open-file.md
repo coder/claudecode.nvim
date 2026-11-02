@@ -27,6 +27,7 @@ Steps:
 - **Select a line range.** Run `$V tool o2 openFile "$(jq -nc --arg p "$WORK/other.txt" '{filePath:$p,startLine:3,endLine:4}')"` and `$V await o2`. The answer text is `Opened file and selected lines 3 to 4`. The same `getregion` expression must print `v|three/four`. Leave with `$V keys Escape`.
 - **Open in the background.** Run `$V tool o3 openFile "$(jq -nc --arg p "$WORK/hello.txt" '{filePath:$p,makeFrontmost:false}')"` and `$V await o3 | jq -r '.result.content[0].text'`. It prints JSON with `"success":true`, the absolute `filePath`, `"languageId":"text"`, and `"lineCount":3`.
 - **Missing file.** Run `$V tool o4 openFile '{"filePath":"/nonexistent/x.txt"}'` and `$V await o4`. The response has an `error` object whose `data` is `File not found: /nonexistent/x.txt`.
+- **User configs.** For every change to the write or reload path, repeat the change's steps under each of these launches, on main and on head, and compare the buffer text, `&modified`, and `sha256sum` of the file: `$V launch -c 'autocmd BufLeave * update' hello.txt`, `$V launch -c 'autocmd BufEnter * if !&modified | edit | endif' hello.txt`, and `$V launch -c 'set cpo+=+' hello.txt`. For main, run `git archive origin/main | tar -x -C <dir>`, then `<dir>/.agents/skills/verify-claudecode-nvim/scripts/vcn.sh` from this checkout.
 - **Proof.** Run `$V capture file-select-text` and `$V screenshot file-select-text` while the span is selected. The status line shows `-- VISUAL --`. Keep the `getregion` output next to it, and end with `$V record open-file`.
 
 ## Gotchas
@@ -34,3 +35,7 @@ Steps:
 - A selection that starts one line early is a regression: the text span selects `one/two/three` and the line range selects `two/t`. Report it, and do not loosen the expected region to match it.
 - The selection is a live visual mode. Send `Escape` before the next step, or the next keys extend the selection.
 - With one window, `makeFrontmost: false` still swaps the visible buffer, because the main window is the current one. Focus behavior with several windows is not mapped yet.
+- A buffer with 'buftype' `acwrite` keeps 'modified', and `:checktime` skips it, with no FileChangedShell and no reload. With `nowrite` or `nofile`, 'modified' reads false.
+- W13 (the file appeared after its buffer was opened) runs no FileChangedShell, so no autocommand can answer it.
+- 'eventignorewin' (Neovim 0.11+) with FileChangedShell skips the event for the current window's buffer, and for another buffer only when every window that shows it sets it. Neovim then asks W12 itself for unsaved changes, or W11 under 'noautoread'.
+- With `cpo+=+`, `:w {file}` resets 'modified', though the buffer's own file is unchanged.
