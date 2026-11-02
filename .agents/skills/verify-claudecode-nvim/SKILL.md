@@ -104,7 +104,7 @@ A proof:
 - Checks side effects directly: `sha256sum "$WORK/<file>"` before and after, buffer text through `$V expr`.
 - Replaces nothing but the Claude CLI, and only at its WebSocket boundary. No stubbed plugin modules, no internal setters.
 - Names the feature ID from `features/` and the entry point (key, command, or tool) next to each artifact it cites. A path that was not driven is reported as not verified, never covered by a different entry point.
-- Proves a change that can raise a prompt or change the editor mode in a live run. After the call, it types the user's next keys with `$V keys` and checks the buffer text. A headless `nvim -u NONE` run answers a file-changed dialog at once with its default choice and hides the bug. Before #408, headless openFile kept the user's unsaved text, while live the W13 dialog held the reply and the user's next `l` loaded the file over that text.
+- Proves a change that can raise a prompt or change the editor mode in a live run. After the call, it types the user's next keys with `$V keys` and checks the buffer text. A headless `nvim -u NONE` run answers a file-changed dialog at once with its default choice and hides the bug. Before #408, headless openFile kept the user's unsaved text, while live the W13 dialog (the file appeared after its buffer was opened) held the reply and the user's next `l` loaded the file over that text.
 
 ## Cleanup
 
@@ -140,12 +140,13 @@ $V cleanup
 
 ## Real CLI handshake
 
-This checks that the real Claude Code CLI accepts the plugin's WebSocket server. It registers the run's server in a scratch CLI config and asks the CLI for its status:
+This checks that the real Claude Code CLI accepts the plugin's WebSocket server. It registers the run's server in a scratch CLI config and asks the CLI for its status. Run it in any shell, with the `VCN_STATE` value launch printed in the first line:
 
 ```bash
+export VCN_STATE=/tmp/vcn.AbC123
 source "$VCN_STATE/run.env"
 cfg=$(mktemp -d)
-helper="jq -c '{\"x-claude-code-ide-authorization\": .authToken}' $VCN_STATE/claude/ide/$PORT.lock"
+helper="jq -c '{\"x-claude-code-ide-authorization\": .authToken}' \"$VCN_STATE/claude/ide/$PORT.lock\""
 json=$(jq -nc --arg u "ws://127.0.0.1:$PORT" --arg h "$helper" '{type: "ws", url: $u, headersHelper: $h}')
 cli() { env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CONFIG_DIR="$cfg" claude "$@" </dev/null; }
 cli mcp add-json -s user nvim "$json"
