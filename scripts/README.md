@@ -8,7 +8,7 @@
 2. Interactive and probe clients built on those libraries (`claude_interactive.sh`, `mcp_test.sh`, `research_messages.sh`, `websocat.sh`, `test_neovim_websocket.sh`).
 3. Test harnesses (`run_integration_tests_individually.sh`, `test_opendiff.lua`, `test_opendiff_simple.sh`, `manual_test_helper.lua`).
 4. Standalone reproductions of GitHub issues (`repro_issue_*.lua`, `repro_issue_*.sh`).
-5. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`.
+5. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`. It also runs the pinned `communique` binary with the repo's `communique.toml` against a fake Anthropic API, to check that one release-notes submission fits the configured output budget.
 
 CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh` and `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"` on Neovim stable and v0.8.0, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
 
@@ -119,9 +119,10 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - `repro_issue_283.lua` binds TCP sockets on `127.0.0.1`. `repro_issue_283.sh` starts a background Neovim and kills it on exit [repro_issue_283.lua:listener:bind] [repro_issue_283.sh:cleanup].
 - `release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and pull requests through the GitHub API [release-please-runner.js:main].
 - `release-please-runner.js` spawns `communique generate` with the full environment (API keys included) in a temp directory `communique-notes-*` that it removes afterward. It runs `prettier` on each changelog update and appends outputs to `GITHUB_OUTPUT`, or prints them when that variable is unset [release-please-runner.js:createCommuniqueChangelogNotes, formatChangelogMarkdown, writeGithubOutputs].
+- `test-release-please-runner.js` starts an HTTP server on a random `127.0.0.1` port and runs `git` and `communique` in a temp directory `communique-config-*` that it removes afterward. It passes `communique` only a placeholder API key [test-release-please-runner.js:testCommuniqueConfigFitsReleaseNotes].
 
 ## Verification
 
-- Run: `npm --prefix scripts run test:release-please-runner` (needs `npm --prefix scripts ci` first).
+- Run: `npm --prefix scripts run test:release-please-runner` (needs `npm --prefix scripts ci` first, and `communique` on `PATH`, which `mise install` provides).
 - Run: `mise run format-check`. treefmt formats and lints `scripts/` with `shfmt` and `shellcheck` (`*.sh`), `stylua` (`*.lua`), and `prettier` (`*.js`, `*.json`, `*.md`).
 - `mise run check` runs `luacheck` on `lua/` and `tests/` only, so it does not cover `scripts/`.
