@@ -46,7 +46,7 @@ Module map (direct files):
 - `M.is_claude_connected()`: false when the server is not running. When `get_status().clients` is non-empty, true only when a client has `handshake_complete`. When it is empty, true when `client_count > 0`, with no handshake check [init.lua:M.is_claude_connected]
 - `M.send_at_mention(file_path, start_line?, end_line?, context?) -> ok, err?`: line numbers are 0-indexed [init.lua:M.send_at_mention]
 - `M.process_mention_queue(from_new_connection?)`: the server's `on_connect` callback calls it [init.lua:M.process_mention_queue]
-- `M.open_with_model(args)`, `M.get_version()`, and `M.version` (`0.2.0`) [init.lua:M.version]
+- `M.open_with_model(args)`, `M.get_version()`, and `M.version`, read from the repository's `VERSION` file at load [init.lua:M.version]
 - Internal API: `M._create_commands`, `M._broadcast_at_mention`, `M._add_paths_to_claude` (default `max_files` 100, `batch_size` 10), `M._format_path_for_at_mention`, `M._ensure_terminal_visible_if_connected`, and `M._maybe_warn_unfocusable_provider` [init.lua:M._add_paths_to_claude]
 
 ### User commands [init.lua:M._create_commands]
