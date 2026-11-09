@@ -9,13 +9,14 @@ local M = {}
 
 local logger = require("claudecode.logger")
 
---- Current plugin version
+--- Current plugin version. The values come from the VERSION file at the repository root, which release-please
+--- bumps, so a release changes no Lua file. Without a readable VERSION file the version is 0.0.0-unknown.
 ---@type ClaudeCodeVersion
 M.version = {
   major = 0,
-  minor = 2,
+  minor = 0,
   patch = 0,
-  prerelease = nil,
+  prerelease = "unknown",
   string = function(self)
     local version = string.format("%d.%d.%d", self.major, self.minor, self.patch)
     if self.prerelease then
@@ -24,6 +25,20 @@ M.version = {
     return version
   end,
 }
+
+do
+  local root = debug.getinfo(1, "S").source:match("^@(.-)lua[/\\]claudecode[/\\]init%.lua$")
+  local file = root and io.open(root .. "VERSION", "r")
+  if file then
+    local text = file:read("*l") or ""
+    file:close()
+    local major, minor, patch, prerelease = text:match("^(%d+)%.(%d+)%.(%d+)%-?(%S*)%s*$")
+    if major then
+      M.version.major, M.version.minor, M.version.patch = tonumber(major), tonumber(minor), tonumber(patch)
+      M.version.prerelease = prerelease ~= "" and prerelease or nil
+    end
+  end
+end
 
 -- Module state
 ---@type ClaudeCodeState
