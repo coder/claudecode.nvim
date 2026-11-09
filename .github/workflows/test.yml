@@ -39,14 +39,10 @@ jobs:
 
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
-
-      # `mise install` rewrites an incomplete mise.lock and downloads tools again to do it.
-      - name: Check that mise.lock is complete
-        run: |
-          if ! git diff --exit-code -- mise.lock; then
-            echo "::error file=mise.lock::mise install changed mise.lock. Run 'mise lock -p linux-x64,macos-arm64' and commit the result."
-            exit 1
-          fi
+        with:
+          # --locked installs only from mise.lock and never rewrites it. Without it, `mise install` fills in missing lock
+          # data and downloads tools again to do it, so a slow www.lua.org failed this step.
+          install_args: --locked
 
       - name: Install release tooling dependencies
         env:

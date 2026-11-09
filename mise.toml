@@ -15,9 +15,10 @@
 [settings]
 # Maintain a committed mise.lock pinning resolved URLs + checksums for the
 # tools (the integrity role flake.lock used to play). Keep it complete: when it
-# lacks an entry that `mise lock` would write, every `mise install` writes that
-# entry again and downloads the tool to do it, so a slow www.lua.org once failed
-# CI's "Set up mise" step. CI fails when `mise install` changes this file.
+# lacks an entry that `mise lock` would write, a plain `mise install` writes
+# that entry again and downloads the tool to do it, so a slow www.lua.org once
+# failed CI's "Set up mise" step. CI runs `mise install --locked`, which fails
+# when a tool is missing from this file and never rewrites it.
 # npm-backed prettier records a version but no checksum, and the conda-backed
 # luajit records its conda packages only for the platform it was locked on.
 # Regenerate with: mise lock -p linux-x64,macos-arm64
