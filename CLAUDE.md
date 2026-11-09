@@ -370,7 +370,7 @@ Log levels for authentication events:
 
 ## Release Process
 
-release-please runs releases (`.github/workflows/release-please.yaml`). Each push to `main` rebuilds the release PR, titled `chore(release): x.y.z`, from the commits since the last release tag. The PR exists only when those commits include a `feat`, `fix`, `perf` or `revert` commit, or a breaking change. A push with only `docs`, `chore`, `ci`, `test`, `refactor`, `build` or `style` commits opens no PR. The release PR bumps `VERSION` and `.release-please-manifest.json`, and Communique regenerates `CHANGELOG.md` and the PR body. Merging that PR creates the `vX.Y.Z` tag and the GitHub Release.
+release-please runs releases (`.github/workflows/release-please.yaml`). Each push to `main` runs release-please over the commits since the last release. When any of them would appear in the release notes, for example a `feat` or `fix` commit, it opens or updates the release PR, titled `chore(release): x.y.z`. The release PR bumps `VERSION` and `.release-please-manifest.json`, and Communique regenerates `CHANGELOG.md` and the PR body. Merging that PR creates the `vX.Y.Z` tag and the GitHub Release.
 
 - Do not edit the version by hand. `lua/claudecode/init.lua` reads `M.version` from `VERSION` when it loads, so a release changes no Lua file and `covered.lock` stays current. The numbers in `init.lua` are only the `0.0.0-unknown` fallback.
 - Give each PR a Conventional Commits title. The merge queue squashes with the title, and release-please picks the next version from those subjects.
