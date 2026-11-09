@@ -40,8 +40,9 @@ jobs:
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
-          # --locked installs only from mise.lock and never rewrites it. Without it, `mise install` fills in missing lock
-          # data and downloads tools again to do it, so a slow www.lua.org failed this step.
+          # --locked installs only tools listed in mise.lock, fails when an entry is missing, and never rewrites it.
+          # Without it, `mise install` fills in missing lock data and downloads tools again to do it, so a slow
+          # www.lua.org failed this step.
           install_args: --locked
           # mise is pinned because `--locked` rules change between releases (2026.11.0 started to require a
           # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release.
