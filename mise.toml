@@ -21,6 +21,9 @@
 # when a tool is missing from this file and never rewrites it.
 # npm-backed prettier records a version but no checksum, and the conda-backed
 # luajit records its conda packages only for the platform it was locked on.
+# The vfox backend (lua, neovim) records a checksum but does not compare its
+# download with it: Lua builds from the lua.org tarball unchecked, and the
+# Neovim plugin checks the upstream checksum instead.
 # Regenerate with: mise lock -p linux-x64,macos-arm64
 lockfile = true
 
