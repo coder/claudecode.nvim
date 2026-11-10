@@ -50,7 +50,11 @@ const UNRELEASED_HEADING_PATTERN = /^#{2,3} \[?Unreleased\]?[ \t]*$/;
 // hand-staged drafts use Keep-a-Changelog `### Added`-style subsections.
 const NEXT_SECTION_PATTERN = /^##? /;
 const TITLE_PATTERN = /^# .+$/;
-const FENCE_PATTERN = /^ {0,3}(?:`{3,}|~{3,})/;
+// CommonMark fences: up to three spaces of indent, then three or more backticks
+// or tildes. A backtick opener cannot have a backtick after it. A closer can
+// have nothing after it but blanks, or the `\r` of a CRLF line ending.
+const FENCE_OPEN_PATTERN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
+const FENCE_CLOSE_PATTERN = /^ {0,3}(`{3,}|~{3,})[ \t\r]*$/;
 
 /**
  * Mirrors release-note workflow credentials: Anthropic works standalone;
@@ -114,6 +118,31 @@ function buildCommuniqueArgs(invocation) {
 }
 
 /**
+ * The fence that is open after `line`: the opener's marker (for example
+ * "````" or "~~~") or null. A fence closes only on a marker of the same
+ * character that is at least as long as the opener's. An unclosed fence runs
+ * to the end of the text.
+ */
+function nextOpenFence(openFence, line) {
+  assert.ok(
+    openFence === null || typeof openFence === "string",
+    "openFence must be a string or null",
+  );
+  assert.equal(typeof line, "string", "line must be a string");
+
+  if (openFence === null) {
+    const opener = FENCE_OPEN_PATTERN.exec(line);
+    return opener === null ? null : (opener[1] ?? opener[2]);
+  }
+  const closer = FENCE_CLOSE_PATTERN.exec(line);
+  const closes =
+    closer !== null &&
+    closer[1][0] === openFence[0] &&
+    closer[1].length >= openFence.length;
+  return closes ? null : openFence;
+}
+
+/**
  * Guard the generated section body against LLM drift: drop a leading version
  * heading if Communique emitted one, and demote stray H2 headings to H3 so they
  * stay nested below the canonical release heading.
@@ -123,15 +152,13 @@ function normalizeCommuniqueBody(body) {
   const withoutLeadingHeading = body
     .trim()
     .replace(/^#{1,3} \[?v?\d[^\n]*\n*/, "");
-  let inFence = false;
+  let openFence = null;
   return withoutLeadingHeading
     .split("\n")
     .map((line) => {
-      if (FENCE_PATTERN.test(line)) {
-        inFence = !inFence;
-        return line;
-      }
-      if (!inFence && /^## /.test(line)) {
+      const outsideFence = openFence === null;
+      openFence = nextOpenFence(openFence, line);
+      if (outsideFence && openFence === null && /^## /.test(line)) {
         return `### ${line.slice(3)}`;
       }
       return line;
@@ -236,14 +263,13 @@ function findLineOutsideFences(lines, start, predicate) {
   assert.equal(typeof start, "number", "start must be a number");
   assert.equal(typeof predicate, "function", "predicate must be a function");
 
-  let inFence = false;
+  let openFence = null;
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i] ?? "";
-    if (FENCE_PATTERN.test(line)) {
-      inFence = !inFence;
-      continue;
-    }
-    if (!inFence && i >= start && predicate(line)) {
+    // A fence line, or a line inside a fence, is never outside it.
+    const outsideFence = openFence === null;
+    openFence = nextOpenFence(openFence, line);
+    if (outsideFence && openFence === null && i >= start && predicate(line)) {
       return i;
     }
   }

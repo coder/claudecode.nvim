@@ -101,6 +101,118 @@ async function testUnreleasedUpdater() {
   assert.equal(updated, runner.formatChangelogMarkdown(updated));
 }
 
+async function testFenceTracking() {
+  // A fence closes only on the same character, at least as long as its opener.
+  const outside = (lines) =>
+    runner.findLineOutsideFences(lines, 0, (line) => line === "## Real");
+
+  assert.equal(
+    outside(["````md", "```", "## Real", "````", "## Real"]),
+    4,
+    "a shorter backtick line must not close a four-backtick fence",
+  );
+  assert.equal(
+    outside(["~~~", "```", "## Real", "~~~", "## Real"]),
+    4,
+    "backticks must not close a tilde fence",
+  );
+  assert.equal(
+    outside(["```", "~~~", "## Real", "```", "## Real"]),
+    4,
+    "tildes must not close a backtick fence",
+  );
+  assert.equal(
+    outside(["~~~~", "~~~", "## Real", "~~~~~", "## Real"]),
+    4,
+    "a shorter tilde line must not close a tilde fence, a longer one closes it",
+  );
+  assert.equal(
+    outside(["```", "```js", "## Real", "```", "## Real"]),
+    4,
+    "a closing fence cannot carry an info string",
+  );
+  assert.equal(
+    outside(["```", "## Real", "````", "## Real"]),
+    3,
+    "a longer fence closes a shorter one",
+  );
+  assert.equal(
+    outside(["```\r", "## Real\r", "```\r", "## Real"]),
+    3,
+    "a CRLF line ending does not stop a fence from closing",
+  );
+  assert.equal(
+    outside(["   ```", "## Real", "   ```", "## Real"]),
+    3,
+    "a fence may be indented by up to three spaces",
+  );
+  assert.equal(
+    outside(["    ```", "## Real"]),
+    1,
+    "four spaces of indent make a code line, not a fence",
+  );
+  assert.equal(
+    outside(["```js```", "## Real"]),
+    1,
+    "a backtick fence cannot carry a backtick in its info string",
+  );
+  assert.equal(
+    outside(["~~~ a`b", "## Real", "~~~", "## Real"]),
+    3,
+    "a tilde fence can carry a backtick in its info string",
+  );
+  assert.equal(
+    outside(["```", "## Real"]),
+    -1,
+    "an unclosed fence runs to the end of the text",
+  );
+
+  // The Communique body keeps headings inside a longer or tilde fence as is.
+  assert.equal(
+    runner.normalizeCommuniqueBody(
+      "## A\n\n````md\n```\n## Not a heading\n````\n\n## B",
+    ),
+    "### A\n\n````md\n```\n## Not a heading\n````\n\n### B",
+  );
+  assert.equal(
+    runner.normalizeCommuniqueBody(
+      "## A\n\n~~~md\n```\n## Not a heading\n~~~\n\n## B",
+    ),
+    "### A\n\n~~~md\n```\n## Not a heading\n~~~\n\n### B",
+  );
+}
+
+async function testUnreleasedUpdaterFences() {
+  const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
+  const released =
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
+
+  // A four-backtick fence in the draft flipped the fence state for the rest of
+  // the file, so the existing release below it was dropped.
+  for (const [open, close] of [
+    ["````md", "````"],
+    ["~~~md", "~~~"],
+  ]) {
+    const updated = new runner.UnreleasedAwareChangelog({
+      changelogEntry: entry,
+    }).updateContent(
+      `# Changelog\n\n## [Unreleased]\n\n${open}\n\`\`\`\n## Not a heading\n${close}\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n`,
+    );
+    assert.equal(updated, released);
+  }
+
+  // An Unreleased heading inside a fence is not the anchor.
+  const updated = new runner.UnreleasedAwareChangelog({
+    changelogEntry: entry,
+  }).updateContent(
+    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n- Draft\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+  );
+  assert.equal(
+    updated,
+    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+  );
+}
+
 function testPullRequestOutputs() {
   assert.deepEqual(runner.formatPullRequestOutputs([]), {
     prs_created: "false",
@@ -312,6 +424,8 @@ async function main() {
   await testCommuniqueArgs();
   await testHeadingNormalization();
   await testUnreleasedUpdater();
+  await testFenceTracking();
+  await testUnreleasedUpdaterFences();
   testPullRequestOutputs();
   await testInternalCommitSkipsCommunique();
   await testReleasableCommitRunsCommunique();
