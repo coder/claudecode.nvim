@@ -2012,10 +2012,9 @@ describe("Range Selection Tests", function()
         _G.vim.test.set_mode("n")
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()
-        assert.is_nil(selection.state.last_active_visual_selection)
-        selection.on_text_changed()
-        fire_debounce() -- the debounce alone is enough: no demotion delay for text that is gone
 
+        -- No timer has fired: the text is gone, so there is no demotion delay for it.
+        assert.is_nil(selection.state.last_active_visual_selection)
         assert_claude_holds_cursor("/path/to/a.txt", 0)
         assert.is_nil(selection.state.demotion_timer)
       end)
@@ -2044,6 +2043,7 @@ describe("Range Selection Tests", function()
         assert.are.equal("alpha", selection.get_latest_selection().text)
 
         delete_at_cursor(6, "alph beta gamma") -- x
+        assert_claude_holds_cursor("/path/to/a.txt", 4) -- at once, before any timer fires
         settle()
         assert_claude_holds_cursor("/path/to/a.txt", 4)
 
@@ -2063,6 +2063,40 @@ describe("Range Selection Tests", function()
         settle()
 
         assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      -- The debounce does nothing in the Claude terminal, so text that is gone must not wait for it.
+      it("holds no deleted text when you go to the Claude terminal right after the edit", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+
+        delete_at_cursor(6, "alph beta gamma") -- x
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        go_to_buffer(2, 0)
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      it("holds no deleted text when you move, edit and go to the Claude terminal inside one debounce", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+
+        move_cursor(5) -- l: the cursor left the selection
+        change_text(6, "alpha eta gamma") -- an edit elsewhere in the line
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        go_to_buffer(2, 0)
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 5)
       end)
 
       -- Finding 3, SameFile: a long visual_demotion_delay_ms, so the demotion is still pending (it never fires

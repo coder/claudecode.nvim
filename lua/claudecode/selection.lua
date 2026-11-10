@@ -21,7 +21,7 @@ end
 ---@return boolean
 local function cursor_unmoved_since_flush(bufnr)
   local caf = M.state.cursor_at_flush
-  if not caf or caf.bufnr ~= bufnr then
+  if not caf or caf.bufnr ~= bufnr or caf.left then
     return false
   end
   local pos = vim.api.nvim_win_get_cursor(0)
@@ -47,25 +47,29 @@ local function clear_held_state()
   M.state.cursor_at_flush = nil
 end
 
----Ends the hold on a visual selection when its buffer, cursor or text is gone, at the moment that happens. A timer
----that compares the cursor when it fires does not see a move away and back inside one debounce, and does not see
----an edit that leaves the cursor where it was. The Claude terminal is not a place the selection left: going there
----keeps the held selection (issue #246).
+---Reacts, at the moment it happens, to something that can end the hold on a visual selection. A timer that
+---compares the cursor when it fires does not see a move away and back inside one debounce, and does not see an
+---edit that leaves the cursor where it was.
+---1. The text changed since the flush: Claude must not keep it, not even until the debounce fires, which does
+---   nothing in the Claude terminal. Report the cursor now.
+---2. The cursor left the flushed position or the buffer: note it in `cursor_at_flush.left`. The next update and
+---   the demotion then report the cursor, even if the cursor comes back. The Claude terminal is not a place the
+---   selection left: going there keeps the held selection (issue #246).
 ---@param compare_cursor boolean false at BufEnter: Neovim restores the window cursor after that event, so only the
 ---buffer and the text say whether the selection is gone.
-local function end_hold_if_selection_left(compare_cursor)
+local function reconcile_held_selection(compare_cursor)
   local caf = M.state.cursor_at_flush
   if not caf then
     return
   end
   local current_buf = vim.api.nvim_get_current_buf()
-  if is_claude_terminal_buffer(current_buf) then
-    return
-  end
-  local left_buffer = caf.bufnr ~= current_buf
-  local moved = compare_cursor and not cursor_unmoved_since_flush(current_buf)
-  if left_buffer or moved or vim.api.nvim_buf_get_changedtick(current_buf) ~= caf.tick then
-    M.state.cursor_at_flush = nil
+  if caf.bufnr == current_buf and vim.api.nvim_buf_get_changedtick(current_buf) ~= caf.tick then
+    clear_held_state()
+    M.update_selection()
+  elseif not caf.left and not is_claude_terminal_buffer(current_buf) then
+    if caf.bufnr ~= current_buf or (compare_cursor and not cursor_unmoved_since_flush(current_buf)) then
+      caf.left = true
+    end
   end
 end
 
@@ -79,10 +83,11 @@ M.state = {
   demotion_timer = nil,
   visual_demotion_delay_ms = 50,
 
-  -- { bufnr, pos, tick }: buffer, cursor position and changedtick captured when a visual selection
-  -- is flushed on visual-mode exit. Demotion only fires once the cursor actually moves away from
-  -- this position or the buffer's text changes, so a held selection persists (see issue #246 and
-  -- M.flush_visual_selection). on_cursor_moved and on_text_changed clear it when that happens.
+  -- { bufnr, pos, tick, left }: buffer, cursor position and changedtick captured when a visual
+  -- selection is flushed on visual-mode exit. Demotion only fires once the cursor actually moves
+  -- away from this position, so a held selection persists (see issue #246 and
+  -- M.flush_visual_selection). on_cursor_moved sets `left` when the cursor leaves, so coming back
+  -- does not undo it, and a change of the text (the tick) ends the hold at once.
   cursor_at_flush = nil,
 
   -- { bufnr, tick } captured when visual mode is entered. Used to detect that an operator
@@ -193,10 +198,10 @@ function M._clear_autocommands()
 end
 
 ---Handles cursor movement events.
----Ends the hold on a visual selection the cursor left, then triggers a debounced update of the selection.
+---Notes that the cursor left a held visual selection, then triggers a debounced update of the selection.
 ---@param entered_buffer boolean|nil true for BufEnter, when the window cursor is not restored yet.
 function M.on_cursor_moved(entered_buffer)
-  end_hold_if_selection_left(not entered_buffer)
+  reconcile_held_selection(not entered_buffer)
   M.debounce_update()
 end
 
@@ -233,7 +238,7 @@ end
 ---Handles text change events.
 ---Ends the hold on a visual selection whose text changed, then triggers a debounced update of the selection.
 function M.on_text_changed()
-  end_hold_if_selection_left(true)
+  reconcile_held_selection(true)
   M.debounce_update()
 end
 
@@ -865,8 +870,13 @@ function M.flush_visual_selection()
   -- residual non-broadcast, not a regression.
   local entry = M.state.visual_entry
   if entry and entry.bufnr == current_buf and vim.api.nvim_buf_get_changedtick(current_buf) ~= entry.tick then
-    -- The operator consumed the selection, and with it any selection held from before.
+    -- The operator consumed the selection, and with it any selection Claude holds in this buffer from
+    -- before or from the in-visual update: report the cursor now.
     clear_held_state()
+    local held = M.state.latest_selection
+    if held and not held.selection.isEmpty and held.filePath == vim.api.nvim_buf_get_name(current_buf) then
+      M.update_selection()
+    end
     return
   end
 
@@ -881,6 +891,7 @@ function M.flush_visual_selection()
     bufnr = current_buf,
     pos = vim.api.nvim_win_get_cursor(0),
     tick = vim.api.nvim_buf_get_changedtick(current_buf),
+    left = false,
   }
   M.state.last_active_visual_selection = {
     bufnr = current_buf,
