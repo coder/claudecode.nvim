@@ -161,9 +161,10 @@ describe("The lifecycle of a WebSocket connection", function()
   end)
 
   describe("when the ping timer runs late, below the wake threshold, with Claude's pong still unread", function()
-    -- libuv runs timers before it reads sockets. A tick that Neovim runs late after a block finds the pong of the last ping
-    -- still in the socket, so its last_pong is a whole interval older than the tick before it. A block of up to 1.5
-    -- intervals is not a wake, so last_pong is not reset.
+    -- A tick that Neovim runs late can run before the socket read (on Neovim 0.8 after any block, on newer Neovim
+    -- after a block inside a libuv callback that runs after the poll phase, such as a check callback), and then finds
+    -- the pong of the last ping still in the socket. Its last_pong is a whole interval older than at the tick before
+    -- it. A block of up to 1.5 intervals is not a wake, so last_pong is not reset.
     it("does not drop a Claude that answers every ping, and forgets the late tick once Claude answers", function()
       local tick = start_ping_timer()
       local client, writes, handle = connect_and_upgrade()
@@ -235,7 +236,8 @@ describe("The lifecycle of a WebSocket connection", function()
         assert.equals(case.status, close_status(writes[3]))
         assert.is_false(handle:is_closing(), "the socket was closed before the Close frame was written")
 
-        -- Claude reads again: libuv writes the queue, then the socket closes, and Claude's hang-up reports nothing more.
+        -- Claude reads again: libuv writes the queue, then the socket closes, and Claude's hang-up reports nothing
+        -- more.
         for _, write in ipairs(writes) do
           write.done()
         end

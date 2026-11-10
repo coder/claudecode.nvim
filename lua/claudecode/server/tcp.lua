@@ -427,9 +427,11 @@ function M.start_ping_timer(server, interval)
           client.pong_overdue = nil
           client_manager.send_ping(client, "ping")
         elseif not client.pong_overdue then
-          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
-          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
-          -- finds the pong that was read in between, or drops the client.
+          -- A tick that Neovim runs late can run before the socket read, and then finds the pong of the last ping
+          -- unread: on Neovim 0.8 after any block, and on newer Neovim after a block inside a libuv callback that runs
+          -- after the poll phase (a check callback), not after a block in vim.schedule, which reads the socket first.
+          -- So the first tick that finds no pong for two intervals pings again, and the next one finds the pong that
+          -- was read in between, or drops the client.
           client.pong_overdue = true
           client_manager.send_ping(client, "ping")
         else
