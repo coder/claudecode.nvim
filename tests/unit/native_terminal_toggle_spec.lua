@@ -1823,29 +1823,44 @@ describe("claudecode.terminal.native toggle behavior", function()
         assert.is_not_nil(native_provider.get_active_bufnr())
       end)
 
-      it("should show the terminal that an open created and a toggle hid while the stop waited", function()
-        snacks_available = false
-        local opened = false
-        mock_vim.api.nvim_create_autocmd("TermClose", {
-          callback = function()
-            if not opened then
-              opened = true
-              native_provider.open("claude", {}, config)
-              native_provider.simple_toggle("claude", {}, config)
-            end
-          end,
-        })
+      -- With focus the terminal window is current afterwards. Without focus (ensure_visible) the user's window stays.
+      for _, focus in ipairs({ true, false }) do
+        it(
+          "should show the terminal that an open created and a toggle hid while the stop waited (focus="
+            .. tostring(focus)
+            .. ")",
+          function()
+            local mock_state = _G.get_mock_state()
+            snacks_available = false
+            local user_winid = mock_state.current_win
+            local opened = false
+            mock_vim.api.nvim_create_autocmd("TermClose", {
+              callback = function()
+                if not opened then
+                  opened = true
+                  native_provider.open("claude", {}, config)
+                  native_provider.simple_toggle("claude", {}, config)
+                  -- Neovim moves the focus back to the user's window when the terminal window closes.
+                  mock_state.current_win = user_winid
+                end
+              end,
+            })
 
-        assert.has_no.errors(function()
-          native_provider.open("claude", {}, config)
-        end)
+            assert.has_no.errors(function()
+              native_provider.open("claude", {}, config, focus)
+            end)
 
-        local active = native_provider.get_active_bufnr()
-        assert.is_true(opened)
-        assert.is_not_nil(active)
-        assert.are.equal(1, running_count())
-        assert.are.equal(1, windows_showing(active))
-      end)
+            local active = native_provider.get_active_bufnr()
+            assert.is_true(opened)
+            assert.is_not_nil(active)
+            assert.are.equal(1, running_count())
+            assert.are.equal(1, windows_showing(active))
+            local current_bufnr = mock_state.windows[mock_state.current_win].bufnr
+            assert.are.equal(focus, current_bufnr == active)
+            assert.are.equal(not focus, mock_state.current_win == user_winid)
+          end
+        )
+      end
 
       it("should be stopped when close runs and the native provider tracks no terminal", function()
         local mock_state = _G.get_mock_state()
