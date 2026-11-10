@@ -11,7 +11,8 @@
 #   RULES        array of invariant names (TypeOK is always checked first and is not a rule)
 #   LIVE         array of temporal property names (may be empty)
 #   EXPECT       assoc array: fact name (or A+B for a combination) -> the rule that must break when it is FALSE,
-#                or "-" for a fact that is not a guard
+#                or "-" for a fact that is not a guard. Quote an A+B key: EXPECT=(["FactA+FactB"]=Rule). shfmt -w
+#                rewrites an unquoted [FactA+FactB] to [FactA + FactB], and --mutants then exits 2 on that key.
 #   tla_constants NAME KIND
 #                function printing the CONSTANTS lines (indented, without the facts) for run NAME,
 #                KIND is "inv" or "live"
@@ -271,6 +272,12 @@ tla_mutants() {
   local -A rule_hit
   local hits assigns parts note
   echo "== mutants: each guard removed alone, each rule checked alone"
+  for f in "${!EXPECT[@]}"; do
+    [[ $f != *[[:space:]]* ]] || {
+      echo "ERROR: EXPECT key \"$f\" has a space; quote an A+B key, [\"A+B\"]=Rule (shfmt -w rewrites an unquoted one)" >&2
+      exit 2
+    }
+  done
   for f in "${FACTS[@]}"; do
     [[ -n ${EXPECT[$f]:-} || " ${!EXPECT[*]} " == *"+$f "* || " ${!EXPECT[*]} " == *" $f+"* ]] || {
       echo "  $f has no EXPECT entry: every fact must be caught by a rule, alone or in a listed combination"
