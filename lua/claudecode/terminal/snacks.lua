@@ -6,6 +6,8 @@ local M = {}
 local snacks_available, Snacks = pcall(require, "snacks")
 local utils = require("claudecode.utils")
 local terminal = nil
+-- True while Snacks.terminal.open runs in M.open. `terminal` is set only after it returns.
+local starting = false
 
 --- @return boolean
 local function is_available()
@@ -52,21 +54,27 @@ end
 ---@param config ClaudeCodeTerminalConfig Terminal configuration
 ---@param env_table table Environment variables to set for the terminal process
 ---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
----@return snacks.terminal.Opts opts Snacks terminal options with start_insert/auto_insert controlled by focus parameter
+---@return snacks.terminal.Opts opts
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
-  local should_insert = focus and config.auto_insert ~= false
+  local auto_insert = config.auto_insert ~= false
+  -- Snacks enters every window it opens (#423).
+  local enter = nil
+  if not focus then
+    enter = false
+  end
   return {
     env = env_table,
     cwd = config.cwd,
-    start_insert = should_insert,
-    auto_insert = should_insert,
+    start_insert = focus and auto_insert,
+    auto_insert = auto_insert,
     auto_close = false,
     win = vim.tbl_deep_extend("force", {
       position = config.split_side,
       width = config.split_width_percentage,
       height = 0,
       relative = "editor",
+      enter = enter,
       -- Default, not a lock. Snacks' terminal style would set "snacks_terminal", and Snacks re-applies `bo` each time
       -- it re-creates a floating window, so the filetype goes through the options, not a write after open.
       -- `snacks_win_opts.bo.filetype` wins.
@@ -143,6 +151,25 @@ local function resolve_split_size(val, total, default_frac)
     return math.floor(val)
   end
   return math.max(1, math.floor(total * default_frac))
+end
+
+-- Snacks' auto_insert runs `startinsert` on BufEnter of the terminal buffer (#423).
+local function win_set_buf_without_bufenter(win, buf)
+  local saved = vim.o.eventignore
+  -- A `-BufEnter` entry wins wherever it stands in the list.
+  local ignored = {}
+  for entry in saved:gmatch("[^,]+") do
+    if entry:lower() ~= "-bufenter" then
+      table.insert(ignored, entry)
+    end
+  end
+  table.insert(ignored, "BufEnter")
+  vim.o.eventignore = table.concat(ignored, ",")
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  vim.o.eventignore = saved
+  if not ok then
+    error(err, 0)
+  end
 end
 
 local function start_insert_if_terminal(term)
@@ -299,7 +326,19 @@ local function cc_show(term, focus, config)
   if (not is_native_split or (term._cc and term._cc.kind == "float")) and term._cc and term._cc.orig_show then
     logger.debug("terminal", "Snacks show: re-creating via Snacks (position=" .. tostring(position) .. ")")
     term._cc.kind = nil
-    term._cc.orig_show(term)
+    if focus or win_opts.enter ~= nil then
+      term._cc.orig_show(term)
+    else
+      -- In Snacks, opts.enter = false skips both entering the window and its queued insert.
+      local snacks_opts = term.opts or {}
+      local entered = snacks_opts.enter
+      snacks_opts.enter = false
+      local ok, err = pcall(term._cc.orig_show, term)
+      snacks_opts.enter = entered
+      if not ok then
+        error(err, 0)
+      end
+    end
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
       maybe_start_insert(term, config)
@@ -325,7 +364,11 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
-  vim.api.nvim_win_set_buf(new_win, term.buf)
+  if focus then
+    vim.api.nvim_win_set_buf(new_win, term.buf)
+  else
+    win_set_buf_without_bufenter(new_win, term.buf)
+  end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native
   end
@@ -401,6 +444,12 @@ function M.open(cmd_string, env_table, config, focus)
     return
   end
 
+  -- A BufEnter or TermOpen autocmd can call open while Snacks.terminal.open runs below. That start is the one this
+  -- open would begin, so a second start would run a second Claude that nothing tracks.
+  if starting then
+    return
+  end
+
   local opts = build_opts(config, env_table, focus)
   -- Pass an argv list (not a string) so Snacks spawns Claude via termopen()
   -- without a shell. A shell would glob-expand bracketed model aliases like
@@ -417,7 +466,9 @@ function M.open(cmd_string, env_table, config, focus)
       user_on_buf(instance)
     end
   end
+  starting = true
   local opened, open_result = pcall(Snacks.terminal.open, cmd, opts)
+  starting = false
   local term_instance = opened and open_result or nil
   -- When errors are silenced, termopen returns -1 instead of raising and leaves a plain buffer.
   local started = term_instance
@@ -426,6 +477,10 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
+    if not focus then
+      -- Snacks keeps these opts for every later show.
+      term_instance.opts.enter = (config.snacks_win_opts or {}).enter
+    end
     terminal = term_instance
   else
     terminal = nil
