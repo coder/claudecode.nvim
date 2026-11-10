@@ -217,20 +217,26 @@ end
 ---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table The parameters to send
----@return boolean success Whether broadcasting was successful
-function M.broadcast(method, params)
+---@param on_written fun(written: integer)|nil When a client took the message: called once with how many did, as
+---  server/init.lua broadcast reports it after its writes finished
+---@return boolean success Whether a client took the message, as server/init.lua broadcast reports it
+function M.broadcast(method, params, on_written)
   if not M.state.server or type(M.state.server.clients) ~= "table" then
     return false
   end
 
-  local success = true
+  local written = 0
 
   for client_id, _ in pairs(M.state.server.clients) do
-    local send_success = M.send(client_id, method, params)
-    success = success and send_success
+    if M.send(client_id, method, params) then
+      written = written + 1
+    end
   end
 
-  return success
+  if written > 0 and on_written then
+    on_written(written)
+  end
+  return written > 0
 end
 
 ---Simulate receiving a message from a client
