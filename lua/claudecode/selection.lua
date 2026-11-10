@@ -231,23 +231,11 @@ function M.update_selection()
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  -- If the buffer name starts with "term://" and contains "claude", do not update selection
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
-    -- Optionally, cancel demotion timer like for the terminal
+  -- Do not update the selection in the Claude terminal; cancel any pending demotion.
+  if M.is_claude_terminal_buffer(current_buf) then
     M._cancel_demotion_timer()
     return
-  end
-
-  -- If the current buffer is the Claude terminal, do not update selection
-  if terminal then
-    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-    if claude_term_bufnr and current_buf == claude_term_bufnr then
-      -- Cancel any pending demotion if we switch to the Claude terminal
-      M._cancel_demotion_timer()
-      return
-    end
   end
 
   local current_mode_info = vim.api.nvim_get_mode()
@@ -790,16 +778,9 @@ function M.flush_visual_selection()
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+  if M.is_claude_terminal_buffer(current_buf) then
     return
-  end
-  if terminal then
-    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-    if claude_term_bufnr and current_buf == claude_term_bufnr then
-      return
-    end
   end
 
   -- Skip when the buffer was edited while in visual mode: the changedtick advancing since
@@ -896,6 +877,23 @@ end
 ---@param selection table The selection object to send.
 function M.send_selection_update(selection)
   M.server.broadcast("selection_changed", selection)
+end
+
+---Whether a buffer is the Claude terminal, which selection tracking ignores.
+---@param bufnr integer
+---@return boolean
+function M.is_claude_terminal_buffer(bufnr)
+  local buf_name = vim.api.nvim_buf_get_name(bufnr)
+  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+    return true
+  end
+  if terminal then
+    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
+    if claude_term_bufnr and bufnr == claude_term_bufnr then
+      return true
+    end
+  end
+  return false
 end
 
 ---Gets the latest recorded selection.

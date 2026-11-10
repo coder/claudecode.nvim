@@ -41,7 +41,8 @@ local function handler(params)
     local current_buf = vim.api.nvim_get_current_buf()
     local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-    if not buf_name or buf_name == "" then
+    -- The Claude terminal is not an editor; tracked mode skips it the same way.
+    if not buf_name or buf_name == "" or selection_module.is_claude_terminal_buffer(current_buf) then
       -- No active editor case - match VS Code format
       local no_editor_response = {
         success = false,
@@ -58,28 +59,10 @@ local function handler(params)
       }
     end
 
-    -- Valid buffer but no selection - return cursor position with success field
-    local empty_selection = {
-      success = true,
-      text = "",
-      filePath = buf_name,
-      fileUrl = "file://" .. buf_name,
-      selection = {
-        start = { line = 0, character = 0 },
-        ["end"] = { line = 0, character = 0 },
-        isEmpty = true,
-      },
-    }
-
-    -- Return MCP-compliant format with JSON-stringified empty selection
-    return {
-      content = {
-        {
-          type = "text",
-          text = safe_json_encode(empty_selection, "empty selection"),
-        },
-      },
-    }
+    -- No tracked selection: `track_selection` is off, or nothing was tracked yet.
+    -- Read the editor now, so the answer is the user's real selection or cursor.
+    selection = selection_module.get_visual_selection() or selection_module.get_cursor_position()
+    assert(type(selection) == "table" and selection.selection, "expected a selection table from claudecode.selection")
   end
 
   -- Add success field to existing selection data
