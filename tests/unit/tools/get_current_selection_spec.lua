@@ -80,24 +80,66 @@ describe("Tool: get_current_selection", function()
     assert.spy(mock_selection_module.get_latest_selection).was_called()
   end)
 
-  it("should answer no active editor when the Claude terminal is current and nothing is tracked", function()
-    mock_selection_module.get_latest_selection = spy.new(function()
-      return nil
-    end)
-    mock_selection_module.is_claude_terminal_buffer = spy.new(function(bufnr)
-      return bufnr == 1
-    end)
-    mock_selection_module.get_visual_selection = spy.new(function()
-      error("must not read the Claude terminal")
-    end)
-    mock_selection_module.get_cursor_position = spy.new(function()
-      error("must not read the Claude terminal")
+  describe("when the Claude terminal is current and nothing is tracked", function()
+    before_each(function()
+      mock_selection_module.get_latest_selection = spy.new(function()
+        return nil
+      end)
+      mock_selection_module.is_claude_terminal_buffer = spy.new(function(bufnr)
+        return bufnr == 1
+      end)
+      mock_selection_module.get_visual_selection = spy.new(function()
+        error("must not read the Claude terminal")
+      end)
+      mock_selection_module.get_cursor_position = spy.new(function(winid)
+        assert(winid == 1001, "must read the previous window, got " .. tostring(winid))
+        return {
+          text = "",
+          filePath = "/prev/file.lua",
+          fileUrl = "file:///prev/file.lua",
+          selection = { start = { line = 6, character = 3 }, ["end"] = { line = 6, character = 3 }, isEmpty = true },
+        }
+      end)
+      _G.vim.fn = _G.vim.fn or {}
+      _G.vim.fn.win_getid = function(nr)
+        return nr == 2 and 1001 or 0
+      end
+      _G.vim.api.nvim_win_get_buf = function(winid)
+        return winid == 1001 and 2 or 1
+      end
+      _G.vim.api.nvim_buf_get_name = spy.new(function(bufnr)
+        return ({ [1] = "term://~//1:claude", [2] = "/prev/file.lua" })[bufnr] or ""
+      end)
     end)
 
-    local result = get_current_selection_handler({})
-    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
-    expect(parsed_result.success).to_be_false()
-    expect(parsed_result.message).to_be("No active editor found")
+    after_each(function()
+      _G.vim.fn.winnr = nil
+      _G.vim.fn.win_getid = nil
+      _G.vim.api.nvim_win_get_buf = nil
+    end)
+
+    it("answers the cursor in the window the user came from", function()
+      _G.vim.fn.winnr = function(arg)
+        return arg == "#" and 2 or 1
+      end
+
+      local result = get_current_selection_handler({})
+      local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+      expect(parsed_result.success).to_be_true()
+      expect(parsed_result.filePath).to_be("/prev/file.lua")
+      expect(parsed_result.selection.start.line).to_be(6)
+    end)
+
+    it("answers no active editor when there is no previous window", function()
+      _G.vim.fn.winnr = function(arg)
+        return arg == "#" and 0 or 1
+      end
+
+      local result = get_current_selection_handler({})
+      local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+      expect(parsed_result.success).to_be_false()
+      expect(parsed_result.message).to_be("No active editor found")
+    end)
   end)
 
   it("should return the live visual selection if no selection is tracked", function()

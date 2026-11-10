@@ -133,7 +133,7 @@ file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua b19b6556c3162ac5
+file lua/claudecode/selection.lua 5574682f344b36f6
 == lua/claudecode/server/client.lua
 file lua/claudecode/server/client.lua 9411e7b95e949d74
 block create_client      647b7523dea26af6
@@ -185,7 +185,7 @@ site lua/claudecode/tools/close_tab.lua: if diff_module_ok and diff.close_diff_b
 site lua/claudecode/tools/close_tab.lua: local closed = diff.close_diff_by_tab_name(tab_name, client and client.id or nil) @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: log.error("close_tab", "Failed to load diff module or close_diff_by_tab_name not available") @ local function handler(params, client)
 == lua/claudecode/tools/get_current_selection.lua
-file lua/claudecode/tools/get_current_selection.lua e2acaa312929eeb3
+file lua/claudecode/tools/get_current_selection.lua e7e0a17f79c9ffba
 == lua/claudecode/tools/get_diagnostics.lua
 file lua/claudecode/tools/get_diagnostics.lua e60d903c8042f813
 == lua/claudecode/tools/get_latest_selection.lua
