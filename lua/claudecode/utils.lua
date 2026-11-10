@@ -28,6 +28,29 @@ function M.map_terminal_suspend(bufnr)
   vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
 end
 
+---Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
+---`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
+---'eventignore' is back to the caller's value afterwards, also when the call raises.
+---@param win number
+---@param buf number
+function M.win_set_buf_without_bufenter(win, buf)
+  local saved = vim.o.eventignore
+  -- A `-BufEnter` entry wins wherever it stands in the list.
+  local ignored = {}
+  for entry in saved:gmatch("[^,]+") do
+    if entry:lower() ~= "-bufenter" then
+      table.insert(ignored, entry)
+    end
+  end
+  table.insert(ignored, "BufEnter")
+  vim.o.eventignore = table.concat(ignored, ",")
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  vim.o.eventignore = saved
+  if not ok then
+    error(err, 0)
+  end
+end
+
 ---Split a command string into an argument vector using POSIX shell word rules.
 ---
 ---Honors single quotes, double quotes, and backslash escapes so terminal

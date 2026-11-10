@@ -1039,8 +1039,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   in `tools/list` plus the hidden `close_tab`. `openDiff` runs in a coroutine and defers its response.
 - plugin: [./plugin/README.md](./plugin/README.md) - Runtime loader: Neovim >= 0.8.0 check, `vim.g.loaded_claudecode`
   guard, and optional `vim.g.claudecode_auto_setup`.
-- scripts: [./scripts/README.md](./scripts/README.md) - Shell WebSocket/MCP clients, issue repro scripts, integration test
-  runner, and the release-please runner.
+- scripts: [./scripts/README.md](./scripts/README.md) - Issue repro scripts, the integration test runner, a manual
+  `openDiff` helper, and the release-please runner.
 
 `fixtures/` (Neovim configs for manual repros) holds repro notes (`README.md` in some folders) but no EGM contracts.
 `tests/` (Busted specs) holds no contracts.
@@ -1054,8 +1054,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
 - The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
 - Lock files live in `$CLAUDE_CONFIG_DIR/ide` or else `~/.claude/ide`, named `<port>.lock`
-  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients that use `find_claude_lockfile` read the port from that basename
-  [scripts/lib_claude.sh:find_claude_lockfile]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
+  [lua/claudecode/lockfile.lua:M.lock_dir]. `repro_issue_238.sh`, `repro_issue_248.sh`, and the verify skill's `ws-client.mjs` read the port from that basename
+  [scripts/repro_issue_238.sh:PORT] [scripts/repro_issue_248.sh:PORT] [.agents/skills/verify-claudecode-nvim/scripts/ws-client.mjs:port]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
 - `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
   none [plugin/claudecode.lua].
 - `openDiff` must run in a non-main coroutine. Its response is deferred until the user accepts or rejects the diff
