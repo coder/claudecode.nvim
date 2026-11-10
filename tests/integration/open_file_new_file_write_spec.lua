@@ -10,7 +10,7 @@ end
 
 describe("openFile on a buffer opened before its file existed", function()
   local open_file = require("claudecode.tools.open_file")
-  local dir, target, other, group, hidden
+  local dir, target, other, group, hidden, eventignore
 
   local function disk(path)
     return table.concat(vim.fn.readfile(path), "|")
@@ -41,13 +41,13 @@ describe("openFile on a buffer opened before its file existed", function()
     target, other = dir .. "/target.txt", dir .. "/other.txt"
     vim.fn.writefile({ "other" }, other)
     group = vim.api.nvim_create_augroup("OpenFileNewFileWriteSpec", { clear = true })
-    hidden = vim.o.hidden
+    hidden, eventignore = vim.o.hidden, vim.o.eventignore
     vim.o.hidden = true
   end)
 
   after_each(function()
     vim.api.nvim_del_augroup_by_id(group)
-    vim.o.hidden = hidden
+    vim.o.hidden, vim.o.eventignore = hidden, eventignore
     vim.cmd("silent! %bwipeout!")
     vim.fn.delete(dir, "rf")
   end)
@@ -125,5 +125,31 @@ describe("openFile on a buffer opened before its file existed", function()
 
     assert.are.same("other unsaved", disk(other))
     assert.are.same("CLAUDE", disk(target))
+  end)
+
+  it("turns 'readonly' off after the step when a step autocmd reset 'buftype'", function()
+    local buf = buffer_opened_before_claude_wrote("USER UNSAVED")
+    autocmds({ "BufEnter * ++nested if &buftype ==# 'acwrite' | setlocal buftype= | endif" })
+
+    open_file.handler({ filePath = target })
+
+    assert.are.same("", vim.bo[buf].buftype)
+    assert.is_false(vim.bo[buf].readonly)
+  end)
+
+  it("sets no 'readonly' for a buffer whose file existed, so a handler write goes through as in Neovim", function()
+    vim.fn.writefile({ "orig" }, target)
+    vim.cmd("edit " .. vim.fn.fnameescape(target))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "USER UNSAVED" })
+    vim.cmd("edit " .. vim.fn.fnameescape(other))
+    vim.fn.writefile({ "CLAUDE" }, target)
+    vim.o.eventignore = "FileChangedShell"
+    vim.g.open_file_spec_readonly = -1
+    autocmds({ "BufEnter * ++nested let g:open_file_spec_readonly = &readonly | update", write_handler })
+
+    open_file.handler({ filePath = target })
+
+    assert.are.same(0, vim.g.open_file_spec_readonly)
+    assert.are.same("USER UNSAVED", disk(target))
   end)
 end)

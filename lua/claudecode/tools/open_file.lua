@@ -288,7 +288,8 @@ end
 ---BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "acwrite". Not "nowrite": Neovim reads
 ---'modified' as off for a nowrite buffer, so an autocommand that loads an unmodified buffer again would drop unsaved
 ---changes. A write of an "acwrite" buffer skips the check that refuses `:w` of a buffer opened before its file
----existed (E13), so such a buffer is also 'readonly' during `fn`, and a write without `!` fails with E45 instead.
+---existed (E13), so such a buffer is also 'readonly' during `fn`. Like E13, 'readonly' refuses a write without `!`,
+---or asks with 'confirm'.
 ---@param buf integer
 ---@param fn fun()
 local function without_neovim_file_check(buf, fn)
