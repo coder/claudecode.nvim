@@ -14,6 +14,21 @@ local starting = false
 -- module, so the next module instance can find the terminal again.
 local OWNED_MARK = owned.SNACKS_MARK
 
+-- Every instance that this provider started, by buffer. The table lives in _G, so it survives a reload of this module.
+-- Snacks.terminal.list() cannot serve for that alone: Snacks keys an instance by its command, directory, env and
+-- count, and it clears the key when a buffer is wiped, whichever instance holds it. A Claude that starts while an
+-- exited one is still waiting for its close has the same key, and the late wipe of the exited one removes the
+-- new Claude from the list.
+local REGISTRY = "claudecode_snacks_terminals"
+
+---@return table<number, table> instances weak values, so a wiped instance goes
+local function registry()
+  if _G[REGISTRY] == nil then
+    _G[REGISTRY] = setmetatable({}, { __mode = "v" })
+  end
+  return _G[REGISTRY]
+end
+
 --- @return boolean
 local function is_available()
   return snacks_available and Snacks and Snacks.terminal ~= nil
@@ -42,10 +57,8 @@ local function setup_terminal_events(term_instance, config)
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
-      -- Clean up. The tracked terminal stays until the close below wipes it (the BufWipeout handler forgets it), so an
-      -- entry that runs in between finds it with an ended job, and forget_ended_terminal wipes it before it starts a
-      -- new Claude. The wipe is not done here: it would delete the buffer-local autocmds that a user defined after
-      -- this handler, in the middle of this event.
+      -- Clean up
+      forget()
       vim.schedule(function()
         term_instance:close({ buf = true })
         vim.cmd.checktime()
@@ -405,40 +418,64 @@ local function patch_instance(term, config)
   end
 end
 
----Closes and forgets the tracked terminal when its Claude has exited and `auto_close` applies. An open must start a new
----Claude then instead of showing it. The TermClose handler of setup_terminal_events only schedules the close, and the
----BufWipeout handler that follows forgets the terminal, so in between (a TermClose autocmd that calls the plugin, or a
----later event) the terminal is still tracked. An instance that an earlier copy of this module started has only that
----copy's handlers, which clear only that copy's `terminal`.
----The close wipes the buffer at once, so that Snacks clears the instance's key (it keys an instance by its command,
----directory, env and count) before an open starts a Claude with the same key. A wipe after that start would clear the
----new Claude's key, and Snacks.terminal.list() would no longer hold it.
+---Forgets the tracked terminal when its Claude has exited and `auto_close` applies. An entry must start a new Claude
+---then instead of showing it. The TermClose handler of setup_terminal_events forgets it too, but a TermClose autocmd
+---that calls the plugin can run first (autocmds run in definition order), and an instance that an earlier copy of this
+---module started has only that copy's handler, which clears only that copy's `terminal`. The close that the handler
+---scheduled wipes the buffer later. Nothing is wiped here: a wipe while Neovim dispatches TermClose would delete the
+---buffer-local autocmds that remain for that event.
 local function forget_ended_terminal()
   if not (terminal and terminal:buf_valid()) then
     return
   end
   local started_with = terminal._cc and terminal._cc.config
   if started_with and started_with.auto_close and owned.job_ended(terminal.buf) then
-    local ended = terminal
     terminal = nil
-    ended:close({ buf = true })
   end
 end
 
----Closes and forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the one that an
----earlier copy of this module started (before a reload): Snacks keeps its instances, and the Claude buffer keeps its
----mark. A window may or may not show it.
+---The instances that an adoption can take: the ones that this provider started (even before a reload), then the ones
+---that Snacks lists, for a Claude that an older version started.
+---@return table[] instances
+local function known_instances()
+  local instances, seen = {}, {}
+  local function add(instance)
+    if instance and instance.buf and not seen[instance] then
+      seen[instance] = true
+      table.insert(instances, instance)
+    end
+  end
+  local started = registry()
+  local bufs = {}
+  for buf in pairs(started) do
+    table.insert(bufs, buf)
+  end
+  table.sort(bufs)
+  for _, buf in ipairs(bufs) do
+    add(started[buf])
+  end
+  if type(Snacks.terminal.list) == "function" then
+    for _, instance in ipairs(Snacks.terminal.list()) do
+      add(instance)
+    end
+  end
+  return instances
+end
+
+---Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the one that an earlier copy
+---of this module started (before a reload): the Claude buffer keeps its mark, and the registry and Snacks keep its
+---instance. A window may or may not show it.
 local function adopt_existing_terminal()
   forget_ended_terminal()
   if terminal and terminal:buf_valid() then
     return
   end
   -- A terminal gets its mark only after its start succeeded, so the one that M.open is starting is not adopted here.
-  if not is_available() or type(Snacks.terminal.list) ~= "function" then
+  if not is_available() then
     return
   end
-  for _, instance in ipairs(Snacks.terminal.list()) do
-    if instance.buf and owned.is_live(instance.buf, OWNED_MARK) then
+  for _, instance in ipairs(known_instances()) do
+    if owned.is_live(instance.buf, OWNED_MARK) then
       terminal = instance
       require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", instance.buf)
       return
@@ -534,6 +571,7 @@ function M.open(cmd_string, env_table, config, focus)
     end
     -- Snacks.terminal.open has already fired FileType, so a <C-z> mapping that a user's handler set stays.
     utils.map_terminal_suspend(term_instance.buf)
+    registry()[term_instance.buf] = term_instance
     terminal = term_instance
   else
     terminal = nil

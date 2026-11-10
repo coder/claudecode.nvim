@@ -97,6 +97,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
   before_each(function()
     original_vim = vim
+    -- The registry of started instances lives in _G, so it would carry over from the previous test.
+    _G.claudecode_snacks_terminals = nil
     started = {}
     notices = {}
     logged_errors = {}
@@ -314,6 +316,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
   after_each(function()
     _G.vim = original_vim
+    _G.claudecode_snacks_terminals = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.utils"] = nil
     package.loaded["claudecode.logger"] = nil
@@ -647,7 +650,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end
       )
 
-      it("is closed by close, which stops nothing (reload=" .. tostring(reload) .. ")", function()
+      it("is not stopped again by close (reload=" .. tostring(reload) .. ")", function()
         snacks_provider.open("claude", {}, config, true)
         local claude = started[1]
         if reload then
@@ -655,8 +658,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
           assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
         end
 
-        exit_job(claude.buf, false)
+        exit_job(claude.buf, true)
         snacks_provider.close()
+        flush_scheduled()
 
         assert.is_false(claude:buf_valid())
         assert.are.equal(0, running_count())
@@ -667,7 +671,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end
 
     -- A wipe inside TermClose would delete the buffer-local autocmds that a user defined after the provider's handler,
-    -- in the middle of the event. So the handler schedules the close and leaves the terminal tracked until then.
+    -- in the middle of the event. So the handler schedules the close.
     it("is wiped by the scheduled close, not by the TermClose handler", function()
       snacks_provider.open("claude", {}, config, true)
       local claude = started[1]
@@ -675,7 +679,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
       exit_job(claude.buf, true)
 
       assert.is_true(claude:buf_valid())
-      assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+      assert.is_nil(snacks_provider._get_terminal_for_test())
       flush_scheduled()
       assert.is_false(claude:buf_valid())
       assert.is_nil(snacks_provider.get_active_bufnr())
