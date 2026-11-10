@@ -513,6 +513,43 @@ vim.api.nvim_create_autocmd("FileType", {
 
 - `external` and `none` create no Neovim buffer, so they set no filetype.
 
+### Suspending Neovim with Ctrl-Z
+
+A Neovim terminal passes Ctrl-Z to its job, and Claude Code then suspends itself. Nothing in the terminal can resume
+it (#194). So the `native` and `snacks` providers map `<C-z>` in terminal mode on the Claude terminal buffer to
+`:suspend`. Ctrl-Z there suspends Neovim, as it does in any other window. The mapping is buffer-local, so other
+terminals keep their own Ctrl-Z behavior. `external` and `none` create no Neovim buffer, so they map nothing.
+
+The buffer-local mapping shadows a global terminal-mode `<C-z>` mapping of yours in the Claude buffer. To keep your
+own mapping there, set it buffer-local for the Claude buffer. The plugin keeps a buffer-local `<C-z>` terminal mapping
+that already exists. For example, to send Ctrl-Z to Claude Code again:
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode", -- the filetype of the Claude buffer (see Terminal Buffer Filetype above)
+  callback = function(args)
+    vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = args.buf })
+  end,
+})
+```
+
+- Replace the mapping with `vim.keymap.set`, as the example does. Do not remove it with `vim.keymap.del` on `snacks`:
+  Snacks fires `FileType` before the plugin maps `<C-z>`, so the handler finds nothing to delete, and the plugin then
+  maps its default. On `native`, the plugin maps first, so `vim.keymap.del` works there.
+- The `pattern` must match the filetype of the Claude buffer. With `snacks`, if you changed it in
+  `snacks_win_opts.bo.filetype`, use that filetype. To avoid the filetype, set the mapping from `snacks_win_opts.on_buf`,
+  which the plugin calls before it maps `<C-z>`:
+
+  ```lua
+  terminal = {
+    snacks_win_opts = {
+      on_buf = function(win)
+        vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = win.buf })
+      end,
+    },
+  }
+  ```
+
 ## Floating Window Configuration
 
 The `snacks_win_opts` configuration allows you to create floating Claude Code terminals with custom positioning, sizing, and key bindings. Here are several practical examples:
@@ -1006,8 +1043,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   in `tools/list` plus the hidden `close_tab`. `openDiff` runs in a coroutine and defers its response.
 - plugin: [./plugin/README.md](./plugin/README.md) - Runtime loader: Neovim >= 0.8.0 check, `vim.g.loaded_claudecode`
   guard, and optional `vim.g.claudecode_auto_setup`.
-- scripts: [./scripts/README.md](./scripts/README.md) - Shell WebSocket/MCP clients, issue repro scripts, integration test
-  runner, and the release-please runner.
+- scripts: [./scripts/README.md](./scripts/README.md) - Issue repro scripts, the integration test runner, a manual
+  `openDiff` helper, and the release-please runner.
 
 `fixtures/` (Neovim configs for manual repros) holds repro notes (`README.md` in some folders) but no EGM contracts.
 `tests/` (Busted specs) holds no contracts.
@@ -1021,8 +1058,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
 - The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
 - Lock files live in `$CLAUDE_CONFIG_DIR/ide` or else `~/.claude/ide`, named `<port>.lock`
-  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients that use `find_claude_lockfile` read the port from that basename
-  [scripts/lib_claude.sh:find_claude_lockfile]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
+  [lua/claudecode/lockfile.lua:M.lock_dir]. `repro_issue_238.sh`, `repro_issue_248.sh`, and the verify skill's `ws-client.mjs` read the port from that basename
+  [scripts/repro_issue_238.sh:PORT] [scripts/repro_issue_248.sh:PORT] [.agents/skills/verify-claudecode-nvim/scripts/ws-client.mjs:port]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
 - `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
   none [plugin/claudecode.lua].
 - `openDiff` must run in a non-main coroutine. Its response is deferred until the user accepts or rejects the diff

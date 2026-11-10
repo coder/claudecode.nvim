@@ -559,6 +559,10 @@ local vim = {
       return 12345
     end,
 
+    maparg = function()
+      return {}
+    end,
+
     -- The mock keeps no split tree, so a tab's tiled windows form one row.
     winlayout = function(tabnr)
       local leaves = {}
@@ -1371,7 +1375,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40 }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
   __index = function(_, k)
     return vim._options[k]
   end,

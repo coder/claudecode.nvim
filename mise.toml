@@ -52,9 +52,10 @@ actionlint = "1.7.12"
 zizmor = "1.25.2"
 
 # Developer tooling (formerly the flake's devPackages).
-# websocat + jq drive the manual WebSocket test scripts in scripts/; fzf backs
-# the fixtures/bin config picker. They stay global because those are interactive
-# helpers run directly (not via `mise run`), so they must be on the shell PATH.
+# websocat + jq drive the WebSocket repro scripts in scripts/ (repro_issue_238.sh,
+# repro_issue_248.sh, repro_issue_277.sh); fzf backs the fixtures/bin config
+# picker. They stay global because those are interactive helpers run directly
+# (not via `mise run`), so they must be on the shell PATH.
 # reviewfixer is intentionally NOT here — it is scoped to the `reviewfix` task
 # below so normal `mise install`/CI don't fetch the beta binary.
 websocat = "1.14.1"

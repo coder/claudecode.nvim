@@ -52,3 +52,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Run Claude in a terminal split](./terminal.md) covers `:ClaudeCode`, `:ClaudeCodeFocus`, `:ClaudeCodeOpen`, `:ClaudeCodeClose`, `:ClaudeCodeSendText`, `:ClaudeCodeSelectModel`, the `claudecode` filetype, and the `none` and `external` providers.
 - [Report editor state](./editor-state.md) covers the `getWorkspaceFolders`, `getOpenEditors`, `getDiagnostics`, `checkDocumentDirty`, and `saveDocument` tools.
 - [Start and stop the Claude server](./server.md) covers `:ClaudeCodeStart`, `:ClaudeCodeStop`, `:ClaudeCodeStatus`, the lock file, token refusal, and diffs closed on disconnect.
+- [Suspend Neovim with Ctrl-Z in the Claude terminal](./terminal-ctrl-z.md) covers the terminal-mode `<C-z>` mapping of the `native` and `snacks` providers: Ctrl-Z runs `:suspend` and never reaches the Claude job.
