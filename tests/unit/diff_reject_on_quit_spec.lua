@@ -4,9 +4,10 @@
 -- so `:q` only HIDES it and never fires BufDelete/BufUnload/BufWipeout -- rejection
 -- therefore relies on a WinClosed autocmd, gated on the proposed buffer no longer
 -- being visible in any window (so splitting it and closing one clone does not
--- prematurely reject).
+-- prematurely reject). A window that switches to another buffer (`:edit`, `:buffer`)
+-- closes no window, so a buffer-local BufHidden autocmd covers that path.
 --
--- This is a unit test of the WinClosed handler logic. The end-to-end behavior
+-- This is a unit test of the WinClosed and BufHidden handler logic. The end-to-end behavior
 -- (that a real `:q` actually triggers it) is covered by the headless gate
 -- scripts/repro_issue_238.lua and the fixtures/issue-238 fixture.
 require("tests.busted_setup")
@@ -40,6 +41,13 @@ describe("diff reject on window close (issue #238)", function()
   local function winclosed_callback()
     local found = autocmd_entries("WinClosed")
     assert(#found == 1, "expected exactly one WinClosed autocmd, got " .. #found)
+    return found[1].callback
+  end
+
+  -- The BufHidden callback, asserting EXACTLY ONE is registered (same reason as winclosed_callback).
+  local function bufhidden_callback()
+    local found = autocmd_entries("BufHidden")
+    assert(#found == 1, "expected exactly one BufHidden autocmd, got " .. #found)
     return found[1].callback
   end
 
@@ -189,6 +197,52 @@ describe("diff reject on window close (issue #238)", function()
     expect(autocmd_opts("BufDelete").buffer).to_be(47)
     expect(autocmd_opts("BufUnload").buffer).to_be(47)
     expect(autocmd_opts("BufWipeout").buffer).to_be(47)
+    expect(autocmd_opts("BufHidden").buffer).to_be(47)
+  end)
+
+  it("rejects when the proposed buffer is hidden by switching its last window to another buffer", function()
+    -- Switching the window with :edit or :buffer closes no window, so WinClosed never fires and the hidden
+    -- buffer fires none of the Buf* deletion events; BufHidden is the only signal.
+    local captured = register_pending("issue238-i", 63)
+    local cb = bufhidden_callback()
+
+    _G.vim.fn.win_findbuf = function()
+      return {}
+    end
+    cb({})
+
+    expect(captured.result).to_be_table()
+    expect(captured.result.content[1].text).to_be("DIFF_REJECTED")
+    expect(diff._get_active_diffs()["issue238-i"].status).to_be("rejected")
+  end)
+
+  it("does NOT reject on BufHidden when a window shows the proposed buffer again", function()
+    local captured = register_pending("issue238-j", 64)
+    local cb = bufhidden_callback()
+
+    _G.vim.fn.win_findbuf = function()
+      return { 1001 }
+    end
+    cb({})
+
+    expect(captured.result).to_be_nil()
+    expect(diff._get_active_diffs()["issue238-j"].status).to_be("pending")
+  end)
+
+  it("does NOT reject on BufHidden a later diff that reuses the tab name", function()
+    -- The reject waits for the next loop turn, and another openDiff can replace the diff in between.
+    local replaced = register_pending("issue238-k", 65)
+    local cb = bufhidden_callback()
+    local replacement = register_pending("issue238-k", 66)
+
+    _G.vim.fn.win_findbuf = function()
+      return {}
+    end
+    cb({})
+
+    expect(replaced.result).to_be_nil()
+    expect(replacement.result).to_be_nil()
+    expect(diff._get_active_diffs()["issue238-k"].status).to_be("pending")
   end)
 
   it("does NOT reject when an unrelated window (not showing the buffer) closes", function()
@@ -235,9 +289,11 @@ describe("diff reject on window close (issue #238)", function()
     -- window-wide handler and it would keep firing against later diffs.
     register_pending("issue238-h", 62)
     expect(#autocmd_entries("WinClosed")).to_be(1)
+    expect(#autocmd_entries("BufHidden")).to_be(1)
 
     diff._cleanup_diff_state("issue238-h", "test cleanup")
 
     expect(#autocmd_entries("WinClosed")).to_be(0)
+    expect(#autocmd_entries("BufHidden")).to_be(0)
   end)
 end)
