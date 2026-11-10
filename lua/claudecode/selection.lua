@@ -65,6 +65,28 @@ local function selection_text_is_there(held, bufnr)
   return ok and utils.valid_utf8(table.concat(lines, "\n")) == held.text
 end
 
+---Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
+---byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
+---A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
+---@param line string
+---@param col integer
+---@return integer
+local function code_point_start(line, col)
+  local byte = line:byte(col)
+  if not byte or byte < 0x80 or byte > 0xBF then
+    return col
+  end
+  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
+  for lead = col - 1, math.max(col - 3, 1), -1 do
+    byte = line:byte(lead)
+    if byte < 0x80 or byte > 0xBF then
+      local length = utils.utf8_sequence_length(line, lead)
+      return (length and lead + length > col) and lead or col
+    end
+  end
+  return col
+end
+
 ---The cursor of a buffer that is not the current one: where a window shows it, else where the selection was
 ---released, kept inside the text that is there now.
 ---@param bufnr integer
@@ -79,7 +101,9 @@ local function cursor_in_other_buffer(bufnr)
   local pos = caf and caf.bufnr == bufnr and caf.pos or { 1, 0 }
   local row = math.max(1, math.min(pos[1], vim.api.nvim_buf_line_count(bufnr)))
   local line = vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1] or ""
-  return cursor_selection(bufnr, row, math.min(pos[2], #line))
+  -- The text changed, so the byte column can fall inside a multibyte character: a cursor is on its first byte.
+  local col = code_point_start(line, math.min(pos[2], #line) + 1) - 1
+  return cursor_selection(bufnr, row, col)
 end
 
 ---Reports the cursor at once if the buffer's text changed since the visual selection in `latest_selection` was read,
@@ -698,28 +722,6 @@ local function get_selection_coordinates()
   else
     return p2, p1
   end
-end
-
----Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
----byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
----A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
----@param line string
----@param col integer
----@return integer
-local function code_point_start(line, col)
-  local byte = line:byte(col)
-  if not byte or byte < 0x80 or byte > 0xBF then
-    return col
-  end
-  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
-  for lead = col - 1, math.max(col - 3, 1), -1 do
-    byte = line:byte(lead)
-    if byte < 0x80 or byte > 0xBF then
-      local length = utils.utf8_sequence_length(line, lead)
-      return (length and lead + length > col) and lead or col
-    end
-  end
-  return col
 end
 
 ---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.

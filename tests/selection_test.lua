@@ -2574,6 +2574,15 @@ describe("Range Selection Tests", function()
           assert_claude_holds_cursor("/path/to/a.txt", 2)
         end)
 
+        it("puts the release position on the first byte of a multibyte character", function()
+          hold_alpha_and_enter_the_terminal()
+          selection.state.cursor_at_flush.pos = { 1, 1 }
+
+          change_buffer_1({ "é" }) -- two bytes: column 1 is its continuation byte
+
+          assert_claude_holds_cursor("/path/to/a.txt", 0)
+        end)
+
         it("keeps the release position inside the lines that are there", function()
           hold_alpha_and_enter_the_terminal()
           _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma", "second", "third" })
