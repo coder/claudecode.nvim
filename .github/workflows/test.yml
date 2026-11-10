@@ -187,6 +187,20 @@ jobs:
       - name: Reject-on-quit regression gate (#238)
         run: nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 
+      # Regression gate for scripts/manual_test_helper.lua. It once hardcoded one developer's
+      # checkout path, so it printed "README.md not found" in every other checkout. Run it by
+      # absolute path from a directory outside the repo. It must open this checkout's README.md,
+      # and the openDiff handler's coroutine must suspend.
+      - name: Manual openDiff helper works outside the repo
+        env:
+          REPO: ${{ github.workspace }}
+        run: |
+          cd "$(mktemp -d)"
+          output="$(timeout 60 nvim --headless -u NONE --cmd "set rtp+=$REPO" -c "luafile $REPO/scripts/manual_test_helper.lua" -c "sleep 300m" -c "qa!" 2>&1)"
+          printf '%s\n' "$output"
+          grep -qF "Old file: $REPO/README.md" <<<"$output" || { echo "FAIL: the helper did not open $REPO/README.md"; exit 1; }
+          grep -qF "openDiff is properly blocking!" <<<"$output" || { echo "FAIL: the openDiff coroutine did not suspend"; exit 1; }
+
   # Each .agents/skills/verify-*/check.sh model-checks one subsystem with TLC on the runner's Java,
   # then compares its covered.lock, which records the code that model was last confirmed against.
   # scripts/tla/test-check-lib.sh tests the harness that all of them share.
