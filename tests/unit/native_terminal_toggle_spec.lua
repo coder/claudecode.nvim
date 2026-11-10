@@ -1432,25 +1432,28 @@ describe("claudecode.terminal.native toggle behavior", function()
     end
 
     for _, focus in ipairs({ true, false }) do
-      it("should show Claude when open (focus=" .. tostring(focus) .. ") runs after you showed a file in its window", function()
-        local mock_state = _G.get_mock_state()
-        local term_config = { split_side = "right", split_width_percentage = 0.3 }
-        native_provider.open("claude", {}, term_config)
-        local claude_bufnr = native_provider.get_active_bufnr()
-        local claude_winid = window_showing(claude_bufnr)
-        local notes_bufnr = show_notes_in(claude_winid)
-        mock_state.current_win = 1
+      it(
+        "should show Claude when open (focus=" .. tostring(focus) .. ") runs after you showed a file in its window",
+        function()
+          local mock_state = _G.get_mock_state()
+          local term_config = { split_side = "right", split_width_percentage = 0.3 }
+          native_provider.open("claude", {}, term_config)
+          local claude_bufnr = native_provider.get_active_bufnr()
+          local claude_winid = window_showing(claude_bufnr)
+          local notes_bufnr = show_notes_in(claude_winid)
+          mock_state.current_win = 1
 
-        native_provider.open("claude", {}, term_config, focus)
+          native_provider.open("claude", {}, term_config, focus)
 
-        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
-        assert.are.equal(1, windows_showing(claude_bufnr))
-        assert.are.equal(1, running_count())
-        -- The window that shows your file keeps it.
-        assert.are.equal(notes_bufnr, mock_state.windows[claude_winid].bufnr)
-        local current_bufnr = mock_state.windows[mock_state.current_win].bufnr
-        assert.are.equal(focus and claude_bufnr or 0, current_bufnr)
-      end)
+          assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+          assert.are.equal(1, windows_showing(claude_bufnr))
+          assert.are.equal(1, running_count())
+          -- The window that shows your file keeps it.
+          assert.are.equal(notes_bufnr, mock_state.windows[claude_winid].bufnr)
+          local current_bufnr = mock_state.windows[mock_state.current_win].bufnr
+          assert.are.equal(focus and claude_bufnr or 0, current_bufnr)
+        end
+      )
     end
 
     for _, entry in ipairs({ entries[3], entries[4] }) do
