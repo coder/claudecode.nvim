@@ -68,7 +68,15 @@ describe("claudecode.terminal.snacks command handling", function()
         end
         return res
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_is_valid = function()
           return true
         end,

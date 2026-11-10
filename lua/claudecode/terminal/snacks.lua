@@ -4,10 +4,15 @@
 local M = {}
 
 local snacks_available, Snacks = pcall(require, "snacks")
+local owned = require("claudecode.terminal.owned")
 local utils = require("claudecode.utils")
 local terminal = nil
 -- True while Snacks.terminal.open runs in M.open. `terminal` is set only after it returns.
 local starting = false
+
+-- Set on each terminal buffer this provider starts. Unlike `terminal`, a buffer variable survives a reload of this
+-- module, so the next module instance can find the terminal again.
+local OWNED_MARK = owned.SNACKS_MARK
 
 --- @return boolean
 local function is_available()
@@ -373,6 +378,46 @@ local function patch_instance(term, config)
   end
 end
 
+---The tracked terminal. When none is tracked, adopts the terminal that an earlier copy of this module started (before
+---a reload): Snacks keeps its instances, and the Claude buffer keeps its mark. A window may or may not show it.
+---@return table|nil terminal
+local function find_terminal()
+  if terminal and terminal:buf_valid() then
+    return terminal
+  end
+  -- The terminal that M.open is starting is not tracked yet, and it is not one to adopt.
+  if starting or type(Snacks.terminal.list) ~= "function" then
+    return nil
+  end
+  for _, instance in ipairs(Snacks.terminal.list()) do
+    if instance.buf and owned.is_live(instance.buf, OWNED_MARK) then
+      terminal = instance
+      require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", instance.buf)
+      return terminal
+    end
+  end
+  return nil
+end
+
+---Stops a Claude that the native provider started before a reload. The provider choice changed since, so nothing
+---controls that Claude, and it would run beside the one that this provider starts.
+---@return boolean stopped
+local function stop_native_terminal()
+  if not owned.find(owned.NATIVE_MARK) then
+    return false
+  end
+  local ok, native_provider = pcall(require, "claudecode.terminal.native")
+  if not ok then
+    return false
+  end
+  vim.notify(
+    "Stopped the Claude that the native provider started, because the snacks provider is in use.",
+    vim.log.levels.WARN
+  )
+  native_provider.close()
+  return true
+end
+
 function M.setup()
   -- No specific setup needed for Snacks provider
 end
@@ -390,11 +435,12 @@ function M.open(cmd_string, env_table, config, focus)
 
   focus = utils.normalize_focus(focus)
 
-  if terminal and terminal:buf_valid() then
+  local existing = find_terminal()
+  if existing then
     -- Reuse the existing terminal. Route through cc_show so a hidden terminal is
     -- restored without Snacks destroying+recreating the window (which would climb
     -- Claude's cursor -- #240/#183). cc_show honors config.auto_insert (#232).
-    cc_show(terminal, focus, config)
+    cc_show(existing, focus, config)
     return
   end
 
@@ -402,6 +448,16 @@ function M.open(cmd_string, env_table, config, focus)
   -- open would begin, so a second start would run a second Claude that nothing tracks.
   if starting then
     return
+  end
+
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and the
+  -- lookup below finds it.
+  if stop_native_terminal() then
+    existing = find_terminal()
+    if existing then
+      cc_show(existing, focus, config)
+      return
+    end
   end
 
   local opts = build_opts(config, env_table, focus)
@@ -431,6 +487,7 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
+    vim.b[term_instance.buf][OWNED_MARK] = true
     terminal = term_instance
   else
     terminal = nil
@@ -475,10 +532,10 @@ function M.close()
   if not is_available() then
     return
   end
-  if not (terminal and terminal:buf_valid()) then
+  local closing = find_terminal()
+  if not closing then
     return
   end
-  local closing = terminal
   local closing_bufnr = closing.buf
   local jobid = vim.bo[closing_bufnr].channel
   -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not reuse this one.
@@ -523,7 +580,7 @@ function M.simple_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
-  if terminal and terminal:buf_valid() then
+  if find_terminal() then
     if cc_is_visible(terminal) then
       logger.debug("terminal", "Simple toggle: hiding visible terminal")
       cc_hide(terminal)
@@ -549,7 +606,7 @@ function M.focus_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
-  if terminal and terminal:buf_valid() then
+  if find_terminal() then
     if not cc_is_visible(terminal) then
       -- Terminal exists but is hidden -> show and focus it.
       logger.debug("terminal", "Focus toggle: showing hidden terminal")

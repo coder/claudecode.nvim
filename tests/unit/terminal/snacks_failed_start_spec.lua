@@ -136,7 +136,15 @@ describe("claudecode.terminal.snacks failed start", function()
         end
         return res
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_get_current_win = function()
           return current_win
         end,

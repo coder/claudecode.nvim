@@ -152,7 +152,15 @@ describe("claudecode.terminal.snacks close", function()
         state.waited_ms = state.waited_ms + timeout
         return false
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_is_valid = function(bufnr)
           return state.buffers[bufnr] ~= nil
         end,
