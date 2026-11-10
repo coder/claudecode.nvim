@@ -43,5 +43,6 @@ const labels: Record<string, string> = {
   ClientIdReused: "a new Claude connection gets the old client id",
   DisconnectCleanupRuns: "the disconnect cleanup runs",
   ServerStops: "the server stops",
+  DeferredCleanupRuns: "the cleanup that waited for windows to change runs",
 };
 export const step = (action: string) => labels[action] ?? action;

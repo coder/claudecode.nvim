@@ -58,6 +58,7 @@ covered_block setup_inline "$INLINE" '^function M\.setup_inline_diff\('
 covered_block accept_current "$DIFF" '^function M\.accept_current_diff\('
 covered_block fire_event "$DIFF" '^local function fire_diff_event\('
 covered_block register_state "$DIFF" '^function M\._register_diff_state\('
+covered_block windows_locked "$DIFF" '^local function windows_locked\('
 covered_block cleanup_state "$DIFF" '^function M\._cleanup_diff_state\('
 covered_block diff_autocmds "$DIFF" '^local function register_diff_autocmds\('
 covered_block reject_when_hidden "$DIFF" '^function M\._register_reject_when_hidden\('
@@ -124,6 +125,23 @@ fact[CloseTakesRejected]=$(as_bool in_order '^      listed\[tab_name\] = diff_da
   'for _, tab_name in ipairs\(tab_names\) do' '^    local diff_data = active_diffs\[tab_name\]$' \
   '^    local rejected = diff_data == listed\[tab_name\] and diff_data\.status == "rejected"$' \
   'if \(matches\(diff_data\) or rejected\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
+# Neovim refuses window changes in the command-line window (E11) and under text lock (E565). A cleanup that ran then
+# raised in the middle of a bulk close, or dropped its entry while its windows stayed. So _cleanup_diff_state tests for
+# the lock before it closes a window or drops the entry, returns with the entry registered, and runs again with
+# vim.defer_fn, only while active_diffs still holds that entry.
+FACTS+=(CleanupHoldsWhenLocked CleanupRetries RetryChecksEntry)
+cleanup_holds_when_locked() {
+  grep -qE '^  return not pcall\(vim\.api\.nvim_set_current_win, vim\.api\.nvim_get_current_win\(\)\)$' \
+    <<<"$windows_locked" &&
+    in_order '^  local diff_data = active_diffs\[tab_name\]$' '^  if windows_locked\(\) then$' '^    return$' \
+      '^  -- Dispatch to unified diff handler$' 'active_diffs\[tab_name\] = nil' <<<"$cleanup_state"
+}
+fact[CleanupHoldsWhenLocked]=$(as_bool cleanup_holds_when_locked)
+fact[CleanupRetries]=$(as_bool in_order '^  if windows_locked\(\) then$' 'vim\.defer_fn\(function\(\)$' \
+  'M\._cleanup_diff_state\(tab_name, reason\)$' '^    return$' <<<"$cleanup_state")
+fact[RetryChecksEntry]=$(as_bool in_order '^  if windows_locked\(\) then$' 'vim\.defer_fn\(function\(\)$' \
+  '^      if active_diffs\[tab_name\] == diff_data then$' 'M\._cleanup_diff_state\(tab_name, reason\)$' \
+  <<<"$cleanup_state")
 # A saved diff outlives its client's connection, so a later connection must never get that client's id.
 # The counter is a global so a reload of server/client.lua keeps it, and only create_client may set it.
 FACTS+=(ClientIdsUnique)
@@ -199,7 +217,7 @@ mapfile -t COVERED < <(find lua plugin \( -name '*.lua' -o -name '*.vim' \) | so
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 
 RULES=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover)
-LIVE=(DisconnectedCallsAnswered)
+LIVE=(DisconnectedCallsAnswered DeferredCleanupDone)
 CONSTRAINT=AnswerBound
 
 # Expected first-broken rule for each fact when only that guard is removed. A+B removes both guards at once.
@@ -214,6 +232,7 @@ EXPECT=(
   [CloseTakesRejected]=NoRejectedLeftover [UserCloseTakesRejected]=NoRejectedLeftover
   [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
   [ClientIdsUnique]=SavedDiffKept
+  [CleanupHoldsWhenLocked]=NoRejectedLeftover [CleanupRetries]=DeferredCleanupDone [RetryChecksEntry]=NoStrandedCall
   [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
   ["SenderCleared+GuardRejected"]=AtMostOneAnswer
   [OpenedEventInSetup]=-
