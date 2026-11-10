@@ -1000,7 +1000,7 @@ describe("Tool: open_file", function()
         end
       end)
       _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
-        return buffers[buf].loaded == true
+        return buffers[buf] ~= nil and buffers[buf].loaded == true -- false for a wiped buffer, as in Neovim
       end)
       _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
         win = win == 0 and (call_win or current_win) or win
@@ -1299,6 +1299,49 @@ describe("Tool: open_file", function()
         expect(success).to_be_true()
         assert.are.same({ "Opened file and selected lines 2 to 2", false }, { result.content[1].text, asked })
       end)
+
+      for _, case in ipairs({
+        {
+          name = "unloads",
+          gone = function()
+            buffers[30].loaded = false
+          end,
+        },
+        {
+          name = "wipes",
+          gone = function()
+            buffers[30] = nil
+          end,
+        },
+      }) do
+        it(
+          "shows the file with no FileChangedShell autocommand when an autocommand " .. case.name .. " the buffer",
+          function()
+            local run_cmd, create = _G.vim.cmd, _G.vim.api.nvim_create_autocmd
+            _G.vim.cmd = function(command)
+              if command == "edit test.txt" and not buffers[30] then
+                buffers[30] = { lines = { "fresh" }, filetype = "lua" } -- :edit makes a new buffer for the file
+              end
+              run_cmd(command)
+              if command == "checktime 30" then
+                case.gone() -- autocmd FileChangedShellPost test.txt bunload (or bwipeout)
+              end
+            end
+            local created_for_missing = {}
+            _G.vim.api.nvim_create_autocmd = function(event, opts)
+              if event == "FileChangedShell" and not (buffers[opts.buffer] and buffers[opts.buffer].loaded) then
+                table.insert(created_for_missing, opts.buffer)
+              end
+              return create(event, opts)
+            end
+
+            local success = pcall(open_file_handler, { filePath = "test.txt" })
+
+            expect(success).to_be_true()
+            assert.are.same({ 30, {} }, { win_buf[1000], created_for_missing })
+          end
+        )
+      end
     end)
 
     describe("when the preview window gets a loaded buffer that Neovim does not check", function()
