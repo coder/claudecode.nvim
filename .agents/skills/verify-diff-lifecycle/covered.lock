@@ -203,7 +203,7 @@ block open_diff_tool     f4bee70e46ded9af
 == lua/claudecode/tools/open_file.lua
 file lua/claudecode/tools/open_file.lua 46f73ca7efb9f393
 == lua/claudecode/tools/save_document.lua
-file lua/claudecode/tools/save_document.lua 5fd303da9fac9d23
+file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
 file lua/claudecode/types.lua 08aa28a9c192d17a
 == lua/claudecode/utils.lua
