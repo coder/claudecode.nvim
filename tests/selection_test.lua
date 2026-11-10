@@ -1722,6 +1722,51 @@ describe("Range Selection Tests", function()
       end)
     end)
 
+    describe("is_claude_terminal_buffer", function()
+      it("is true for a term:// buffer whose name contains claude", function()
+        _G.vim.test.add_buffer(7, "term://~/proj//123:claude --model x", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return nil
+        end
+        assert(selection.is_claude_terminal_buffer(7) == true)
+      end)
+
+      it("is true for the active Claude terminal buffer", function()
+        _G.vim.test.add_buffer(8, "term://~/proj//456:sh", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(8) == true)
+      end)
+
+      it("is false for a file buffer and for another terminal", function()
+        _G.vim.test.add_buffer(9, "/path/to/test.lua", { "" })
+        _G.vim.test.add_buffer(10, "term://~/proj//789:sh", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(9) == false)
+        assert(selection.is_claude_terminal_buffer(10) == false)
+      end)
+
+      it("is false, and does not raise, for a buffer that was wiped", function()
+        local real_get_name = _G.vim.api.nvim_buf_get_name
+        _G.vim.api.nvim_buf_get_name = function(bufnr)
+          assert(_G.vim._buffers[bufnr] ~= nil, "Invalid buffer id: " .. tostring(bufnr)) -- as Neovim raises
+          return real_get_name(bufnr)
+        end
+        terminal_module.get_active_terminal_bufnr = function()
+          return 11 -- the Claude terminal was wiped too
+        end
+
+        local ok, result = pcall(selection.is_claude_terminal_buffer, 11)
+        _G.vim.api.nvim_buf_get_name = real_get_name
+
+        assert.is_true(ok)
+        assert.is_false(result)
+      end)
+    end)
+
     describe("cursor-guarded demotion", function()
       local function seed_held_selection()
         local visual_selection = {

@@ -28,23 +28,6 @@ local function cursor_unmoved_since_flush(bufnr)
   return pos[1] == caf.pos[1] and pos[2] == caf.pos[2]
 end
 
----Returns true if the buffer is the Claude terminal, by the same two checks as `update_selection` and the flush.
----A buffer that was wiped is not: a stored buffer number can name one (a popup that wipes itself when you leave
----it), and nvim_buf_get_name() raises an error for it.
----@param bufnr number
----@return boolean
-local function is_claude_terminal_buffer(bufnr)
-  if not vim.api.nvim_buf_is_valid(bufnr) then
-    return false
-  end
-  local buf_name = vim.api.nvim_buf_get_name(bufnr)
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
-    return true
-  end
-  local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-  return claude_term_bufnr ~= nil and claude_term_bufnr == bufnr
-end
-
 ---Forgets the held visual selection. Call it where `latest_selection` is replaced.
 local function clear_held_state()
   M.state.last_active_visual_selection = nil
@@ -109,14 +92,14 @@ local function reconcile_held_selection(compare_cursor)
   end
   local current_buf = vim.api.nvim_get_current_buf()
   if caf.away and caf.away ~= current_buf then
-    if not is_claude_terminal_buffer(caf.away) then
+    if not M.is_claude_terminal_buffer(caf.away) then
       caf.away = nil
       caf.left = true
       return
     end
     caf.away = nil
   end
-  if is_claude_terminal_buffer(current_buf) then
+  if M.is_claude_terminal_buffer(current_buf) then
     -- Cancel the pending demotion now: if it fired first, its callback would resolve the held state in the
     -- terminal, before the terminal's own debounced update cancels it.
     caf.away = nil
@@ -289,7 +272,7 @@ function M.on_mode_changed()
       -- A new selection replaces the held one. A selection in the Claude terminal never reaches Claude (the
       -- flush and updates skip it), so it does not: you can copy text from the terminal and the selection you
       -- held stays.
-      if not is_claude_terminal_buffer(buf) then
+      if not M.is_claude_terminal_buffer(buf) then
         clear_held_state()
       end
     elseif leaving_visual then
@@ -352,23 +335,11 @@ function M.update_selection()
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  -- If the buffer name starts with "term://" and contains "claude", do not update selection
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
-    -- Optionally, cancel demotion timer like for the terminal
+  -- Do not update the selection in the Claude terminal; cancel any pending demotion.
+  if M.is_claude_terminal_buffer(current_buf) then
     M._cancel_demotion_timer()
     return
-  end
-
-  -- If the current buffer is the Claude terminal, do not update selection
-  if terminal then
-    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-    if claude_term_bufnr and current_buf == claude_term_bufnr then
-      -- Cancel any pending demotion if we switch to the Claude terminal
-      M._cancel_demotion_timer()
-      return
-    end
   end
 
   local current_mode_info = vim.api.nvim_get_mode()
@@ -914,16 +885,9 @@ function M.flush_visual_selection()
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+  if M.is_claude_terminal_buffer(current_buf) then
     return
-  end
-  if terminal then
-    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-    if claude_term_bufnr and current_buf == claude_term_bufnr then
-      return
-    end
   end
 
   -- Skip when the buffer was edited while in visual mode: the changedtick advancing since
@@ -1025,6 +989,28 @@ end
 ---@param selection table The selection object to send.
 function M.send_selection_update(selection)
   M.server.broadcast("selection_changed", selection)
+end
+
+---Whether a buffer is the Claude terminal, which selection tracking ignores.
+---A buffer that was wiped is not: a stored buffer number can name one (a popup that wipes itself when you leave
+---it), and nvim_buf_get_name() raises an error for it.
+---@param bufnr integer
+---@return boolean
+function M.is_claude_terminal_buffer(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  local buf_name = vim.api.nvim_buf_get_name(bufnr)
+  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+    return true
+  end
+  if terminal then
+    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
+    if claude_term_bufnr and bufnr == claude_term_bufnr then
+      return true
+    end
+  end
+  return false
 end
 
 ---Gets the latest recorded selection.
