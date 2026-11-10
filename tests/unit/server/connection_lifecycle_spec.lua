@@ -140,19 +140,54 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.equals(frame.OPCODE.PING, parse(writes[2]).opcode)
     end)
 
-    it("still drops a client that never answers after it was connected", function()
+    it("still drops a client that never answers, at the second tick that finds no pong", function()
       local tick = start_ping_timer()
       local client, writes, handle = connect_and_upgrade()
 
-      for _ = 1, 3 do
-        clock = clock + interval
-        tick()
-      end
+      clock = clock + interval
+      tick() -- the client is 1 interval old: a ping
+      clock = clock + interval
+      tick() -- no pong for 2 intervals: the first such tick pings again and does not drop
+      assert.is_not_nil(server.clients[client.id], "the client was dropped at the first tick that found no pong")
+      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
+      clock = clock + interval
+      tick() -- still no pong: the second such tick drops the client
 
       assert.is_nil(server.clients[client.id])
       assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Connection timeout")
       assert.equals(1011, close_status(writes[#writes]))
       assert.is_true(handle:is_closing())
+    end)
+  end)
+
+  describe("when the ping timer runs late, below the wake threshold, with Claude's pong still unread", function()
+    -- libuv runs timers before it reads sockets. A tick that Neovim runs late after a block finds the pong of the last ping
+    -- still in the socket, so its last_pong is a whole interval older than the tick before it. A block of up to 1.5
+    -- intervals is not a wake, so last_pong is not reset.
+    it("does not drop a Claude that answers every ping, and forgets the late tick once Claude answers", function()
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      local pong = frame.create_frame(frame.OPCODE.PONG, "ping", true, true)
+
+      clock = clock + interval
+      tick()
+      handle._read_cb(nil, pong)
+      clock = clock + interval
+      tick() -- Neovim blocks right after this ping, before it reads the pong, for 1.3 intervals
+      clock = clock + 1.3 * interval
+      tick()
+
+      assert.is_not_nil(server.clients[client.id], "the client was dropped by a late tick")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      handle._read_cb(nil, pong) -- the loop reads the pong after the late tick
+      clock = clock + interval
+      tick()
+      clock = clock + 1.3 * interval -- a second late tick, again with the pong unread
+      tick()
+
+      assert.is_not_nil(server.clients[client.id], "the first late tick counted against the second one")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
     end)
   end)
 

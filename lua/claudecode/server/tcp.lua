@@ -424,6 +424,13 @@ function M.start_ping_timer(server, interval)
       if client.state == "connected" then
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, interval * 2) then
+          client.pong_overdue = nil
+          client_manager.send_ping(client, "ping")
+        elseif not client.pong_overdue then
+          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
+          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
+          -- finds the pong that was read in between, or drops the client.
+          client.pong_overdue = true
           client_manager.send_ping(client, "ping")
         else
           -- Client connection timed out - log at INFO level (this is expected behavior)

@@ -31,6 +31,7 @@ local CLOSE_REASONS = {
 ---@field connected_at number|nil When the WebSocket handshake completed (vim.loop.now())
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
+---@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
