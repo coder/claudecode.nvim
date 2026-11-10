@@ -103,8 +103,13 @@ async function testUnreleasedUpdater() {
 
 async function testFenceTracking() {
   // A fence closes only on the same character, at least as long as its opener.
+  // A trailing `\r` is part of the line ending, so the CRLF cases still match.
   const outside = (lines) =>
-    runner.findLineOutsideFences(lines, 0, (line) => line === "## Real");
+    runner.findLineOutsideFences(
+      lines,
+      0,
+      (line) => line.replace(/\r$/, "") === "## Real",
+    );
 
   assert.equal(
     outside(["````md", "```", "## Real", "````", "## Real"]),
@@ -139,7 +144,27 @@ async function testFenceTracking() {
   assert.equal(
     outside(["```\r", "## Real\r", "```\r", "## Real"]),
     3,
-    "a CRLF line ending does not stop a fence from closing",
+    "a CRLF line ending does not stop a backtick fence from opening or closing",
+  );
+  assert.equal(
+    outside(["~~~\r", "## Real\r", "~~~\r", "## Real"]),
+    3,
+    "a CRLF line ending does not stop a tilde fence from opening or closing",
+  );
+  assert.equal(
+    outside(["```", "## Real", "    ```", "## Real", "```", "## Real"]),
+    5,
+    "a closing fence indented by four spaces does not close",
+  );
+  assert.equal(
+    outside(["``", "## Real", "``", "## Real"]),
+    1,
+    "two backticks do not open a fence",
+  );
+  assert.equal(
+    outside(["~~", "## Real", "~~", "## Real"]),
+    1,
+    "two tildes do not open a fence",
   );
   assert.equal(
     outside(["   ```", "## Real", "   ```", "## Real"]),
@@ -180,6 +205,15 @@ async function testFenceTracking() {
     ),
     "### A\n\n~~~md\n```\n## Not a heading\n~~~\n\n### B",
   );
+  // The body is split on `\n` only, so CRLF lines keep their `\r`.
+  for (const marker of ["```", "~~~"]) {
+    assert.equal(
+      runner.normalizeCommuniqueBody(
+        `## A\r\n${marker}\r\n## inside\r\n${marker}\r\n## B`,
+      ),
+      `### A\r\n${marker}\r\n## inside\r\n${marker}\r\n### B`,
+    );
+  }
 }
 
 async function testUnreleasedUpdaterFences() {

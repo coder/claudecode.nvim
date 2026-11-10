@@ -52,8 +52,9 @@ const NEXT_SECTION_PATTERN = /^##? /;
 const TITLE_PATTERN = /^# .+$/;
 // CommonMark fences: up to three spaces of indent, then three or more backticks
 // or tildes. A backtick opener cannot have a backtick after it. A closer can
-// have nothing after it but blanks, or the `\r` of a CRLF line ending.
-const FENCE_OPEN_PATTERN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/;
+// have nothing after it but blanks. A line can end in the `\r` of a CRLF line
+// ending, and `.` does not match `\r`, so no pattern here uses it.
+const FENCE_OPEN_PATTERN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,})[^\n]*)$/;
 const FENCE_CLOSE_PATTERN = /^ {0,3}(`{3,}|~{3,})[ \t\r]*$/;
 
 /**
