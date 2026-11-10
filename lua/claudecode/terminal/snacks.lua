@@ -225,8 +225,8 @@ local function reapply_snacks_window_state(term, win)
   end)
 end
 
----The terminal whose float hide_float hid, and the tab it floated in, until anything else shows the terminal.
----@type { term: table, tab: integer }?
+---The terminal whose float hide_float hid, until anything else shows the terminal.
+---@type table?
 local float_hidden_for_diff = nil
 
 ---Hide the terminal window without disturbing the cursor anchor.
@@ -686,9 +686,8 @@ function M.hide_float()
   if not (terminal and terminal:buf_valid() and cc_is_visible(terminal) and win_is_floating(terminal.win)) then
     return false
   end
-  local tab = vim.api.nvim_win_get_tabpage(terminal.win)
   cc_hide(terminal)
-  float_hidden_for_diff = { term = terminal, tab = tab }
+  float_hidden_for_diff = terminal
   return true
 end
 
@@ -697,14 +696,9 @@ end
 function M.restore_float()
   local hidden = float_hidden_for_diff
   float_hidden_for_diff = nil
-  if not (hidden and hidden.term == terminal) then
-    return
+  if hidden and hidden == terminal then
+    cc_show(terminal, false, terminal._cc and terminal._cc.config)
   end
-  -- Before Neovim 0.10 hide_float closed the float, and Snacks re-creates it in the current tab.
-  if not supports_config_hide() and vim.api.nvim_get_current_tabpage() ~= hidden.tab then
-    return
-  end
-  cc_show(terminal, false, terminal._cc and terminal._cc.config)
 end
 
 ---Is the terminal provider available?

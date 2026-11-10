@@ -206,17 +206,22 @@ describe("openDiff with a floating Claude terminal", function()
       pending(name .. " (needs Neovim 0.10)")
     end
 
-  it_parks_floats("returns the cursor to the float when the user was typing in it as the diff opened", function()
-    setup_diff({ layout = "vertical" })
-    vim.api.nvim_set_current_win(float.win)
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it_parks_floats(
+      "returns the cursor to the float when the user was typing in it as a " .. layout .. " diff opened",
+      function()
+        setup_diff({ layout = layout })
+        vim.api.nvim_set_current_win(float.win)
 
-    open_diff("proposed.txt")
-    assert.is_not.equal(float.win, vim.api.nvim_get_current_win(), "the diff has focus while it is open")
-    close_tab("proposed.txt")
+        open_diff("proposed.txt")
+        assert.is_not.equal(float.win, vim.api.nvim_get_current_win(), "the diff has focus while it is open")
+        close_tab("proposed.txt")
 
-    assert.equal(1, #visible_floats())
-    assert.equal(float.win, vim.api.nvim_get_current_win(), "the cursor is back where the user left it")
-  end)
+        assert.equal(1, #visible_floats())
+        assert.equal(float.win, vim.api.nvim_get_current_win(), "the cursor is back where the user left it")
+      end
+    )
+  end
 
   it("leaves the float and its focus alone when keep_terminal_focus is set", function()
     setup_diff({ layout = "vertical", keep_terminal_focus = true })
@@ -388,7 +393,7 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(1, #visible_floats())
   end)
 
-  it_parks_floats("does not hold the float for a diff in another tab", function()
+  it_parks_floats("does not wait for a diff in another tab before it shows the float", function()
     setup_diff({ layout = "vertical" })
     local first_tab = vim.api.nvim_get_current_tabpage()
 
@@ -396,11 +401,74 @@ describe("openDiff with a floating Claude terminal", function()
     vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
     local second = open_diff("second.txt")
     assert.is_false(second.created_new_tab)
-    assert.is_not.equal(first_tab, vim.api.nvim_get_current_tabpage())
+    vim.api.nvim_set_current_tabpage(first_tab)
 
     close_tab("proposed.txt")
 
     assert.equal(1, #visible_floats(first_tab), "the first tab's diff is done, so its float is back")
+  end)
+
+  it_parks_floats("leaves the float hidden when the diff closes while the user is in another tab", function()
+    setup_diff({ layout = "vertical" })
+    local first_tab = vim.api.nvim_get_current_tabpage()
+
+    open_diff("proposed.txt")
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    close_tab("proposed.txt")
+
+    assert.equal(0, #visible_floats(first_tab), "the float stays hidden: Snacks would re-create it in this tab")
+    assert.equal(0, float.show_calls)
+  end)
+
+  it("leaves the terminal alone when another window shows it as the diff closes", function()
+    setup_diff({ layout = "vertical" })
+
+    open_diff("proposed.txt")
+    vim.cmd("botright vsplit")
+    vim.api.nvim_win_set_buf(0, float.buf)
+    close_tab("proposed.txt")
+
+    assert.equal(0, float.show_calls, "the user already has the terminal in a split")
+    assert.equal(0, #visible_floats())
+  end)
+
+  it("leaves a float the user moved to another tab visible when a diff opens in this tab", function()
+    setup_diff({ layout = "unified" })
+    local first_tab = vim.api.nvim_get_current_tabpage()
+
+    open_diff("proposed.txt")
+    float.user_show()
+    vim.api.nvim_win_close(float.win, true)
+    float.win = nil
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    local float_tab = vim.api.nvim_get_current_tabpage()
+    float.user_show()
+    assert.equal(1, #visible_floats(float_tab), "the user moved the float into the second tab")
+    vim.api.nvim_set_current_tabpage(first_tab)
+
+    local second = open_diff("second.txt")
+
+    assert.equal(first_tab, vim.api.nvim_win_get_tabpage(second.new_window), "the second diff is in the first tab")
+    assert.equal(1, #visible_floats(float_tab), "a diff in the first tab must not hide the second tab's float")
+    assert.equal(1, float.hide_calls, "only the first diff hid the float")
+  end)
+
+  it("hides a float the user re-created in another tab while an earlier diff is still open", function()
+    setup_diff({ layout = "vertical" })
+
+    open_diff("proposed.txt")
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    if float.win and vim.api.nvim_win_is_valid(float.win) then
+      vim.api.nvim_win_close(float.win, true)
+      float.win = nil
+    end
+    float.user_show()
+    assert.equal(1, #visible_floats(), "the user has the float in the second tab")
+
+    local second = open_diff("second.txt")
+
+    assert.is_false(second.created_new_tab)
+    assert.equal(0, #visible_floats(), "the float does not cover the diff in the second tab")
   end)
 
   it_parks_floats("puts the cursor in the editor window when the window it was in is a hidden float", function()

@@ -20,7 +20,6 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
   local mock_snacks
   local open_show_spy
   local last_split_cmd
-  local current_tab
 
   local function make_window(buf, opts)
     local id = next_win_id
@@ -77,7 +76,6 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     next_win_id = 1000
     next_buf_id = 1
     last_split_cmd = nil
-    current_tab = 1
 
     open_show_spy = spy.new(function(self)
       -- Snacks re-creates the window from the original opts (e.g. a float).
@@ -205,12 +203,6 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end,
         nvim_win_call = function(_, fn)
           fn()
-        end,
-        nvim_win_get_tabpage = function()
-          return 1
-        end,
-        nvim_get_current_tabpage = function()
-          return current_tab
         end,
       },
     }
@@ -386,7 +378,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end
       end)
 
-      it("restore_float re-creates the float when the user is still in its tab", function()
+      it("restore_float re-creates the float", function()
         local term = open_float()
         local win = term.win
 
@@ -396,15 +388,6 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         snacks_provider.restore_float()
         assert.spy(open_show_spy).was_called(1)
         assert.are.equal("editor", windows[term.win].config.relative)
-      end)
-
-      it("restore_float leaves the float closed when the user is in another tab", function()
-        open_float()
-        assert.is_true(snacks_provider.hide_float())
-
-        current_tab = 2
-        snacks_provider.restore_float()
-        assert.spy(open_show_spy).was_not_called()
       end)
     end)
 

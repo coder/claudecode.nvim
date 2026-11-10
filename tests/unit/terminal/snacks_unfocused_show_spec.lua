@@ -174,12 +174,6 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         nvim_win_call = function(_, fn)
           fn()
         end,
-        nvim_win_get_tabpage = function()
-          return 1
-        end,
-        nvim_get_current_tabpage = function()
-          return 1
-        end,
       },
     }
 
