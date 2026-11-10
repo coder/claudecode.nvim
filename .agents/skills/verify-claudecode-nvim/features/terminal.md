@@ -1,6 +1,6 @@
 # Run Claude in a terminal split
 
-The user starts the Claude Code CLI in a terminal split with `:ClaudeCode`, then hides, shows, focuses, and stops it with the same command family. `:ClaudeCodeSendText` types into its prompt, and `:ClaudeCodeSelectModel` starts it with a picked model. The terminal buffer has the filetype `claudecode`, so user autocmds can target it. The `none` provider opens nothing, and `external` starts the CLI outside Neovim.
+The user starts the Claude Code CLI in a terminal split with `:ClaudeCode`, then hides, shows, focuses, and stops it with the same command family. `:ClaudeCodeSendText` types into its prompt, and `:ClaudeCodeSelectModel` starts it with a picked model. The terminal buffer has the filetype `claudecode`, so user autocmds can target it, for example to map keys that leave terminal mode. The `none` provider opens nothing, and `external` starts the CLI outside Neovim.
 
 ## Sub-features
 
@@ -11,13 +11,14 @@ The user starts the Claude Code CLI in a terminal split with `:ClaudeCode`, then
 - `term-send` `:ClaudeCodeSendText {text}` types `{text}` and Enter into the running terminal and leaves focus where it is. `:ClaudeCodeSendText!` leaves out the Enter. Under `native` or `snacks` with no terminal, it warns `Cannot send text: no Claude terminal is currently running.` Under `none` or `external`, it warns `Cannot send text: terminal.provider="<provider>" runs Claude outside Neovim, so there is no pane to write to.`
 - `term-model` `:ClaudeCodeSelectModel [args]` lists the `models` option under `Select Claude model:` and runs `:ClaudeCode --model <value> [args]` with the pick.
 - `term-filetype` the native and snacks terminal buffers have filetype `claudecode`, set once per terminal.
+- `term-keys` the README's "Leaving Terminal Mode in the Claude Terminal" examples. A `FileType claudecode` mapping of `Ctrl+H`, `Ctrl+J`, `Ctrl+K`, or `Ctrl+L` leaves terminal mode and moves to the next window, and `Ctrl+Q` leaves terminal mode and stays. A single `Escape` still reaches the job. The plugin maps no terminal key itself.
 - `term-env` the job gets `CLAUDE_CODE_SSE_PORT` (the plugin's port), `ENABLE_IDE_INTEGRATION=true`, and `FORCE_CODE_TERMINAL=true`.
 - `term-providers` under `none`, `:ClaudeCode`, `:ClaudeCodeFocus`, and `:ClaudeCodeOpen` do nothing. Under `external`, `:ClaudeCode` runs `provider_opts.external_terminal_cmd` with `%s` replaced by the command, outside Neovim.
 
 ## How to get to it (user POV)
 
 - The user types `:ClaudeCode`, `:ClaudeCodeFocus`, `:ClaudeCodeOpen`, or `:ClaudeCodeSelectModel`, each with optional CLI arguments, or `:ClaudeCodeClose` or `:ClaudeCodeSendText[!] {text}`.
-- The user's config has `autocmd FileType claudecode ...`.
+- The user's config has `autocmd FileType claudecode ...`, for example the key mappings in the README section "Leaving Terminal Mode in the Claude Terminal".
 - The CLI in the terminal exits.
 
 ## Driving it with vcn.sh
@@ -37,12 +38,14 @@ Steps:
 - **Arguments and model.** Run `$V keys ':ClaudeCode --model sonnet' Enter`. `$V until "match(getbufline($T, 1, '\$'), '^ARGS: --model sonnet') >= 0" 1` passes. Leave terminal mode and run `:ClaudeCodeClose`. Run `$V keys ':ClaudeCodeSelectModel' Enter`, then `$V capture term-model-list`: it shows `Select Claude model:` and `2: Claude Opus (Latest, 1M context)`. `$V keys 2 Enter` starts a terminal whose first line is `ARGS: --model opus[1m]`.
 - **Exit.** In terminal mode, run `$V keys exit Enter`. `$V until "winnr('\$')" 1` passes.
 - **Providers.** On a baseline launch (`none`), `:ClaudeCode`, `:ClaudeCodeFocus`, and `:ClaudeCodeOpen` leave `winnr('$')` at `1`. For `external`, launch with `VCN_SETUP=$(jq -nc --arg c "sh -c 'echo %s > ext.out'" '{terminal:{provider:"external",provider_opts:{external_terminal_cmd:$c}}}') $V launch` and run `$V keys ':ClaudeCode --model haiku' Enter`. `$V until "filereadable('ext.out')" 1` passes, `cat "$WORK/ext.out"` prints `claude --model haiku`, and `winnr('$')` stays `1`.
+- **Keys.** The job must log its input, so launch with `C="sh -c 'stty raw -echo; exec dd bs=1 of=keys.bin status=none' claude"` and the same `VCN_SETUP`. In each shell set `B="string(blob2list(readblob('keys.bin')))"`, which prints the bytes the job got, for example `[8]` for `Ctrl+H`. Run `$V keys ':ClaudeCode' Enter`. With no mapping, `$V keys Ctrl+H` gives `$V until "$B . '|' . mode() . '|' . &buftype" '[8]|t|terminal'`, and `$V keys Escape` then gives `[8, 27]|t|terminal`: both keys reach the job and the focus stays. `$V keys 'Ctrl+\' 'Ctrl+N'` gives `$V until 'mode(1)' nt`. Run `:ClaudeCodeClose`, then cut the README's two `lua` blocks under that heading into `$WORK/keys-1.lua` and `$WORK/keys-2.lua`: `awk '/^### Leaving Terminal Mode in the Claude Terminal/{on=1;next} on&&/^## /{exit} on&&/^\140\140\140lua$/{n++;inb=1;next} on&&/^\140\140\140$/{inb=0;next} on&&inb&&n==1' README.md > "$WORK/keys-1.lua"` (`n==2` for `keys-2.lua`). Run `$V keys ':luafile keys-1.lua' Enter ':ClaudeCode' Enter`: `$V until "mode() . '|' . maparg('<C-h>', 't', 0, 1).buffer" 't|1'`. `$V keys Ctrl+H` gives `$V until "bufname() . '|' . mode()" 'hello.txt|n'`, `$B` is `[]`, and `$V capture term-keys-after-ctrl-h` has no `-- TERMINAL --` line. For `Ctrl+L`, `Ctrl+J`, and `Ctrl+K`: run `:ClaudeCodeFocus`, leave terminal mode, run `:wincmd H`, `:wincmd K`, or `:wincmd J` (the Claude window moves to that edge), type `i`, and press the key. Each gives `hello.txt|n` and `[]`. After `:ClaudeCodeFocus`, `$V keys Escape` gives `$V until "$B . '|' . mode() . '|' . &filetype" '[27]|t|claudecode'`. Leave terminal mode, run `:ClaudeCodeClose`, `:luafile keys-2.lua`, and `:ClaudeCode`. `$V keys Ctrl+Q` gives `$V until "mode(1) . '|' . &filetype . '|' . winnr()" 'nt|claudecode|2'`, and `$B` is `[]`. `i` and `Escape` give `[27]|t`. In a plain `:terminal` (leave terminal mode, `:wincmd h`, `:terminal`), `empty(maparg('<C-q>', 't'))` is `1`.
 - **Snacks.** Clone snacks.nvim as in [send-at-mention](./send-at-mention.md), and launch as in Preconditions with `provider:"snacks"` and `--cmd 'set rtp^=<dir>'`. Every step above gives the same result.
-- **Proof.** Keep the `term-start` and `term-model-list` captures, and end with `$V record terminal`.
+- **Proof.** Keep the `term-start`, `term-model-list`, and `term-keys-after-ctrl-h` captures, and end with `$V record terminal`.
 
 ## Gotchas
 
 - Arguments reach only a new terminal. With a terminal open or hidden, `:ClaudeCode --model x` and a `:ClaudeCodeSelectModel` pick just hide or show the old one. Run `:ClaudeCodeClose` first.
 - The model list is a blocking prompt, and RPC does not answer while it shows. Read it with `$V capture`, and answer with a number and `Enter`, or with `Escape`, before any `$V expr`.
 - Plain `terminal_cmd = "sh"` cannot test arguments: `sh --model opus` exits at once, and its window closes. Use the `ARGS:` shell.
+- `mode()` prints `n` in terminal-Normal mode too. `mode(1)` prints `nt` there and `n` in a file window.
 - Under `none`, the `:ClaudeCodeSendText` warning is wider than the screen, so Neovim waits at `Press ENTER` and RPC stops answering. Run `$V capture` and then `$V keys Enter`.

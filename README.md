@@ -513,6 +513,55 @@ vim.api.nvim_create_autocmd("FileType", {
 
 - `external` and `none` create no Neovim buffer, so they set no filetype.
 
+### Leaving Terminal Mode in the Claude Terminal
+
+The Claude terminal runs in terminal mode, where Neovim sends every key to Claude Code. So `<C-w>h` and your own window
+mappings do nothing there. `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on it itself
+(#53, #77).
+
+The plugin does not remap terminal keys, so you choose them:
+
+- `<C-\><C-n>` works with no setup. Neovim handles it, so Claude Code never sees it. You stay in the Claude window in
+  Normal mode, and `<C-w>h` and the other window commands work. To type to Claude Code again, press `i` in the Claude
+  window. (When you come back to it from another window, the `snacks` provider re-enters terminal mode by itself.)
+- A shorter key is a mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer Filetype above). It exists on the
+  Claude buffer only, so other terminals keep their keys, and a single `<Esc>` still goes to Claude Code.
+
+To switch windows with `<C-h>`, `<C-j>`, `<C-k>` and `<C-l>` (each key leaves terminal mode and moves):
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode",
+  callback = function(args)
+    for _, key in ipairs({ "h", "j", "k", "l" }) do
+      vim.keymap.set("t", "<C-" .. key .. ">", "<C-\\><C-n><C-w>" .. key, {
+        buffer = args.buf,
+        desc = "Leave terminal mode and move to the window in direction " .. key,
+      })
+    end
+  end,
+})
+```
+
+To leave terminal mode and stay in the Claude window, here with `<C-q>`:
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode",
+  callback = function(args)
+    vim.keymap.set("t", "<C-q>", "<C-\\><C-n>", { buffer = args.buf, desc = "Leave terminal mode" })
+  end,
+})
+```
+
+A key you map no longer reaches Claude Code, and Claude Code binds some Ctrl keys itself, so pick keys you do not use
+there. Do not map `<Esc>`: the `snacks` provider sets its own `<Esc>` key on the Claude buffer, and it replaces a mapping
+from your autocmd.
+
+If `<C-h>` and the others clash with tmux or a navigation plugin, use `<A-h>` and the others instead (write `"<A-"` for
+`"<C-"` in the first block). In a floating Claude window (`snacks_win_opts.position = "float"`), the four keys all go back
+to the window you came from.
+
 ## Floating Window Configuration
 
 The `snacks_win_opts` configuration allows you to create floating Claude Code terminals with custom positioning, sizing, and key bindings. Here are several practical examples:
