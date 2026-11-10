@@ -3,31 +3,48 @@ require("tests.busted_setup")
 local temp_dir = require("tests.helpers.temp_dir")
 local quote = temp_dir.quote
 
-local STUB_TIMEOUT = {
-  "#!/bin/sh",
-  'if [ -f "$STUB_DIR/short_timeout" ]; then',
-  '  for arg in "$@"; do',
-  '    case "$arg" in',
-  "      [0-9]*s) arg=1s ;;",
-  "    esac",
-  '    set -- "$@" "$arg"',
-  "    shift",
-  "  done",
-  "fi",
-  'echo "$1 $2 $3" >> "$STUB_DIR/timeout_args"',
-  'exec "$REAL_TIMEOUT" "$@"',
-}
-local STUB_NVIM = {
-  "#!/bin/sh",
+local SPEC_NAME = {
   'for arg in "$@"; do',
   '  case "$arg" in',
   '    *"test_file(\'"*) spec=${arg#*"test_file(\'"}; spec=${spec%%"\'"*} ;;',
   "  esac",
   "done",
   "name=${spec##*/}",
+}
+
+---@param ... string[]
+---@return string[]
+local function concat(...)
+  local joined = {}
+  for _, lines in ipairs({ ... }) do
+    for _, line in ipairs(lines) do
+      table.insert(joined, line)
+    end
+  end
+  return joined
+end
+
+local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
+  'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
+  "  pid=$$",
+  '  (while kill -0 "$pid"; do',
+  '    if [ -f "$STUB_DIR/$name.ready" ]; then kill -TERM "$pid"; break; fi',
+  "    sleep 0.05",
+  "  done) > /dev/null 2>&1 &",
+  '  echo $! > "$STUB_DIR/$name.helper.pid"',
+  '  if [ "$1" = -k ]; then',
+  "    shift 2",
+  '    set -- -k 1s "$@"',
+  "  fi",
+  "fi",
+  'echo "$1 $2 $3" >> "$STUB_DIR/timeout_args"',
+  'exec "$REAL_TIMEOUT" "$@"',
+})
+local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
   'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
   "  trap '' TERM",
+  '  : > "$STUB_DIR/$name.ready"',
   "  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done",
   "fi",
   'if [ -f "$STUB_DIR/$name.orphan" ]; then',
@@ -36,7 +53,7 @@ local STUB_NVIM = {
   "fi",
   'cat "$STUB_DIR/$name.out"',
   'exit "$(cat "$STUB_DIR/$name.exit")"',
-}
+})
 
 -- Plenary prints these three lines, in colour, when a file's specs have all finished.
 ---@param success integer
@@ -76,6 +93,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   local script = root .. "/scripts/run_integration_tests_individually.sh"
   local dir
   local orphan_pid
+  local helper_pids
 
   ---@param path string
   ---@param lines string[]
@@ -109,6 +127,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   before_each(function()
     dir = temp_dir.new()
     orphan_pid = nil
+    helper_pids = {}
     shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
     write(dir .. "/bin/nvim", STUB_NVIM, true)
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
@@ -117,6 +136,11 @@ describe("scripts/run_integration_tests_individually.sh", function()
   after_each(function()
     if orphan_pid and is_running(orphan_pid) then
       shell("kill -KILL " .. orphan_pid)
+    end
+    for _, pid in ipairs(helper_pids) do
+      if is_running(pid) then
+        shell("kill -KILL " .. pid)
+      end
     end
     temp_dir.remove(dir)
   end)
@@ -135,7 +159,6 @@ describe("scripts/run_integration_tests_individually.sh", function()
       end
       if spec.ignore_term then
         write(dir .. "/" .. spec.name .. ".ignore_term", {})
-        write(dir .. "/short_timeout", {})
       end
     end
     local command = "cd "
@@ -149,6 +172,13 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local pipe = assert(io.popen(command .. " " .. quote(script) .. " 2>&1; echo status=$?"))
     local output = pipe:read("*a")
     pipe:close()
+    for _, spec in ipairs(specs) do
+      local pid_file = spec.ignore_term and io.open(dir .. "/" .. spec.name .. ".helper.pid")
+      if pid_file then
+        table.insert(helper_pids, pid_file:read("*l"))
+        pid_file:close()
+      end
+    end
     local ran = {}
     local log = io.open(dir .. "/ran")
     if log then
@@ -181,6 +211,22 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local args = log:read("*a")
     log:close()
     assert.are.equal("-k 5s 30s\n", args)
+  end)
+
+  it("shortens only the kill grace of the file that ignores SIGTERM", function()
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+      { name = "stuck_spec.lua", exit = 0, output = hung_output("stuck_spec.lua"), ignore_term = true },
+      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.are.same({ "a_spec.lua", "stuck_spec.lua", "z_spec.lua" }, ran)
+    assert.is_truthy(output:find("Failed test files:\n  - stuck_spec.lua\n\n", 1, true), output)
+    local log = assert(io.open(dir .. "/timeout_args"))
+    local args = log:read("*a")
+    log:close()
+    assert.are.equal("-k 5s 30s\n-k 1s 30s\n-k 5s 30s\n", args)
   end)
 
   it("runs command_args_spec.lua like every other file", function()
