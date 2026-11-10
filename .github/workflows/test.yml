@@ -81,56 +81,41 @@ jobs:
           if [ -f "luacov.stats.out" ]; then
             ./.luarocks/bin/luacov
 
-            echo "Creating lcov.info from luacov.report.out"
-            {
-              echo "TN:"
-              grep -E "^Summary$" -A1000 luacov.report.out | grep -E "^[^ ].*:" | while read -r line; do
-                file=$(echo "$line" | cut -d':' -f1)
-                echo "SF:$file"
-                percent=$(echo "$line" | grep -oE "[0-9\.]+%" | tr -d '%')
-                if [ -n "$percent" ]; then
-                  echo "DA:1,1"
-                  echo "LF:1"
-                  echo "LH:$percent"
-                fi
-                echo "end_of_record"
-              done
-            } > lcov.info
-
-            {
-              echo "## 📊 Test Coverage Report"
-              echo ""
-
-              if [ -f "luacov.report.out" ]; then
-                overall_coverage=$(grep -E "Total.*%" luacov.report.out | grep -oE "[0-9]+\.[0-9]+%" | head -1)
-                if [ -n "$overall_coverage" ]; then
-                  echo "**Overall Coverage: $overall_coverage**"
-                  echo ""
-                fi
-
-                echo "| File | Coverage |"
-                echo "|------|----------|"
-
-                grep -E "^[^ ].*:" luacov.report.out | while read -r line; do
-                  file=$(echo "$line" | cut -d':' -f1)
-                  percent=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+%" | head -1)
-                  if [ -n "$percent" ]; then
-                    # Add emoji based on coverage level
-                    percent_num="${percent%.*}"
-                    if [ "$percent_num" -ge 90 ]; then
-                      emoji="🟢"
-                    elif [ "$percent_num" -ge 70 ]; then
-                      emoji="🟡"
-                    else
-                      emoji="🔴"
-                    fi
-                    echo "| \`$file\` | $emoji $percent |"
-                  fi
-                done
-              else
-                echo "❌ No coverage report generated"
-              fi
-            } >> "$GITHUB_STEP_SUMMARY"
+            summary=$(mktemp)
+            status=0
+            awk -v root="$PWD/" '
+              function emoji(percent) {
+                if (percent + 0 >= 90) return "🟢"
+                if (percent + 0 >= 70) return "🟡"
+                return "🔴"
+              }
+              /^Summary$/ { in_summary = 1; next }
+              !in_summary || $NF !~ /^[0-9.]+%$/ { next }
+              {
+                file = $0
+                sub(/[ \t]+[0-9]+[ \t]+[0-9]+[ \t]+[0-9.]+%[ \t]*$/, "", file)
+                if (index(file, root) == 1) file = substr(file, length(root) + 1)
+                if (file == "Total") {
+                  overall = $NF
+                } else {
+                  rows = rows "| `" file "` | " emoji($NF) " " $NF " |\n"
+                  count++
+                }
+              }
+              END {
+                print "## 📊 Test Coverage Report\n"
+                if (count == 0 || overall == "") {
+                  print "❌ luacov.report.out has no per-file row or no Total row"
+                  exit 1
+                }
+                print "**Overall Coverage: " overall "**\n"
+                print "| File | Coverage |"
+                print "|------|----------|"
+                printf "%s", rows
+              }
+            ' luacov.report.out > "$summary" || status=$?
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
           else
             {
               echo "## 📊 Test Coverage Report"
