@@ -31,7 +31,7 @@ Steps:
 ## Gotchas
 
 - Neovim 0.12 answers `:suspend` by sending itself SIGSTOP, but only after the terminal replies to the Primary Device Attributes query (`ESC [ c`). agent-tty sends no reply, so nvim in a vcn.sh run never stops, not even for Ctrl-Z in a normal window. The nvim screen also stops updating after the first `:suspend`, so capture the terminal before the first Ctrl-Z. Count `VimSuspend` events there, and use `proof-ctrl-z-stop.py` to see the stop. A process group that is orphaned does not explain it, because the kernel cannot drop SIGSTOP.
-- The pty in `proof-ctrl-z-stop.py` replies `ESC [ ? 62 ; c` to that query. Without the reply, nvim waits at startup and never stops. The script signals only the shell, nvim, the nvim server and the job it started, and it kills them at the end.
+- The pty in `proof-ctrl-z-stop.py` replies `ESC [ ? 62 ; c` to that query. Without the reply, nvim waits at `:suspend` and never stops. The script signals only the shell, nvim, the nvim server and the job it started, and it kills them at the end.
 - The probe job must stop itself with SIGSTOP. The Claude job leads its own session, so its process group is orphaned, and the kernel drops a default-action SIGTSTP for it. `ctrl-z-probe-job.mjs` sends SIGSTOP, and the job's process state shows `T` after a Ctrl-Z that reached it.
 - The `terminal_cmd` must use absolute paths. nvim runs with `PATH=/usr/bin:/bin`, so a bare `node` is not found.
 - `VCN_SETUP` and `VERIFY_OUT` must name the same evidence dir, because the job log path is part of `terminal_cmd`. `VERIFY_OUT` must be missing or empty.
