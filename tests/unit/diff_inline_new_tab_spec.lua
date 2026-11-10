@@ -2,19 +2,10 @@ require("tests.busted_setup")
 
 -- Regression tests for the unified (inline) diff in a new tab.
 --
--- Two defects previously affected the `layout = "unified"` + `open_in_new_tab`
--- path (both in diff_inline.setup_inline_diff):
---
---   1. The diff was opened with `rightbelow vsplit` off the ephemeral [No Name]
---      window created by `:tabnew`, leaving that empty window lingering as a
---      blank pane beside the diff.
---   2. guard_inline_setup captured `display_terminal_in_new_tab()`'s return
---      values with `{ pcall(action) }` + `unpack(results, 2)`. In
---      hide_terminal_in_new_tab mode that helper returns a nil terminal window
---      in the middle of its result list, so `#results` reported a border before
---      the nil and the trailing new-tab handle was dropped -- leaving
---      new_tab_number nil (tab leaked on cleanup; ClaudeCodeDiffOpened fired with
---      tab_number = nil).
+-- With `layout = "unified"` and `open_in_new_tab`, diff_inline.setup_inline_diff
+-- used to open the diff with `rightbelow vsplit` off the empty [No Name] window
+-- that `:tabnew` creates. That window stayed in the tab as a blank pane beside
+-- the diff. The diff now takes that window, unless it is the Claude terminal's.
 describe("Unified diff in new tab", function()
   local open_diff_tool = require("claudecode.tools.open_diff")
   local diff = require("claudecode.diff")
@@ -22,6 +13,7 @@ describe("Unified diff in new tab", function()
   local test_old_file = "/tmp/claudecode_inline_newtab_old.txt"
   local test_new_file = "/tmp/claudecode_inline_newtab_new.txt"
   local test_tab_name = "inline-new-tab"
+  local real_display_terminal_in_new_tab = diff._display_terminal_in_new_tab
 
   local function setup_config(hide_terminal_in_new_tab)
     diff.setup({
@@ -79,6 +71,7 @@ describe("Unified diff in new tab", function()
   end)
 
   after_each(function()
+    diff._display_terminal_in_new_tab = real_display_terminal_in_new_tab
     os.remove(test_old_file)
     os.remove(test_new_file)
     package.loaded["claudecode.terminal"] = nil
@@ -139,16 +132,30 @@ describe("Unified diff in new tab", function()
     end)
   end)
 
-  it("tracks the new tab handle so it is not leaked on cleanup (hidden terminal)", function()
-    setup_config(true)
+  it("does not take the terminal's window when the new tab holds only the terminal", function()
+    setup_config(false)
+    local term_buf = vim.api.nvim_create_buf(false, true)
+    -- A new tab whose only window is the Claude terminal's: there is no empty window to take.
+    diff._display_terminal_in_new_tab = function()
+      local original_tab = vim.api.nvim_get_current_tabpage()
+      vim.cmd("tabnew")
+      local new_tab = vim.api.nvim_get_current_tabpage()
+      local terminal_win = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(terminal_win, term_buf)
+      return original_tab, terminal_win, false, new_tab
+    end
     local co = open_diff()
 
     local state = diff._get_active_diffs()[test_tab_name]
     assert.is_table(state)
-    -- Regression guard for the unpack-past-nil-hole bug: the new-tab handle must
-    -- survive display_terminal_in_new_tab()'s nil terminal-window return value.
-    assert.is_not_nil(state.new_tab_number)
-    assert.is_true(vim.api.nvim_tabpage_is_valid(state.new_tab_number))
+    local terminal_win = state.terminal_win_in_new_tab
+    assert.is_not_nil(terminal_win)
+
+    -- The terminal keeps its window, and the diff gets a window of its own beside it.
+    assert.equal(term_buf, vim._windows[terminal_win].buf)
+    assert.are_not.equal(terminal_win, state.new_window)
+    assert.equal(state.new_buffer, vim._windows[state.new_window].buf)
+    assert.equal(2, #windows_in_new_tab(state))
 
     vim.schedule(function()
       diff._resolve_diff_as_rejected(test_tab_name)

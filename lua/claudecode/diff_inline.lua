@@ -384,15 +384,13 @@ function M.setup_inline_diff(params, resolution_callback, config)
   guard_inline_setup(function()
     assert(editor_win and vim.api.nvim_win_is_valid(editor_win), "ClaudeCode unified diff target window must be valid")
     vim.api.nvim_set_current_win(editor_win)
-    if created_new_tab then
-      -- In a freshly created tab, `editor_win` is the ephemeral [No Name] window
-      -- from `:tabnew` (bufhidden=wipe). Reuse it directly as the diff window --
-      -- splitting a new window off it would leave that empty [No Name] window
-      -- lingering as a blank pane beside the diff.
+    if created_new_tab and editor_win ~= terminal_win_in_new_tab then
+      -- In a new tab, `editor_win` is the empty [No Name] window that `:tabnew` made (bufhidden=wipe). The diff takes
+      -- that window: a split beside it would leave the empty window as a blank pane.
       diff_win = editor_win
     else
-      -- In the current tab, `editor_win` holds real user content; show the diff
-      -- in a split beside it rather than replacing it.
+      -- Anywhere else `editor_win` holds the user's content, or it is the Claude terminal (a new tab that holds only
+      -- the terminal). The diff goes in a split beside it, so that window keeps its buffer.
       vim.cmd("rightbelow vsplit")
       diff_win = vim.api.nvim_get_current_win()
     end
