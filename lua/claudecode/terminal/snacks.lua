@@ -52,7 +52,7 @@ end
 ---@param config ClaudeCodeTerminalConfig Terminal configuration
 ---@param env_table table Environment variables to set for the terminal process
 ---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
----@return snacks.terminal.Opts opts Snacks terminal options: enter and start_insert follow focus, auto_insert follows config
+---@return snacks.terminal.Opts opts
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   local auto_insert = config.auto_insert ~= false
@@ -455,7 +455,7 @@ function M.open(cmd_string, env_table, config, focus)
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     if not focus then
-      -- enter = false was only for this start.
+      -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter
     end
     terminal = term_instance
