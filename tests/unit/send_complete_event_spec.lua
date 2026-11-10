@@ -157,7 +157,7 @@ describe("ClaudeCodeSendComplete event (#228)", function()
   -- Drive the REAL _broadcast_at_mention (NOT stubbed) so the payload's formatted
   -- path / directory-adjusted lines are actually exercised. This is what locks in
   -- the headline behavior: the event reports what Claude received, not the raw args.
-  it("reports the cwd-relative formatted path (real _broadcast_at_mention)", function()
+  it("reports the absolute formatted path (real _broadcast_at_mention)", function()
     setup_mocks()
     _G.vim.fn.getcwd = function()
       return "/Users/test/project"
@@ -170,7 +170,7 @@ describe("ClaudeCodeSendComplete event (#228)", function()
 
     local ev = last_send_complete()
     assert.is_not_nil(ev)
-    assert.is_equal("src/foo.lua", ev.opts.data.file_path)
+    assert.is_equal("/Users/test/project/src/foo.lua", ev.opts.data.file_path)
     assert.is_equal(2, ev.opts.data.start_line)
     assert.is_equal(4, ev.opts.data.end_line)
   end)
@@ -188,7 +188,7 @@ describe("ClaudeCodeSendComplete event (#228)", function()
 
     local ev = last_send_complete()
     assert.is_not_nil(ev)
-    assert.is_equal("lua/", ev.opts.data.file_path)
+    assert.is_equal("/Users/test/project/lua/", ev.opts.data.file_path)
     assert.is_nil(ev.opts.data.start_line)
     assert.is_nil(ev.opts.data.end_line)
   end)
