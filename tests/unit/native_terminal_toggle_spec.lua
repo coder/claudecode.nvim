@@ -467,6 +467,86 @@ describe("claudecode.terminal.native toggle behavior", function()
     end)
   end)
 
+  describe("terminal buffer filetype", function()
+    -- Records every write of 'filetype' through vim.bo, so a test can count them even when the buffer is deleted later.
+    local function record_filetype_writes()
+      local writes = {}
+      local inner = mock_vim.bo
+      mock_vim.bo = setmetatable({}, {
+        __index = function(_, bufnr)
+          local buffer_options = inner[bufnr]
+          return setmetatable({}, {
+            __index = function(_, option)
+              return buffer_options[option]
+            end,
+            __newindex = function(_, option, value)
+              if option == "filetype" then
+                table.insert(writes, { bufnr = bufnr, value = value })
+              end
+              buffer_options[option] = value
+            end,
+          })
+        end,
+      })
+      return writes
+    end
+
+    it("sets claudecode once, on the buffer that runs the job", function()
+      local writes = record_filetype_writes()
+      mock_vim.fn.termopen = function()
+        return 12345
+      end
+
+      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+      assert.are.same({ { bufnr = native_provider.get_active_bufnr(), value = "claudecode" } }, writes)
+    end)
+
+    it("sets no filetype when termopen fails", function()
+      local mock_state = _G.get_mock_state()
+      mock_state.windows[1] = { bufnr = 0 }
+      mock_state.current_win = 1
+      mock_vim.api.nvim_buf_delete = function(bufnr)
+        mock_state.buffers[bufnr] = nil
+      end
+      mock_vim.notify = function() end
+      mock_vim.log = { levels = { ERROR = 4 } }
+      local writes = record_filetype_writes()
+      mock_vim.fn.termopen = function()
+        return -1
+      end
+
+      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 }, true)
+
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.are.same({}, writes)
+    end)
+
+    it("does not set it again when a hidden terminal is shown", function()
+      local config = { split_side = "right", split_width_percentage = 0.3 }
+      local writes = record_filetype_writes()
+      mock_vim.fn.termopen = function()
+        return 12345
+      end
+      native_provider.open("claude", {}, config)
+      assert.are.equal(1, #writes)
+
+      -- Hide the terminal: the buffer stays, no window shows it.
+      mock_vim.api.nvim_list_wins = function()
+        return { 1, 3 }
+      end
+      mock_vim.api.nvim_win_get_buf = function()
+        return 50
+      end
+      mock_vim.api.nvim_get_current_win = function()
+        return 4
+      end
+      native_provider.toggle("claude", {}, config)
+
+      assert.are.equal(1, #writes)
+    end)
+  end)
+
   describe("termopen success", function()
     it("runs Claude in a listed terminal buffer shown in the split and closes it on exit", function()
       local mock_state = _G.get_mock_state()

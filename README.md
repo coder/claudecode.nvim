@@ -494,8 +494,8 @@ vim.api.nvim_create_autocmd("FileType", {
 
 - `native` sets the filetype once per terminal, after the job starts, so `buftype` is already `terminal` in the handler.
 - `snacks` sets it through the Snacks window options (`bo.filetype`). That replaces the `snacks_terminal` filetype that
-  snacks.nvim gives its terminals, so a `FileType snacks_terminal` autocmd no longer matches the Claude buffer. Your
-  `snacks_win_opts` take precedence over this default. To get the Snacks filetype back, or to pick another name:
+  snacks.nvim gives its terminals, so a `FileType snacks_terminal` autocmd no longer matches the Claude buffer. To get
+  the Snacks filetype back, or to pick another name, set it in `snacks_win_opts`:
 
   ```lua
   terminal = {
@@ -503,8 +503,13 @@ vim.api.nvim_create_autocmd("FileType", {
   }
   ```
 
-  Snacks applies `bo` when it creates the buffer, before the job starts (`buftype` is still `nofile`), and again when it
-  re-creates a window that was closed, so `FileType` can fire more than once for one buffer. Keep the handler idempotent.
+  Only `snacks_win_opts` changes it. A `bo.filetype` in your global snacks.nvim config (`styles.terminal` or
+  `terminal.win`), or in a `style` that `snacks_win_opts` names, does not apply to the Claude buffer.
+
+  Snacks applies `bo` when it creates the buffer, before the job starts (`buftype` is still `nofile`) and before it
+  opens the window. So a window option set in the handler (`vim.opt_local.colorcolumn = ...`) does not reach the Claude
+  window. Use `snacks_win_opts.wo` for that. Snacks applies `bo` again when it re-creates a floating window that was
+  closed, so `FileType` can fire twice for one buffer. Keep the handler idempotent.
 
 - `external` and `none` create no Neovim buffer, so they set no filetype.
 
