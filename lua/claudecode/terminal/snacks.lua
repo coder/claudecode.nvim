@@ -4,10 +4,15 @@
 local M = {}
 
 local snacks_available, Snacks = pcall(require, "snacks")
+local owned = require("claudecode.terminal.owned")
 local utils = require("claudecode.utils")
 local terminal = nil
 -- True while Snacks.terminal.open runs in M.open. `terminal` is set only after it returns.
 local starting = false
+
+-- Set on each terminal buffer this provider starts. Unlike `terminal`, a buffer variable survives a reload of this
+-- module, so the next module instance can find the terminal again.
+local OWNED_MARK = owned.SNACKS_MARK
 
 --- @return boolean
 local function is_available()
@@ -30,7 +35,10 @@ local function setup_terminal_events(term_instance, config)
   -- Handle command completion/exit - only if auto_close is enabled
   if config.auto_close then
     term_instance:on("TermClose", function()
-      if vim.v.event.status ~= 0 and not term_instance._cc.closing then
+      -- The native provider's direct stop of this Claude (owned.stop_other) clears the mark first, so the exit that it
+      -- causes is no error.
+      local stopped_elsewhere = term_instance:buf_valid() and not vim.b[term_instance.buf][OWNED_MARK]
+      if vim.v.event.status ~= 0 and not term_instance._cc.closing and not stopped_elsewhere then
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
@@ -400,6 +408,39 @@ local function patch_instance(term, config)
   end
 end
 
+---When no terminal is tracked, tracks the one that an earlier copy of this module started (before a reload): Snacks
+---keeps its instances, and the Claude buffer keeps its mark. A window may or may not show it.
+local function adopt_existing_terminal()
+  if terminal and terminal:buf_valid() then
+    return
+  end
+  -- A terminal gets its mark only after its start succeeded, so the one that M.open is starting is not adopted here.
+  if not is_available() or type(Snacks.terminal.list) ~= "function" then
+    return
+  end
+  for _, instance in ipairs(Snacks.terminal.list()) do
+    if instance.buf and owned.is_live(instance.buf, OWNED_MARK) then
+      terminal = instance
+      require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", instance.buf)
+      return
+    end
+  end
+end
+
+---Stops a Claude that the native provider started before a reload. The provider choice changed since, so nothing
+---controls that Claude, and it would run beside the one that this provider starts.
+---@return boolean stopped
+local function stop_native_terminal()
+  if not owned.stop_other(owned.NATIVE_MARK, "native") then
+    return false
+  end
+  vim.notify(
+    "Stopped the Claude that the native provider started, because the snacks provider is in use.",
+    vim.log.levels.WARN
+  )
+  return true
+end
+
 function M.setup()
   -- No specific setup needed for Snacks provider
 end
@@ -417,6 +458,8 @@ function M.open(cmd_string, env_table, config, focus)
 
   focus = utils.normalize_focus(focus)
 
+  adopt_existing_terminal()
+
   if terminal and terminal:buf_valid() then
     -- Reuse the existing terminal. Route through cc_show so a hidden terminal is
     -- restored without Snacks destroying+recreating the window (which would climb
@@ -428,6 +471,13 @@ function M.open(cmd_string, env_table, config, focus)
   -- A BufEnter or TermOpen autocmd can call open while Snacks.terminal.open runs below. That start is the one this
   -- open would begin, so a second start would run a second Claude that nothing tracks.
   if starting then
+    return
+  end
+
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and this
+  -- open shows it.
+  if stop_native_terminal() and terminal and terminal:buf_valid() then
+    cc_show(terminal, focus, config)
     return
   end
 
@@ -458,6 +508,7 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
+    vim.b[term_instance.buf][OWNED_MARK] = true
     if not focus then
       -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter
@@ -508,7 +559,10 @@ function M.close()
   if not is_available() then
     return
   end
+  adopt_existing_terminal()
   if not (terminal and terminal:buf_valid()) then
+    -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
+    stop_native_terminal()
     return
   end
   local closing = terminal
@@ -556,6 +610,7 @@ function M.simple_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
+  adopt_existing_terminal()
   if terminal and terminal:buf_valid() then
     if cc_is_visible(terminal) then
       logger.debug("terminal", "Simple toggle: hiding visible terminal")
@@ -582,6 +637,7 @@ function M.focus_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
+  adopt_existing_terminal()
   if terminal and terminal:buf_valid() then
     if not cc_is_visible(terminal) then
       -- Terminal exists but is hidden -> show and focus it.
@@ -614,6 +670,7 @@ end
 ---Get the active terminal buffer number
 ---@return number?
 function M.get_active_bufnr()
+  adopt_existing_terminal()
   if terminal and terminal:buf_valid() and terminal.buf then
     if vim.api.nvim_buf_is_valid(terminal.buf) then
       return terminal.buf

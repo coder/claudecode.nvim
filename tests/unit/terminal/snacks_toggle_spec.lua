@@ -148,7 +148,15 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end
         return result
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_call = function(_, fn)
           return fn()
         end,
