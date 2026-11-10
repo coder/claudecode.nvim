@@ -44,9 +44,20 @@ describe("Tool: get_current_selection", function()
     _G.vim.json.encode = nil
   end)
 
-  it("should return an empty selection structure if no selection is available", function()
+  it("should return the live cursor position if no selection is tracked", function()
     mock_selection_module.get_latest_selection = spy.new(function()
       return nil
+    end)
+    mock_selection_module.get_visual_selection = spy.new(function()
+      return nil
+    end)
+    mock_selection_module.get_cursor_position = spy.new(function()
+      return {
+        text = "",
+        filePath = "/current/file.lua",
+        fileUrl = "file:///current/file.lua",
+        selection = { start = { line = 4, character = 2 }, ["end"] = { line = 4, character = 2 }, isEmpty = true },
+      }
     end)
 
     local success, result = pcall(get_current_selection_handler, {})
@@ -61,9 +72,33 @@ describe("Tool: get_current_selection", function()
     expect(parsed_result.text).to_be("")
     expect(parsed_result.filePath).to_be("/current/file.lua")
     expect(parsed_result.selection.isEmpty).to_be_true()
-    expect(parsed_result.selection.start.line).to_be(0) -- Default empty selection
-    expect(parsed_result.selection.start.character).to_be(0)
+    expect(parsed_result.selection.start.line).to_be(4)
+    expect(parsed_result.selection.start.character).to_be(2)
     assert.spy(mock_selection_module.get_latest_selection).was_called()
+  end)
+
+  it("should return the live visual selection if no selection is tracked", function()
+    mock_selection_module.get_latest_selection = spy.new(function()
+      return nil
+    end)
+    mock_selection_module.get_visual_selection = spy.new(function()
+      return {
+        text = "beta",
+        filePath = "/current/file.lua",
+        fileUrl = "file:///current/file.lua",
+        selection = { start = { line = 1, character = 0 }, ["end"] = { line = 1, character = 4 }, isEmpty = false },
+      }
+    end)
+    mock_selection_module.get_cursor_position = spy.new(function()
+      error("get_cursor_position must not be called while a visual selection exists")
+    end)
+
+    local result = get_current_selection_handler({})
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_true()
+    expect(parsed_result.text).to_be("beta")
+    expect(parsed_result.selection.isEmpty).to_be_false()
+    expect(parsed_result.selection["end"].character).to_be(4)
   end)
 
   it("should return the selection data from claudecode.selection if available", function()
