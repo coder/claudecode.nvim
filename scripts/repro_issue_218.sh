@@ -160,6 +160,8 @@ stop_tree() {
   # shellcheck disable=SC2086
   kill -KILL $live 2>/dev/null || true
 }
+# The socket directory of agent-tty home $1: /tmp/agent-tty/ and the first 8 hex digits of the
+# sha256 of the home path (agent-tty's sessionPaths.js). Prints nothing without a sha256 tool.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 socket_dir() {
   local sum=""
