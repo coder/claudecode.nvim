@@ -275,7 +275,10 @@ cleanup() {
     rm -rf "$WORK"
   fi
   if [[ -n "$forget_stopped" ]]; then
-    warn "         agent-tty's registry still lists the home $(printf '%q' "$AGENT_HOME"). Remove the entry with: agent-tty home forget $(printf '%q' "$AGENT_HOME")"
+    # `agent-tty home list` hides a home whose directory is gone, but the registry file keeps the entry.
+    q_home="$(printf '%q' "$AGENT_HOME")"
+    warn "         agent-tty's registry file still holds an entry for the removed home $q_home."
+    warn "         'agent-tty home list' does not show it. Remove it with: agent-tty home forget $q_home"
   fi
 }
 trap cleanup EXIT
