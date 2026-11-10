@@ -65,7 +65,10 @@ describe("The @ mention queue", function()
   ---Let `ms` milliseconds pass.
   local function run(ms)
     local stop_at = loop.now + ms
+    local phases = 0
     while true do
+      phases = phases + 1
+      assert(phases < 100000, "the timers keep firing without letting time pass")
       while #loop.scheduled > 0 do
         protect(table.remove(loop.scheduled, 1))
       end
