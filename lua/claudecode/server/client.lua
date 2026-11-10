@@ -27,6 +27,7 @@ local CLOSE_REASONS = {
 ---@field pending table|nil The reads of an incomplete frame, with their total length in `size` and the frame's in `needed`
 ---@field fragments table|nil Joined pieces of the text message whose last fragment has not arrived, and their total `size`
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
+---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
 
@@ -91,6 +92,19 @@ local function add_data_frame(client, data_frame)
     return nil, 1007, "Invalid UTF-8 in text message"
   end
   return message
+end
+
+---Close a connection after a protocol error, and report its client at once. The Close frame is written before the
+---socket closes: its write callback closes the socket, and nothing else may close it before (see `close_pending`).
+---The client must not wait for that write: a Claude that does not read would keep it in `server.clients` until it does.
+---@param client WebSocketClient
+---@param status integer The RFC 6455 status to close with
+---@param problem string What broke the protocol, short enough for one line of :messages
+---@param on_error function Callback for errors: function(client, error_msg)
+local function fail_connection(client, status, problem, on_error)
+  client.buffer = ""
+  M.close_client(client, status, CLOSE_REASONS[status])
+  on_error(client, problem)
 end
 
 ---Process incoming data for a client
@@ -178,6 +192,9 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         end
         client.handshake_complete = true
         client.state = "connected"
+        -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
+        -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
+        client.last_pong = vim.loop.now()
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
           on_open(client)
@@ -211,16 +228,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- Fatal protocol violation: send the RFC 6455 Close frame, drop the
         -- offending bytes (so they are not re-parsed forever, which previously
         -- wedged the connection), and tear the connection down.
-        --
-        -- on_error runs the synchronous teardown (tcp.lua _disconnect_client ->
-        -- _remove_client -> tcp_handle:close()), which would cancel the pending
-        -- Close-frame write if it ran first. Passing it as close_client's on_done
-        -- runs it from the write callback, i.e. only after the status code has
-        -- been flushed, so the peer actually receives the 1002/1007/1009 close.
-        client.buffer = ""
-        M.close_client(client, close_code, CLOSE_REASONS[close_code], function()
-          on_error(client, detail)
-        end)
+        fail_connection(client, close_code, detail, on_error)
       else
         frame_length = detail -- The frame is incomplete. Its length is known once its header arrived.
       end
@@ -229,6 +237,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
     offset = offset + bytes_consumed
 
+    -- parse_frame rejects every opcode but the six handled here with 1002, so no other opcode gets this far.
     local opcode = parsed_frame.opcode
     if opcode == frame.OPCODE.TEXT or opcode == frame.OPCODE.BINARY or opcode == frame.OPCODE.CONTINUATION then
       local message, status, problem = add_data_frame(client, parsed_frame)
@@ -241,11 +250,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
           end
         end)
       elseif status then
-        -- Same teardown as a fatal frame above: on_error runs only after the Close frame is written.
-        client.buffer = ""
-        M.close_client(client, status, CLOSE_REASONS[status], function()
-          on_error(client, problem)
-        end)
+        fail_connection(client, status, problem, on_error)
         break
       end
     elseif opcode == frame.OPCODE.CLOSE then
@@ -280,12 +285,6 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       client.tcp_handle:write(pong_frame)
     elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
-    else
-      M.close_client(client, 1002, CLOSE_REASONS[1002], function()
-        on_error(client, "Unknown WebSocket opcode: " .. opcode)
-      end)
-      client.buffer = ""
-      break
     end
   end
   client.buffer = client.buffer:sub(offset)
@@ -330,14 +329,8 @@ end
 ---@param client WebSocketClient The client object
 ---@param code number|nil Close code (default: 1000)
 ---@param reason string|nil Close reason
----@param on_done function|nil Optional callback run after the Close frame has been
----  written (or once the connection is already gone). Protocol-violation paths use
----  it to defer error/teardown until the status code has actually been flushed.
-function M.close_client(client, code, reason, on_done)
+function M.close_client(client, code, reason)
   if client.state == "closed" or client.state == "closing" then
-    if on_done then
-      vim.schedule(on_done)
-    end
     return
   end
 
@@ -353,26 +346,20 @@ function M.close_client(client, code, reason, on_done)
   -- in tcp.lua's _remove_client.
   if client.tcp_handle:is_closing() then
     client.state = "closed"
-    if on_done then
-      vim.schedule(on_done)
-    end
     return
   end
 
   -- An upgrading client gets the Close frame too: libuv writes it after the 101 reply that is still queued.
   if client.handshake_complete or client.state == "upgrading" then
     local close_frame = frame.create_close_frame(code, reason)
+    -- The write callback closes the socket, so nothing may close it first: that would cancel the frame. libuv always
+    -- invokes the callback (on success or error), so the socket is never left open.
+    client.close_pending = true
     client.tcp_handle:write(close_frame, function()
+      client.close_pending = nil
       client.state = "closed"
       if not client.tcp_handle:is_closing() then
         client.tcp_handle:close()
-      end
-      -- Run any teardown only after the Close frame has been flushed, so a
-      -- caller's synchronous handle close cannot cancel the pending write. libuv
-      -- always invokes this callback (on success or error), so on_done is never
-      -- dropped.
-      if on_done then
-        on_done()
       end
     end)
     -- Mark as "closing" while the Close frame write/teardown is in flight. The
@@ -382,9 +369,6 @@ function M.close_client(client, code, reason, on_done)
   else
     client.state = "closed"
     client.tcp_handle:close()
-    if on_done then
-      vim.schedule(on_done)
-    end
   end
 end
 

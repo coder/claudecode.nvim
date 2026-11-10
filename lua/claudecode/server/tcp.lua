@@ -229,6 +229,16 @@ function M._handle_new_connection(server)
   server.on_connect(client)
 end
 
+---Close the socket of a client that left the server, unless it is closing already or the write callback of its Close
+---frame will close it: closing it now would cancel that frame.
+---@param client WebSocketClient The client whose socket to close
+local function release_socket(client)
+  if client.close_pending or client.tcp_handle:is_closing() then
+    return
+  end
+  client.tcp_handle:close()
+end
+
 ---Disconnect a client and remove it from the server.
 ---This ensures `server.on_disconnect` is invoked for every disconnect path
 ---(EOF, read errors, protocol errors, timeouts), and only once per client.
@@ -257,6 +267,9 @@ function M._disconnect_client(server, client, code, reason)
   -- Idempotency: a client can hit multiple disconnect paths (e.g. CLOSE frame
   -- followed by a TCP EOF). Only notify/remove once.
   if not server.clients[client.id] then
+    -- The server dropped this client already, perhaps by stopping before this event ran, and nothing else will close
+    -- its socket.
+    release_socket(client)
     return
   end
 
@@ -270,10 +283,7 @@ end
 function M._remove_client(server, client)
   if server.clients[client.id] then
     server.clients[client.id] = nil
-
-    if not client.tcp_handle:is_closing() then
-      client.tcp_handle:close()
-    end
+    release_socket(client)
   end
 end
 
@@ -354,18 +364,6 @@ function M.get_clients_info(server)
   return clients
 end
 
----Close a specific client connection
----@param server TCPServer The server object
----@param client_id string The client ID
----@param code number|nil Close code
----@param reason string|nil Close reason
-function M.close_client(server, client_id, code, reason)
-  local client = server.clients[client_id]
-  if client then
-    client_manager.close_client(client, code, reason)
-  end
-end
-
 ---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)
@@ -438,6 +436,9 @@ function M.start_ping_timer(server, interval)
           -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
           -- connection still ends without the client's Close frame, which is what 1006 means here.
           client_manager.close_client(client, 1011, "Keepalive timeout")
+          -- The socket does not wait for the Close frame: a Claude that stopped answering may never read it. Closing
+          -- now drops the frame when Claude's window is full.
+          client.close_pending = nil
           M._disconnect_client(server, client, 1006, "Connection timeout")
         end
       end
