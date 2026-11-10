@@ -11,16 +11,22 @@
 #                     `Error:` line of a Node stack trace, and a `mise ERROR` line) and the fix, and claims no saved
 #                     screen
 #   rtp               VCN_RTP=<dir>:<dir> puts both dirs on nvim's runtimepath, so require() finds a module in each
-#   rtp-relative      relative VCN_RTP entries resolve against the directory launch runs in
+#   rtp-relative      relative VCN_RTP entries resolve against the directory launch runs in (a shallow temp dir, so
+#                     `..` parts cannot clamp at / and hide a missing resolution)
 #   rtp-symlink       a VCN_RTP entry with `..` after a symlink means the parent of the link's target
 #   rtp-missing       a VCN_RTP entry that is not a directory: launch exits 1 naming it
 #   rtp-control       without VCN_RTP the same require() fails
-#   sigterm           SIGTERM to the process group of a running launch: it exits 143 and leaves no state dir or process
+#   sigterm           SIGTERM to the process group of a launch with a live session: it exits 143 and leaves no state dir
+#                     or process
+#   signal-early      SIGTERM, SIGINT and SIGHUP before the run exists (launch held in `mkdir`): exit 143, no state dir
+#   signal-doctor     the same three signals while `agent-tty doctor` runs: exit 143, no state dir, and the full cleanup
+#                     ran (it calls `agent-tty home forget`), not only the early trap that removes the state dir
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
-# need everything under Needs in SKILL.md.
+# need everything under Needs in SKILL.md, and the signal cases need perl.
 # Prints one `ok <case>` per case, or `FAIL <case>: <reason>` and exits 1, and ends with `CASES <n>`.
 set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
+root=$PWD
 TMP=$(mktemp -d)
 live_state="" live_path=""
 cleanup_all() {
@@ -39,6 +45,8 @@ fail() {
 
 good=${VCN_AGENT_TTY:-$(command -v agent-tty || mise which agent-tty)} || fail setup "no agent-tty to use as the good one"
 real_mise=$(command -v mise)
+real_mkdir=$(command -v mkdir)
+perl=$(command -v perl) || fail setup "perl not found"
 # The tools vcn.sh needs, each linked by name, so PATH holds no agent-tty. A mise shim dir would hold one.
 mkdir "$TMP/tools"
 for tool in jq setsid; do
@@ -77,26 +85,52 @@ mise ERROR Version: 2026.10.25 linux-x64 (2026-10-31)
 ERRORS
 exit 1
 SHIM
-# The stand-in answers `mise which agent-tty` with $FAKE_MISE_ATT, and nothing else differently.
+# The stand-in answers `mise which agent-tty` with $FAKE_MISE_ATT, and runs every other command from the directory the
+# proof started in, so a case can launch from another directory and still resolve nvim and node.
 cat >"$TMP/mise/mise" <<MISE
 #!/bin/sh
 if [ "\$1" = which ] && [ "\$2" = agent-tty ]; then
   [ -n "\${FAKE_MISE_ATT-}" ] && echo "\$FAKE_MISE_ATT" && exit 0
   exit 1
 fi
-exec "$real_mise" "\$@"
+cd "$root" && exec "$real_mise" "\$@"
 MISE
-chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise"
+# The signal cases hold launch at a known point: in the `mkdir` that makes the run's dirs, which runs before run.env
+# exists, or in `agent-tty doctor` (the stand-in logs every call to $GATE/calls and answers all but doctor at once).
+# Each stand-in tells the proof it was reached through $GATE/reached.
+mkdir "$TMP/gate-bin" "$TMP/slow"
+cat >"$TMP/gate-bin/mkdir" <<MKDIR
+#!/bin/sh
+case "\$*" in
+"-p /tmp/vcn."*"/home /tmp/vcn."*"/claude /tmp/vcn."*"/work")
+  if [ ! -f "\$GATE/reached" ]; then
+    printf '%s\n' "\$2" | sed 's#/home\$##' >"\$GATE/state"
+    : >"\$GATE/reached"
+    while [ -f "\$GATE/hold" ]; do sleep 0.05; done
+  fi
+  ;;
+esac
+exec "$real_mkdir" "\$@"
+MKDIR
+cat >"$TMP/slow/agent-tty" <<'SLOW'
+#!/bin/sh
+echo "$3 $4" >>"$GATE/calls"
+if [ "$3" = doctor ]; then
+  : >"$GATE/reached"
+  sleep 300
+fi
+SLOW
+chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise" "$TMP/gate-bin/mkdir" "$TMP/slow/agent-tty"
 ln -s "$good" "$TMP/good/agent-tty"
 ln -s "$good" "$TMP/good2/agent-tty"
 good_path=$TMP/mise:$TMP/good:$base
 
-# launch <case> <PATH> [VAR=value...]: runs launch and sets rc, out and state.
+# launch <case> <PATH> [VAR=value...]: runs launch, in $launch_cwd when it is set, and sets rc, out and state.
 launch() {
   local name=$1 path=$2
   shift 2
   rc=0
-  out=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" "$V" launch 2>&1) || rc=$?
+  out=$(cd "${launch_cwd:-.}" && env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" "$V" launch 2>&1) || rc=$?
   state=$(grep -o 'VCN_STATE=/tmp/vcn\.[A-Za-z0-9]*' <<<"$out" | head -n 1 | cut -d= -f2 || true)
   if ((rc == 0)); then
     live_state=$state live_path=$path
@@ -173,27 +207,89 @@ rtp_case() { # <case> <want require() result> [VAR=value...]
 }
 
 rtp_case rtp onetwo VCN_RTP="$TMP/rtp-one:$TMP/rtp-two"
-rtp_case rtp-relative onetwo VCN_RTP="$(realpath -s --relative-to=. "$TMP/rtp-one"):$(realpath -s --relative-to=. "$TMP/rtp-two")"
+launch_cwd=$TMP rtp_case rtp-relative onetwo VCN_RTP="rtp-one:rtp-two"
 rtp_case rtp-symlink onetwo VCN_RTP="$TMP/rtp-one:$TMP/lnk/../rtp-linked"
 refused rtp-missing "$good_path" "VCN_RTP entry $TMP/nope is not a directory" VCN_RTP="$TMP/rtp-one:$TMP/nope"
 rtp_case rtp-control --
 
-# A signal ends bash with $? still 0 in an EXIT trap, so launch must turn it into an exit to clean up its run. The
-# signal lands after launch made the agent-tty session, so the cleanup must destroy a live session: its host process
-# and its nvim both carry the run's tag.
-sigterm_case() {
-  local name=sigterm pid f st="" rc=0 pids=()
-  env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$good_path" VERIFY_OUT="$TMP/out-$name" \
-    "$TMP/tools/setsid" "$V" launch >"$TMP/$name.txt" 2>&1 </dev/null &
+# A signal ends bash with $? still 0 in an EXIT trap, so launch must turn it into an exit to clean up its run.
+# A background job starts with SIGINT ignored, and a harness can start it with SIGHUP ignored, and bash cannot trap a
+# signal that was ignored at entry: perl resets both before launch starts.
+# start_launch <case> <PATH> [VAR=value...]: runs launch in the background in its own process group and sets pid.
+start_launch() {
+  local name=$1 path=$2
+  shift 2
+  # shellcheck disable=SC2016
+  env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" \
+    "$perl" -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV' "$TMP/tools/setsid" "$V" launch >"$TMP/$name.txt" 2>&1 </dev/null &
   pid=$!
+}
+
+# find_state <case>: sets st to the state dir whose run.env names the case's evidence dir, within 30 s.
+find_state() {
+  local f
+  st=""
   for _ in $(seq 300); do
     for f in /tmp/vcn.*/run.env; do
-      if [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$name" "$f" 2>/dev/null; then st=$(dirname "$f"); fi
+      if [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$1" "$f" 2>/dev/null; then st=$(dirname "$f"); fi
     done
-    [[ -z $st ]] || break
+    [[ -z $st ]] || return 0
     sleep 0.1
   done
-  [[ -n $st ]] || fail "$name" "launch wrote no run.env within 30 s: $(cat "$TMP/$name.txt")"
+  fail "$1" "launch wrote no run.env within 30 s: $(cat "$TMP/$1.txt")"
+}
+
+# wait_for <case> <file>: waits up to 30 s for a stand-in to create the file.
+wait_for() {
+  for _ in $(seq 300); do
+    [[ -f $2 ]] && return 0
+    sleep 0.1
+  done
+  fail "$1" "launch did not reach the stand-in within 30 s: $(cat "$TMP/$1.txt")"
+}
+
+# signal_group <case> <signal> <state dir>: signals launch's process group and checks it exited 143 and removed the dir.
+signal_group() {
+  local name=$1 sig=$2 dir=$3 rc=0 left
+  kill -"$sig" -- "-$pid" || fail "$name" "no process group $pid to signal"
+  wait "$pid" || rc=$?
+  if [[ $rc != 143 || -e $dir ]]; then
+    left=$([[ -e $dir ]] && echo yes || echo no)
+    [[ $dir != /tmp/vcn.* ]] || rm -rf -- "$dir"
+    fail "$name" "SIG$sig made launch exit $rc (wanted 143), state dir left: $left"
+  fi
+}
+
+signal_case() { # <case> <early|doctor>
+  local name=$1 where=$2 sig gate run
+  for sig in TERM INT HUP; do
+    run=$name-$sig gate=$TMP/gate-$name-$sig
+    mkdir "$gate"
+    if [[ $where == early ]]; then
+      : >"$gate/hold"
+      start_launch "$run" "$TMP/gate-bin:$good_path" GATE="$gate"
+      wait_for "$run" "$gate/reached"
+      st=$(<"$gate/state")
+    else
+      start_launch "$run" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
+      wait_for "$run" "$gate/reached"
+      find_state "$run"
+    fi
+    signal_group "$run" "$sig" "$st"
+    # Only the late trap runs launch_failed, whose cleanup ends with `agent-tty home forget`. The early trap only removes
+    # the state dir. The output of launch is no evidence: a trap that runs inside `att` writes to att's redirections.
+    [[ $where == early ]] || grep -qx 'home forget' "$gate/calls" || fail "$run" "launch did not run its cleanup, agent-tty calls: $(tr '\n' ',' <"$gate/calls")"
+  done
+  echo "ok $name: SIGTERM, SIGINT and SIGHUP made launch exit 143 and remove its state dir"
+  cases=$((cases + 1))
+}
+
+# The signal lands after launch made the agent-tty session, so the cleanup must destroy a live session: its host
+# process and its nvim both carry the run's tag.
+sigterm_case() {
+  local name=sigterm pids=()
+  start_launch "$name" "$good_path"
+  find_state "$name"
   live_state=$st live_path=$good_path
   for _ in $(seq 600); do
     grep -q '^TUI_PID=' "$st/run.env" 2>/dev/null && break
@@ -201,10 +297,7 @@ sigterm_case() {
   done
   grep -q '^TUI_PID=' "$st/run.env" || fail "$name" "launch made no session within 60 s: $(cat "$TMP/$name.txt")"
   [[ ! -e $TMP/out-$name/run.env ]] || fail "$name" "launch finished before the signal"
-  kill -TERM -- "-$pid" || fail "$name" "no process group $pid to signal"
-  wait "$pid" || rc=$?
-  [[ $rc == 143 ]] || fail "$name" "launch exited $rc after SIGTERM, wanted 143: $(cat "$TMP/$name.txt")"
-  [[ ! -e $st ]] || fail "$name" "state dir $st is still there after SIGTERM"
+  signal_group "$name" TERM "$st"
   mapfile -t pids < <(grep -lzxF "VCN_RUN_TAG=$st" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
   if ((${#pids[@]} > 0)); then
     # Every PID here carries this run's tag, so it is the proof's own.
@@ -216,5 +309,7 @@ sigterm_case() {
   cases=$((cases + 1))
 }
 
+signal_case signal-early early
+signal_case signal-doctor doctor
 sigterm_case
 echo "CASES $cases"
