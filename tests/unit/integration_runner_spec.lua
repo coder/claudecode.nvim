@@ -5,13 +5,16 @@ local quote = temp_dir.quote
 
 local STUB_TIMEOUT = {
   "#!/bin/sh",
-  'for arg in "$@"; do',
-  '  case "$arg" in',
-  "    [0-9]*s) arg=1s ;;",
-  "  esac",
-  '  set -- "$@" "$arg"',
-  "  shift",
-  "done",
+  'if [ -f "$STUB_DIR/short_timeout" ]; then',
+  '  for arg in "$@"; do',
+  '    case "$arg" in',
+  "      [0-9]*s) arg=1s ;;",
+  "    esac",
+  '    set -- "$@" "$arg"',
+  "    shift",
+  "  done",
+  "fi",
+  'echo "$1 $2 $3" >> "$STUB_DIR/timeout_args"',
   'exec "$REAL_TIMEOUT" "$@"',
 }
 local STUB_NVIM = {
@@ -97,7 +100,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
   ---@param pid string
   local function wait_until_stopped(pid)
-    local deadline = os.time() + 3
+    local deadline = os.time() + 10
     while is_running(pid) and os.time() < deadline do
       os.execute("sleep 0.1")
     end
@@ -132,6 +135,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       end
       if spec.ignore_term then
         write(dir .. "/" .. spec.name .. ".ignore_term", {})
+        write(dir .. "/short_timeout", {})
       end
     end
     local command = "cd "
@@ -165,6 +169,18 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("0", status, output)
     assert.is_truthy(output:find("All integration tests passed!", 1, true), output)
     assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("gives a file that exits on its own the runner's own timeouts", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local log = assert(io.open(dir .. "/timeout_args"))
+    local args = log:read("*a")
+    log:close()
+    assert.are.equal("-k 5s 30s\n", args)
   end)
 
   it("runs command_args_spec.lua like every other file", function()
