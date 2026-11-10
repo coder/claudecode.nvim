@@ -12,6 +12,7 @@
 #                     screen
 #   rtp               VCN_RTP=<dir>:<dir> puts both dirs on nvim's runtimepath, so require() finds a module in each
 #   rtp-relative      relative VCN_RTP entries resolve against the directory launch runs in
+#   rtp-symlink       a VCN_RTP entry with `..` after a symlink means the parent of the link's target
 #   rtp-missing       a VCN_RTP entry that is not a directory: launch exits 1 naming it
 #   rtp-control       without VCN_RTP the same require() fails
 #   sigterm           SIGTERM to the process group of a running launch: it exits 143 and leaves no state dir or process
@@ -154,6 +155,9 @@ for d in one two; do
   mkdir -p "$TMP/rtp-$d/lua"
   echo "return { dir = '$d' }" >"$TMP/rtp-$d/lua/vcn_rtp_$d.lua"
 done
+mkdir -p "$TMP/target/inner" "$TMP/target/rtp-linked/lua"
+echo "return { dir = 'linked' }" >"$TMP/target/rtp-linked/lua/vcn_rtp_two.lua"
+ln -s "$TMP/target/inner" "$TMP/lnk"
 probe="luaeval('(pcall(require, \"vcn_rtp_one\") and \"one\" or \"-\") .. (pcall(require, \"vcn_rtp_two\") and \"two\" or \"-\")')"
 
 rtp_case() { # <case> <want require() result> [VAR=value...]
@@ -170,6 +174,7 @@ rtp_case() { # <case> <want require() result> [VAR=value...]
 
 rtp_case rtp onetwo VCN_RTP="$TMP/rtp-one:$TMP/rtp-two"
 rtp_case rtp-relative onetwo VCN_RTP="$(realpath -s --relative-to=. "$TMP/rtp-one"):$(realpath -s --relative-to=. "$TMP/rtp-two")"
+rtp_case rtp-symlink onetwo VCN_RTP="$TMP/rtp-one:$TMP/lnk/../rtp-linked"
 refused rtp-missing "$good_path" "VCN_RTP entry $TMP/nope is not a directory" VCN_RTP="$TMP/rtp-one:$TMP/nope"
 rtp_case rtp-control --
 

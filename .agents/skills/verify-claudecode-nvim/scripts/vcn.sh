@@ -102,13 +102,14 @@ pick_agent_tty() {
 }
 
 # nvim runs in $WORK, so a relative VCN_RTP entry would point nowhere and plugin code would silently not load.
+# Symlinks resolve too: `link/..` means the parent of link's target, which realpath -s would collapse to link's parent.
 rtp_dirs() {
   local dir out="" dirs=() IFS=:
   read -ra dirs <<<"${VCN_RTP-}"
   for dir in ${dirs[@]+"${dirs[@]}"}; do
     [[ -z $dir ]] && continue
     [[ -d $dir ]] || die "VCN_RTP entry $dir is not a directory"
-    out+=${out:+:}$(realpath -s -- "$dir")
+    out+=${out:+:}$(realpath -- "$dir")
   done
   printf '%s' "$out"
 }
