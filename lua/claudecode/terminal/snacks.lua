@@ -153,25 +153,6 @@ local function resolve_split_size(val, total, default_frac)
   return math.max(1, math.floor(total * default_frac))
 end
 
--- Snacks' auto_insert runs `startinsert` on BufEnter of the terminal buffer (#423).
-local function win_set_buf_without_bufenter(win, buf)
-  local saved = vim.o.eventignore
-  -- A `-BufEnter` entry wins wherever it stands in the list.
-  local ignored = {}
-  for entry in saved:gmatch("[^,]+") do
-    if entry:lower() ~= "-bufenter" then
-      table.insert(ignored, entry)
-    end
-  end
-  table.insert(ignored, "BufEnter")
-  vim.o.eventignore = table.concat(ignored, ",")
-  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
-  vim.o.eventignore = saved
-  if not ok then
-    error(err, 0)
-  end
-end
-
 local function start_insert_if_terminal(term)
   if
     term.buf
@@ -362,7 +343,7 @@ local function cc_show(term, focus, config)
   if focus then
     vim.api.nvim_win_set_buf(new_win, term.buf)
   else
-    win_set_buf_without_bufenter(new_win, term.buf)
+    utils.win_set_buf_without_bufenter(new_win, term.buf)
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native

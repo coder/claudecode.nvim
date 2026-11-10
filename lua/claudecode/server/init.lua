@@ -57,8 +57,9 @@ function M.start(config, auth_token)
       else
         logger.debug("server", "WebSocket client connected (no auth):", client.id)
       end
-
-      -- Notify main module about new connection for queue processing
+    end,
+    on_open = function(client)
+      -- The client completed its WebSocket handshake, so it can take the queued @ mentions now.
       local main_module = require("claudecode")
       if main_module.process_mention_queue then
         vim.schedule(function()
@@ -429,8 +430,10 @@ end
 ---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table|nil The parameters to send
----@return boolean success Whether broadcast was successful
-function M.broadcast(method, params)
+---@param on_written fun(written: integer)|nil When a connected client took the message: called once after the writes
+---  finished, with how many succeeded (see tcp.lua broadcast)
+---@return boolean success Whether a connected client took the message
+function M.broadcast(method, params, on_written)
   if not M.state.server then
     return false
   end
@@ -442,8 +445,7 @@ function M.broadcast(method, params)
   }
 
   local json_message = vim.json.encode(message)
-  tcp_server.broadcast(M.state.server, json_message)
-  return true
+  return tcp_server.broadcast(M.state.server, json_message, on_written) > 0
 end
 
 ---Get server status information
