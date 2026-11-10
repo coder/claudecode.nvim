@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Reproduction / verification for issue #218:
+# Check for issue #218:
 #   "[BUG] Neovim crashes when accepting new file diff with render-markdown.nvim
 #    installed"
 #   https://github.com/coder/claudecode.nvim/issues/218
 #
-# Root cause (verified): accepting (:w) a NEW-file *markdown* diff that claudecode
+# Root cause found for the report: accepting (:w) a NEW-file *markdown* diff that claudecode
 # opened in a NEW TAB (diff_opts.open_in_new_tab = true) tears the diff down via
 # diff.close_diff_by_tab_name -> _cleanup_diff_state, which runs `:tabclose` on
 # the tab whose windows are STILL in diff mode. When render-markdown.nvim is
@@ -14,10 +14,12 @@
 # or turning diff mode off before the teardown (the reporter's `diffoff`
 # workaround), avoids it.
 #
-# The exact symptom is build-dependent (same memory-unsafety bug):
-#   * Neovim 0.12.3            -> SIGSEGV, raw exit 139  (matches the reporter)
+# On the builds that crashed, the symptom was build-dependent (same memory-unsafety bug):
+#   * a Neovim 0.12.3 build     -> SIGSEGV, raw exit 139  (matches the reporter)
 #   * some 0.11.0 release builds -> abnormal exit 0, no VimLeave, dies mid-tabclose
-# Either way Neovim disappears the instant the diff is accepted.
+# Either way Neovim disappeared the instant the diff was accepted. Whether a given
+# build, set of plugin commits and claudecode.nvim checkout still crashes is what
+# this script finds out. It does not assume it.
 #
 # This driver needs a REAL terminal UI (the crash is in the redraw/teardown path,
 # which does not run under --headless), so it uses the `agent-tty` CLI. No real
@@ -25,9 +27,11 @@
 # (a sleeping process) and drives the openDiff coroutine flow directly.
 #
 # Usage:
-#   scripts/repro_issue_218.sh                 # repro (expects crash)
+#   scripts/repro_issue_218.sh                 # default run: render-markdown installed
 #   NVIM_BIN=/path/to/nvim scripts/repro_issue_218.sh
-#   scripts/repro_issue_218.sh --no-render-markdown   # control (expects survival)
+#   scripts/repro_issue_218.sh --no-render-markdown   # control run: render-markdown removed
+#
+# What it checks: is Neovim still running after the new-file markdown diff is accepted?
 #
 # The run works on a COPY of fixtures/issue-218 in a temp directory (the copy keeps
 # the committed lazy-lock.json), so it never modifies a tracked file. The temp
@@ -35,7 +39,13 @@
 # fixture's NVIM_APPNAME ($XDG_DATA_HOME/issue-218 or issue-218norm), outside the
 # temp directory, and `Lazy! restore` pins them to the commits in that lock file.
 #
-# Exit code: 0 if the expected outcome was observed, 1 otherwise.
+# Exit code:
+#   0  default run: Neovim terminated after the accept (the crash was observed).
+#      control run: Neovim kept running (control OK).
+#   1  default run: Neovim kept running (the crash was NOT observed on this build and
+#      checkout, which is the expected result once the crash is fixed).
+#      control run: Neovim terminated (unexpected).
+#      Either run: agent-tty or nvim is missing, or no agent-tty session could be created.
 
 # Note: no `set -e` — agent-tty subcommands can return non-zero on benign
 # conditions (e.g. a `wait` that times out), and we handle outcomes explicitly.
