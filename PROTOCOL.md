@@ -135,7 +135,7 @@ When the user explicitly sends a selection as context:
 }
 ```
 
-`lineStart` and `lineEnd` are 0-based, and `lineEnd` is the last selected line. Claude Code CLI 2.1.312 adds 1 to each and shows the mention as `@<path>#L<start>-<end>`, or `@<path>#L<line>` for one line, with the path relative to its working directory.
+`lineStart` and `lineEnd` are 0-based, and `lineEnd` is the last selected line. Claude Code CLI 2.1.312 adds 1 to each and shows the mention as `@<path>#L<start>-<end>`, or `@<path>#L<line>` for one line, with the path relative to its working directory. `filePath` is absolute: the CLI (2.1.322) computes that display path with Node's `path.relative` against its own working directory, so a relative `filePath` would resolve against Claude's cwd, which can differ from Neovim's. The VS Code extension sends the document's absolute `fsPath` too.
 
 ### From Claude to IDE
 
