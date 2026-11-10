@@ -24,12 +24,13 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  # Create a temporary file for output
-  local temp_output
+  local temp_output group_file
   temp_output=$(mktemp)
+  group_file=$(mktemp)
 
-  # Run the test with timeout (nvim from PATH: action-setup-vim in CI, mise locally)
-  if timeout 30s nvim --headless -u tests/minimal_init.lua \
+  # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
+  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s 30s "$@"' _ "$group_file" \
+    nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
     2>&1 | tee "$temp_output"; then
     EXIT_CODE=0
@@ -56,23 +57,23 @@ run_test_file() {
   TOTAL_FAILED=$((TOTAL_FAILED + failed_count))
   TOTAL_ERRORS=$((TOTAL_ERRORS + error_count))
 
+  # Exit 124 is timeout's, 137 is its SIGKILL after 5 more seconds, and 143 is SIGTERM.
+  if [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 137 ]] || [[ $EXIT_CODE -eq 143 ]]; then
+    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within 30s"
+    # nvim busy in a Lua loop ignores SIGTERM and outlives timeout.
+    kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
+  fi
+
   # Check if test failed
-  if [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || { [[ $EXIT_CODE -ne 0 ]] && [[ $EXIT_CODE -ne 124 ]] && [[ $EXIT_CODE -ne 143 ]]; }; then
+  if [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || [[ $EXIT_CODE -ne 0 ]]; then
     FAILED_FILES+=("$basename")
   fi
 
   # Cleanup
-  rm -f "$temp_output"
+  rm -f "$temp_output" "$group_file"
 }
 
-# Run each test file, skipping command_args_spec.lua which is known to hang
 for test_file in tests/integration/*_spec.lua; do
-  if [[ $test_file == *"command_args_spec.lua" ]]; then
-    echo ""
-    echo "Skipping: $(basename "$test_file") (known to hang in CI)"
-    continue
-  fi
-
   run_test_file "$test_file"
 done
 

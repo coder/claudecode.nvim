@@ -269,7 +269,7 @@ The autocmd `data` carries:
 
 | field        | type           | notes                                                                                |
 | ------------ | -------------- | ------------------------------------------------------------------------------------ |
-| `file_path`  | `string`       | The formatted/cwd-relative path Claude received                                      |
+| `file_path`  | `string`       | The absolute path Claude received (a directory ends in `/`)                          |
 | `start_line` | `integer\|nil` | **0-indexed** (Claude convention, not 1-indexed editor lines); `nil` for whole files |
 | `end_line`   | `integer\|nil` | 0-indexed; `nil` for whole-file/directory sends                                      |
 | `context`    | `string\|nil`  | Internal trigger tag (e.g. `"ClaudeCodeSend"`); best-effort, may change              |

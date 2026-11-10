@@ -1,4 +1,5 @@
--- A failed Snacks start must not leave a window or buffer behind.
+-- A failed Snacks start must not leave a window or buffer behind. An open that an autocmd calls
+-- while a start runs must not start a second Claude.
 --
 -- Real Snacks.terminal.open shows its window and scratch buffer first, then calls
 -- termopen. For a command that is not executable, termopen raises E475 (or returns
@@ -13,6 +14,7 @@ describe("claudecode.terminal.snacks failed start", function()
   local current_win
   local next_id
   local start_mode
+  local start_hook
   local original_win
   local opened
   local opened_buf
@@ -41,6 +43,16 @@ describe("claudecode.terminal.snacks failed start", function()
     return ids
   end
 
+  -- Runs an autocmd's call into the provider at a point of the start: "buf" (the scratch buffer exists, no window
+  -- yet, as in Snacks' on_buf) or "win" (the window shows it, as in a BufEnter or TermOpen autocmd).
+  local function fire_start_hook(when)
+    local hook = start_hook
+    if hook and hook.when == when then
+      start_hook = nil -- Neovim does not nest an autocmd into itself
+      hook.fn()
+    end
+  end
+
   local function snacks_open(cmd, opts)
     local term = {}
     function term:buf_valid()
@@ -62,10 +74,12 @@ describe("claudecode.terminal.snacks failed start", function()
     if opts.win.on_buf then
       opts.win.on_buf(term)
     end
+    fire_start_hook("buf")
     term.win = new_win(term.buf)
     opened = term
     opened_buf = term.buf
     opened_opts = opts
+    fire_start_hook("win")
 
     if start_mode == "raise" then
       error(
@@ -88,6 +102,7 @@ describe("claudecode.terminal.snacks failed start", function()
     opened = nil
     opened_buf = nil
     opened_opts = nil
+    start_hook = nil
     debug_lines = {}
     original_win = new_win(new_buf())
     buffers[windows[original_win].buf].buftype = ""
@@ -250,5 +265,59 @@ describe("claudecode.terminal.snacks failed start", function()
     assert.spy(vim.keymap.set).was_called(1)
     assert.are.equal(opened.buf, vim.keymap.set.calls[1].vals[4].buffer)
     assert.spy(vim.notify).was_not_called()
+  end)
+
+  describe("an autocmd calls open while the start runs", function()
+    local function call_open_from_autocmd(when)
+      start_hook = {
+        when = when,
+        fn = function()
+          snacks_provider.open("claude", {}, config(), true)
+        end,
+      }
+    end
+
+    for _, when in ipairs({ "buf", "win" }) do
+      it("starts one Claude and tracks it (the autocmd runs at " .. when .. ")", function()
+        start_mode = "started"
+        call_open_from_autocmd(when)
+
+        snacks_provider.open("claude", {}, config(), true)
+
+        assert.spy(package.loaded["snacks"].terminal.open).was_called(1)
+        assert.is_nil(start_hook, "the autocmd must have run")
+        assert.are.equal(opened, snacks_provider._get_terminal_for_test())
+        assert.are.equal(opened.buf, snacks_provider.get_active_bufnr())
+        assert.spy(vim.notify).was_not_called()
+      end)
+
+      it("starts nothing and leaves no terminal when the start fails (the autocmd runs at " .. when .. ")", function()
+        start_mode = "raise"
+        call_open_from_autocmd(when)
+
+        snacks_provider.open("/nonexistent-claude", {}, config(), true)
+
+        assert.spy(package.loaded["snacks"].terminal.open).was_called(1)
+        assert.is_nil(start_hook, "the autocmd must have run")
+        assert_failed_cleanly()
+      end)
+    end
+
+    for _, mode in ipairs({ "started", "raise" }) do
+      it("starts Claude when open runs after a start that " .. mode .. " returned", function()
+        start_mode = mode
+        snacks_provider.open("claude", {}, config(), true)
+        assert.spy(package.loaded["snacks"].terminal.open).was_called(1)
+        if mode == "started" then
+          -- Wipe the terminal, so the next open must start a new one.
+          vim.api.nvim_win_close(opened.win)
+          vim.api.nvim_buf_delete(opened.buf)
+        end
+
+        snacks_provider.open("claude", {}, config(), true)
+
+        assert.spy(package.loaded["snacks"].terminal.open).was_called(2)
+      end)
+    end
   end)
 end)

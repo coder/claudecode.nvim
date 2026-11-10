@@ -6,6 +6,8 @@ local M = {}
 local snacks_available, Snacks = pcall(require, "snacks")
 local utils = require("claudecode.utils")
 local terminal = nil
+-- True while Snacks.terminal.open runs in M.open. `terminal` is set only after it returns.
+local starting = false
 
 --- @return boolean
 local function is_available()
@@ -396,6 +398,12 @@ function M.open(cmd_string, env_table, config, focus)
     return
   end
 
+  -- A BufEnter or TermOpen autocmd can call open while Snacks.terminal.open runs below. That start is the one this
+  -- open would begin, so a second start would run a second Claude that nothing tracks.
+  if starting then
+    return
+  end
+
   local opts = build_opts(config, env_table, focus)
   -- Pass an argv list (not a string) so Snacks spawns Claude via termopen()
   -- without a shell. A shell would glob-expand bracketed model aliases like
@@ -412,7 +420,9 @@ function M.open(cmd_string, env_table, config, focus)
       user_on_buf(instance)
     end
   end
+  starting = true
   local opened, open_result = pcall(Snacks.terminal.open, cmd, opts)
+  starting = false
   local term_instance = opened and open_result or nil
   -- When errors are silenced, termopen returns -1 instead of raising and leaves a plain buffer.
   local started = term_instance
