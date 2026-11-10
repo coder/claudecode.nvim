@@ -2,11 +2,16 @@
 # Proves how `vcn.sh launch` picks agent-tty and loads VCN_RTP, with stand-ins for a broken agent-tty and for mise:
 #   skip-broken       an agent-tty on PATH that fails `agent-tty doctor` comes first: launch runs the next one that passes
 #   mise-broken       mise's agent-tty is the broken one: launch runs the PATH one that passes
-#   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH
+#   mise-only         the only good agent-tty is the one `mise which` names: launch runs it
+#   path-over-mise    a different good agent-tty on PATH and in mise: the PATH one wins
+#   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
-#   none-passes       every candidate fails doctor: launch exits 1 with one message that lists each failure and the fix
+#   none-passes       every candidate fails doctor: launch exits 1 with one message that lists each failure (a stack
+#                     trace line and a mise shim error line) and the fix, and claims no saved screen
 #   rtp               VCN_RTP=<dir>:<dir> puts both dirs on nvim's runtimepath, so require() finds a module in each
+#   rtp-relative      relative VCN_RTP entries resolve against the directory launch runs in
+#   rtp-missing       a VCN_RTP entry that is not a directory: launch exits 1 naming it
 #   rtp-control       without VCN_RTP the same require() fails
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
 # need everything under Needs in SKILL.md.
@@ -14,7 +19,16 @@
 set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+live_state="" live_path=""
+cleanup_all() {
+  if [[ -n $live_state ]]; then
+    env PATH="$live_path" VCN_STATE="$live_state" "$V" cleanup >/dev/null 2>&1 || true
+  fi
+  cd /
+  rm -rf "$TMP"
+}
+trap cleanup_all EXIT
+cd "$TMP"
 cases=0
 
 fail() {
@@ -24,14 +38,22 @@ fail() {
 
 good=${VCN_AGENT_TTY:-$(command -v agent-tty || mise which agent-tty)} || fail setup "no agent-tty to use as the good one"
 real_mise=$(command -v mise)
-base=$(dirname "$(command -v jq)"):$(dirname "$(command -v setsid)"):/usr/bin:/bin
-for dir in ${base//:/ }; do
+# The tools vcn.sh needs, each linked by name, so PATH holds no agent-tty. A mise shim dir would hold one.
+mkdir "$TMP/tools"
+for tool in jq setsid; do
+  exe=$(mise which "$tool" 2>/dev/null || command -v "$tool") || fail setup "$tool not found"
+  ln -s "$exe" "$TMP/tools/$tool"
+done
+base=$TMP/tools:/usr/bin:/bin
+for dir in /usr/bin /bin; do
   [[ ! -e $dir/agent-tty ]] || fail setup "$dir holds an agent-tty, so no case can leave PATH without a good one"
 done
 
-# The stand-in dies the way a mise-installed agent-tty without node-pty's native build does.
-mkdir "$TMP/broken" "$TMP/mise"
+# The stand-ins die the way a mise-installed agent-tty without node-pty's native build does, and the way a mise shim
+# does when its tool is disabled.
+mkdir "$TMP/broken" "$TMP/shim" "$TMP/mise" "$TMP/good" "$TMP/good2"
 printf '%s\n' '#!/bin/sh' "echo 'Error: Failed to load native module: pty.node, checked: build/Release' >&2" 'exit 1' >"$TMP/broken/agent-tty"
+printf '%s\n' '#!/bin/sh' "echo 'mise ERROR agent-tty is not a valid shim.' >&2" 'exit 1' >"$TMP/shim/agent-tty"
 # The stand-in answers `mise which agent-tty` with $FAKE_MISE_ATT, and nothing else differently.
 cat >"$TMP/mise/mise" <<MISE
 #!/bin/sh
@@ -41,20 +63,27 @@ if [ "\$1" = which ] && [ "\$2" = agent-tty ]; then
 fi
 exec "$real_mise" "\$@"
 MISE
-chmod +x "$TMP/broken/agent-tty" "$TMP/mise/mise"
-mkdir "$TMP/good"
+chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise"
 ln -s "$good" "$TMP/good/agent-tty"
+ln -s "$good" "$TMP/good2/agent-tty"
+good_path=$TMP/mise:$TMP/good:$base
 
-# launch <case> <PATH> [VAR=value...]: sets rc, out and state.
+# launch <case> <PATH> [VAR=value...]: runs launch in $TMP and sets rc, out and state.
 launch() {
   local name=$1 path=$2
   shift 2
   rc=0
   out=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" "$V" launch 2>&1) || rc=$?
   state=$(grep -o 'VCN_STATE=/tmp/vcn\.[A-Za-z0-9]*' <<<"$out" | head -n 1 | cut -d= -f2 || true)
+  if ((rc == 0)); then
+    live_state=$state live_path=$path
+  fi
 }
 
-stop() { [[ -z $state ]] || env PATH="$1" VCN_STATE="$state" "$V" cleanup >/dev/null; }
+stop() {
+  [[ -z $state ]] || env PATH="$1" VCN_STATE="$state" "$V" cleanup >/dev/null
+  live_state=""
+}
 
 launched_with() { # <case> <PATH> <want ATT_BIN> [VAR=value...]
   local name=$1 path=$2 want=$3 got
@@ -77,6 +106,7 @@ refused() { # <case> <PATH> <text launch prints> [VAR=value...]
     fail "$name" "launch exited $rc, wanted 1: $out"
   }
   [[ $out == *"$want"* ]] || fail "$name" "output lacks '$want': $out"
+  [[ $out != *"screen saved"* ]] || fail "$name" "output claims a saved screen, but no session started: $out"
   [[ -z $state || ! -e $state ]] || fail "$name" "state dir $state is still there"
   echo "ok $name: exit 1, output has '$want'"
   cases=$((cases + 1))
@@ -84,31 +114,40 @@ refused() { # <case> <PATH> <text launch prints> [VAR=value...]
 
 launched_with skip-broken "$TMP/mise:$TMP/broken:$TMP/good:$base" "$TMP/good/agent-tty"
 launched_with mise-broken "$TMP/mise:$TMP/good:$base" "$TMP/good/agent-tty" FAKE_MISE_ATT="$TMP/broken/agent-tty"
-launched_with explicit "$TMP/mise:$TMP/broken:$base" "$good" VCN_AGENT_TTY="$good"
+launched_with mise-only "$TMP/mise:$base" "$TMP/good/agent-tty" FAKE_MISE_ATT="$TMP/good/agent-tty"
+launched_with path-over-mise "$good_path" "$TMP/good/agent-tty" FAKE_MISE_ATT="$TMP/good2/agent-tty"
+launched_with explicit "$TMP/mise:$TMP/broken:$base" "$good" VCN_AGENT_TTY="$good" FAKE_MISE_ATT="$TMP/broken/agent-tty"
 refused explicit-broken "$TMP/mise:$TMP/good:$base" "$TMP/broken/agent-tty: Error: Failed to load native module: pty.node" \
   VCN_AGENT_TTY="$TMP/broken/agent-tty"
 refused explicit-missing "$TMP/mise:$TMP/good:$base" "VCN_AGENT_TTY=$TMP/nope is not an executable file" VCN_AGENT_TTY="$TMP/nope"
-refused none-passes "$TMP/mise:$TMP/broken:$base" "npm install --prefix <dir> agent-tty@0.5.0" FAKE_MISE_ATT="$TMP/broken/agent-tty"
-[[ $out == *"MISE_DISABLE_TOOLS=npm:agent-tty VCN_AGENT_TTY=<dir>/node_modules/.bin/agent-tty"* ]] || fail none-passes "output lacks the fix command: $out"
-[[ $out == *"$TMP/broken/agent-tty: Error: Failed to load native module: pty.node"* ]] || fail none-passes "output lacks the candidate's failure: $out"
+refused none-passes "$TMP/mise:$TMP/shim:$TMP/broken:$base" "VCN_AGENT_TTY=<dir>/node_modules/.bin/agent-tty" \
+  FAKE_MISE_ATT="$TMP/broken/agent-tty"
+for want in "npm install --prefix <dir> agent-tty@0.5.0" \
+  "$TMP/shim/agent-tty: mise ERROR agent-tty is not a valid shim." \
+  "$TMP/broken/agent-tty: Error: Failed to load native module: pty.node"; do
+  [[ $out == *"$want"* ]] || fail none-passes "output lacks '$want': $out"
+done
 
 for d in one two; do
   mkdir -p "$TMP/rtp-$d/lua"
   echo "return { dir = '$d' }" >"$TMP/rtp-$d/lua/vcn_rtp_$d.lua"
 done
 probe="luaeval('(pcall(require, \"vcn_rtp_one\") and \"one\" or \"-\") .. (pcall(require, \"vcn_rtp_two\") and \"two\" or \"-\")')"
-launch rtp "$TMP/mise:$TMP/good:$base" VCN_RTP="$TMP/rtp-one:$TMP/rtp-two"
-((rc == 0)) || fail rtp "launch exited $rc: $out"
-got=$(env PATH="$TMP/mise:$TMP/good:$base" VCN_STATE="$state" "$V" expr "$probe" 2>&1) || true
-stop "$TMP/mise:$TMP/good:$base"
-[[ $got == onetwo ]] || fail rtp "require found '$got', wanted onetwo"
-echo "ok rtp: require() found a module in each VCN_RTP dir"
-cases=$((cases + 1))
-launch rtp-control "$TMP/mise:$TMP/good:$base"
-((rc == 0)) || fail rtp-control "launch exited $rc: $out"
-got=$(env PATH="$TMP/mise:$TMP/good:$base" VCN_STATE="$state" "$V" expr "$probe" 2>&1) || true
-stop "$TMP/mise:$TMP/good:$base"
-[[ $got == -- ]] || fail rtp-control "require found '$got' without VCN_RTP"
-echo "ok rtp-control: require() fails without VCN_RTP"
-cases=$((cases + 1))
+
+rtp_case() { # <case> <want require() result> [VAR=value...]
+  local name=$1 want=$2 got
+  shift 2
+  launch "$name" "$good_path" "$@"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  got=$(env PATH="$good_path" VCN_STATE="$state" "$V" expr "$probe" 2>&1) || true
+  stop "$good_path"
+  [[ $got == "$want" ]] || fail "$name" "require found '$got', wanted '$want'"
+  echo "ok $name: require() found '$got'"
+  cases=$((cases + 1))
+}
+
+rtp_case rtp onetwo VCN_RTP="$TMP/rtp-one:$TMP/rtp-two"
+rtp_case rtp-relative onetwo VCN_RTP="rtp-one:rtp-two"
+refused rtp-missing "$good_path" "VCN_RTP entry $TMP/nope is not a directory" VCN_RTP="$TMP/rtp-one:$TMP/nope"
+rtp_case rtp-control --
 echo "CASES $cases"

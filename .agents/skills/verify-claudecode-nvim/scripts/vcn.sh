@@ -78,7 +78,7 @@ no_agent_tty() {
   die "$1
 If a failure names pty.node, that agent-tty lacks node-pty's native build, as a mise-installed npm-agent-tty can. Install one outside mise and name it:
   npm install --prefix <dir> agent-tty@0.5.0
-  MISE_DISABLE_TOOLS=npm:agent-tty VCN_AGENT_TTY=<dir>/node_modules/.bin/agent-tty $0 launch"
+  VCN_AGENT_TTY=<dir>/node_modules/.bin/agent-tty $0 launch"
 }
 
 pick_agent_tty() {
@@ -92,11 +92,24 @@ pick_agent_tty() {
     fi
     why=$(jq -r '[.result.checks[]?[]? | select(.status != "pass") | "\(.name): \(.message)"] | join("; ")' \
       "$OUT/agent-tty-doctor.json" 2>/dev/null || true)
-    # A crash before doctor prints anything leaves only a stack trace on stderr.
-    [[ -n $why ]] || why=$(grep -m1 -E '^[A-Za-z]*Error' "$VCN_STATE/doctor.err" || echo "no usable output")
+    # A candidate that dies before doctor prints anything leaves only stderr: a stack trace, or a mise shim's error.
+    [[ -n $why ]] || why=$(grep -m1 -E 'Error|ERROR' "$VCN_STATE/doctor.err" || sed -n '/./{p;q;}' "$VCN_STATE/doctor.err")
+    [[ -n $why ]] || why="no usable output"
     tried+=$'\n'"  $cand: $why"
   done
   no_agent_tty "no agent-tty passes \`agent-tty doctor\`:$tried"
+}
+
+# nvim runs in $WORK, so a relative VCN_RTP entry would point nowhere and plugin code would silently not load.
+rtp_dirs() {
+  local dir out="" dirs=() IFS=:
+  read -ra dirs <<<"${VCN_RTP-}"
+  for dir in ${dirs[@]+"${dirs[@]}"}; do
+    [[ -z $dir ]] && continue
+    [[ -d $dir ]] || die "VCN_RTP entry $dir is not a directory"
+    out+=${out:+:}$(realpath -s -- "$dir")
+  done
+  printf '%s' "$out"
 }
 
 # A wait that times out still answers ok:true, so read timedOut. On an exited session it answers at once.
@@ -380,6 +393,7 @@ cmd_launch() {
   att_cands=$(agent_tty_candidates)
   [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"
   mapfile -t att_cands <<<"$att_cands"
+  VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
   setsid_exe=$(bin setsid)
   bin jq >/dev/null
