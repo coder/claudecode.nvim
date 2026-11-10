@@ -595,6 +595,29 @@ async function testUnreleasedUpdaterFences() {
     ),
     released,
   );
+
+  // Only LF, CR and CR LF end a line. Other line-like characters stay inside the line, so no fence opens here.
+  for (const character of ["\u2028", "\u2029", "\u0085", "\f", "\v"]) {
+    assert.equal(
+      update(
+        `# Changelog\n\n## [Unreleased]\n\nNote${character}\`\`\`${previous}`,
+      ),
+      released,
+      `U+${character.codePointAt(0).toString(16).padStart(4, "0")} does not end a line`,
+    );
+  }
+
+  // A CR after an LF, and two CRs before an LF, are separate line endings: each one ends a line, so the
+  // fenced block keeps its blank line.
+  for (const inside of ["x\n\ry", "x\r\r\ny"]) {
+    assert.equal(
+      update(
+        `# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2025-09-15\n\n\`\`\`\n${inside}\n\`\`\`\n`,
+      ),
+      released.replace("- Previous", "```\nx\n\ny\n```"),
+      `${JSON.stringify(inside)} holds two line endings`,
+    );
+  }
 }
 
 function testPullRequestOutputs() {
