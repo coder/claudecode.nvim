@@ -37,15 +37,29 @@ describe("claudecode.terminal.snacks after a module reload", function()
     return win
   end
 
-  -- Mirrors Snacks.terminal.open: it creates the instance, shows its window, then starts the job.
-  local function snacks_open(_, opts)
+  -- Snacks.terminal.tid: the key of an instance is its command, directory, env and count.
+  local function snacks_key(cmd, opts)
+    local env = {}
+    for name, value in pairs(opts.env or {}) do
+      table.insert(env, name .. "=" .. tostring(value))
+    end
+    table.sort(env)
+    local command = type(cmd) == "table" and table.concat(cmd, "\0") or tostring(cmd)
+    return table.concat({ command, tostring(opts.cwd), table.concat(env, "\0"), tostring(opts.count or 1) }, "\1")
+  end
+
+  -- Mirrors Snacks.terminal.open: it creates the instance, shows its window, then starts the job. It keeps the
+  -- instance under its key, and Snacks clears that key when the buffer is wiped, whichever instance holds it by then.
+  local function snacks_open(cmd, opts)
     local bufnr = state.next_bufnr
     state.next_bufnr = state.next_bufnr + 1
     local jobid = state.next_jobid
     state.next_jobid = state.next_jobid + 1
-    state.buffers[bufnr] = { jobid = jobid, vars = {} }
+    local key = snacks_key(cmd, opts)
+    state.buffers[bufnr] = { jobid = jobid, vars = {}, key = key }
     state.running_jobs[jobid] = true
-    local term = { buf = bufnr, opts = { wo = {}, w = {} } }
+    local term = { buf = bufnr, key = key, opts = { wo = {}, w = {} } }
+    state.keyed[key] = term
     function term:buf_valid()
       return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
     end
@@ -90,6 +104,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
       buffers = {},
       windows = {},
       terminals = {},
+      keyed = {},
       running_jobs = {},
       exiting_jobs = {},
       scheduled = {},
@@ -131,8 +146,10 @@ describe("claudecode.terminal.snacks after a module reload", function()
       }),
       bo = setmetatable({}, {
         __index = function(_, bufnr)
+          -- Neovim raises for a buffer that is not valid, and for a name that is not a number.
           local buf = state.buffers[bufnr]
-          return { channel = buf and buf.jobid or 0, buftype = "terminal" }
+          assert(buf, "Invalid buffer id: " .. tostring(bufnr))
+          return { channel = buf.jobid, buftype = "terminal" }
         end,
       }),
       tbl_deep_extend = function(_, ...)
@@ -217,6 +234,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
         nvim_buf_delete = function(bufnr)
           assert(state.buffers[bufnr], "nvim_buf_delete: invalid buffer " .. tostring(bufnr))
           local jobid = state.buffers[bufnr].jobid
+          -- Snacks' BufWipeout handler clears the key of the wiped instance, whichever instance holds it by then.
+          local key = state.buffers[bufnr].key
+          if key then
+            state.keyed[key] = nil
+          end
           for win, w in pairs(state.windows) do
             if w.buf == bufnr then
               state.windows[win] = nil
@@ -266,10 +288,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
     package.loaded["snacks"] = {
       terminal = {
         open = snacks_open,
+        -- Snacks.terminal.list: the instances that a key still holds.
         list = function()
           local list = {}
           for _, term in ipairs(state.terminals) do
-            if term:buf_valid() then
+            if term:buf_valid() and state.keyed[term.key] == term then
               table.insert(list, term)
             end
           end
@@ -411,7 +434,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     snacks_provider.open("claude", {}, config, true)
     assert.are.equal(claude, snacks_provider._get_terminal_for_test())
     -- Snacks lists a second marked terminal before the tracked one.
-    local other = snacks_open("claude", { win = {} })
+    local other = snacks_open("claude", { win = {}, count = 2 })
     state.buffers[other.buf].vars.claudecode_snacks_terminal = true
     state.terminals[#state.terminals] = nil
     table.insert(state.terminals, 1, other)
@@ -480,6 +503,13 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end
   end
 
+  -- Runs the callbacks that vim.schedule queued, like the event loop does.
+  local function flush_scheduled()
+    while #state.scheduled > 0 do
+      table.remove(state.scheduled, 1)()
+    end
+  end
+
   describe("a Claude that exited before the scheduled close runs", function()
     for _, entry in ipairs(entries) do
       for _, reload in ipairs({ false, true }) do
@@ -528,6 +558,111 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
         assert.are.equal(2, #started)
         assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
+      end)
+    end
+
+    -- Snacks keys an instance by its command, directory, env and count, and clears the key when a buffer is wiped. A
+    -- Claude that starts before the exited one is wiped has the same key, so the late wipe would drop the new Claude from
+    -- Snacks.terminal.list(), and a reload could not find it again.
+    for _, provider_first in ipairs({ false, true }) do
+      for _, reload in ipairs({ false, true }) do
+        it(
+          string.format(
+            "stays findable after a later reload when an open started it in the gap (provider's handler first=%s, reload before=%s)",
+            tostring(provider_first),
+            tostring(reload)
+          ),
+          function()
+            snacks_provider.open("claude", {}, config, true)
+            local claude = started[1]
+            local handler = state.buffers[claude.buf].snacks_term_close
+            if reload then
+              reload_snacks()
+              assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+            end
+
+            exit_job(claude.buf, false)
+            if provider_first then
+              handler()
+            end
+            snacks_provider.open("claude", {}, config, true)
+            if not provider_first then
+              handler()
+            end
+            flush_scheduled()
+            assert.are.equal(2, #started)
+
+            reload_snacks()
+            assert.are.equal(started[2].buf, snacks_provider.get_active_bufnr())
+            snacks_provider.open("claude", {}, config, true)
+            assert.are.equal(2, #started)
+            assert.are.equal(1, running_count())
+          end
+        )
+      end
+    end
+
+    -- The closed instance has no buffer, and Neovim raises for vim.bo[nil]. Every entry must skip it.
+    for _, reload in ipairs({ false, true }) do
+      it(
+        "raises no error in any entry once the exited instance is closed (reload=" .. tostring(reload) .. ")",
+        function()
+          snacks_provider.open("claude", {}, config, true)
+          local claude = started[1]
+          if reload then
+            reload_snacks()
+            assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+          end
+          exit_job(claude.buf, true)
+          flush_scheduled()
+          assert.is_false(claude:buf_valid())
+
+          for _, entry in ipairs(entries) do
+            assert.has_no.errors(entry[2])
+          end
+          assert.has_no.errors(snacks_provider.get_active_bufnr)
+          assert.has_no.errors(snacks_provider.close)
+        end
+      )
+    end
+
+    -- terminal.lua's ensure_visible asks get_active_bufnr and shows nothing when it names a buffer.
+    for _, reload in ipairs({ false, true }) do
+      it(
+        "is not the active buffer, so ensure_visible starts a new Claude (reload=" .. tostring(reload) .. ")",
+        function()
+          snacks_provider.open("claude", {}, config, true)
+          local claude = started[1]
+          if reload then
+            reload_snacks()
+            assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+          end
+
+          exit_job(claude.buf, false)
+
+          assert.is_nil(snacks_provider.get_active_bufnr())
+          snacks_provider.open("claude", {}, config, false)
+          assert.are.equal(2, #started)
+          assert.are.equal(1, running_count())
+        end
+      )
+
+      it("is closed by close, which stops nothing (reload=" .. tostring(reload) .. ")", function()
+        snacks_provider.open("claude", {}, config, true)
+        local claude = started[1]
+        if reload then
+          reload_snacks()
+          assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+        end
+
+        exit_job(claude.buf, false)
+        snacks_provider.close()
+
+        assert.is_false(claude:buf_valid())
+        assert.are.equal(0, running_count())
+        assert.are.same({}, state.exiting_jobs)
+        assert.are.same({}, notices)
+        assert.is_nil(snacks_provider.get_active_bufnr())
       end)
     end
 

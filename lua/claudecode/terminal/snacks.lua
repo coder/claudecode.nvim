@@ -42,10 +42,12 @@ local function setup_terminal_events(term_instance, config)
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
-      -- Clean up
+      -- Clean up. The buffer goes now, not in a scheduled callback. Snacks keys an instance by its command, directory,
+      -- env and count, and it clears that key when the buffer is wiped. An open between the exit and the wipe starts a
+      -- Claude with the same key, and the late wipe would drop that Claude from Snacks.terminal.list().
       forget()
+      term_instance:close({ buf = true })
       vim.schedule(function()
-        term_instance:close({ buf = true })
         vim.cmd.checktime()
       end)
     end, { buf = true })
@@ -403,23 +405,28 @@ local function patch_instance(term, config)
   end
 end
 
----Forgets the tracked terminal when its Claude has exited and `auto_close` applies. Its close is pending then, so an
----open must start a new Claude instead of showing it. The TermClose handler of setup_terminal_events forgets it too,
----but a TermClose autocmd that calls the plugin can run first (autocmds run in definition order), and an instance that
----an earlier copy of this module started has only that copy's handler, which clears only that copy's `terminal`.
+---Closes and forgets the tracked terminal when its Claude has exited and `auto_close` applies. An open must start a new
+---Claude then instead of showing it. The TermClose handler of setup_terminal_events does the same, but a TermClose
+---autocmd that calls the plugin can run first (autocmds run in definition order), and an instance that an earlier copy
+---of this module started has only that copy's handler, which clears only that copy's `terminal`.
+---The close wipes the buffer at once, so that Snacks clears the instance's key (it keys an instance by its command,
+---directory, env and count) before an open starts a Claude with the same key. A wipe after that start would clear the
+---new Claude's key, and Snacks.terminal.list() would no longer hold it.
 local function forget_ended_terminal()
   if not (terminal and terminal:buf_valid()) then
     return
   end
   local started_with = terminal._cc and terminal._cc.config
   if started_with and started_with.auto_close and owned.job_ended(terminal.buf) then
+    local ended = terminal
     terminal = nil
+    ended:close({ buf = true })
   end
 end
 
----Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the one that an earlier
----copy of this module started (before a reload): Snacks keeps its instances, and the Claude buffer keeps its mark. A
----window may or may not show it.
+---Closes and forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the one that an
+---earlier copy of this module started (before a reload): Snacks keeps its instances, and the Claude buffer keeps its
+---mark. A window may or may not show it.
 local function adopt_existing_terminal()
   forget_ended_terminal()
   if terminal and terminal:buf_valid() then

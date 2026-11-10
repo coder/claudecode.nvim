@@ -103,8 +103,10 @@ describe("claudecode.terminal.snacks close", function()
       end,
       bo = setmetatable({}, {
         __index = function(_, bufnr)
+          -- Neovim raises for a buffer that is not valid, and for a name that is not a number.
           local buf = state.buffers[bufnr]
-          return { channel = buf and buf.jobid or 0, buftype = "terminal" }
+          assert(buf, "Invalid buffer id: " .. tostring(bufnr))
+          return { channel = buf.jobid, buftype = "terminal" }
         end,
       }),
       keymap = { set = function() end },
