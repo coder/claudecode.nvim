@@ -577,6 +577,15 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
+  it("G, control: a queued file outside the cwd keeps its absolute path, though it shares the cwd's prefix", function()
+    send("/project2/a.lua")
+    local claude = claude_connects()
+    claude.handshake()
+    run(1500)
+
+    assert.same({ "/project2/a.lua" }, claude.received())
+  end)
+
   it("G: a queued mention reaches Claude with the same cwd-relative path as a connected send", function()
     send("/project/src/queued.lua")
     local claude = claude_connects()

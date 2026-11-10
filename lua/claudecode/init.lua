@@ -1239,6 +1239,26 @@ function M.get_version()
   }
 end
 
+---The part of path below dir, or nil when path is not dir or inside it. A sibling such as /project2 is not inside
+---/project, and every absolute path is inside /.
+---@param path string
+---@param dir string
+---@return string|nil relative "" for dir itself
+local function relative_to(path, dir)
+  if dir == "" or path:sub(1, #dir) ~= dir then
+    return nil
+  end
+  local rest = path:sub(#dir + 1)
+  if rest == "" or dir:match("[/\\]$") then
+    return rest
+  end
+  local separator = rest:sub(1, 1)
+  if separator == "/" or separator == "\\" then
+    return rest:sub(2)
+  end
+  return nil
+end
+
 ---Format file path for at mention (exposed for testing)
 ---@param file_path string The file path to format
 ---@return string formatted_path The formatted path
@@ -1259,28 +1279,19 @@ function M._format_path_for_at_mention(file_path)
 
   local is_directory = vim.fn.isdirectory(file_path) == 1
   local formatted_path = file_path
+  local relative_path = relative_to(file_path, vim.fn.getcwd())
 
   if is_directory then
-    local cwd = vim.fn.getcwd()
-    if string.find(file_path, cwd, 1, true) == 1 then
-      local relative_path = string.sub(file_path, #cwd + 2)
-      if relative_path ~= "" then
-        formatted_path = relative_path
-      else
-        formatted_path = "./"
-      end
+    if relative_path == "" then
+      formatted_path = "./"
+    elseif relative_path then
+      formatted_path = relative_path
     end
     if not string.match(formatted_path, "/$") then
       formatted_path = formatted_path .. "/"
     end
-  else
-    local cwd = vim.fn.getcwd()
-    if string.find(file_path, cwd, 1, true) == 1 then
-      local relative_path = string.sub(file_path, #cwd + 2)
-      if relative_path ~= "" then
-        formatted_path = relative_path
-      end
-    end
+  elseif relative_path and relative_path ~= "" then
+    formatted_path = relative_path
   end
 
   return formatted_path, is_directory

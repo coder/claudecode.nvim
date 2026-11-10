@@ -217,17 +217,18 @@ end
 ---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table The parameters to send
----@return boolean success Whether broadcasting was successful
+---@return boolean success Whether a client took the message, as server/init.lua broadcast reports it
 function M.broadcast(method, params)
   if not M.state.server or type(M.state.server.clients) ~= "table" then
     return false
   end
 
-  local success = true
+  local success = false
 
   for client_id, _ in pairs(M.state.server.clients) do
-    local send_success = M.send(client_id, method, params)
-    success = success and send_success
+    if M.send(client_id, method, params) then
+      success = true
+    end
   end
 
   return success

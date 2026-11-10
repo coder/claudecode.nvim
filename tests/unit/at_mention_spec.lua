@@ -144,6 +144,21 @@ describe("At Mention Functionality", function()
 
       expect(formatted_path).to_be("./")
     end)
+
+    it("keeps the absolute path of a file in a sibling directory that shares the cwd's prefix", function()
+      local formatted_path = init_module._format_path_for_at_mention("/Users/test/project2/a.lua")
+
+      expect(formatted_path).to_be("/Users/test/project2/a.lua")
+    end)
+
+    it("makes a path relative to a cwd of /", function()
+      mock_vim.fn.getcwd = function()
+        return "/"
+      end
+      local formatted_path = init_module._format_path_for_at_mention("/tmp/a.lua")
+
+      expect(formatted_path).to_be("tmp/a.lua")
+    end)
   end)
 
   describe("file at mention from nvim-tree", function()
