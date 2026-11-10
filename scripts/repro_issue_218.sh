@@ -165,15 +165,19 @@ in_new_session() {
 }
 # An agent-tty call from the cleanup: its own session, and SIGKILL after about $1 seconds. Node
 # resets a signal that `trap ''` ignores, so without the session a second signal to the process
-# group kills `list`, `inspect` or `destroy`, and the session survives. Output goes to the caller.
+# group kills `list`, `inspect` or `destroy`, and the session survives. Output goes to the caller,
+# and the error output is dropped. A call that takes 3 s on a quiet host can take 10 s on a busy
+# one, and a call that the deadline stops leaves its session running, so the deadlines are long
+# and a stopped call prints a warning.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 atty_cleanup() {
-  local end=$((SECONDS + $1)) pid live
+  local secs=$1 end=$((SECONDS + $1)) pid live
   shift
-  in_new_session "${ATTY[@]}" "$@" &
+  in_new_session "${ATTY[@]}" "$@" 2>/dev/null &
   pid=$!
   while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
   if kill -0 "$pid" 2>/dev/null; then
+    echo "WARNING: the cleanup stopped 'agent-tty $1' after $secs s. A session of this run can still be running." >&2
     live="$(tree_alive "$pid" "$pid")"
     # shellcheck disable=SC2086
     kill -KILL $live 2>/dev/null || true
@@ -213,12 +217,12 @@ cleanup() {
     # includes a session whose Neovim has exited. `destroy` leaves the session's empty socket
     # directory in /tmp/agent-tty, and rmdir never removes a directory that still holds a
     # socket. It also leaves this run's home in agent-tty's per-user registry.
-    for sid in $(atty_cleanup 10 list --all --json 2>/dev/null | jq -r '.result.sessions[]?.sessionId // empty' 2>/dev/null); do
-      sock="$(atty_cleanup 10 inspect "$sid" --json 2>/dev/null | jq -r '.result.host.rpcSocketPath // empty' 2>/dev/null)"
-      atty_cleanup 20 destroy "$sid" --json >/dev/null 2>&1 || true
+    for sid in $(atty_cleanup 30 list --all --json | jq -r '.result.sessions[]?.sessionId // empty' 2>/dev/null); do
+      sock="$(atty_cleanup 30 inspect "$sid" --json | jq -r '.result.host.rpcSocketPath // empty' 2>/dev/null)"
+      atty_cleanup 60 destroy "$sid" --json >/dev/null || true
       if [[ "$sock" == /* ]]; then rmdir "$(dirname "$sock")" 2>/dev/null || true; fi
     done
-    atty_cleanup 10 home forget "$AGENT_HOME" --json >/dev/null 2>&1 || true
+    atty_cleanup 30 home forget "$AGENT_HOME" --json >/dev/null || true
   fi
   [[ -z "$WORK" ]] || rm -rf "$WORK"
 }
