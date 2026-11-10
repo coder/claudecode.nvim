@@ -385,8 +385,8 @@ local function find_terminal()
   if terminal and terminal:buf_valid() then
     return terminal
   end
-  -- The terminal that M.open is starting is not tracked yet, and it is not one to adopt.
-  if starting or not is_available() or type(Snacks.terminal.list) ~= "function" then
+  -- A terminal gets its mark only after its start succeeded, so the one that M.open is starting is not adopted here.
+  if not is_available() or type(Snacks.terminal.list) ~= "function" then
     return nil
   end
   for _, instance in ipairs(Snacks.terminal.list()) do
