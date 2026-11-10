@@ -35,7 +35,10 @@
 #
 # The run works on a COPY of fixtures/issue-218 in a temp directory (the copy keeps
 # the committed lazy-lock.json), so it never modifies a tracked file. The temp
-# directory is removed on exit. Plugins are installed into stdpath("data") of the
+# directory is removed on exit. So are the agent-tty session, its entry in agent-tty's
+# per-user home registry, and its empty socket directory under /tmp/agent-tty (the
+# session's home is a fresh temp directory, so none of them belongs to another run).
+# Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
 # commits in that lock file. The exception is lazy.nvim itself on the first run (empty
@@ -52,6 +55,8 @@
 #      Either run: agent-tty, nvim or jq is missing, or no agent-tty session could be created.
 #   2  Either run: Neovim did not show "Repro218 ready" within 10 s after :Repro218, so the
 #      run never reached the ready state and checked nothing.
+#   3  Either run: after `Lazy! restore` a fixture plugin is not at its commit in
+#      lazy-lock.json (the restore failed), so the run would test other revisions.
 
 # Note: no `set -e` — agent-tty subcommands can return non-zero on benign
 # conditions (e.g. a `wait` that times out), and we handle outcomes explicitly.
@@ -79,11 +84,16 @@ WORK="$(mktemp -d)"
 AGENT_HOME="$WORK/atty"
 ATTY=(agent-tty --home "$AGENT_HOME")
 SID=""
+SOCK_DIR=""
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() {
   if [[ -n "$SID" ]]; then
     "${ATTY[@]}" destroy "$SID" --json >/dev/null 2>&1 || true
   fi
+  # `destroy` leaves this run's home in agent-tty's per-user registry and its empty socket
+  # directory in /tmp/agent-tty. The home is a fresh temp dir, so both belong to this run.
+  "${ATTY[@]}" home forget "$AGENT_HOME" --json >/dev/null 2>&1 || true
+  if [[ -n "$SOCK_DIR" ]]; then rmdir "$SOCK_DIR" 2>/dev/null || true; fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -104,38 +114,88 @@ cp -R "$REPO_ROOT/fixtures/issue-218" "$CONFHOME/$APPNAME"
 if [[ "$WANT_RM" -eq 0 ]]; then
   rm "$CONFHOME/$APPNAME/lua/plugins/render-markdown.lua"
 fi
+# lazy.nvim runs `:source` on the plugin files of the checkout, and `:source` expands `$VAR`
+# and backticks in a path. Neovim gets this plain symlink instead of the checkout path, so a
+# checkout under any directory name loads.
+CHECKOUT_LINK="$WORK/checkout"
+ln -s "$REPO_ROOT" "$CHECKOUT_LINK"
 
 echo "Repo:        $REPO_ROOT"
-echo "Neovim:      $($NVIM_BIN --version | head -1)  ($NVIM_BIN)"
+echo "Neovim:      $("$NVIM_BIN" --version | head -1)  ($NVIM_BIN)"
 echo "render-md:   $([[ $WANT_RM -eq 1 ]] && echo INSTALLED || echo REMOVED)"
 echo "Workdir:     $WORK"
 echo
 
 echo "==> Installing fixture plugins at the commits in lazy-lock.json (lazy restore)…"
-# The copy is outside the checkout, so CLAUDECODE_DEV_DIR tells the fixture which checkout to load.
-NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$REPO_ROOT" \
-  "$NVIM_BIN" --headless "+Lazy! restore" "+qa" >/dev/null 2>&1 || true
+# Neovim exits 0 even when `Lazy! restore` fails (for example when a pinned commit cannot be
+# fetched), so the check below compares every plugin the config uses with the committed
+# lock file. lazy.nvim itself is skipped (see the header). Paths reach Neovim through
+# environment variables, never through its command line, so a path cannot be parsed as Ex
+# syntax. The copy is outside the checkout, so CLAUDECODE_DEV_DIR tells the fixture which
+# checkout to load.
+RESTORE_CHECK="$WORK/restore_check.lua"
+cat >"$RESTORE_CHECK" <<'EOF'
+local lock = vim.json.decode(table.concat(vim.fn.readfile(vim.env.REPRO218_LOCKFILE), "\n"))
+local Git = require("lazy.manage.git")
+local stale = {}
+for _, plugin in ipairs(require("lazy").plugins()) do
+  if plugin.name ~= "lazy.nvim" and not plugin._.is_local then
+    local want = lock[plugin.name] and lock[plugin.name].commit
+    local info = plugin._.installed and Git.info(plugin.dir) or nil
+    if not (want and info and info.commit == want) then
+      table.insert(stale, plugin.name)
+    end
+  end
+end
+if #stale > 0 then
+  io.stderr:write("not at the commit in lazy-lock.json: " .. table.concat(stale, ", ") .. "\n")
+  vim.cmd("cquit 3")
+end
+EOF
+RESTORE_LOG="$WORK/restore.log"
+NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
+  REPRO218_LOCKFILE="$REPO_ROOT/fixtures/issue-218/lazy-lock.json" REPRO218_RESTORE_CHECK="$RESTORE_CHECK" \
+  "$NVIM_BIN" --headless "+Lazy! restore" "+lua dofile(vim.env.REPRO218_RESTORE_CHECK)" "+qa" >"$RESTORE_LOG" 2>&1
+RESTORE_RC=$?
+if [[ "$RESTORE_RC" -ne 0 ]]; then
+  STALE="$(sed -n 's/^.*not at the commit in lazy-lock.json: //p' "$RESTORE_LOG")"
+  echo "ERROR: Lazy! restore did not leave the fixture plugins at the commits in lazy-lock.json (nvim exit $RESTORE_RC)." >&2
+  if [[ -n "$STALE" ]]; then
+    echo "       Not at their locked commit: $STALE" >&2
+  else
+    echo "       Last lines from Neovim:" >&2
+    tail -n 5 "$RESTORE_LOG" | sed 's/^/         /' >&2
+  fi
+  echo "       The run would test other plugin revisions, so it reached no verdict." >&2
+  exit 3
+fi
 
-# Wrapper launcher that captures Neovim's RAW exit status (139 = SIGSEGV).
+# Wrapper launcher that captures Neovim's RAW exit status (139 = SIGSEGV). It is a fixed
+# script: the work dir, the nvim binary and the status file arrive as arguments and the
+# Neovim environment arrives through `env` below, so no path is ever interpolated into shell
+# code.
 LAUNCH="$WORK/launch.sh"
-cat >"$LAUNCH" <<EOF
+cat >"$LAUNCH" <<'EOF'
 #!/bin/bash
-export NVIM_APPNAME="$APPNAME"
-export XDG_CONFIG_HOME="$CONFHOME"
-export CLAUDECODE_DEV_DIR="$REPO_ROOT"
-cd "$WORK"
-"$NVIM_BIN"
-echo "RAW=\$?" > "$EXITF"
-exit \$?
+cd "$1" || exit 1
+"$2"
+echo "RAW=$?" > "$3"
+exit $?
 EOF
 chmod +x "$LAUNCH"
 
 echo "==> Launching Neovim under agent-tty…"
-SID="$("${ATTY[@]}" create --json --cols 150 --rows 44 -- "$LAUNCH" | jq -r '.result.sessionId')"
+SID="$("${ATTY[@]}" create --json --cols 150 --rows 44 -- \
+  env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
+  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" | jq -r '.result.sessionId')"
 if [[ -z "$SID" || "$SID" == "null" ]]; then
   echo "ERROR: failed to create agent-tty session." >&2
   exit 1
 fi
+# The socket directory is empty after `destroy`; cleanup removes it. rmdir never removes a
+# directory that still holds a socket.
+SOCK="$("${ATTY[@]}" inspect "$SID" --json 2>/dev/null | jq -r '.result.host.rpcSocketPath // empty')"
+if [[ "$SOCK" == /* ]]; then SOCK_DIR="$(dirname "$SOCK")"; fi
 
 "${ATTY[@]}" wait "$SID" --screen-stable-ms 1800 --json >/dev/null 2>&1 || true
 
