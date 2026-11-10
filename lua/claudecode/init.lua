@@ -80,6 +80,9 @@ function M.is_claude_connected()
   end
 end
 
+-- vim.loop.now() when a flush first had to wait for a ready client, until a mention goes out or the queue is cleared
+local ready_wait_since
+
 ---@return number|nil wait Milliseconds until some connected client completed its handshake connection_wait_delay ms
 ---  ago: 0 when one did, nil when no connected client reports when it connected
 local function ms_until_a_client_is_ready()
@@ -149,6 +152,7 @@ local function clear_mention_queue()
     logger.debug("queue", "Clearing " .. #queue .. " queued @ mentions")
   end
   M.state.mention_queue = {}
+  ready_wait_since = nil
   stop_timer("mention_timer")
   stop_timer("connection_timer")
 end
@@ -194,10 +198,18 @@ local function flush_mention_queue()
   end
   -- M.stop clears the queue when it drops the server, and the stop cancels this flush too.
   local server = assert(M.state.server, "the @ mention queue holds mentions while the integration is stopped")
-  -- Claude gets connection_wait_delay ms after its handshake before the first mention. A client connected that long
-  -- takes the mention now, whatever other clients do meanwhile.
+  -- A mention goes out only once some connected client has been connected for connection_wait_delay ms. The broadcast
+  -- then reaches every connected client, also one that connected later. Another client's handshake cannot postpone it.
   local wait = ms_until_a_client_is_ready()
   if wait and wait > 0 then
+    -- Clients that keep connecting and leaving before any of them is ready must not hold the mentions forever.
+    ready_wait_since = ready_wait_since or vim.loop.now()
+    local limit = M.state.config.connection_timeout + M.state.config.connection_wait_delay
+    if vim.loop.now() - ready_wait_since >= limit then
+      logger.error("queue", "Connection timeout - clearing " .. #queue .. " queued @ mentions")
+      clear_mention_queue()
+      return
+    end
     start_timer("mention_timer", wait, flush_mention_queue)
     return
   end
@@ -212,6 +224,7 @@ local function flush_mention_queue()
     return
   end
   table.remove(queue, 1)
+  ready_wait_since = nil
   logger.debug("queue", "Sent queued @ mention: " .. mention.file_path)
   schedule_mention_flush(inter_message_delay)
 end
@@ -245,12 +258,13 @@ local function queue_mention(file_path, start_line, end_line)
 end
 
 ---Process the mention queue. Claude completed its WebSocket handshake when from_new_connection is true (the server's
----on_open callback): the queue then flushes connection_wait_delay ms later, so that Claude is ready for the mentions.
----@param from_new_connection boolean|nil true after a handshake; otherwise the oldest mention goes out now
+---on_open callback): the handshake stops the connection timeout, and a flush is due in connection_wait_delay ms
+---unless one is due already. Without the argument, the flush runs now.
+---Either way, a flush sends the oldest mention only once some connected client has been connected for
+---connection_wait_delay ms, and otherwise waits for that moment (see flush_mention_queue).
+---@param from_new_connection boolean|nil true after a handshake; otherwise the queue flushes now
 function M.process_mention_queue(from_new_connection)
   if from_new_connection then
-    -- The handshake stops the connection timeout, and a flush is due. The flush itself waits until a client has been
-    -- connected for connection_wait_delay ms, so another client's handshake cannot postpone it.
     schedule_mention_flush(M.state.config.connection_wait_delay)
   else
     flush_mention_queue()

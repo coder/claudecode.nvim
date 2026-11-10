@@ -277,6 +277,10 @@ describe("The @ mention queue", function()
       handle._read_cb(nil, frame.create_frame(frame.OPCODE.CLOSE, "\3\232", true, true))
       assert.equals("closing", client.state)
     end
+    -- Claude answers a ping: the server sets last_pong.
+    function claude.pong()
+      handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+    end
     ---@return string[] paths The filePath of each at_mentioned notification Claude received, in order.
     function claude.received()
       local paths = {}
@@ -491,6 +495,91 @@ describe("The @ mention queue", function()
       assert.same({}, errors)
     end
   )
+
+  it("D: a Claude whose handshake came 700 ms after its TCP connect still gets connection_wait_delay", function()
+    local claude = claude_connects()
+    run(700)
+    claude.handshake()
+    send("/project/a.lua")
+    run(300)
+    assert.same({}, claude.received(), "the wait starts at the handshake, not at the TCP connect")
+
+    run(400)
+    assert.same({ "a.lua" }, names(claude.received()))
+  end)
+
+  it("D: a Claude whose CLOSE frame arrives as a flush is due does not count as ready", function()
+    local first = claude_connects()
+    first.handshake()
+    run(1000)
+    local second = claude_connects()
+    second.handshake()
+    send("/project/a.lua")
+    -- In the timer phase of the due flush, after it: the ready Claude sends its CLOSE frame and is "closing".
+    at(50, first.close)
+    run(300)
+    assert.same({}, second.received(), "only a connected Claude counts as ready")
+
+    run(400)
+    assert.same({ "a.lua" }, names(second.received()))
+    assert.same({}, first.received())
+  end)
+
+  it("D: when the Claude a flush waits for leaves during the wait, the next Claude gets its own wait", function()
+    local first = claude_connects()
+    first.handshake()
+    send("/project/a.lua")
+    run(300)
+    first.drop()
+    run(200)
+    local second = claude_connects()
+    second.handshake()
+    run(300)
+    assert.same({}, second.received(), "the flush checks again after its wait")
+
+    run(400)
+    assert.same({ "a.lua" }, names(second.received()))
+  end)
+
+  it("D: a Claude that answered a ping just now has still been connected since its handshake", function()
+    local claude = claude_connects()
+    claude.handshake()
+    run(1000)
+    claude.pong()
+    send("/project/a.lua")
+    run(100)
+
+    assert.same({ "a.lua" }, names(claude.received()))
+  end)
+
+  it("S: clients that keep connecting and leaving before any is ready do not hold a mention forever", function()
+    -- Each client lives 300 ms and a new one connects every 200 ms, for 20 s: one is always connected, and none is
+    -- connected for connection_wait_delay (600 ms).
+    local clients = { claude_connects() }
+    clients[1].handshake()
+    send("/project/a.lua")
+    local error_at
+    for i = 2, 101 do
+      local new = claude_connects()
+      new.handshake()
+      clients[i] = new
+      run(100)
+      clients[i - 1].drop()
+      run(100)
+      if #errors > 0 and not error_at then
+        error_at = loop.now
+      end
+    end
+
+    assert.equals(1, #errors)
+    assert.matches("Connection timeout %- clearing 1 queued", errors[1])
+    assert.is_true(error_at >= 10000 and error_at <= 11500, "the error came at " .. tostring(error_at) .. " ms")
+    assert.same({}, claudecode.state.mention_queue)
+    for _, claude in ipairs(clients) do
+      assert.same({}, claude.received())
+    end
+    assert_no_lua_error()
+  end)
 
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()
     send("/project/first.lua")

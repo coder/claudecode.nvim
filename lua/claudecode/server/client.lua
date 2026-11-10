@@ -197,7 +197,8 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
         -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
         client.last_pong = vim.loop.now()
-        -- init.lua sends the first @ mention to a client connection_wait_delay ms after this.
+        -- init.lua sends queued @ mentions only once some connected client has been connected for
+        -- connection_wait_delay ms since this point. The broadcast then also reaches clients that connected later.
         client.connected_at = client.last_pong
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
