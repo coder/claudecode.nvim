@@ -451,6 +451,70 @@ describe("The lifecycle of a WebSocket connection", function()
     end)
   end)
 
+  -- libuv lowers the queue size of a socket by the bytes it wrote on Linux and macOS, but only by a whole write request
+  -- when that request is done on Windows. A large frame is queued in pieces, so progress shows after each piece.
+  describe("when a message is larger than one piece of a write", function()
+    local piece = 1024 * 1024
+
+    it("queues it in pieces that make up the frame, and calls back once, after the last piece", function()
+      local client, writes = connect_and_upgrade()
+      local message = string.rep("abcdefgh", 3 * piece / 8 + 5) -- three pieces and a short rest
+      local expected = frame.create_text_frame(message)
+      local callback = spy.new(function() end)
+
+      tcp.send_to_client(server, client.id, message, callback)
+
+      local pieces = {}
+      for index = 2, #writes do -- writes[1] is the 101 reply
+        table.insert(pieces, writes[index].data)
+        assert.is_true(#writes[index].data <= piece)
+      end
+      assert.equals(4, #pieces)
+      assert.is_true(expected == table.concat(pieces), "the pieces are not the frame")
+      for index = 2, #writes - 1 do
+        writes[index].done()
+      end
+      assert.spy(callback).was_not_called()
+      writes[#writes].done()
+      assert.spy(callback).was_called(1)
+    end)
+
+    it("queues a message of one piece or less as one write", function()
+      local client, writes = connect_and_upgrade()
+
+      tcp.send_to_client(server, client.id, string.rep("x", piece - 16))
+
+      assert.equals(2, #writes)
+    end)
+
+    it("keeps a client whose reader takes several intervals for a message, as libuv counts it on Windows", function()
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, string.rep("x", 8 * piece))
+
+      -- Claude reads 2 MB per interval. A write counts as done once Claude read all of it.
+      local credit = 0
+      for _ = 1, 6 do
+        credit = credit + 2 * piece
+        for _, write in ipairs(writes) do
+          if write.left > 0 then
+            if #write.data > credit then
+              break
+            end
+            credit = credit - #write.data
+            write.done()
+          end
+        end
+        handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+        clock = clock + interval
+        tick()
+      end
+
+      assert.is_not_nil(server.clients[client.id], "a Claude that reads the message was dropped")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+  end)
+
   -- The ping timer sees only the clients in `server.clients`. A client that left it with its Close frame still queued
   -- is covered by the deadline of that frame: the same window, and the same rule, no write progress for two intervals.
   describe("when a Close frame waits in the queue of a Claude that does not read", function()
