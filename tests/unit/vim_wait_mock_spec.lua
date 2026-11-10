@@ -75,9 +75,51 @@ describe("tests.mocks.vim wait", function()
     assert.stub(popen_stub).was_not.called()
   end)
 
-  it("rejects a condition that is not a function", function()
-    assert.has_error(function()
-      mock_vim.wait(100, true)
+  it("treats an interval below 1 as 1", function()
+    local function never_true_until(limit)
+      local counter = { polls = 0 }
+      function counter.condition()
+        counter.polls = counter.polls + 1
+        assert(counter.polls <= limit, "polled more than " .. limit .. " times")
+        return false
+      end
+      return counter
+    end
+
+    local zero = never_true_until(1000)
+    assert.is_false(mock_vim.wait(100, zero.condition, 0))
+    assert.are.equal(101, zero.polls)
+
+    local negative = never_true_until(1000)
+    assert.is_false(mock_vim.wait(100, negative.condition, -5))
+    assert.are.equal(101, negative.polls)
+  end)
+
+  describe("argument checks", function()
+    local function wait_error(...)
+      local ok, err = pcall(mock_vim.wait, ...)
+      assert.is_false(ok)
+      return tostring(err)
+    end
+
+    it("rejects a condition that is not a function", function()
+      assert.is_truthy(wait_error(100, false):find("vim.wait: condition must be a function", 1, true))
+    end)
+
+    it("rejects a timeout that is not a number", function()
+      local err = wait_error("100", function()
+        return true
+      end)
+
+      assert.is_truthy(err:find("vim.wait: timeout must be a number", 1, true))
+    end)
+
+    it("rejects an interval that is not a number", function()
+      local err = wait_error(100, function()
+        return true
+      end, "10")
+
+      assert.is_truthy(err:find("vim.wait: interval must be a number", 1, true))
     end)
   end)
 end)
