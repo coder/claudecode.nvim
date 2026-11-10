@@ -645,7 +645,7 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.is_not_nil(server.clients[client.id])
     end)
 
-    -- A tick that comes more than 1.2 intervals after the one before may not have had a chance to see progress: libuv
+    -- A tick that comes more than 1.05 intervals after the one before may not have had a chance to see progress: libuv
     -- can still wait to report the bytes Claude read while the loop was blocked. Such a tick is no evidence of a stall,
     -- so it neither starts the count of two ticks nor ends it. The test keeps Claude's pong fresh, to isolate the rule.
     describe("with the stall counted in ticks that came on time", function()
@@ -711,6 +711,20 @@ describe("The lifecycle of a WebSocket connection", function()
 
         on_time_tick(tick, handle) -- still no progress on a tick that came on time: the stall is real
         assert.is_nil(server.clients[client.id])
+      end)
+
+      it("counts a tick that is a few percent late, as timers jitter, and not one that is 10% late", function()
+        local tick, client, handle = stalled_client()
+
+        handle._read_cb(nil, pong)
+        clock = clock + 1.1 * interval
+        tick()
+        assert.is_nil(client.write_stalled, "a tick 10% late counted")
+
+        handle._read_cb(nil, pong)
+        clock = clock + 1.04 * interval
+        tick()
+        assert.is_true(client.write_stalled, "a tick 4% late did not count")
       end)
 
       it("clears the count when any tick, late or on time, finds progress", function()

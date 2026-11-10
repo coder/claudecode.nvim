@@ -504,7 +504,7 @@ end
 ---A tick that came late, after the loop was blocked, is no evidence either way: libuv may not have reported yet what
 ---Claude read during the block, so such a tick does not start the count and does not end it.
 ---@param client WebSocketClient The client object
----@param tick_on_time boolean False when the tick came late: more than 1.2 intervals after the one before it (`start_ping_timer`)
+---@param tick_on_time boolean False when the tick came late: more than 1.05 intervals after the one before it (`start_ping_timer`)
 ---@return boolean reading False when this tick, and the one that counted before it, found no write progress
 function M.is_client_reading(client, tick_on_time)
   if M.sample_write_progress(client) then

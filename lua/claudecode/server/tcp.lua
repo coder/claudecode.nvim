@@ -423,8 +423,9 @@ function M.start_ping_timer(server, interval)
     -- Allow 50% grace period (e.g., 45s instead of 30s) to account for system load
     local is_wake_from_sleep = elapsed > (interval * 1.5)
     -- A tick that comes late, after the loop was blocked, may not have had a chance to see write progress: libuv can
-    -- still wait to report the bytes that Claude read during the block. Such a tick is no evidence of a stall.
-    local tick_on_time = elapsed <= (interval * 1.2)
+    -- still wait to report the bytes that Claude read during the block. Such a tick is no evidence of a stall. The 5%
+    -- allow for the jitter of a timer that is not late, and a block that makes a tick later than that counts as late.
+    local tick_on_time = elapsed <= (interval * 1.05)
 
     if is_wake_from_sleep then
       -- After system sleep/wake, reset all client pong and write-progress timestamps to prevent false timeouts
