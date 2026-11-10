@@ -1996,21 +1996,19 @@ describe("Range Selection Tests", function()
       it("ends at once when an operator consumes a selection that Claude already holds", function()
         selection.enable(mock_server)
         start_selecting(5)
-        -- The debounce ran in visual mode: Claude holds the live selection.
-        local live = {
-          text = "alpha",
-          filePath = "/path/to/a.txt",
-          fileUrl = "file:///path/to/a.txt",
-          selection = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 5 }, isEmpty = false },
-        }
-        selection.state.last_active_visual_selection = { bufnr = 1, selection_data = live, timestamp = 0 }
-        selection.state.selection_tick = { bufnr = 1, tick = 5 }
-        selection.state.latest_selection = live
+
+        -- The debounce ran in visual mode: Claude holds the live selection, read at changedtick 5.
+        _G.vim._marks = { v = { 0, 1, 1, 0 } } -- the anchor of the selection
+        _G.vim.test.set_cursor(0, 1, 4)
+        selection.on_cursor_moved()
+        fire_debounce()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
 
         -- d: the flush sees the changedtick move and skips. What it skips is not held any more.
         _G.vim._changedtick = 6
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { " beta gamma" })
         _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 0)
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()
 
