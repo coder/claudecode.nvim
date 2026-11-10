@@ -141,9 +141,18 @@ describe("claudecode.terminal.snacks failed start", function()
           return {}
         end,
       }),
+      fn = {
+        maparg = function()
+          return {}
+        end,
+      },
+      keymap = { set = spy.new(function() end) },
       api = {
         nvim_list_bufs = function()
           return {}
+        end,
+        nvim_buf_call = function(_, fn)
+          return fn()
         end,
         nvim_get_current_win = function()
           return current_win
@@ -210,6 +219,7 @@ describe("claudecode.terminal.snacks failed start", function()
     assert.is_nil(buffers[opened_buf], "the Snacks scratch buffer must be deleted")
     assert.is_nil(snacks_provider.get_active_bufnr())
     assert.is_nil(snacks_provider._get_terminal_for_test())
+    assert.spy(vim.keymap.set).was_not_called()
     assert.spy(vim.notify).was_called(1)
     assert.are.equal(vim.log.levels.ERROR, vim.notify.calls[1].vals[2])
     return vim.notify.calls[1].vals[1]
@@ -260,6 +270,8 @@ describe("claudecode.terminal.snacks failed start", function()
     assert.are.equal(opened.buf, snacks_provider.get_active_bufnr())
     assert.is_not_nil(windows[opened.win])
     assert.are.equal(opened, on_buf_arg)
+    assert.spy(vim.keymap.set).was_called(1)
+    assert.are.equal(opened.buf, vim.keymap.set.calls[1].vals[4].buffer)
     assert.spy(vim.notify).was_not_called()
   end)
 

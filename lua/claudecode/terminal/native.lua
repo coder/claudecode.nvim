@@ -267,6 +267,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   bufnr = new_bufnr
   job_auto_close = effective_config.auto_close
   vim.bo[bufnr].bufhidden = "hide"
+  utils.map_terminal_suspend(bufnr)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen
 

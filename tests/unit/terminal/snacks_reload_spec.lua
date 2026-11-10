@@ -144,9 +144,13 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end
         return res
       end,
+      keymap = { set = function() end },
       fn = {
         has = function(feature)
           return feature == "nvim-0.10" and 1 or 0
+        end,
+        maparg = function()
+          return {}
         end,
         -- Neovim raises for a job that exited or was stopped.
         jobpid = function(id)
@@ -252,6 +256,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end,
         nvim_win_call = function(_, fn)
           fn()
+        end,
+        nvim_buf_call = function(_, fn)
+          return fn()
         end,
       },
     }
