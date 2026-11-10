@@ -46,18 +46,27 @@ local function handler(params)
     }
   end
 
-  local success, err = pcall(vim.api.nvim_buf_call, bufnr, function()
-    vim.cmd("write")
+  -- The inner pcall keeps the error a plain message: an error that escapes the
+  -- nvim_buf_call callback comes back with a Lua stack trace and local paths.
+  local success, err
+  local call_ok, call_err = pcall(vim.api.nvim_buf_call, bufnr, function()
+    success, err = pcall(vim.cmd, "write")
   end)
+  if not call_ok then
+    success, err = false, call_err
+  end
 
   if not success then
+    local message = tostring(err)
+    -- Keep the Vim error ("E45: ...") when there is one, else the first line.
+    message = message:match("E%d+:[^\n]*") or message:match("^[^\n]*")
     return {
       content = {
         {
           type = "text",
           text = vim.json.encode({
             success = false,
-            message = "Failed to save file: " .. tostring(err),
+            message = "Failed to save file: " .. message,
             filePath = params.filePath,
           }),
         },
