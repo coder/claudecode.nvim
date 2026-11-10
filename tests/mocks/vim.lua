@@ -559,6 +559,10 @@ local vim = {
       return 12345
     end,
 
+    maparg = function()
+      return {}
+    end,
+
     -- The mock keeps no split tree, so a tab's tiled windows form one row.
     winlayout = function(tabnr)
       local leaves = {}
