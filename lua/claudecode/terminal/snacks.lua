@@ -42,12 +42,12 @@ local function setup_terminal_events(term_instance, config)
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
-      -- Clean up. The buffer goes now, not in a scheduled callback. Snacks keys an instance by its command, directory,
-      -- env and count, and it clears that key when the buffer is wiped. An open between the exit and the wipe starts a
-      -- Claude with the same key, and the late wipe would drop that Claude from Snacks.terminal.list().
-      forget()
-      term_instance:close({ buf = true })
+      -- Clean up. The tracked terminal stays until the close below wipes it (the BufWipeout handler forgets it), so an
+      -- entry that runs in between finds it with an ended job, and forget_ended_terminal wipes it before it starts a
+      -- new Claude. The wipe is not done here: it would delete the buffer-local autocmds that a user defined after
+      -- this handler, in the middle of this event.
       vim.schedule(function()
+        term_instance:close({ buf = true })
         vim.cmd.checktime()
       end)
     end, { buf = true })
@@ -406,9 +406,10 @@ local function patch_instance(term, config)
 end
 
 ---Closes and forgets the tracked terminal when its Claude has exited and `auto_close` applies. An open must start a new
----Claude then instead of showing it. The TermClose handler of setup_terminal_events does the same, but a TermClose
----autocmd that calls the plugin can run first (autocmds run in definition order), and an instance that an earlier copy
----of this module started has only that copy's handler, which clears only that copy's `terminal`.
+---Claude then instead of showing it. The TermClose handler of setup_terminal_events only schedules the close, and the
+---BufWipeout handler that follows forgets the terminal, so in between (a TermClose autocmd that calls the plugin, or a
+---later event) the terminal is still tracked. An instance that an earlier copy of this module started has only that
+---copy's handlers, which clear only that copy's `terminal`.
 ---The close wipes the buffer at once, so that Snacks clears the instance's key (it keys an instance by its command,
 ---directory, env and count) before an open starts a Claude with the same key. A wipe after that start would clear the
 ---new Claude's key, and Snacks.terminal.list() would no longer hold it.

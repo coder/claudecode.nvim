@@ -666,6 +666,21 @@ describe("claudecode.terminal.snacks after a module reload", function()
       end)
     end
 
+    -- A wipe inside TermClose would delete the buffer-local autocmds that a user defined after the provider's handler,
+    -- in the middle of the event. So the handler schedules the close and leaves the terminal tracked until then.
+    it("is wiped by the scheduled close, not by the TermClose handler", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+
+      exit_job(claude.buf, true)
+
+      assert.is_true(claude:buf_valid())
+      assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+      flush_scheduled()
+      assert.is_false(claude:buf_valid())
+      assert.is_nil(snacks_provider.get_active_bufnr())
+    end)
+
     it("stays tracked without auto_close, which keeps an exited Claude by design", function()
       snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
       local claude = started[1]
