@@ -116,4 +116,36 @@ describe("a held selection with the real plugin", function()
     assert.are.equal(file_buf, vim.api.nvim_get_current_buf())
     assert.are.equal("alpha", selection.get_latest_selection().text)
   end)
+
+  -- A popup that wipes itself when you leave it: its buffer number is gone at the next event, and the plugin must
+  -- neither raise nor keep the selection of a file you left.
+  for _, kind in ipairs({ "bufhidden=wipe left with :buffer #", "nvim_buf_delete of the displayed buffer" }) do
+    it("ends the selection without an error when the buffer you visited is wiped (" .. kind .. ")", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      select_and_release()
+
+      vim.cmd("enew")
+      local scratch = vim.api.nvim_get_current_buf()
+      vim.bo[scratch].buftype = "nofile"
+      if kind:find("bufhidden") then
+        vim.bo[scratch].bufhidden = "wipe"
+      end
+      wait(100)
+
+      assert.has_no.errors(function()
+        if kind:find("bufhidden") then
+          vim.cmd("buffer #")
+        else
+          vim.api.nvim_buf_delete(scratch, { force = true })
+        end
+      end)
+      wait(400)
+
+      assert.is_false(vim.api.nvim_buf_is_valid(scratch))
+      assert.are.equal(file_buf, vim.api.nvim_get_current_buf())
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
+  end
 end)
