@@ -137,6 +137,36 @@ async function testFenceTracking() {
     "a closing fence cannot carry an info string",
   );
   assert.equal(
+    outside(["```", "## Real", "``` ", "## Real"]),
+    3,
+    "a closing fence can be followed by a space",
+  );
+  assert.equal(
+    outside(["```", "## Real", "```\t", "## Real"]),
+    3,
+    "a closing fence can be followed by a tab",
+  );
+  assert.equal(
+    outside(["```", "## Real", "```  \t ", "## Real"]),
+    3,
+    "a closing fence can be followed by any run of spaces and tabs",
+  );
+  assert.equal(
+    outside(["```", "## Real", "```\f", "## Real", "```", "## Real"]),
+    5,
+    "only spaces and tabs can follow a closing fence",
+  );
+  assert.equal(
+    outside(["~~~", "## Real", "~~~ ", "## Real"]),
+    3,
+    "a closing tilde fence can be followed by a space",
+  );
+  assert.equal(
+    outside(["~~~", "## Real", "~~~\t", "## Real"]),
+    3,
+    "a closing tilde fence can be followed by a tab",
+  );
+  assert.equal(
     outside(["```", "## Real", "````", "## Real"]),
     3,
     "a longer fence closes a shorter one",
@@ -155,6 +185,16 @@ async function testFenceTracking() {
     outside(["```", "## Real", "    ```", "## Real", "```", "## Real"]),
     5,
     "a closing fence indented by four spaces does not close",
+  );
+  assert.equal(
+    outside(["```", "## Real", "\t```", "## Real", "```", "## Real"]),
+    5,
+    "a closing fence indented by a tab does not close",
+  );
+  assert.equal(
+    outside(["~~~", "## Real", "\t~~~", "## Real", "~~~", "## Real"]),
+    5,
+    "a closing tilde fence indented by a tab does not close",
   );
   assert.equal(
     outside(["``", "## Real", "``", "## Real"]),
@@ -177,6 +217,16 @@ async function testFenceTracking() {
     "four spaces of indent make a code line, not a fence",
   );
   assert.equal(
+    outside(["\t```", "## Real"]),
+    1,
+    "a tab of indent makes a code line, not a fence",
+  );
+  assert.equal(
+    outside(["\t~~~", "## Real"]),
+    1,
+    "a tab of indent makes a code line, not a tilde fence",
+  );
+  assert.equal(
     outside(["```js```", "## Real"]),
     1,
     "a backtick fence cannot carry a backtick in its info string",
@@ -187,9 +237,47 @@ async function testFenceTracking() {
     "a tilde fence can carry a backtick in its info string",
   );
   assert.equal(
+    outside(["```~~~", "## Real", "```", "## Real"]),
+    3,
+    "a backtick fence can carry tildes in its info string",
+  );
+  assert.equal(
+    outside(["~~~ ~~~", "## Real", "~~~", "## Real"]),
+    3,
+    "a tilde fence can carry tildes in its info string",
+  );
+  assert.equal(
     outside(["```", "## Real"]),
     -1,
     "an unclosed fence runs to the end of the text",
+  );
+
+  // `findLineOutsideFences` never returns a fence line, a line inside a fence, or a closer, even
+  // when the predicate matches every line.
+  const anyLine = () => true;
+  assert.equal(
+    runner.findLineOutsideFences(["```", "inside", "```", "tail"], 0, anyLine),
+    3,
+    "an opener, a line inside the fence, and a closer are not outside the fence",
+  );
+  assert.equal(
+    runner.findLineOutsideFences(["~~~", "inside", "~~~"], 0, anyLine),
+    -1,
+    "a text that is only a tilde fence has no line outside it",
+  );
+  assert.equal(
+    runner.findLineOutsideFences(["```", "inside"], 0, anyLine),
+    -1,
+    "an unclosed fence leaves no line outside it",
+  );
+  assert.equal(
+    runner.findLineOutsideFences(
+      ["outside", "```", "inside", "```", "outside"],
+      1,
+      anyLine,
+    ),
+    4,
+    "the search starts at `start` and still skips the fence lines",
   );
 
   // The Communique body keeps headings inside a longer or tilde fence as is.
