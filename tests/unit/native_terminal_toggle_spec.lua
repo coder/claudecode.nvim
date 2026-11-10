@@ -289,7 +289,13 @@ describe("claudecode.terminal.native toggle behavior", function()
         columns = 120,
         lines = 40,
       },
+      keymap = {
+        set = function() end,
+      },
       fn = {
+        maparg = function()
+          return {}
+        end,
         termopen = function(cmd, opts)
           local jobid = mock_state.next_jobid
           mock_state.next_jobid = mock_state.next_jobid + 1
@@ -464,6 +470,77 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       local mock_state = _G.get_mock_state()
       assert.are.equal("claudecode", mock_state.buffers[bufnr].options.filetype)
+    end)
+  end)
+
+  describe("Ctrl-Z in terminal mode (#194)", function()
+    local keymap_calls
+
+    before_each(function()
+      keymap_calls = {}
+      local mock_state = _G.get_mock_state()
+      mock_vim.keymap.set = function(mode, lhs, rhs, opts)
+        table.insert(keymap_calls, {
+          mode = mode,
+          lhs = lhs,
+          rhs = rhs,
+          opts = opts,
+          filetype_then = mock_state.buffers[opts.buffer].options.filetype,
+        })
+      end
+      mock_vim.fn.termopen = function()
+        return 12345
+      end
+    end)
+
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+
+    it("maps <C-z> to :suspend on the Claude terminal buffer and on no other buffer", function()
+      native_provider.open("claude", {}, config, true)
+
+      local bufnr = native_provider.get_active_bufnr()
+      assert.are.equal(1, #keymap_calls)
+      assert.are.equal("t", keymap_calls[1].mode)
+      assert.are.equal("<C-z>", keymap_calls[1].lhs)
+      assert.are.equal("<Cmd>suspend<CR>", keymap_calls[1].rhs)
+      assert.are.equal(bufnr, keymap_calls[1].opts.buffer)
+    end)
+
+    it("maps it before the filetype is set, so a FileType claudecode autocmd sees the mapping", function()
+      native_provider.open("claude", {}, config, true)
+
+      assert.are.equal(1, #keymap_calls)
+      assert.is_nil(keymap_calls[1].filetype_then)
+      local mock_state = _G.get_mock_state()
+      assert.are.equal("claudecode", mock_state.buffers[native_provider.get_active_bufnr()].options.filetype)
+    end)
+
+    it("maps the buffer once: opening again, hiding and showing it add no mapping", function()
+      native_provider.open("claude", {}, config, true)
+      native_provider.open("claude", {}, config, true)
+      native_provider.simple_toggle("claude", {}, config)
+      native_provider.simple_toggle("claude", {}, config)
+      native_provider.focus_toggle("claude", {}, config)
+
+      assert.are.equal(1, #keymap_calls)
+    end)
+
+    it("maps no buffer when termopen fails", function()
+      local mock_state = _G.get_mock_state()
+      mock_state.windows[1] = { bufnr = 0 }
+      mock_state.current_win = 1
+      mock_vim.api.nvim_buf_delete = function(bufnr)
+        mock_state.buffers[bufnr] = nil
+      end
+      mock_vim.notify = function() end
+      mock_vim.log = { levels = { ERROR = 4 } }
+      mock_vim.fn.termopen = function()
+        return -1
+      end
+
+      native_provider.open("claude", {}, config, true)
+
+      assert.are.equal(0, #keymap_calls)
     end)
   end)
 
