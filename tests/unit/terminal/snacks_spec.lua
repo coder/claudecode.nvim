@@ -155,4 +155,72 @@ describe("claudecode.terminal.snacks command handling", function()
     assert.is_table(captured.cmd)
     assert.are.same({ home .. "/.claude/local/claude" }, captured.cmd)
   end)
+
+  -- The buffer filetype goes through the Snacks window options (`bo`), not a later vim.bo write: Snacks applies
+  -- `bo` each time it creates the window, so a later write would be undone when Snacks re-creates a closed window.
+  describe("buffer filetype", function()
+    before_each(function()
+      -- The suite's vim mock merges one level deep. These specs need the real recursive merge, because a user's
+      -- `bo` table must merge into the default `bo` table.
+      local function deep_extend(_, ...)
+        local result = {}
+        for _, tbl in ipairs({ ... }) do
+          for key, value in pairs(tbl) do
+            if type(value) == "table" and type(result[key]) == "table" then
+              result[key] = deep_extend("force", result[key], value)
+            else
+              result[key] = value
+            end
+          end
+        end
+        return result
+      end
+      _G.vim.tbl_deep_extend = deep_extend
+    end)
+
+    it("defaults the Snacks window filetype to claudecode", function()
+      snacks_provider.open("claude", {}, base_config(), true)
+
+      assert.spy(mock_snacks.terminal.open).was_called(1)
+      assert.are.equal("claudecode", captured.opts.win.bo.filetype)
+    end)
+
+    it("lets snacks_win_opts.bo.filetype override the default", function()
+      local config = base_config()
+      config.snacks_win_opts = { bo = { filetype = "my_claude" } }
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal("my_claude", captured.opts.win.bo.filetype)
+    end)
+
+    it("restores the Snacks terminal filetype when snacks_win_opts names it", function()
+      local config = base_config()
+      config.snacks_win_opts = { bo = { filetype = "snacks_terminal" } }
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal("snacks_terminal", captured.opts.win.bo.filetype)
+    end)
+
+    it("keeps the default filetype when snacks_win_opts sets other buffer options", function()
+      local config = base_config()
+      config.snacks_win_opts = { bo = { buflisted = false } }
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal("claudecode", captured.opts.win.bo.filetype)
+      assert.is_false(captured.opts.win.bo.buflisted)
+    end)
+
+    it("keeps the default filetype when snacks_win_opts sets window options only", function()
+      local config = base_config()
+      config.snacks_win_opts = { position = "float", width = 0.8 }
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal("claudecode", captured.opts.win.bo.filetype)
+      assert.are.equal("float", captured.opts.win.position)
+    end)
+  end)
 end)

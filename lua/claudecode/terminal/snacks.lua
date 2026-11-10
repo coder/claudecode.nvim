@@ -67,6 +67,10 @@ local function build_opts(config, env_table, focus)
       width = config.split_width_percentage,
       height = 0,
       relative = "editor",
+      -- Default, not a lock. Snacks' terminal style would set "snacks_terminal", and Snacks re-applies `bo` each time
+      -- it re-creates a floating window, so the filetype goes through the options, not a write after open.
+      -- `snacks_win_opts.bo.filetype` wins.
+      bo = { filetype = "claudecode" },
       keys = {
         claude_new_line = {
           "<S-CR>",
