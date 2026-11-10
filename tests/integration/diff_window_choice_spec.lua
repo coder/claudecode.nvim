@@ -128,6 +128,32 @@ describe("unified diff window choice", function()
     assert.same(expected, wins, "the new tab holds no empty window")
   end)
 
+  it("keeps the content a TabNew hook put in its new tab", function()
+    use({ layout = "unified", open_in_new_tab = true, hide_terminal_in_new_tab = true })
+    open_terminal()
+    local group = vim.api.nvim_create_augroup("window_choice_spec_dashboard", { clear = true })
+    vim.api.nvim_create_autocmd("TabNewEntered", {
+      group = group,
+      once = true,
+      callback = function()
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "dashboard" })
+      end,
+    })
+
+    local ok, diff_win = pcall(open_diff)
+    vim.api.nvim_del_augroup_by_id(group)
+
+    assert.is_true(ok, diff_win)
+    local state = diff._get_active_diffs()[tab]
+    local other_lines = {}
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(state.new_tab_number)) do
+      if win ~= diff_win then
+        other_lines[#other_lines + 1] = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)
+      end
+    end
+    assert.same({ { "dashboard" } }, other_lines, "the hook's content keeps its window beside the diff")
+  end)
+
   it("keeps the Claude terminal's window when its new tab holds only the terminal", function()
     use({ layout = "unified", open_in_new_tab = true })
     open_terminal()

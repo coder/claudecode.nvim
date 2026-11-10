@@ -15,6 +15,18 @@ local function get_diff_fn()
   return (vim.text and vim.text.diff) or vim.diff
 end
 
+--- True when `win` still shows the buffer that `:tabnew` made: unnamed, unmodified, one empty line. A `TabNew` hook (a
+--- dashboard, say) can fill that buffer, and the diff must not replace it.
+---@param win integer
+---@return boolean
+local function shows_untouched_tabnew_buffer(win)
+  local buf = vim.api.nvim_win_get_buf(win)
+  if vim.api.nvim_buf_get_name(buf) ~= "" or vim.api.nvim_get_option_value("modified", { buf = buf }) then
+    return false
+  end
+  return vim.api.nvim_buf_line_count(buf) == 1 and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == ""
+end
+
 -- ── Highlight groups ──────────────────────────────────────────────
 
 local function setup_highlights()
@@ -384,13 +396,14 @@ function M.setup_inline_diff(params, resolution_callback, config)
   guard_inline_setup(function()
     assert(editor_win and vim.api.nvim_win_is_valid(editor_win), "ClaudeCode unified diff target window must be valid")
     vim.api.nvim_set_current_win(editor_win)
-    if created_new_tab and editor_win ~= terminal_win_in_new_tab then
-      -- In a new tab, `editor_win` is the empty [No Name] window that `:tabnew` made (bufhidden=wipe). The diff takes
-      -- that window: a split beside it would leave the empty window as a blank pane.
+    if created_new_tab and editor_win ~= terminal_win_in_new_tab and shows_untouched_tabnew_buffer(editor_win) then
+      -- In a new tab, `editor_win` is usually the empty [No Name] window that `:tabnew` made. The diff takes that
+      -- window: a split beside it would leave the empty window as a blank pane.
       diff_win = editor_win
     else
-      -- Anywhere else `editor_win` holds the user's content, or it is the Claude terminal (a new tab that holds only
-      -- the terminal). The diff goes in a split beside it, so that window keeps its buffer.
+      -- Anywhere else, `editor_win` holds the user's content, or the Claude terminal (a new tab that holds only the
+      -- terminal), or content that a `TabNew` hook put in the new tab. The diff goes in a split beside it, so that
+      -- window keeps its buffer.
       vim.cmd("rightbelow vsplit")
       diff_win = vim.api.nvim_get_current_win()
     end

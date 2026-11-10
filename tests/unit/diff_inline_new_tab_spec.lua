@@ -132,6 +132,35 @@ describe("Unified diff in new tab", function()
     end)
   end)
 
+  it("keeps the content a TabNew hook put in the new tab and opens the diff beside it", function()
+    setup_config(true)
+    local dashboard_buf
+    diff._display_terminal_in_new_tab = function(...)
+      local original_tab, terminal_win, had_terminal, new_tab = real_display_terminal_in_new_tab(...)
+      dashboard_buf = vim.api.nvim_win_get_buf(vim.api.nvim_get_current_win())
+      vim.api.nvim_buf_set_lines(dashboard_buf, 0, -1, false, { "dashboard" })
+      return original_tab, terminal_win, had_terminal, new_tab
+    end
+    local co = open_diff()
+
+    local state = diff._get_active_diffs()[test_tab_name]
+    assert.is_table(state)
+    assert.are_not.equal(dashboard_buf, vim._windows[state.new_window].buf, "the diff has a window of its own")
+    assert.equal(state.new_buffer, vim._windows[state.new_window].buf)
+    local shown = {}
+    for _, w in ipairs(windows_in_new_tab(state)) do
+      shown[w.buf] = true
+    end
+    assert.is_true(shown[dashboard_buf], "the hook's content keeps its window")
+
+    vim.schedule(function()
+      diff._resolve_diff_as_rejected(test_tab_name)
+    end)
+    vim.wait(100, function()
+      return coroutine.status(co) == "dead"
+    end)
+  end)
+
   it("does not take the terminal's window when the new tab holds only the terminal", function()
     setup_config(false)
     local term_buf = vim.api.nvim_create_buf(false, true)
