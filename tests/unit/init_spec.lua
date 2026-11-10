@@ -100,6 +100,17 @@ describe("claudecode.init", function()
     end
   end
 
+  -- The text of every WARN that logger.warn passed to vim.notify since the spy was last cleared.
+  local function warn_messages()
+    local messages = {}
+    for _, call in ipairs(vim.notify.calls) do
+      if call.vals[2] == vim.log.levels.WARN then
+        table.insert(messages, call.vals[1])
+      end
+    end
+    return messages
+  end
+
   before_each(function()
     -- A fresh module, so a server an earlier test started is not still running.
     package.loaded["claudecode"] = nil
@@ -298,6 +309,141 @@ describe("claudecode.init", function()
 
       assert(#mock_server.stop.calls == 0, "Server stop was called unexpectedly")
       assert(#mock_lockfile.remove.calls == 0, "Lockfile remove was called unexpectedly")
+    end)
+  end)
+
+  describe("start with a lock file whose token does not match", function()
+    local real_create
+    local real_remove
+    local real_stop
+    local order
+
+    before_each(function()
+      real_create = mock_lockfile.create
+      real_remove = mock_lockfile.remove
+      real_stop = mock_server.stop
+      order = {}
+      -- The generated token is "mock-auth-token-12345". create wrote a file that holds another one.
+      mock_lockfile.create = function()
+        return true, "/mock/path/12345.lock", "some-other-token-99999"
+      end
+      -- Both spies also record the order of the two calls.
+      mock_lockfile.remove = SpyObject.new(function()
+        table.insert(order, "lockfile.remove")
+        return true
+      end)
+      mock_server.stop = SpyObject.new(function()
+        table.insert(order, "server.stop")
+        return true
+      end)
+    end)
+
+    after_each(function()
+      mock_lockfile.create = real_create
+      mock_lockfile.remove = real_remove
+      mock_server.stop = real_stop
+    end)
+
+    it("should stop the server and remove the lock file that create wrote", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      mock_server.stop.calls = {}
+      mock_lockfile.remove.calls = {}
+
+      local success, err = claudecode.start(false)
+
+      assert(success == false)
+      assert(err == "Authentication token mismatch between server and lock file", tostring(err))
+      assert(#mock_server.stop.calls == 1, "Server stop was not called once")
+      assert(#mock_lockfile.remove.calls == 1, "Lock file was not removed")
+      assert(mock_lockfile.remove.calls[1].vals[1] == 12345, "Lock file removed for the wrong port")
+      assert(claudecode.state.server == nil)
+      assert(claudecode.state.port == nil)
+      assert(claudecode.state.auth_token == nil)
+    end)
+
+    it("should remove the lock file before it stops the server", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      order = {}
+
+      claudecode.start(false)
+
+      assert(table.concat(order, ",") == "lockfile.remove,server.stop", table.concat(order, ","))
+    end)
+
+    it("should still fail with the mismatch error when the lock file cannot be removed", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      mock_server.stop.calls = {}
+      local remove_calls = 0
+      mock_lockfile.remove = function()
+        remove_calls = remove_calls + 1
+        return false, "Failed to remove lock file: /mock/path/12345.lock: Permission denied"
+      end
+      vim.notify:clear()
+
+      local success, err = claudecode.start(false)
+
+      assert(success == false)
+      assert(err == "Authentication token mismatch between server and lock file", tostring(err))
+      assert(remove_calls == 1, "Lock file removal was not tried once")
+      assert(#mock_server.stop.calls == 1, "Server stop was not called once")
+      assert(claudecode.state.server == nil)
+
+      -- One warning carries the OS error. It names the failed removal once, not twice.
+      local warnings = warn_messages()
+      assert(#warnings == 1, "Expected one warning, got " .. #warnings)
+      assert(
+        warnings[1] == "[ClaudeCode] [init] [WARN] Failed to remove lock file: /mock/path/12345.lock: Permission denied",
+        warnings[1]
+      )
+    end)
+
+    it("should not warn when the lock file is removed", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      vim.notify:clear()
+
+      claudecode.start(false)
+
+      assert(#warn_messages() == 0, "Unexpected warning: " .. tostring(warn_messages()[1]))
+    end)
+  end)
+
+  describe("stop when the lock file cannot be removed", function()
+    local real_remove
+
+    before_each(function()
+      real_remove = mock_lockfile.remove
+    end)
+
+    after_each(function()
+      mock_lockfile.remove = real_remove
+    end)
+
+    it("should warn once with the lock file error and still stop the server", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      local started = claudecode.start(false)
+      assert(started == true)
+      mock_server.stop.calls = {}
+      mock_lockfile.remove = function()
+        return false, "Failed to remove lock file: /mock/path/12345.lock: Permission denied"
+      end
+      vim.notify:clear()
+
+      local success = claudecode.stop()
+
+      assert(success == true)
+      assert(#mock_server.stop.calls == 1, "Server stop was not called once")
+      assert(claudecode.state.server == nil)
+      local warnings = warn_messages()
+      assert(#warnings == 1, "Expected one warning, got " .. #warnings)
+      assert(
+        warnings[1] == "[ClaudeCode] [init] [WARN] Failed to remove lock file: /mock/path/12345.lock: Permission denied",
+        warnings[1]
+      )
     end)
   end)
 
