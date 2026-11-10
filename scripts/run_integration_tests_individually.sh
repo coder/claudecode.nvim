@@ -75,7 +75,6 @@ run_test_file() {
   rm -f "$temp_output"
 }
 
-# Run each test file
 for test_file in tests/integration/*_spec.lua; do
   run_test_file "$test_file"
 done

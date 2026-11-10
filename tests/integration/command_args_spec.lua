@@ -12,16 +12,14 @@ end
 describe("ClaudeCode command arguments", function()
   local terminal = require("claudecode.terminal")
   local real_termopen
-  -- One { cmd, opts } for each terminal job the plugin started, as termopen received them.
-  local started
+  local termopen_calls
 
   before_each(function()
-    started = {}
+    termopen_calls = {}
     real_termopen = vim.fn.termopen
-    -- No process starts: the command would be `claude`.
     vim.fn.termopen = function(cmd, opts)
-      table.insert(started, { cmd = cmd, opts = opts })
-      return 1000 + #started
+      table.insert(termopen_calls, { cmd = cmd, opts = opts })
+      return 1000 + #termopen_calls
     end
     require("claudecode")._create_commands()
   end)
@@ -29,7 +27,6 @@ describe("ClaudeCode command arguments", function()
   after_each(function()
     terminal.close()
     vim.fn.termopen = real_termopen
-    -- terminal.setup keeps a directory it was given until another one replaces it.
     terminal.defaults.cwd, terminal.defaults.cwd_provider = nil, nil
     terminal.setup({ provider = "native" }, nil)
     vim.cmd("silent! tabonly!")
@@ -37,12 +34,12 @@ describe("ClaudeCode command arguments", function()
     vim.cmd("silent! %bwipeout!")
   end)
 
-  ---@param command string An Ex command that opens the Claude terminal
-  ---@return table job The one terminal job it started
+  ---@param command string
+  ---@return table job
   local function start(command)
     vim.cmd(command)
-    assert.are.equal(1, #started, "the command started one terminal job")
-    return started[1]
+    assert.are.equal(1, #termopen_calls, "the command started one terminal job")
+    return termopen_calls[1]
   end
 
   describe("with the native terminal provider", function()

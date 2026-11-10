@@ -1,6 +1,3 @@
--- Runs under busted's mock vim only. before_each below replaces vim.cmd, vim.schedule and other vim functions and never
--- restores them. In a real Neovim that stops plenary's final `vim.cmd("0cq")`, so nvim never exits and the integration
--- runner times out. tests/integration/command_args_spec.lua checks the same commands in a real Neovim.
 require("tests.busted_setup")
 require("tests.mocks.vim")
 

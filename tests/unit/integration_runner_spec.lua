@@ -6,8 +6,6 @@ require("tests.busted_setup")
 local temp_dir = require("tests.helpers.temp_dir")
 local quote = temp_dir.quote
 
--- `timeout 30s nvim ...` runs `nvim ...`. The stub nvim finds the spec in the `test_file('<spec>')` argument, records
--- its name, then plays back that spec's canned output and exit status.
 local STUB_TIMEOUT = { "#!/bin/sh", "shift", 'exec "$@"' }
 local STUB_NVIM = {
   "#!/bin/sh",
@@ -35,8 +33,7 @@ local function summary(success, failed, errors)
   }
 end
 
--- What plenary has printed when a spec hangs in its second test: the first test's result, and no summary.
-local function before_summary(spec)
+local function hung_output(spec)
   return { "Testing: \t/repo/tests/integration/" .. spec, "\27[32mSuccess\27[0m\t||\tfirst test" }
 end
 
@@ -47,7 +44,6 @@ local function shell(command)
 end
 
 describe("scripts/run_integration_tests_individually.sh", function()
-  -- The repo root, from this file's path, so the spec runs from any directory.
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
   local script = root .. "/scripts/run_integration_tests_individually.sh"
   local dir
@@ -75,10 +71,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
     temp_dir.remove(dir)
   end)
 
-  ---@param specs { name: string, exit: integer, output: string[] }[] The integration specs, in the order they run
-  ---@return string status The exit status of the script
-  ---@return string output What the script printed
-  ---@return string[] ran The names of the specs the stub nvim ran, in order
+  ---@param specs { name: string, exit: integer, output: string[] }[]
+  ---@return string status
+  ---@return string output
+  ---@return string[] ran
   local function run_script(specs)
     for _, spec in ipairs(specs) do
       write(dir .. "/tests/integration/" .. spec.name, {})
@@ -122,7 +118,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
   it("fails a file that hit the timeout before busted printed its summary", function()
     local status, output = run_script({
-      { name = "hang_spec.lua", exit = 124, output = before_summary("hang_spec.lua") },
+      { name = "hang_spec.lua", exit = 124, output = hung_output("hang_spec.lua") },
     })
 
     assert.are.equal("1", status, output)
@@ -131,7 +127,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
   it("fails a file that was killed by SIGTERM before busted printed its summary", function()
     local status, output = run_script({
-      { name = "killed_spec.lua", exit = 143, output = before_summary("killed_spec.lua") },
+      { name = "killed_spec.lua", exit = 143, output = hung_output("killed_spec.lua") },
     })
 
     assert.are.equal("1", status, output)
@@ -167,7 +163,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   it("runs the files after a hung one and lists only the hung one", function()
     local status, output, ran = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
-      { name = "hang_spec.lua", exit = 124, output = before_summary("hang_spec.lua") },
+      { name = "hang_spec.lua", exit = 124, output = hung_output("hang_spec.lua") },
       { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
     })
 
