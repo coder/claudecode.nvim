@@ -251,6 +251,35 @@ async function testFenceTracking() {
     -1,
     "an unclosed fence runs to the end of the text",
   );
+  assert.equal(
+    outside(["````md", "## Real", "````", "## Real"]),
+    3,
+    "a four-backtick line opens a fence, and a four-backtick line closes it",
+  );
+  // The info string of a backtick opener can hold anything but a backtick.
+  for (const opener of [
+    "``` js title=x",
+    "```\tjs",
+    "```c++",
+    "```{r}",
+    "```\fjs",
+  ]) {
+    assert.equal(
+      outside([opener, "## Real", "```", "## Real"]),
+      3,
+      `a backtick fence can carry the info string in ${JSON.stringify(opener)}`,
+    );
+  }
+  assert.equal(
+    outside(["~~~\tjs", "## Real", "~~~", "## Real"]),
+    3,
+    "a tilde fence can carry a tab in its info string",
+  );
+  assert.equal(
+    outside(["```", "## Real", "```\u00a0", "## Real", "```", "## Real"]),
+    5,
+    "a no-break space cannot follow a closing fence",
+  );
 
   // `findLineOutsideFences` never returns a fence line, a line inside a fence, or a closer, even
   // when the predicate matches every line.
@@ -278,6 +307,16 @@ async function testFenceTracking() {
     ),
     4,
     "the search starts at `start` and still skips the fence lines",
+  );
+  assert.equal(
+    runner.findLineOutsideFences(["a", "b"], 1, anyLine),
+    1,
+    "the line at `start` itself can match",
+  );
+  assert.equal(
+    runner.findLineOutsideFences(["```", "## x", "```", "y"], 1, anyLine),
+    3,
+    "fence tracking starts at line 0, so a fence that opens before `start` still hides its lines",
   );
 
   // The Communique body keeps headings inside a longer or tilde fence as is.
