@@ -438,6 +438,36 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end)
   end
 
+  -- Snacks.terminal.list() keys an instance by its command, directory, env and count, and clears the key when any
+  -- buffer with that key is wiped. The provider finds its Claude by the mark and the live job, not by that list.
+  it("finds the running Claude when Snacks.terminal.list() does not hold it", function()
+    snacks_provider.open("claude", {}, config, true)
+    local claude = started[1]
+    package.loaded["snacks"].terminal.list = function()
+      return {}
+    end
+    reload_snacks()
+
+    assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+    snacks_provider.open("claude", {}, config, true)
+    assert.are.equal(1, #started)
+    assert.are.equal(1, running_count())
+  end)
+
+  -- A Claude that an older version started has the mark but not the auto_close variable. An exited one is not forgotten
+  -- then, like a terminal that started without auto_close.
+  it("keeps an adopted Claude that has no auto_close variable after it exits", function()
+    snacks_provider.open("claude", {}, config, true)
+    local claude = started[1]
+    state.buffers[claude.buf].vars.claudecode_snacks_auto_close = nil
+    reload_snacks()
+    assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+
+    state.running_jobs[state.buffers[claude.buf].jobid] = nil
+
+    assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+  end)
+
   it("keeps the tracked terminal when another marked terminal appears", function()
     snacks_provider.open("claude", {}, config, true)
     local claude = started[1]
