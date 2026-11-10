@@ -3,6 +3,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 -- Window options for terminal display (internal type, not exposed in public API)
 ---@class WindowOptions
@@ -430,7 +431,7 @@ local function display_terminal_in_new_tab()
     vim.cmd("wincmd L")
   end
 
-  vim.api.nvim_win_set_buf(terminal_win, terminal_bufnr)
+  utils.win_set_buf_without_bufenter(terminal_win, terminal_bufnr)
 
   apply_window_options(terminal_win, terminal_options)
 
