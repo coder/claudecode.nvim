@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 35f1bc960cb293e4
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 70bbd0261de567d9
+file lua/claudecode/diff.lua d495140316c390b3
 block resolve_saved          5eeea81ac74a902f
 block resolve_rejected       0d1b8ae047185ddb
 block open_blocking          92067df7f9d4d4d9
@@ -23,7 +23,7 @@ block cleanup_all            43e7b595cf106229
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
 block register_state         8cf78b6711a9ecc6
-block cleanup_state          33851a6dba9a7741
+block cleanup_state          c976689ce5cbd8d4
 block diff_autocmds          83bfb24dd6e3b8bd
 block reject_when_hidden     dd45932e5cd7090d
 block deny_current           94385d781b70d50c
@@ -102,7 +102,7 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 5775e2b4574b6495
+file lua/claudecode/diff_inline.lua 5cc2a4acf9f9b2bd
 block inline_saved           53e3ff9a47388fc9
 block inline_rejected        3a098216eef4b774
 block setup_inline           c00ff97a9c6f6103

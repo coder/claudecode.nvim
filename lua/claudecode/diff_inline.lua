@@ -596,6 +596,9 @@ function M.cleanup_inline_diff(tab_name, diff_data)
       if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
         pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
       end
+      if vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
+        diff._release_surviving_diff_tab(diff_data)
+      end
     end
 
     -- Ensure terminal remains visible in the original tab

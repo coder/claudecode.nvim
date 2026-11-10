@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Claude closes a diff that opened in a new tab while the user has left that tab's Claude terminal in terminal-normal
-# mode, and again after the user went back to the first tab. The cursor ends in the user's file in Normal mode, and
-# the next key moves the cursor instead of typing into the file. Needs VCN_STATE from a launch with a real Claude
+# mode, after the user went back to the first tab, and after the user closed the first tab, so the diff tab is the last
+# tab. The cursor ends in the user's file in Normal mode, and the next key moves the cursor instead of typing into the
+# file. In the last-tab case no Claude terminal or diff mode is left in the user's window, and the diff's BufEnter
+# handler is gone. Needs VCN_STATE from a launch with a real Claude
 # terminal and diff_opts.open_in_new_tab, for example:
 #   VCN_SETUP='{"terminal_cmd":"sleep 300","terminal":{"provider":"native"},"diff_opts":{"open_in_new_tab":true}}' vcn.sh launch
 # Add "layout":"unified" to diff_opts for the unified layout. For the snacks provider, set terminal.provider to
-# "snacks" and launch with `--cmd "set rtp^=<snacks.nvim dir>"`. Evidence lands in $OUT as new-tab-diff-close-*.
+# "snacks" and launch with VCN_RTP=<snacks.nvim dir>. Evidence lands in $OUT as new-tab-diff-close-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
 # shellcheck source=/dev/null
@@ -26,10 +28,10 @@ open_diff() {
 }
 
 close_and_check() {
-  local id=$1 label=$2 mode text
+  local id=$1 label=$2 landed_expr=${3-"tabpagenr('\$') . bufname()"} landed=${4-1hello.txt} mode text
   "$V" tool "c-$id" close_tab "$(jq -nc --arg t "$(tab_name "$id")" '{tab_name:$t}')"
   [[ $("$V" await "c-$id" 10 | jq -r '.result.content[0].text') == TAB_CLOSED ]] || fail "close_tab c-$id did not answer TAB_CLOSED"
-  "$V" until "tabpagenr('\$') . bufname()" 1hello.txt
+  "$V" until "$landed_expr" "$landed"
   # Nothing signals that an insert did not start, so wait for a pending one before reading the mode.
   sleep 0.5
   mode=$("$V" expr 'mode(1)')
@@ -74,4 +76,24 @@ open_diff d2
 
 step "Claude closes d2 while the cursor is in the first tab"
 close_and_check d2 4-first-tab
+
+step "Claude proposes d3; the user closes the first tab, so the diff tab is the last tab"
+open_diff d3
+"$V" keys Ctrl+W l
+"$V" until '&buftype . mode(1)' terminalt
+"$V" keys "Ctrl+\\" 'Ctrl+N'
+"$V" until '&buftype . mode(1)' terminalnt
+"$V" keys ':tabfirst' Enter ':tabclose' Enter
+"$V" until "tabpagenr('\$') . &buftype" 1terminal
+"$V" capture new-tab-diff-close-5-last-tab >/dev/null
+
+step "Claude closes d3: the last tab cannot close, so the user keeps a file window without the diff"
+# The window shows hello.txt after a split diff and an empty buffer after a unified one, so wait for the cursor to
+# leave the terminal instead of for a buffer name.
+close_and_check d3 6-last-tab "tabpagenr('\$') . (&buftype == 'terminal' ? 'T' : 'F')" 1F
+handlers=$("$V" expr "len(filter(nvim_get_autocmds({'event': 'BufEnter', 'group': 'ClaudeCodeMCPDiff'}), 'v:val.buflocal'))")
+state=$("$V" expr "&buftype . '|' . &diff")
+[[ $state == '|0' ]] || fail "after close_tab of the last tab the window is '$state', not a plain buffer with diff mode off"
+[[ $handlers == 0 ]] || fail "after close_tab of the last tab $handlers terminal BufEnter handlers are left"
+echo "ok: 6-last-tab: no terminal window under the cursor, diff mode off, no BufEnter handler left"
 echo "PASS new-tab-diff-close-mode; evidence in $OUT"

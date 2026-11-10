@@ -46,7 +46,14 @@ describe("a diff in a new tab: mode", function()
         get_active_terminal_bufnr = function()
           return _G.terminal_buf
         end,
-        ensure_visible = function() end,
+        ensure_visible = function()
+          if opts.show_terminal_again then
+            local current = vim.api.nvim_get_current_win()
+            vim.cmd("botright vsplit")
+            vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), _G.terminal_buf)
+            vim.api.nvim_set_current_win(current)
+          end
+        end,
       }
       if opts.snacks_auto_insert then
         vim.api.nvim_create_autocmd("BufEnter", {
@@ -147,6 +154,31 @@ describe("a diff in a new tab: mode", function()
   local function go_to_first_tab()
     call([[vim.api.nvim_set_current_tabpage(vim.api.nvim_list_tabpages()[1])]])
     return child_state()
+  end
+
+  local function close_first_tab()
+    call([[
+      vim.api.nvim_set_current_tabpage(vim.api.nvim_list_tabpages()[1])
+      vim.cmd("tabclose")
+    ]])
+    return child_state()
+  end
+
+  local function diff_leftovers()
+    return call([[
+      local handlers = 0
+      for _, autocmd in ipairs(vim.api.nvim_get_autocmds({ event = "BufEnter", group = "ClaudeCodeMCPDiff" })) do
+        if autocmd.buflocal and autocmd.buffer == _G.terminal_buf then
+          handlers = handlers + 1
+        end
+      end
+      return {
+        handlers = handlers,
+        diff_mode = vim.wo.diff,
+        windows = #vim.api.nvim_tabpage_list_wins(0),
+        job_running = vim.fn.jobwait({ _G.job }, 0)[1] == -1,
+      }
+    ]])
   end
 
   local function shows_proposal(state)
@@ -276,6 +308,59 @@ describe("a diff in a new tab: mode", function()
           assert.is_true(state.name:find("a.txt", 1, true) ~= nil, state.name)
           assert.equal("n", state.mode)
         end)
+      end)
+
+      describe("when the user closed the first tab, so the diff tab is the last tab", function()
+        local function expect_ordinary_tab(state)
+          local leftovers = diff_leftovers()
+
+          assert.equal(1, state.tabs)
+          assert.equal("n", state.mode)
+          assert.not_equal("terminal", state.buftype)
+          assert.is_false(shows_proposal(state), state.name)
+          assert.is_false(leftovers.diff_mode)
+          assert.equal(2, leftovers.windows)
+          assert.equal(0, leftovers.handlers)
+          assert.is_true(leftovers.job_running)
+        end
+
+        it("leaves Normal mode in a buffer that is not the diff, without the diff's terminal handler", function()
+          start_child({ layout = layout, show_terminal_again = true })
+          open_diff("a.txt", "first diff")
+          assert.equal(1, close_first_tab().tabs)
+
+          close_diff("first diff")
+
+          expect_ordinary_tab(child_state())
+        end)
+
+        it("does the same when the user left the diff tab's terminal in terminal-normal mode", function()
+          start_child({ layout = layout, show_terminal_again = true })
+          open_diff("a.txt", "first diff")
+          focus_terminal_in_tab()
+          leave_terminal_mode()
+          assert.equal("terminal", close_first_tab().buftype)
+
+          close_diff("first diff")
+
+          expect_ordinary_tab(child_state())
+        end)
+      end)
+
+      it("keeps a cursor the user moved to a window of their own when the diff tab is the last tab", function()
+        start_child({ layout = layout, show_terminal_again = true })
+        open_diff("a.txt", "first diff")
+        close_first_tab()
+        call([[
+          vim.cmd("new")
+          _G.user_win = vim.api.nvim_get_current_win()
+        ]])
+
+        close_diff("first diff")
+        local state = child_state()
+
+        assert.is_true(call([[return vim.api.nvim_get_current_win() == _G.user_win]]))
+        assert.equal("n", state.mode)
       end)
 
       it("leaves the cursor in the terminal, in terminal mode, with keep_terminal_focus", function()

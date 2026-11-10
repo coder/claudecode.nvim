@@ -1313,6 +1313,37 @@ function M._create_diff_view_from_window(
   }
 end
 
+---`:tabclose` refuses the last tab page (E784), so the tab of a diff stays as the user's tab. Remove what the diff put
+---in it, as closing the tab would: the Claude terminal window, which takes its `BufEnter` handler along and keeps the
+---cursor out of the terminal. A cursor in one of the diff's windows goes to the file window, or to the window of a
+---unified diff, which gets an empty buffer. A cursor in another window stays there. The caller deletes the proposal
+---buffer, which also ends the diff mode of the file window.
+---@param diff_data table
+local function release_surviving_diff_tab(diff_data)
+  local tab = diff_data.new_tab_number
+  local function in_tab(win)
+    return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_tabpage(win) == tab
+  end
+
+  local editor_win = in_tab(diff_data.target_window) and diff_data.target_window or diff_data.new_window
+  if in_tab(editor_win) then
+    local cursor_win = vim.api.nvim_get_current_win()
+    if cursor_win == diff_data.terminal_win_in_new_tab or cursor_win == diff_data.new_window then
+      pcall(vim.api.nvim_set_current_win, editor_win)
+    end
+    if editor_win == diff_data.new_window then
+      pcall(vim.api.nvim_win_set_buf, editor_win, vim.api.nvim_create_buf(true, false))
+    end
+  end
+
+  local terminal_win = diff_data.terminal_win_in_new_tab
+  if in_tab(terminal_win) then
+    pcall(vim.api.nvim_win_close, terminal_win, false)
+  end
+end
+
+M._release_surviving_diff_tab = release_surviving_diff_tab
+
 ---Clean up diff state and resources
 ---@param tab_name string The diff identifier
 ---@param reason string Reason for cleanup
@@ -1353,6 +1384,9 @@ function M._cleanup_diff_state(tab_name, reason)
       -- Restore original tab focus if still valid
       if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
         pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
+      end
+      if vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
+        release_surviving_diff_tab(diff_data)
       end
     else
       -- Fallback: close the previously current tab if it's still around and not the original
