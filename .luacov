@@ -7,4 +7,11 @@ return {
     "lua/claudecode/",
     "plugin/",
   },
+
+  -- A spec that puts `./lua/?.lua` first on package.path loads a module under a relative name, so the stats hold one
+  -- module twice. These names make the report merge the two and list each file by its relative path.
+  modules = {
+    ["claudecode.*"] = "lua",
+    ["claudecode.*.*"] = "lua",
+  },
 }
