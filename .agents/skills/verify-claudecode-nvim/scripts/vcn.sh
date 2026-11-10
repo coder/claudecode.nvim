@@ -17,7 +17,10 @@
 #   disconnect                  kill the client VCN_CLIENT names (unset: the launch client)
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
 # VCN_CLIENT=<name> makes rpc, tool, await, connect and disconnect act as that client.
+# VCN_AGENT_TTY=<path> makes launch run that agent-tty (default: the first agent-tty on PATH, then mise's, that
+#                      passes `agent-tty doctor`).
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
+# VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -56,6 +59,59 @@ attj() {
   out=$(att "$@") || true
   jq -e '.ok == true' <<<"$out" >/dev/null 2>&1 || die "agent-tty $1 failed: ${out:-no output}"
   printf '%s\n' "$out"
+}
+
+agent_tty_candidates() {
+  if [[ -n ${VCN_AGENT_TTY-} ]]; then
+    # Absolute, without resolving symlinks: an agent-tty shim only works under its own name.
+    [[ -f $VCN_AGENT_TTY && -x $VCN_AGENT_TTY ]] || die "VCN_AGENT_TTY=$VCN_AGENT_TTY is not an executable file"
+    realpath -s -- "$VCN_AGENT_TTY"
+    return
+  fi
+  {
+    type -ap agent-tty || true
+    mise which agent-tty 2>/dev/null || true
+  } | awk '!seen[$0]++'
+}
+
+no_agent_tty() {
+  die "$1
+If a failure names pty.node, that agent-tty lacks node-pty's native build, as a mise-installed npm-agent-tty can. Install one outside mise and name it:
+  npm install --prefix <dir> agent-tty@0.5.0
+  VCN_AGENT_TTY=<dir>/node_modules/.bin/agent-tty $0 launch"
+}
+
+pick_agent_tty() {
+  local cand why tried=""
+  for cand in "$@"; do
+    ATT_BIN=$cand
+    att doctor --json >"$OUT/agent-tty-doctor.json" 2>"$VCN_STATE/doctor.err" || true
+    if jq -e '.result.ok == true' "$OUT/agent-tty-doctor.json" >/dev/null 2>&1; then
+      env_line ATT_BIN "$cand" >>"$VCN_STATE/run.env"
+      return 0
+    fi
+    why=$(jq -r '[.result.checks[]?[]? | select(.status != "pass") | "\(.name): \(.message)"] | join("; ")' \
+      "$OUT/agent-tty-doctor.json" 2>/dev/null || true)
+    # A candidate that dies before doctor prints anything leaves only stderr. Take the `Error:` line of a Node stack
+    # trace (a source line with `new Error(` comes first) or a mise shim's `mise ERROR` line.
+    [[ -n $why ]] || why=$(grep -m1 -E '^([A-Za-z]*Error:|mise ERROR)' "$VCN_STATE/doctor.err" || sed -n '/./{p;q;}' "$VCN_STATE/doctor.err")
+    [[ -n $why ]] || why="no usable output"
+    tried+=$'\n'"  $cand: $why"
+  done
+  no_agent_tty "no agent-tty passes \`agent-tty doctor\`:$tried"
+}
+
+# nvim runs in $WORK, so a relative VCN_RTP entry would point nowhere and plugin code would silently not load.
+# Symlinks resolve too: `link/..` means the parent of link's target, which realpath -s would collapse to link's parent.
+rtp_dirs() {
+  local dir out="" dirs=() IFS=:
+  read -ra dirs <<<"${VCN_RTP-}"
+  for dir in ${dirs[@]+"${dirs[@]}"}; do
+    [[ -z $dir ]] && continue
+    [[ -d $dir ]] || die "VCN_RTP entry $dir is not a directory"
+    out+=${out:+:}$(realpath -- "$dir")
+  done
+  printf '%s' "$out"
 }
 
 # A wait that times out still answers ok:true, so read timedOut. On an exited session it answers at once.
@@ -279,7 +335,7 @@ unsafe_above() {
 launch_failed() {
   local rc=$?
   ((rc == 0)) && return 0
-  echo "vcn: launch failed (VCN_STATE=$VCN_STATE); screen saved to $OUT/launch-failure.screen.txt; tearing the run down" >&2
+  echo "vcn: launch failed (VCN_STATE=$VCN_STATE)${SID:+; screen saved to $OUT/launch-failure.screen.txt}; tearing the run down" >&2
   (cmd_capture launch-failure) >/dev/null 2>&1 || true
   cmd_cleanup >&2 || true
   exit "$rc"
@@ -327,7 +383,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_exe node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
+  local nvim_exe att_cands node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
   if [[ -n ${VCN_NVIM-} ]]; then
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
@@ -336,7 +392,10 @@ cmd_launch() {
     nvim_exe=$(bin nvim)
   fi
   [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
-  att_exe=$(bin agent-tty)
+  att_cands=$(agent_tty_candidates)
+  [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"
+  mapfile -t att_cands <<<"$att_cands"
+  VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
   setsid_exe=$(bin setsid)
   bin jq >/dev/null
@@ -358,6 +417,7 @@ cmd_launch() {
   fi
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
+  trap 'rm -rf -- "$state"; exit 143' TERM INT HUP
   out=${out:-$guard/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
   if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
     rmdir "$state"
@@ -422,15 +482,15 @@ cmd_launch() {
     env_line NVIM_SOCK "$state/nvim.sock"
     env_line NVIM_BIN "$nvim_exe"
     env_line NVIM_08 "$nvim_08"
-    env_line ATT_BIN "$att_exe"
     env_line NODE_DIR "$(dirname "$node_exe")"
   } >"$state/run.env"
   export VCN_STATE=$state
   load
   trap launch_failed EXIT
-  att doctor --json >"$OUT/agent-tty-doctor.json" || true
-  jq -e '.result.ok == true' "$OUT/agent-tty-doctor.json" >/dev/null ||
-    die "agent-tty doctor failed: $(jq -r '[.result.checks[]?[]? | select(.status != "pass") | "\(.name): \(.message)"] | join("; ")' "$OUT/agent-tty-doctor.json")"
+  # A signal ends bash with $? still 0 in the EXIT trap, and launch_failed then skips its cleanup: make it an exit.
+  trap 'exit 143' TERM INT HUP
+  pick_agent_tty "${att_cands[@]}"
+  load
   [[ $# -gt 0 ]] || set -- hello.txt
   # COLORTERM: agent-tty answers no truecolor query, so without it nvim keeps 'notermguicolors'. The default
   # colorscheme then gives DiffChange no color, and a changed line shows only its changed characters.
@@ -438,7 +498,7 @@ cmd_launch() {
     env -i VCN_RUN_TAG="$state" TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 PATH=/usr/bin:/bin HOME="$state/home" \
     XDG_CONFIG_HOME="$state/home/.config" XDG_DATA_HOME="$state/home/.local/share" \
     XDG_STATE_HOME="$state/home/.local/state" XDG_CACHE_HOME="$state/home/.cache" \
-    CLAUDE_CONFIG_DIR="$state/claude" VCN_REPO="$REPO" VCN_SETUP="${VCN_SETUP-}" \
+    CLAUDE_CONFIG_DIR="$state/claude" VCN_REPO="$REPO" VCN_SETUP="${VCN_SETUP-}" VCN_RTP="${VCN_RTP-}" \
     "$nvim_exe" --listen "$NVIM_SOCK" -u "$SKILL_DIR/scripts/init.lua" "$@" | jq -r .result.sessionId)
   env_line SID "$sid" >>"$state/run.env"
   load
@@ -469,7 +529,7 @@ cmd_launch() {
     "$nvim_exe" --version | head -n 1
     echo "agent-tty $(att version --json | jq -r .result.cliVersion)"
   } >>"$OUT/run.env"
-  trap - EXIT
+  trap - EXIT TERM INT HUP
   echo "VCN_STATE=$state"
   echo "OUT=$OUT"
 }
