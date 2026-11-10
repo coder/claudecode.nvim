@@ -185,7 +185,7 @@ site lua/claudecode/tools/close_tab.lua: if diff_module_ok and diff.close_diff_b
 site lua/claudecode/tools/close_tab.lua: local closed = diff.close_diff_by_tab_name(tab_name, client and client.id or nil) @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: log.error("close_tab", "Failed to load diff module or close_diff_by_tab_name not available") @ local function handler(params, client)
 == lua/claudecode/tools/get_current_selection.lua
-file lua/claudecode/tools/get_current_selection.lua 4be66177513028d0
+file lua/claudecode/tools/get_current_selection.lua 5fb9ade5d26239ae
 == lua/claudecode/tools/get_diagnostics.lua
 file lua/claudecode/tools/get_diagnostics.lua e60d903c8042f813
 == lua/claudecode/tools/get_latest_selection.lua

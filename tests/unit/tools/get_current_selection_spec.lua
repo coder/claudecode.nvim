@@ -169,6 +169,44 @@ describe("Tool: get_current_selection", function()
       expect(parsed_result.filePath).to_be("/prev/file.lua")
     end)
 
+    it("prefers the previous window of this tab over the previous tab", function()
+      _G.vim.fn.winnr = function(arg)
+        return arg == "#" and 2 or 1
+      end
+      _G.vim.fn.tabpagenr = function(arg)
+        return arg == "#" and 1 or 2
+      end
+      _G.vim.fn.win_getid = function(nr, tab)
+        if tab == 1 then
+          return 1002 -- the other tab's window: must not be read
+        end
+        return nr == 2 and 1001 or 0
+      end
+
+      local result = get_current_selection_handler({})
+      local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+      expect(parsed_result.success).to_be_true()
+      expect(parsed_result.filePath).to_be("/prev/file.lua")
+    end)
+
+    it("answers no active editor, without an error, when there is no previous window and no previous tab", function()
+      _G.vim.fn.winnr = function(arg)
+        return arg == "#" and 0 or 1
+      end
+      _G.vim.fn.win_getid = function(nr, tab)
+        return tab == 0 and -1 or 0 -- Neovim 0.12.3 answers -1 for win_getid(win, 0)
+      end
+      _G.vim.api.nvim_win_get_buf = function(winid)
+        assert(winid > 0, "Invalid window id: " .. tostring(winid))
+        return 1
+      end
+
+      local result = get_current_selection_handler({})
+      local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+      expect(parsed_result.success).to_be_false()
+      expect(parsed_result.message).to_be("No active editor found")
+    end)
+
     it("answers no active editor when there is no previous window", function()
       _G.vim.fn.winnr = function(arg)
         return arg == "#" and 0 or 1
