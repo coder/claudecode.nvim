@@ -56,8 +56,18 @@ run_test_file() {
   TOTAL_FAILED=$((TOTAL_FAILED + failed_count))
   TOTAL_ERRORS=$((TOTAL_ERRORS + error_count))
 
+  # Exit 124 is timeout's and 143 is SIGTERM. Plenary prints "Errors :" last, after every spec in the file has run, so a
+  # timeout after it only means nvim's exit hung. Without it, a spec hung or was killed mid-run.
+  local summary_count
+  summary_count=$(echo "$clean_output" | grep -c "^Errors :" || true)
+  local hung=false
+  if { [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 143 ]]; } && [[ $summary_count -eq 0 ]]; then
+    hung=true
+    echo "TIMEOUT: $basename stopped (exit $EXIT_CODE) before busted printed its summary"
+  fi
+
   # Check if test failed
-  if [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || { [[ $EXIT_CODE -ne 0 ]] && [[ $EXIT_CODE -ne 124 ]] && [[ $EXIT_CODE -ne 143 ]]; }; then
+  if [[ $hung == true ]] || [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || { [[ $EXIT_CODE -ne 0 ]] && [[ $EXIT_CODE -ne 124 ]] && [[ $EXIT_CODE -ne 143 ]]; }; then
     FAILED_FILES+=("$basename")
   fi
 
