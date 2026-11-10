@@ -276,7 +276,21 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
-WORK="$(mktemp -d)"
+# The cleanup removes WORK by its name, so the name exists before the directory does. A signal
+# to the process group that kills `mkdir` after it made the directory still leaves a directory
+# that the cleanup can find. The name holds this script's PID and two random numbers, and the
+# cleanup removes that exact path, never a pattern.
+WORK_PARENT="${TMPDIR:-/tmp}"
+WORK_PARENT="${WORK_PARENT%/}"
+for ((attempt = 0; attempt < 20; attempt++)); do
+  WORK="$WORK_PARENT/repro218.$$.$RANDOM$RANDOM"
+  mkdir -m 700 -- "$WORK" 2>/dev/null && break
+  WORK=""
+done
+if [[ -z "$WORK" ]]; then
+  echo "ERROR: cannot create a directory under ${WORK_PARENT:-/}." >&2
+  exit 1
+fi
 AGENT_HOME="$WORK/atty"
 mkdir -p "$AGENT_HOME" # agent-tty requires its --home dir to exist before `create`
 ATTY=(agent-tty --home "$AGENT_HOME")
