@@ -18,6 +18,7 @@ describe("claudecode.init", function()
   local saved_vim_fn = vim.fn
   local saved_vim_log = vim.log
   local saved_require = _G.require
+  local augroup_ids
 
   local mock_server = {
     start = function()
@@ -88,11 +89,31 @@ describe("claudecode.init", function()
     end,
   }
 
+  -- The VimLeavePre callback init.lua registers in its ClaudeCodeShutdown group. setup() can load
+  -- claudecode.diff for the first time, and that module registers a VimLeavePre autocmd of its own.
+  local function find_shutdown_callback()
+    for _, call in ipairs(vim.api.nvim_create_autocmd.calls) do
+      local opts = call.vals[2]
+      if call.vals[1] == "VimLeavePre" and opts and opts.group == augroup_ids.ClaudeCodeShutdown then
+        return opts.callback
+      end
+    end
+  end
+
   before_each(function()
+    -- A fresh module, so a server an earlier test started is not still running.
+    package.loaded["claudecode"] = nil
+    augroup_ids = {}
+    local augroup_count = 0
     vim.api = {
       nvim_create_autocmd = SpyObject.new(function() end),
-      nvim_create_augroup = SpyObject.new(function()
-        return 1
+      -- One id per group name, so tests can tell the groups apart.
+      nvim_create_augroup = SpyObject.new(function(name)
+        if not augroup_ids[name] then
+          augroup_count = augroup_count + 1
+          augroup_ids[name] = augroup_count
+        end
+        return augroup_ids[name]
       end),
       nvim_create_user_command = SpyObject.new(function() end),
       nvim_echo = SpyObject.new(function() end),
@@ -247,16 +268,7 @@ describe("claudecode.init", function()
       claudecode.setup()
       claudecode.start()
 
-      local callback_fn = nil
-      for _, call in ipairs(vim.api.nvim_create_autocmd.calls) do
-        if call.vals[1] == "VimLeavePre" then
-          -- The mock for nvim_create_augroup returns 1, and this is passed as the group.
-          if call.vals[2] and call.vals[2].group == 1 then
-            callback_fn = call.vals[2].callback
-            break
-          end
-        end
-      end
+      local callback_fn = find_shutdown_callback()
       assert(callback_fn, "Callback for VimLeavePre with ClaudeCodeShutdown group not found")
 
       mock_server.stop.calls = {}
@@ -274,8 +286,8 @@ describe("claudecode.init", function()
       local claudecode = require("claudecode")
       claudecode.setup({ auto_start = false })
 
-      local opts = vim.api.nvim_create_autocmd.calls[1].vals[2]
-      local callback_fn = opts.callback
+      local callback_fn = find_shutdown_callback()
+      assert(callback_fn, "Callback for VimLeavePre with ClaudeCodeShutdown group not found")
 
       mock_server.stop.calls = {}
       mock_lockfile.remove.calls = {}

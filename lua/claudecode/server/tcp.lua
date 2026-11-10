@@ -11,7 +11,7 @@ local M = {}
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
 ---@field on_disconnect function Callback for client disconnections
----@field on_error fun(err_msg: string) Callback for errors
+---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
 
 -- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
@@ -100,6 +100,7 @@ end
 ---@param port number Port to bind and listen on
 ---@return table|nil handle The bound+listening TCP handle, or nil on failure
 ---@return string|nil error Error message if failed
+---@return string|nil reason The libuv error alone, if bind or listen failed
 function M._bind_and_listen(server, port)
   local handle = vim.loop.new_tcp()
   if not handle then
@@ -109,7 +110,7 @@ function M._bind_and_listen(server, port)
   local bind_success, bind_err = handle:bind("127.0.0.1", port)
   if not bind_success then
     handle:close()
-    return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error")
+    return nil, "Failed to bind to port " .. port .. ": " .. (bind_err or "unknown error"), bind_err
   end
 
   local listen_success, listen_err = handle:listen(128, function(err)
@@ -123,7 +124,7 @@ function M._bind_and_listen(server, port)
 
   if not listen_success then
     handle:close()
-    return nil, "Failed to listen on port " .. port .. ": " .. (listen_err or "unknown error")
+    return nil, "Failed to listen on port " .. port .. ": " .. (listen_err or "unknown error"), listen_err
   end
 
   return handle, nil
@@ -155,24 +156,26 @@ function M.create_server(config, callbacks, auth_token)
   -- here (rather than committing to a single pre-probed port) is what fixes #283:
   -- when several Neovim instances race for the same port, the losers just advance
   -- to the next candidate instead of giving up with EADDRINUSE.
-  local last_err
+  local last_reason
   local tried_any = false
   for port in port_iterator(min_port, max_port) do
     tried_any = true
-    local handle, err = M._bind_and_listen(server, port)
+    local handle, err, reason = M._bind_and_listen(server, port)
     if handle then
       server.server = handle
       server.port = port
       return server, nil
     end
-    last_err = err
+    last_reason = reason or err
   end
 
   if not tried_any then
     return nil, "No available ports in range " .. min_port .. "-" .. max_port
   end
-  return nil,
-    "Failed to bind to any port in range " .. min_port .. "-" .. max_port .. ": " .. (last_err or "unknown error")
+  -- Short, so that it fits the command line at 80 columns: Neovim shows it at startup. libuv's error starts with its
+  -- code ("EADDRINUSE: address already in use"), and the code alone says why.
+  local code = last_reason and last_reason:match("^(%u+):") or last_reason or "unknown error"
+  return nil, string.format("No free port in %d-%d (%s)", min_port, max_port, code)
 end
 
 ---Handle a new client connection
@@ -186,7 +189,7 @@ function M._handle_new_connection(server)
 
   local accept_success, accept_err = server.server:accept(client_tcp)
   if not accept_success then
-    server.on_error("Failed to accept connection: " .. (accept_err or "unknown error"))
+    server.on_error("Accept error: " .. (accept_err or "unknown error"))
     client_tcp:close()
     return
   end
@@ -197,10 +200,10 @@ function M._handle_new_connection(server)
 
   -- Set up data handler
   client_tcp:read_start(function(err, data)
+    -- A client's failure is reported only as its disconnect reason, which the server logs at debug level. The
+    -- user cannot act on it, and the plugin shows each on_error line, so a long one stops Neovim at "Press ENTER".
     if err then
-      local error_msg = "Client read error: " .. err
-      server.on_error(error_msg)
-      M._disconnect_client(server, client, 1006, error_msg)
+      M._disconnect_client(server, client, 1006, "Client read error: " .. err)
       return
     end
 
@@ -216,7 +219,6 @@ function M._handle_new_connection(server)
     end, function(cl, code, reason)
       M._disconnect_client(server, cl, code, reason)
     end, function(cl, error_msg)
-      server.on_error("Client " .. cl.id .. " error: " .. error_msg)
       M._disconnect_client(server, cl, 1006, "Client error: " .. error_msg)
     end, server.auth_token)
   end)
@@ -397,11 +399,14 @@ function M.start_ping_timer(server, interval)
         else
           -- Client connection timed out - log at INFO level (this is expected behavior)
           local time_since_pong = math.floor((now - client.last_pong) / 1000)
-          require("claudecode.logger").info(
+          require("claudecode.logger").one_line(
+            "info",
             "server",
-            string.format("Client %s keepalive timeout (%ds idle), closing connection", client.id, time_since_pong)
+            string.format("Closed %s: no reply for %ds", client.id, time_since_pong)
           )
-          client_manager.close_client(client, 1006, "Connection timeout")
+          -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
+          -- connection still ends without the client's Close frame, which is what 1006 means here.
+          client_manager.close_client(client, 1011, "Keepalive timeout")
           M._disconnect_client(server, client, 1006, "Connection timeout")
         end
       end

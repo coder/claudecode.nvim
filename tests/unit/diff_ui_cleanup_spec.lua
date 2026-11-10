@@ -1,9 +1,17 @@
 require("tests.busted_setup")
 
 local diff = require("claudecode.diff")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("Diff UI cleanup behavior", function()
-  local test_old_file = "/tmp/test_ui_cleanup_old.txt"
+  local dir, test_old_file
+  setup(function()
+    dir = temp_dir.new()
+    test_old_file = dir .. "/test_ui_cleanup_old.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local tab_name = "test_ui_cleanup_tab"
 
   before_each(function()
@@ -15,6 +23,8 @@ describe("Diff UI cleanup behavior", function()
     -- Reset tabs mock
     vim._tabs = { [1] = true, [2] = true }
     vim._current_tabpage = 2 -- Simulate we're on the newly created tab during cleanup
+    -- The tabclose assertions read the last command, so drop the one the previous test ran
+    vim._last_command = nil
   end)
 
   after_each(function()

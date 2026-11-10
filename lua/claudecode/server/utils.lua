@@ -1,4 +1,6 @@
 ---@brief Utility functions for WebSocket server implementation
+local shared_utils = require("claudecode.utils")
+
 local M = {}
 
 -- Lua 5.1 compatible bitwise operations (arithmetic emulation).
@@ -286,40 +288,19 @@ function M.parse_http_headers(request)
   return headers
 end
 
----Check if a string contains valid UTF-8
+---Check if a string is well-formed UTF-8, as RFC 6455 requires of a text frame or a close reason: no overlong
+---form, no UTF-16 surrogate, nothing above U+10FFFF. Uses the decoder that cleans outbound text.
 ---@param str string The string to check
 ---@return boolean valid True if the string is valid UTF-8
 function M.is_valid_utf8(str)
   local i = 1
   while i <= #str do
-    local byte = str:byte(i)
-    local char_len = 1
-
-    if byte >= 0x80 then
-      if byte >= 0xF0 then
-        char_len = 4
-      elseif byte >= 0xE0 then
-        char_len = 3
-      elseif byte >= 0xC0 then
-        char_len = 2
-      else
-        return false
-      end
-
-      for j = 1, char_len - 1 do
-        if i + j > #str then
-          return false
-        end
-        local cont_byte = str:byte(i + j)
-        if cont_byte < 0x80 or cont_byte >= 0xC0 then
-          return false
-        end
-      end
+    local length = shared_utils.utf8_sequence_length(str, i)
+    if not length then
+      return false
     end
-
-    i = i + char_len
+    i = i + length
   end
-
   return true
 end
 

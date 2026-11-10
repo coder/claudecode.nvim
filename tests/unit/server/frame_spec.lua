@@ -68,10 +68,11 @@ describe("WebSocket frame parsing", function()
       assert.equals(1009, close_code)
     end)
 
-    it("returns close code 1007 for invalid UTF-8 in a text frame", function()
-      -- byte1: fin=1, opcode=TEXT(0x1) => 0x81; byte2: unmasked, len=2
-      -- payload: 0xFF 0xFE is not valid UTF-8.
-      local data = string.char(0x81, 0x02) .. string.char(0xFF, 0xFE)
+    it("returns close code 1007 for invalid UTF-8 in a close reason", function()
+      -- byte1: fin=1, opcode=CLOSE(0x8) => 0x88; byte2: unmasked, len=4
+      -- payload: 2-byte close code (1000) + 2 invalid UTF-8 reason bytes.
+      local payload = utils.uint16_to_bytes(1000) .. string.char(0xFF, 0xFE)
+      local data = string.char(0x88, 0x04) .. payload
       local parsed, consumed, close_code = frame.parse_frame(data)
 
       assert.is_nil(parsed)
@@ -79,12 +80,9 @@ describe("WebSocket frame parsing", function()
       assert.equals(1007, close_code)
     end)
 
-    it("returns close code 1007 for invalid UTF-8 in a close reason", function()
-      -- byte1: fin=1, opcode=CLOSE(0x8) => 0x88; byte2: unmasked, len=4
-      -- payload: 2-byte close code (1000) + 2 invalid UTF-8 reason bytes.
-      local payload = utils.uint16_to_bytes(1000) .. string.char(0xFF, 0xFE)
-      local data = string.char(0x88, 0x04) .. payload
-      local parsed, consumed, close_code = frame.parse_frame(data)
+    it("returns close code 1007 for a close reason with a UTF-16 surrogate", function()
+      local payload = utils.uint16_to_bytes(1000) .. "\237\160\128"
+      local parsed, consumed, close_code = frame.parse_frame(string.char(0x88, #payload) .. payload)
 
       assert.is_nil(parsed)
       assert.equals(0, consumed)
@@ -134,6 +132,14 @@ describe("WebSocket frame parsing", function()
   end)
 
   describe("parse_frame valid frames remain unaffected", function()
+    it("leaves the UTF-8 check of a text frame to the message it belongs to", function()
+      -- A fragment may end inside a code point, here after the first two bytes of U+1F600.
+      local parsed, _, close_code = frame.parse_frame(frame.create_text_frame("ok \240\159", false))
+
+      assert.equals("ok \240\159", parsed.payload)
+      assert.is_nil(close_code)
+    end)
+
     it("parses a valid unmasked text frame without a close code", function()
       local data = frame.create_text_frame("hello")
       local parsed, consumed, close_code = frame.parse_frame(data)
@@ -278,6 +284,10 @@ describe("WebSocket client malformed frame handling", function()
     assert.spy(on_error).was_not_called()
 
     -- The bytes remain buffered, waiting for the rest of the frame.
-    assert.equals(incomplete, c.buffer)
+    local messages = {}
+    client.process_data(c, "defghij", function(_, message)
+      table.insert(messages, message)
+    end, noop, on_error)
+    assert.same({ "abcdefghij" }, messages)
   end)
 end)

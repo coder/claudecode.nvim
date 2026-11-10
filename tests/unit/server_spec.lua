@@ -187,6 +187,61 @@ describe("WebSocket Server", function()
     server.stop()
   end)
 
+  describe("invalid JSON-RPC messages", function()
+    local tcp = require("claudecode.server.tcp")
+    local original = {}
+    local encoded
+
+    before_each(function()
+      original.server = server.state.server
+      original.send_to_client = tcp.send_to_client
+      original.decode = vim.json.decode
+      original.encode = vim.json.encode
+      original.null = vim.NIL
+      server.state.server = {}
+      tcp.send_to_client = function() end
+      vim.NIL = setmetatable({}, { __name = "vim.NIL" })
+      encoded = {}
+      vim.json.encode = function(value)
+        table.insert(encoded, value)
+        return ""
+      end
+    end)
+
+    after_each(function()
+      server.state.server = original.server
+      tcp.send_to_client = original.send_to_client
+      vim.json.decode = original.decode
+      vim.json.encode = original.encode
+      vim.NIL = original.null
+    end)
+
+    for _, payload in ipairs({ "5", "true", "false", '"text"' }) do
+      it("answers -32600 with a JSON null id for payload " .. payload, function()
+        vim.json.decode = _G.json_decode
+
+        local ok, err = pcall(server._handle_message, { id = "test_client" }, payload)
+
+        assert.is_true(ok, tostring(err))
+        expect(#encoded).to_be(1)
+        expect(encoded[1].id).to_be(vim.NIL)
+        expect(encoded[1].error.code).to_be(-32600)
+      end)
+    end
+
+    it("answers -32700 with a JSON null id when the message is not JSON", function()
+      vim.json.decode = function()
+        error("Expected value but found invalid token")
+      end
+
+      server._handle_message({ id = "test_client" }, "{not json")
+
+      expect(#encoded).to_be(1)
+      expect(encoded[1].id).to_be(vim.NIL)
+      expect(encoded[1].error.code).to_be(-32700)
+    end)
+  end)
+
   describe("authentication integration", function()
     it("should start server with authentication token", function()
       local config = {

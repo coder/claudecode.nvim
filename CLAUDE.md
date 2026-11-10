@@ -370,50 +370,11 @@ Log levels for authentication events:
 
 ## Release Process
 
-### Version Updates
+release-please runs releases (`.github/workflows/release-please.yaml`). Each push to `main` runs release-please over the commits since the last release. When any of them would appear in the release notes, for example a `feat` or `fix` commit, it opens or updates the release PR, titled `chore(release): x.y.z`. The release PR bumps `VERSION` and `.release-please-manifest.json`, and Communique regenerates `CHANGELOG.md` and the PR body. Merging that PR creates the `vX.Y.Z` tag and the GitHub Release.
 
-When updating the version number for a new release, you must update **ALL** of these files:
-
-1. **`lua/claudecode/init.lua`** - Main version table:
-
-   ```lua
-   M.version = {
-     major = 0,
-     minor = 2,  -- Update this
-     patch = 0,  -- Update this
-     prerelease = nil,  -- Remove for stable releases
-   }
-   ```
-
-2. **`scripts/claude_interactive.sh`** - Multiple client version references:
-   - Line ~52: `"version": "0.2.0"` (handshake)
-   - Line ~223: `"version": "0.2.0"` (initialize)
-   - Line ~309: `"version": "0.2.0"` (reconnect)
-
-3. **`scripts/lib_claude.sh`** - ClaudeCodeNvim version:
-   - Line ~120: `"version": "0.2.0"` (init message)
-
-4. **`CHANGELOG.md`** - Add new release section with:
-   - Release date
-   - Features with PR references
-   - Bug fixes with PR references
-   - Development improvements
-
-### Release Commands
-
-```bash
-# Get merged PRs since last version
-gh pr list --state merged --base main --json number,title,mergedAt,url --jq 'sort_by(.mergedAt) | reverse'
-
-# Get commit history
-git log --oneline v0.1.0..HEAD
-
-# Always run before committing
-mise run all
-
-# Verify no old version references remain
-rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
-```
+- Do not edit the version by hand. `lua/claudecode/init.lua` reads `M.version` from `VERSION` when it loads, so a release changes no Lua file and `covered.lock` stays current. The numbers in `init.lua` are only the `0.0.0-unknown` fallback.
+- Give each PR a Conventional Commits title. The merge queue squashes with the title, and release-please picks the next version from those subjects.
+- The `"version"` strings in `scripts/claude_interactive.sh` and `scripts/lib_claude.sh` are the test client's own `clientInfo`, not the plugin version.
 
 ## Development Workflow
 

@@ -49,8 +49,13 @@ jobs:
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
-          install_args: node communique
+          # --locked: install only tools listed in mise.lock and never rewrite it (see test.yml).
+          install_args: --locked node communique
           cache: false
+          # mise is pinned because `--locked` rules change between releases (2026.11.0 started to require a
+          # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release.
+          version: 2026.11.5
+          sha256: 7a5b051d6f17d335c502f8047a5175cf3103f347d91942771c60da4e302ebcb0
 
       - name: Install locked Release Please dependency
         env:

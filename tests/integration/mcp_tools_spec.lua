@@ -190,9 +190,10 @@ describe("MCP Tools Integration", function()
   end)
 
   describe("Tools Call Handler", function()
+    local mock_tools
     before_each(function()
       -- Mock the tools module to isolate handler logic.
-      tools = {
+      mock_tools = {
         handle_invoke = function(client, params)
           if params.name == "openDiff" then
             local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
@@ -268,9 +269,9 @@ describe("MCP Tools Integration", function()
 
       server.register_handlers()
 
-      -- Patch server's "tools/call" handler to use the mocked tools.handle_invoke.
+      -- Patch server's "tools/call" handler to use mock_tools.handle_invoke.
       server.state.handlers["tools/call"] = function(client, params)
-        local result_or_error_table = tools.handle_invoke(client, params)
+        local result_or_error_table = mock_tools.handle_invoke(client, params)
         if result_or_error_table.error then
           return nil, result_or_error_table.error
         elseif result_or_error_table.result then
@@ -495,7 +496,7 @@ describe("MCP Tools Integration", function()
       end
 
       -- Use the same mock tools for end-to-end test
-      tools = {
+      local mock_tools = {
         get_tool_list = function()
           return {
             {
@@ -553,12 +554,12 @@ describe("MCP Tools Integration", function()
       -- Replace the tools reference in server handlers
       server.state.handlers["tools/list"] = function(client, params)
         return {
-          tools = tools.get_tool_list(),
+          tools = mock_tools.get_tool_list(),
         }
       end
 
       server.state.handlers["tools/call"] = function(client, params)
-        local result_or_error_table = tools.handle_invoke(client, params)
+        local result_or_error_table = mock_tools.handle_invoke(client, params)
         if result_or_error_table.error then
           return nil, result_or_error_table.error
         elseif result_or_error_table.result then
@@ -621,7 +622,7 @@ describe("MCP Tools Integration", function()
 
     it("should handle parameter validation across the protocol", function()
       -- Use mock tools for parameter validation test
-      tools = {
+      local mock_tools = {
         handle_invoke = function(client, params)
           if params.name == "openDiff" then
             local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
@@ -665,7 +666,7 @@ describe("MCP Tools Integration", function()
 
       -- Replace the tools reference in server handlers
       server.state.handlers["tools/call"] = function(client, params)
-        local result_or_error_table = tools.handle_invoke(client, params)
+        local result_or_error_table = mock_tools.handle_invoke(client, params)
         if result_or_error_table.error then
           return nil, result_or_error_table.error
         elseif result_or_error_table.result then

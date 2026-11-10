@@ -19,6 +19,12 @@ describe("Diff Buffer Cleanup Edge Cases", function()
     -- Extend the existing vim mock
     mock_vim = _G.vim or {}
 
+    -- The failure switches live on the shared mock, so clear the ones the previous test set.
+    mock_vim._simulate_buffer_creation_failure = nil
+    mock_vim._simulate_buffer_config_failure = nil
+    mock_vim._simulate_buffer_delete_failure = nil
+    mock_vim._simulate_mkdir_failure = nil
+
     -- Track created buffers for cleanup verification
     mock_vim._created_buffers = {}
     mock_vim._deleted_buffers = {}
@@ -195,10 +201,8 @@ describe("Diff Buffer Cleanup Edge Cases", function()
         tab_name = tab_name,
       }
 
-      -- Mock file existence check to return false
-      mock_vim.fn.filereadable = function(path)
-        return 0 -- File doesn't exist
-      end
+      -- Make configuring the proposed buffer fail inside the setup
+      mock_vim._simulate_buffer_config_failure = true
 
       -- Setup should fail but cleanup should be called
       local success, error_result = pcall(function()
@@ -210,6 +214,10 @@ describe("Diff Buffer Cleanup Edge Cases", function()
       expect(error_result).to_be_table()
       expect(error_result.code).to_be(-32000)
       expect(error_result.message).to_be("Diff setup failed")
+
+      -- The proposed buffer the failed setup created was deleted again
+      expect(#mock_vim._created_buffers).to_be(1)
+      expect(mock_vim._deleted_buffers[1]).to_be(mock_vim._created_buffers[1])
     end)
 
     it("should handle directory creation failure for new files", function()

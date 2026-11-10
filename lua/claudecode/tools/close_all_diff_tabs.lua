@@ -11,8 +11,9 @@ local schema = {
 
 ---Handles the closeAllDiffTabs tool invocation.
 ---Closes all diff tabs/windows in the editor.
+---@param client table|nil The calling WebSocket client (handle_invoke passes it)
 ---@return table response MCP-compliant response with content array indicating number of closed tabs.
-local function handler(params)
+local function handler(params, client)
   -- Tear down only the diffs this plugin created, resolving their pending
   -- coroutines (issue #248). claudecode.diff.active_diffs is the authoritative
   -- record of every diff claudecode opened, so it is the complete and safe scope
@@ -26,7 +27,7 @@ local function handler(params)
   -- #277). This also matches the official VS Code extension, which closes only
   -- tabs it labelled "[Claude Code] ..." -- i.e. its own diffs.
   local diff = require("claudecode.diff")
-  local closed_count = diff.close_all_diffs("closeAllDiffTabs tool")
+  local closed_count = diff.close_all_diffs("closeAllDiffTabs tool", client and client.id or nil)
 
   -- Return MCP-compliant format matching VS Code extension
   return {

@@ -1,5 +1,6 @@
 -- luacheck: globals expect
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("Diff Module", function()
   local diff
@@ -120,6 +121,192 @@ describe("Diff Module", function()
       expect(result.temp_file).to_be_nil() -- Ensure no temp_file is created on failure
 
       rawset(io, "open", old_io_open)
+    end)
+
+    describe("when a temp directory cannot be created", function()
+      local cache = "/tmp/nvim_mock_cache"
+      local primary = cache .. "/claudecode_diffs"
+      local fallback = cache .. "/claudecode_diffs_fallback"
+      local old_io_open
+
+      -- Models real Neovim: mkdir(path, "p") on a path under a read-only directory raises E739,
+      -- except under :silent!, where it returns 0 instead. Files open only in directories mkdir created.
+      local function stub_filesystem(unwritable_dir, failure)
+        local created = {}
+        original_vim_functions["fn.mkdir"] = vim.fn.mkdir
+        vim.fn.mkdir = function(path, flags)
+          assert(flags == "p", "create_temp_file must create parent directories")
+          if path:sub(1, #unwritable_dir + 1) == unwritable_dir .. "/" then
+            if failure == "raises" then
+              error("Vim:E739: Cannot create directory " .. path .. ": permission denied", 0)
+            end
+            return 0
+          end
+          created[path] = true
+          return 1
+        end
+        rawset(io, "open", function(path)
+          if not created[path:match("^(.*)/[^/]*$")] then
+            return nil, path .. ": No such file or directory"
+          end
+          return { write = function() end, close = function() end }
+        end)
+      end
+
+      before_each(function()
+        old_io_open = io.open
+      end)
+
+      after_each(function()
+        rawset(io, "open", old_io_open)
+      end)
+
+      for _, failure in ipairs({ "raises", "returns 0" }) do
+        it("uses the fallback directory when mkdir " .. failure .. " inside the primary one", function()
+          stub_filesystem(primary, failure)
+
+          local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Fallback")
+
+          expect(result.success).to_be_true()
+          expect(result.temp_file:sub(1, #fallback + 1)).to_be(fallback .. "/")
+        end)
+
+        it("names both directories in the error when mkdir " .. failure .. " for both", function()
+          stub_filesystem(cache, failure)
+
+          local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "No dir")
+
+          expect(result.success).to_be_false()
+          expect(result.temp_file).to_be_nil()
+          expect(result.error:find(fallback, 1, true)).not_to_be_nil()
+          local without_fallback = result.error:gsub(fallback, "")
+          expect(without_fallback:find(primary, 1, true)).not_to_be_nil()
+        end)
+      end
+    end)
+
+    describe("session folder on disk", function()
+      local root
+      local old_time
+
+      local function sh(cmd)
+        local status = os.execute(cmd)
+        return status == 0 or status == true
+      end
+
+      local function exists(path)
+        return os.rename(path, path) ~= nil
+      end
+
+      local function parent(path)
+        return path:match("^(.*)/[^/]*$")
+      end
+
+      -- :bwipeout fires BufDelete and then BufWipeout. An autocmd for both events runs once per event, once = true too.
+      local function wipe_proposed_buffer()
+        local events = vim._autocmds["ClaudeCodeDiffCleanup"].events
+        local autocmd = events[#events]
+        local registered = type(autocmd.events) == "table" and autocmd.events or { autocmd.events }
+        for _, event in ipairs({ "BufDelete", "BufWipeout" }) do
+          for _, name in ipairs(registered) do
+            if name == event then
+              autocmd.opts.callback({ event = event })
+            end
+          end
+        end
+      end
+
+      -- Models real Neovim on POSIX: mkdir and delete act on disk, and delete(path, "d") removes only an empty directory.
+      before_each(function()
+        old_time = os.time
+        root = temp_dir.new()
+        for _, name in ipairs({ "stdpath", "mkdir", "delete", "isdirectory", "fnamemodify", "getpid", "tempname" }) do
+          original_vim_functions["fn." .. name] = vim.fn[name]
+        end
+        local fnamemodify = vim.fn.fnamemodify
+        vim.fn.fnamemodify = function(path, modifier)
+          if modifier == ":h" then
+            return parent(path)
+          end
+          return fnamemodify(path, modifier)
+        end
+        vim.fn.stdpath = function()
+          return root
+        end
+        vim.fn.mkdir = function(path)
+          return sh("mkdir -p " .. temp_dir.quote(path)) and 1 or 0
+        end
+        vim.fn.isdirectory = function(path)
+          return sh("test -d " .. temp_dir.quote(path)) and 1 or 0
+        end
+        vim.fn.delete = function(path, flags)
+          if flags == "rf" then
+            return sh("rm -rf " .. temp_dir.quote(path)) and 0 or -1
+          end
+          return os.remove(path) and 0 or -1
+        end
+      end)
+
+      after_each(function()
+        rawset(os, "time", old_time)
+        temp_dir.remove(root)
+      end)
+
+      it("removes the folder without a notification when the proposed buffer closes", function()
+        local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Cleanup")
+        expect(result.success).to_be_true()
+        expect(exists(result.temp_file)).to_be_true()
+
+        vim._last_notify = nil
+        wipe_proposed_buffer()
+
+        expect(exists(parent(result.temp_file))).to_be_false()
+        expect(vim._last_notify).to_be_nil()
+      end)
+
+      it("warns once when the folder is not empty after the proposed buffer closes", function()
+        local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Cleanup")
+        expect(result.success).to_be_true()
+        local stray = io.open(parent(result.temp_file) .. "/stray.txt", "w")
+        stray:write("x")
+        stray:close()
+        local warnings = {}
+        original_vim_functions["notify"] = vim.notify
+        vim.notify = function(msg, level)
+          if level == vim.log.levels.WARN then
+            table.insert(warnings, msg)
+          end
+        end
+
+        wipe_proposed_buffer()
+
+        expect(exists(result.temp_file)).to_be_false()
+        expect(#warnings).to_be(1)
+        expect(warnings[1]:find("Error removing temp directory", 1, true) ~= nil).to_be_true()
+      end)
+
+      it("gives two Neovim processes different folders even with the same tempname, time and RNG state", function()
+        -- Every process's first tempname() ends in the same counter, and the RNG is unseeded until the server starts.
+        vim.fn.tempname = function()
+          return "/tmp/nvim.user/abc/0"
+        end
+        rawset(os, "time", function()
+          return 1700000000
+        end)
+
+        local folders = {}
+        for _, pid in ipairs({ 101, 202 }) do
+          vim.fn.getpid = function()
+            return pid
+          end
+          math.randomseed(42)
+          local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "new content", "Process " .. pid)
+          expect(result.success).to_be_true()
+          table.insert(folders, parent(result.temp_file))
+        end
+
+        expect(folders[1] ~= folders[2]).to_be_true()
+      end)
     end)
   end)
 
@@ -302,6 +489,24 @@ describe("Diff Module", function()
   end)
 
   describe("Dirty Buffer Detection", function()
+    -- These tests replace functions on the shared vim mock. Record them so teardown() restores them.
+    before_each(function()
+      for _, path in ipairs({
+        "fn.filereadable",
+        "fn.bufnr",
+        "api.nvim_list_bufs",
+        "api.nvim_list_wins",
+        "api.nvim_buf_get_option",
+        "api.nvim_create_buf",
+        "api.nvim_buf_set_name",
+        "api.nvim_buf_set_lines",
+        "api.nvim_set_option_value",
+      }) do
+        local scope, name = path:match("^(%a+)%.(.+)$")
+        original_vim_functions[path] = vim[scope][name]
+      end
+    end)
+
     it("should detect clean buffer", function()
       -- Mock vim.fn.bufnr to return a valid buffer number
       local old_bufnr = _G.vim.fn.bufnr
