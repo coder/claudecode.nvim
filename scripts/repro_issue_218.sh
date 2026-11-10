@@ -38,9 +38,16 @@
 # directory is removed on exit. So are the agent-tty session, its entry in agent-tty's
 # per-user home registry, and its empty socket directory under /tmp/agent-tty (the
 # session's home is a fresh temp directory, so none of them belongs to another run).
-# SIGTERM, SIGINT and SIGHUP run the same cleanup. It stops the Neovim that is restoring
-# plugins, lets an `agent-tty create` that is already running finish, and destroys every
-# session in the run's own agent-tty home.
+# SIGTERM, SIGINT and SIGHUP run the same cleanup, and the cleanup ignores further signals,
+# so every step in it has a deadline. It stops the Neovim that is restoring plugins and
+# that Neovim's child processes (SIGTERM, then SIGKILL after about 5 s: Neovim ignores
+# SIGTERM while a vim.fn.system() child runs, as in lazy.nvim's bootstrap clone, and then
+# does not exit), and removes the plugin directories that the interrupted restore added, so
+# that no half-installed plugin stays for the next run. It lets an `agent-tty create` that
+# is already running finish (about 5 s), and destroys every session in the run's own
+# agent-tty home. Each agent-tty call in the cleanup runs in its own session and has a
+# deadline, because Node resets a signal that the cleanup ignores, and a second signal to
+# the process group would kill the call.
 # Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
@@ -86,51 +93,143 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
-WORK="$(mktemp -d)"
-AGENT_HOME="$WORK/atty"
-ATTY=(agent-tty --home "$AGENT_HOME")
+# State that the cleanup reads. A signal before the first assignment finds it empty.
+WORK=""
+AGENT_HOME=""
+ATTY=(agent-tty)
 SID=""
+CREATE_PID=""  # `agent-tty create`: the cleanup lets it finish, then destroys its session
+RESTORING=0    # 1 while the restore Neovim runs
+LAZY_DIR=""    # stdpath("data")/lazy of the fixture's NVIM_APPNAME
+LAZY_BEFORE="" # the entries of LAZY_DIR before the restore
 # bash runs a trap only after a foreground command ends, but `wait` returns at once. So the
 # long commands run in the background and the script waits for them. A signal then runs the
-# cleanup at once, and the cleanup deals with the job that is still running:
-BG_PID=""     # a command that the cleanup kills: the restore Neovim or an agent-tty wait
-CREATE_PID="" # `agent-tty create`: the cleanup lets it finish, then destroys its session
-# Run a command that the cleanup can kill. Returns the exit status of the command.
+# cleanup at once, and the cleanup stops every job that is still running.
 run_killable() {
   "$@" &
-  BG_PID=$!
-  wait "$BG_PID"
-  local rc=$?
-  BG_PID=""
-  return "$rc"
+  wait $!
+}
+# The live processes among the PIDs in $2... and all the current descendants of PID $1, one `ps`
+# call. A zombie does not count. `ps -A -o pid= -o ppid= -o stat=` works on Linux and macOS.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+tree_alive() {
+  local root=$1
+  shift
+  ps -A -o pid= -o ppid= -o stat= 2>/dev/null | awk -v root="$root" -v list=" $* " '
+    { pid[NR] = $1; st[NR] = $3; kids[$2] = kids[$2] " " $1 }
+    END {
+      seen[root] = 1; queue[1] = root; n = 1
+      for (h = 1; h <= n; h++) {
+        m = split(kids[queue[h]], k, " ")
+        for (i = 1; i <= m; i++) if (!(k[i] in seen)) { seen[k[i]] = 1; queue[++n] = k[i] }
+      }
+      for (i = 1; i <= NR; i++)
+        if (st[i] !~ /^Z/ && ((pid[i] in seen) || index(list, " " pid[i] " "))) printf "%s ", pid[i]
+    }'
+}
+# Stop the process $1 and its descendants. SIGTERM first: git removes a partial clone on SIGTERM.
+# Neovim ignores a deadly signal while a vim.fn.system() child runs, so SIGKILL whatever is alive
+# after about 5 s. Descendants that appear while it waits get the SIGTERM too. The deadline is in
+# seconds, not in loop counts, because one `ps` call can take 0.3 s on a loaded host.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+stop_tree() {
+  local known=" " live new p end=$((SECONDS + 6))
+  while :; do
+    # shellcheck disable=SC2086  # the list of PIDs is split on purpose
+    live="$(tree_alive "$1" $known)"
+    [[ -n "$live" ]] || return 0
+    new=""
+    for p in $live; do
+      [[ "$known" == *" $p "* ]] || new+=" $p"
+    done
+    known+="$new "
+    # shellcheck disable=SC2086
+    [[ -z "$new" ]] || kill $new 2>/dev/null || true
+    ((SECONDS < end)) || break
+    sleep 0.1
+  done
+  # shellcheck disable=SC2086
+  kill -KILL $live 2>/dev/null || true
+}
+# Run a command in its own session, so that a signal to this script's process group cannot
+# reach it. setsid(1) is not on macOS, but /usr/bin/perl is. Without either, run it as it is.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+in_new_session() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid -w "$@"
+  elif command -v perl >/dev/null 2>&1; then
+    perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec $ARGV[0]: $!\n"' -- "$@"
+  else
+    "$@"
+  fi
+}
+# An agent-tty call from the cleanup: its own session, and SIGKILL after about $1 seconds. Node
+# resets a signal that `trap ''` ignores, so without the session a second signal to the process
+# group kills `list`, `inspect` or `destroy`, and the session survives. Output goes to the caller.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+atty_cleanup() {
+  local end=$((SECONDS + $1)) pid live
+  shift
+  in_new_session "${ATTY[@]}" "$@" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+  if kill -0 "$pid" 2>/dev/null; then
+    live="$(tree_alive "$pid" "$pid")"
+    # shellcheck disable=SC2086
+    kill -KILL $live 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null
 }
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() {
   trap '' INT TERM HUP # a second signal must not cut the cleanup short
-  if [[ -n "$BG_PID" ]]; then
-    kill "$BG_PID" 2>/dev/null || true
-    wait "$BG_PID" 2>/dev/null || true
-  fi
+  local pid sid sock end entry
   # A create that is still running makes a session whose ID this script has not read yet.
-  if [[ -n "$CREATE_PID" ]]; then wait "$CREATE_PID" 2>/dev/null || true; fi
-  # The home is a fresh temp dir, so every session in it belongs to this run. `destroy`
-  # leaves the session's empty socket directory in /tmp/agent-tty, and rmdir never removes a
-  # directory that still holds a socket. It also leaves this run's home in agent-tty's
-  # per-user registry.
-  local sid sock
-  for sid in $("${ATTY[@]}" list --json 2>/dev/null | jq -r '.result.sessions[]?.sessionId // empty' 2>/dev/null); do
-    sock="$("${ATTY[@]}" inspect "$sid" --json 2>/dev/null | jq -r '.result.host.rpcSocketPath // empty' 2>/dev/null)"
-    "${ATTY[@]}" destroy "$sid" --json >/dev/null 2>&1 || true
-    if [[ "$sock" == /* ]]; then rmdir "$(dirname "$sock")" 2>/dev/null || true; fi
+  # Give it about 5 s to finish, then stop it.
+  if [[ -n "$CREATE_PID" ]]; then
+    end=$((SECONDS + 6))
+    while kill -0 "$CREATE_PID" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+    ! kill -0 "$CREATE_PID" 2>/dev/null || stop_tree "$CREATE_PID"
+    wait "$CREATE_PID" 2>/dev/null || true
+  fi
+  # Every other job: the restore Neovim, or an agent-tty wait. `jobs -p` also finds a job that
+  # a signal caught between `&` and the line that saves its PID.
+  for pid in $(jobs -p); do
+    stop_tree "$pid"
+    wait "$pid" 2>/dev/null || true
   done
-  "${ATTY[@]}" home forget "$AGENT_HOME" --json >/dev/null 2>&1 || true
-  rm -rf "$WORK"
+  # The fixture's bootstrap skips the clone when lazy.nvim's directory exists, and Lazy! restore
+  # trusts a plugin directory. An interrupted restore can leave a half-installed one, so remove
+  # the entries that this run added.
+  if [[ "$RESTORING" -eq 1 && -n "$LAZY_DIR" && -d "$LAZY_DIR" ]]; then
+    for entry in "$LAZY_DIR"/* "$LAZY_DIR"/.[!.]*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      [[ $'\n'"$LAZY_BEFORE"$'\n' == *$'\n'"${entry##*/}"$'\n'* ]] || rm -rf "$entry"
+    done
+  fi
+  # Only once ATTY carries --home: before that, `agent-tty list` would read the user's own home.
+  if [[ "${ATTY[1]:-}" == "--home" ]]; then
+    # The home is a fresh temp dir, so every session in it belongs to this run, and `--all`
+    # includes a session whose Neovim has exited. `destroy` leaves the session's empty socket
+    # directory in /tmp/agent-tty, and rmdir never removes a directory that still holds a
+    # socket. It also leaves this run's home in agent-tty's per-user registry.
+    for sid in $(atty_cleanup 10 list --all --json 2>/dev/null | jq -r '.result.sessions[]?.sessionId // empty' 2>/dev/null); do
+      sock="$(atty_cleanup 10 inspect "$sid" --json 2>/dev/null | jq -r '.result.host.rpcSocketPath // empty' 2>/dev/null)"
+      atty_cleanup 20 destroy "$sid" --json >/dev/null 2>&1 || true
+      if [[ "$sock" == /* ]]; then rmdir "$(dirname "$sock")" 2>/dev/null || true; fi
+    done
+    atty_cleanup 10 home forget "$AGENT_HOME" --json >/dev/null 2>&1 || true
+  fi
+  [[ -z "$WORK" ]] || rm -rf "$WORK"
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
+WORK="$(mktemp -d)"
+AGENT_HOME="$WORK/atty"
 mkdir -p "$AGENT_HOME" # agent-tty requires its --home dir to exist before `create`
+ATTY=(agent-tty --home "$AGENT_HOME")
 EXITF="$WORK/nvim_exit.txt"
 : >"$EXITF"
 
@@ -186,10 +285,15 @@ if #stale > 0 then
 end
 EOF
 RESTORE_LOG="$WORK/restore.log"
+LAZY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$APPNAME/lazy"
+LAZY_BEFORE="$(ls -A "$LAZY_DIR" 2>/dev/null)"
+RESTORING=1
+# Neovim reads nothing here. Without </dev/null a failed bootstrap clone waits for a key.
 run_killable env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
   REPRO218_LOCKFILE="$REPO_ROOT/fixtures/issue-218/lazy-lock.json" REPRO218_RESTORE_CHECK="$RESTORE_CHECK" \
-  "$NVIM_BIN" --headless "+Lazy! restore" "+lua dofile(vim.env.REPRO218_RESTORE_CHECK)" "+qa" >"$RESTORE_LOG" 2>&1
+  "$NVIM_BIN" --headless "+Lazy! restore" "+lua dofile(vim.env.REPRO218_RESTORE_CHECK)" "+qa" >"$RESTORE_LOG" 2>&1 </dev/null
 RESTORE_RC=$?
+RESTORING=0
 if [[ "$RESTORE_RC" -ne 0 ]]; then
   STALE="$(sed -n 's/^.*not at the commit in lazy-lock.json: //p' "$RESTORE_LOG")"
   echo "ERROR: Lazy! restore did not leave the fixture plugins at the commits in lazy-lock.json (nvim exit $RESTORE_RC)." >&2

@@ -51,7 +51,8 @@ scripts/repro_issue_218.sh --no-render-markdown
 Either run exits 2 when Neovim does not show `Repro218 ready` within 10 s, and 3 when
 `Lazy! restore` leaves a fixture plugin off its commit in `lazy-lock.json`. Both mean the run
 reached no verdict. Exit 1 also covers a missing `agent-tty`, `nvim` or `jq`, and an
-`agent-tty` session that could not be created.
+`agent-tty` session that could not be created. SIGTERM, SIGINT and SIGHUP end the script with
+exit 143, 130 and 129 after its cleanup, with no verdict.
 
 The reported crash was in the redraw/teardown path, which does **not** run under
 `--headless`, so the driver uses the `agent-tty` CLI to get a real terminal UI.
