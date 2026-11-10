@@ -362,7 +362,6 @@ tla_init() {
   if [[ $keep == 1 ]]; then
     echo "work dir: $work"
   else
-    # shellcheck disable=SC2064 # expand $work now
-    trap "rm -rf '$work'" EXIT
+    trap 'rm -rf "$work"' EXIT
   fi
 }
