@@ -8,7 +8,7 @@ While Claude is connected, Neovim tells it what the user is looking at. Every se
 - `sel-cursor-notify` pushes an empty selection (`isEmpty: true`) at the cursor after the user moves away from a selection, or edits the text it holds.
 - `sel-current` answers `getCurrentSelection` with `success`, `text`, `filePath`, `fileUrl`, and `selection`.
 - `sel-latest` answers `getLatestSelection` with the last selection Neovim pushed.
-- `sel-untracked` with `track_selection = false` pushes nothing. `getCurrentSelection` then reads the editor when Claude asks: the Visual selection, or the cursor position. `getLatestSelection` answers `{"success":false,"message":"No selection available"}`.
+- `sel-untracked` with `track_selection = false` pushes nothing. `getCurrentSelection` then reads the editor when Claude asks: the Visual selection, or the cursor position. From the Claude terminal it reads the cursor of the window the user came from. `getLatestSelection` answers `{"success":false,"message":"No selection available"}`.
 
 ## How to get to it (user POV)
 
