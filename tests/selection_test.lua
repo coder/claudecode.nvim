@@ -2652,6 +2652,19 @@ describe("Range Selection Tests", function()
           assert.is_nil(mock_server.last_broadcast)
         end)
 
+        it("does not read a buffer that was unloaded while you stay in the terminal", function()
+          hold_alpha_and_enter_the_terminal()
+          ticks[1] = 6
+          _G.vim._buffers[1] = nil -- :bunload
+
+          assert.has_no.errors(function()
+            fire_autocmd("CursorMoved") -- in the terminal
+          end)
+
+          assert.are.equal("alpha", selection.get_latest_selection().text)
+          assert.is_nil(mock_server.last_broadcast)
+        end)
+
         it("checks once after a burst of changes, such as a :%s", function()
           hold_alpha_and_enter_the_terminal()
           local original_schedule = _G.vim.schedule

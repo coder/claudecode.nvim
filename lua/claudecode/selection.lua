@@ -123,13 +123,13 @@ local function demote_if_selection_text_changed()
   return true
 end
 
----Whether a visual selection that was read in the buffer is what Claude holds.
+---Whether a visual selection that was read in the buffer is what Claude holds. Disabling tracking forgets both.
 ---@param bufnr integer
 ---@return boolean
 local function holds_selection_of(bufnr)
   local read = M.state.selection_tick
   local held = M.state.latest_selection
-  return M.state.tracking_enabled and read ~= nil and read.bufnr == bufnr and held ~= nil and not held.selection.isEmpty
+  return read ~= nil and read.bufnr == bufnr and held ~= nil and not held.selection.isEmpty
 end
 
 ---Listens for changes to the buffer of the selection that Claude holds, for as long as it holds one. Neovim fires
