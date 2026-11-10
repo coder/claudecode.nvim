@@ -68,6 +68,11 @@ describe("claudecode.terminal.snacks command handling", function()
         end
         return res
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       fn = {
         maparg = function()
           return {}
@@ -75,6 +80,9 @@ describe("claudecode.terminal.snacks command handling", function()
       },
       keymap = { set = function() end },
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_call = function(_, fn)
           return fn()
         end,
