@@ -435,6 +435,7 @@ function M.start_ping_timer(server, interval)
       )
       for _, client in pairs(server.clients) do
         if client.state == "connected" then
+          -- The alive check below finds the fresh pong and clears `pong_overdue`, and the stall window restarts too.
           client.last_pong = now
           client.last_drain = now
         end
@@ -445,6 +446,7 @@ function M.start_ping_timer(server, interval)
       if client.state == "connected" then
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, timeout) then
+          client.pong_overdue = nil
           if client_manager.is_client_reading(client, timeout) then
             client_manager.send_ping(client, "ping")
           else
@@ -459,6 +461,13 @@ function M.start_ping_timer(server, interval)
             )
             drop_client(server, client, "Not reading", "Write queue stalled")
           end
+        elseif not client.pong_overdue then
+          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
+          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
+          -- finds the pong that was read in between, or drops the client. A client without a pong gets this second
+          -- chance whatever its write queue shows: the stall rule above judges only a client that answers.
+          client.pong_overdue = true
+          client_manager.send_ping(client, "ping")
         else
           -- Client connection timed out - log at INFO level (this is expected behavior)
           local time_since_pong = math.floor((now - client.last_pong) / 1000)

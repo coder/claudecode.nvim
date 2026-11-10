@@ -190,19 +190,59 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.equals(frame.OPCODE.PING, parse(writes[2]).opcode)
     end)
 
-    it("still drops a client that never answers after it was connected", function()
+    it("still drops a client that never answers, at the second tick that finds no pong", function()
       local tick = start_ping_timer()
       local client, writes, handle = connect_and_upgrade()
 
-      for _ = 1, 3 do
-        clock = clock + interval
-        tick()
-      end
+      clock = clock + interval
+      tick() -- the client is 1 interval old: a ping
+      clock = clock + interval
+      tick() -- no pong for 2 intervals: the first such tick pings again and does not drop
+      assert.is_not_nil(server.clients[client.id], "the client was dropped at the first tick that found no pong")
+      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
+      clock = clock + interval
+      tick() -- still no pong: the second such tick drops the client
 
       assert.is_nil(server.clients[client.id])
       assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Connection timeout")
       assert.equals(1011, close_status(writes[#writes]))
       assert.is_true(handle:is_closing())
+    end)
+  end)
+
+  describe("when the ping timer runs late, below the wake threshold, with Claude's pong still unread", function()
+    -- libuv runs timers before it reads sockets. A tick that Neovim runs late after a block finds the pong of the last ping
+    -- still in the socket, so its last_pong is a whole interval older than the tick before it. A block of up to 1.5
+    -- intervals is not a wake, so last_pong is not reset.
+    it("does not drop a Claude that answers every ping, and forgets the late tick once Claude answers", function()
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      local pong = frame.create_frame(frame.OPCODE.PONG, "ping", true, true)
+      -- A Claude answers a ping after it read it, so libuv has written the pings queued for it by then.
+      local function claude_pongs()
+        handle.drain(math.huge)
+        handle._read_cb(nil, pong)
+      end
+
+      clock = clock + interval
+      tick()
+      claude_pongs()
+      clock = clock + interval
+      tick() -- Neovim blocks right after this ping, before it reads the pong, for 1.3 intervals
+      clock = clock + 1.3 * interval
+      tick()
+
+      assert.is_not_nil(server.clients[client.id], "the client was dropped by a late tick")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      claude_pongs() -- the loop reads the pong after the late tick
+      clock = clock + interval
+      tick()
+      clock = clock + 1.3 * interval -- a second late tick, again with the pong unread
+      tick()
+
+      assert.is_not_nil(server.clients[client.id], "the first late tick counted against the second one")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
     end)
   end)
 
@@ -448,6 +488,116 @@ describe("The lifecycle of a WebSocket connection", function()
       pong_and_tick(tick, handle)
 
       assert.is_nil(server.clients[client.id])
+    end)
+  end)
+
+  -- Two rules judge a connected client on each ping tick. The pong rule gives a client without a pong one more tick
+  -- (`pong_overdue`) and then drops it. The stall rule drops a client that answers, whose write queue made no progress for
+  -- two intervals. The pong rule runs first, so only a client that answers is judged for a stall.
+  describe("when a client misses a pong and its write queue stalls", function()
+    local reply = string.rep("x", 262144)
+
+    local function pong(handle)
+      handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+    end
+
+    ---Start a client whose queue never drains, which answers the first tick and the third, and not the second.
+    local function stalled_client_that_misses_a_pong()
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      pong(handle)
+      clock = clock + interval
+      tick() -- the 101 reply was written: that is progress, and the last one
+      clock = clock + interval
+      tick() -- no pong for two intervals: the second chance
+      return tick, client, writes, handle
+    end
+
+    it("gives a silent client its second chance although its queue stalled too, then drops it for the pong", function()
+      local client_manager = require("claudecode.server.client")
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      -- No pong for two intervals and no byte written for three: both rules find this client dead at the first tick.
+      client.last_pong = clock - 2 * interval
+      client.last_drain = clock - 3 * interval
+      client.drained_bytes = client.queued_bytes - handle:get_write_queue_size()
+      assert.is_false(client_manager.is_client_alive(client, 2 * interval))
+      assert.is_false(client_manager.is_client_reading(client, 2 * interval))
+
+      tick()
+
+      assert.is_not_nil(server.clients[client.id], "the stall skipped the second chance of the pong rule")
+      assert.is_true(client.pong_overdue)
+      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
+
+      clock = clock + interval
+      tick()
+
+      assert.is_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Connection timeout")
+      assert.equals(1011, close_status(writes[#writes]))
+      assert.equals("Keepalive timeout", parse(writes[#writes]).payload:sub(3))
+      assert.is_true(handle:is_closing())
+    end)
+
+    it("drops a client for the stall when its pong arrives, because the pong does not save a stalled queue", function()
+      local tick, client, writes, handle = stalled_client_that_misses_a_pong()
+      assert.is_true(client.pong_overdue)
+
+      pong(handle) -- the late pong is read, but nothing of the queue is written
+      clock = clock + interval
+      tick()
+
+      assert.is_nil(client.pong_overdue, "the tick that found the pong kept the flag")
+      assert.is_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+      assert.equals("Not reading", parse(writes[#writes]).payload:sub(3))
+    end)
+
+    it("keeps a client whose pong arrives while its queue drains, and clears the flag", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      pong(handle)
+      clock = clock + interval
+      tick()
+      clock = clock + interval
+      tick() -- no pong: the second chance
+      assert.is_true(client.pong_overdue)
+
+      handle.drain(1024) -- Claude reads a little, and answers
+      pong(handle)
+      clock = clock + interval
+      tick()
+
+      assert.is_nil(client.pong_overdue)
+      assert.is_not_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+
+    it("clears the flag and restarts the stall window when the machine wakes from sleep", function()
+      local tick, client, _, handle = stalled_client_that_misses_a_pong()
+      assert.is_true(client.pong_overdue)
+
+      clock = clock + 600000 -- the machine slept for ten minutes, and the timer runs first when it wakes
+      tick()
+      assert.is_nil(client.pong_overdue, "the wake kept the flag")
+      assert.is_not_nil(server.clients[client.id], "the sleep counted against the client")
+
+      pong(handle)
+      clock = clock + interval
+      tick()
+      assert.is_not_nil(server.clients[client.id], "the stall window did not restart at the wake")
+      pong(handle)
+      clock = clock + interval
+      tick()
+
+      assert.is_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
     end)
   end)
 

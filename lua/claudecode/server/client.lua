@@ -35,6 +35,7 @@ local CLOSE_REASONS = {
 ---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
 ---@field drained_bytes integer The bytes libuv had written to the socket when `is_client_reading` last saw progress
 ---@field last_drain number Timestamp of the last `is_client_reading` check that found the write queue empty or smaller
+---@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
