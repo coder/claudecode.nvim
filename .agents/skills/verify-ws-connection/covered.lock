@@ -1,7 +1,7 @@
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua 3ea42f7c9346e68c
-block main_start             5114b0003ac79809
-block main_stop              ac8f4791930fff1f
+file lua/claudecode/init.lua 2a23b89a8274ad0b
+block main_start             7bf331d94d09a034
+block main_stop              a9958aa6dee75143
 site lua/claudecode/init.lua: local success, error = M.state.server.stop() @ function M.stop()
 site lua/claudecode/init.lua: server.stop() @ function M.start(show_startup_notification)
 site lua/claudecode/init.lua: server.stop() @ function M.start(show_startup_notification)
