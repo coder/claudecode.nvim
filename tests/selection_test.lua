@@ -1877,12 +1877,17 @@ describe("Range Selection Tests", function()
         selection.on_cursor_moved()
       end
 
-      -- x on the cursor: the text changes, the cursor stays, TextChanged and CursorMoved fire.
-      local function delete_at_cursor(tick, line)
+      -- The text changes and TextChanged fires; the cursor stays.
+      local function change_text(tick, line)
         _G.vim._changedtick = tick
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { line })
-        selection.on_cursor_moved()
         selection.on_text_changed()
+      end
+
+      -- x on the cursor: CursorMoved also fires, because the text of the cursor line changed.
+      local function delete_at_cursor(tick, line)
+        selection.on_cursor_moved()
+        change_text(tick, line)
       end
 
       -- :b <buffer>: BufEnter fires while the window cursor is still at the start of the buffer. Buffer 2 is b.txt.
@@ -2044,6 +2049,19 @@ describe("Range Selection Tests", function()
 
         delete_at_cursor(7, "alphbeta gamma") -- x
         settle()
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      it("ends when the selected text changes without CursorMoved (a plugin applies an edit)", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        change_text(6, "alph beta gamma")
+        settle()
+
         assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
 
