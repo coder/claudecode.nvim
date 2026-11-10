@@ -5,10 +5,10 @@ While Claude is connected, Neovim tells it what the user is looking at. Every se
 ## Sub-features
 
 - `sel-visual-notify` pushes `selection_changed` with the selected text and 0-based positions while the user selects in Visual or Select mode. A blockwise selection is sent as one span from its first to its last position, not as a rectangle. A charwise selection that reaches past the end of a line includes the newline.
-- `sel-cursor-notify` pushes an empty selection (`isEmpty: true`) at the cursor after the user moves away.
+- `sel-cursor-notify` pushes an empty selection (`isEmpty: true`) at the cursor after the user moves away from a selection, or edits the text it holds.
 - `sel-current` answers `getCurrentSelection` with `success`, `text`, `filePath`, `fileUrl`, and `selection`.
 - `sel-latest` answers `getLatestSelection` with the last selection Neovim pushed.
-- `sel-untracked` with `track_selection = false` pushes nothing. `getCurrentSelection` then reads the editor when Claude asks: the Visual selection, or the cursor position. `getLatestSelection` answers `{"success":false,"message":"No selection available"}`.
+- `sel-untracked` with `track_selection = false` pushes nothing. `getCurrentSelection` then reads the editor when Claude asks: the Visual selection, or the cursor position. From the Claude terminal it reads the cursor of the window the user came from. `getLatestSelection` answers `{"success":false,"message":"No selection available"}`.
 
 ## How to get to it (user POV)
 
@@ -36,8 +36,8 @@ Steps:
 
 ## Gotchas
 
-- Leaving visual mode without moving the cursor keeps the last visual selection. `getCurrentSelection` still returns it with `isEmpty: false`. Move the cursor before you test the empty state.
-- While tracking is on, `getCurrentSelection` and `getLatestSelection` both return the selection Neovim last pushed. `getCurrentSelection` only adds `"success":true`. Neither reads the editor again, so during the debounce both return the older selection.
-- Notifications are debounced. Wait for the mode or cursor state with `$V until`, then allow about one second before you read `ws-in.jsonl`.
+- Leaving visual mode keeps the last visual selection until the user moves the cursor, starts another selection, lets an operator consume it, edits its text, or goes to another file. A visit to the Claude terminal keeps it. `getCurrentSelection` still returns it with `isEmpty: false`. Move the cursor before you test the empty state.
+- While tracking is on, `getCurrentSelection` and `getLatestSelection` both return the selection Neovim last pushed. `getCurrentSelection` only adds `"success":true`. Neither reads the editor again, so during the debounce both return the older selection. Three events do not wait for the debounce, and each pushes at once: leaving visual mode, editing the held text or consuming it with an operator, and moving the cursor away from a held selection. Entering another file (`:b`, a window switch) waits for the debounce: measured about 100 ms.
+- Most notifications are debounced; the three events above are not. Wait for the mode or cursor state with `$V until`, then allow about one second before you read `ws-in.jsonl`.
 - Lines and characters are 0-based in every payload. `:3` in Neovim is `line: 2`.
 - Notifications reach only a connected client. If `$V doctor` fails the handshake line, nothing arrives.
