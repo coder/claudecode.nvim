@@ -67,11 +67,19 @@ tla_constants() {
   return "${TOY_CALLBACK_RC-0}"
 }
 [[ -z ${TOY_NO_CONSTANTS-} ]] || unset -f tla_constants
-[[ -n ${TOY_NO_MAIN-} ]] || tla_main "$@"
+[[ -z ${TOY_OWN_TRAP-} ]] || trap true EXIT
+if [[ -n ${TOY_NO_MAIN-} ]]; then
+  :
+elif [[ -n ${TOY_PIPE-} ]]; then
+  tla_main "$@" | cat
+else
+  tla_main "$@"
+fi
 SH
-# A script that sources the lib and then calls neither tla_init nor tla_main.
+# A script that sources the lib and then calls neither tla_init nor tla_main, and one that sources it twice.
 printf '#!/usr/bin/env bash\nsource "$(dirname "$0")/../../../scripts/tla/check-lib.sh"\n' >"$skill/noop.sh"
-chmod +x "$skill/noop.sh"
+printf '#!/usr/bin/env bash\nlib="$(dirname "$0")/../../../scripts/tla/check-lib.sh"\nsource "$lib"\nsource "$lib"\n' >"$skill/twice.sh"
+chmod +x "$skill/noop.sh" "$skill/twice.sh"
 chmod +x "$check"
 git -C "$repo" init -q
 
@@ -122,7 +130,7 @@ run "$check"
 expect "baseline passes" 0 "RESULT: PASS"
 run env TOY_TYPEBAD=TRUE "$check"
 expect "TypeOK broken in the initial state exits 2" 2 "TypeOK broke"
-run env TOY_INITBAD=TRUE TOY_RULES=Small "$check"
+run env TOY_INITBAD=TRUE TOY_RULES=Small TOY_EXPECT='[Guard]=Small [Other]=- [InitBad]=- [TypeBadInit]=-' "$check"
 expect "a rule broken in the initial state ends with RESULT: FAIL" 1 "RESULT: FAIL"
 run env TOY_RULES= "$check"
 expect "empty RULES exits 2" 2 "RULES is empty"
@@ -152,6 +160,12 @@ run env TOY_NO_INIT=1 "$check"
 expect "tla_main without tla_init exits 2" 2 "must call tla_init"
 run "$skill/noop.sh"
 expect "a script that calls neither tla_init nor tla_main exits 2" 2 "without calling tla_main"
+run "$skill/twice.sh"
+expect "sourcing the lib twice exits 2" 2 "sourced twice"
+run env TOY_OWN_TRAP=1 "$check"
+expect "a check.sh that replaces the EXIT trap exits 2" 2 "replaced the EXIT trap"
+run env TOY_PIPE=1 "$check"
+expect "tla_main in a pipe exits 2" 2 "must run in the main shell"
 run env TOY_CALLBACK_RC=1 "$check"
 expect "a failing tla_constants exits 2" 2 "tla_constants failed"
 run env TOY_LIVE=Reach TOY_MKDIR=live-Reach.cfg JAVA="$root/fakebin/java" "$check"
@@ -168,8 +182,22 @@ run env TOY_EXPECT='[Guard]=Bound [Other]=- [InitBad]=-' "$check"
 expect "a plain run refuses a fact with no EXPECT entry" 2 "has no EXPECT entry"
 run env TOY_EXPECT= "$check" --hash-only
 expect "--hash-only refuses an empty EXPECT" 2 "EXPECT is empty"
+run env TOY_EXPECT='[Guard]=Bund [Other]=- [InitBad]=- [TypeBadInit]=-' "$check"
+expect "a plain run refuses an EXPECT value that is not a rule" 2 "not in RULES or LIVE"
+run env TOY_LIVE=Reach TOY_EXPECT='[Guard]=Bound [Other]=Reach [InitBad]=- [TypeBadInit]=-' "$check" --hash-only
+expect "an EXPECT value can be a LIVE property" 0 "covered.lock matches"
 run env TOY_EXPECT='[Guard]=Bound [Other+InitBad+TypeBadInit]=-' "$check" --mutants
 expect "the middle fact of an A+B+C EXPECT key has an entry" 0 "every guard is caught"
+run "$check" --keep --record
+kept=$(sed -n 's/^work dir: //p' <<<"$out")
+if [[ -n $kept && -d $kept ]]; then
+  n=$((n + 1))
+  echo "ok    --keep leaves the work dir"
+else
+  n=$((n + 1))
+  failed=$((failed + 1))
+  echo "FAIL  --keep leaves the work dir: no directory at '$kept'"
+fi
 run "$check" --mutants
 expect "--mutants passes and catches the guard" 0 "Guard=FALSE +caught by: Bound"
 if [[ $(grep -n 'toy note' <<<"$out" | cut -d: -f1) -lt $(grep -n 'every guard is caught' <<<"$out" | cut -d: -f1) ]]; then

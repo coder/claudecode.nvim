@@ -19,10 +19,14 @@
 #   CONSTRAINT   optional state constraint name
 #   MUTANT_NOTES optional array of lines that --mutants prints after its last row, before its closing line
 #
-# tla_init exits 2 when here, SKILL or MODEL is empty or the model file is missing. tla_main exits 2 when SITE_RE,
-# COVERED, RULES or FACTS is empty, when tla_constants is not defined, when a covered_block file is not in COVERED,
-# and, in every mode, when EXPECT has a key with a space or a non-fact, or lacks an entry for a fact. A check.sh that
-# calls tla_main without tla_init, or ends without calling tla_main, exits 2 too.
+# Source the lib once, do not set your own EXIT trap after it, and call tla_main directly (not in a pipe or a subshell).
+# The lib's EXIT handler removes the work dir and refuses a check.sh that never reached tla_main.
+#
+# Misuse exits 2, never 0 or 1. tla_init refuses an empty here, SKILL or MODEL and a missing model file. tla_main
+# refuses an empty SITE_RE, COVERED, RULES or FACTS, a missing tla_constants, a covered_block file that COVERED omits,
+# and, in every mode, an EXPECT key with a space or a non-fact, a fact without an entry, and a value that is not in
+# RULES, LIVE or "-". It also refuses a missing tla_init, a replaced EXIT trap and a call from a pipe or a subshell.
+# The EXIT handler refuses a check.sh that ends without calling tla_main, and the lib refuses a second source.
 #
 # Exit codes: 0 pass, 1 rule broken, 2 tool or script error (or TypeOK broken), 3 stale.
 set -euo pipefail
@@ -31,6 +35,12 @@ if ((BASH_VERSINFO[0] < 4)); then
   echo "ERROR: check.sh needs bash 4 or newer, not $BASH_VERSION (on macOS: brew install bash)" >&2
   exit 2
 fi
+# A second source would reset blocks and the other arrays, and --record would write a lock with no block lines.
+[[ -z ${tla_lib_sourced:-} ]] || {
+  echo "ERROR: check-lib.sh is sourced twice; source it once" >&2
+  exit 2
+}
+tla_lib_sourced=1
 
 # CI reads these two pin lines to key its jar cache and passes that jar as TLC_JAR. A check.sh must not set its own pin.
 TLC_VERSION=1.7.4
@@ -333,6 +343,8 @@ tla_check_expect() {
       [[ " ${FACTS[*]} " == *" $p "* ]] || tla_die "EXPECT key \"$f\" names \"$p\", which is not in FACTS"
       in_expect[$p]=1
     done
+    [[ ${EXPECT[$f]} == - || " ${RULES[*]} ${LIVE[*]:-} " == *" ${EXPECT[$f]} "* ]] ||
+      tla_die "EXPECT key \"$f\" names the rule \"${EXPECT[$f]}\", which is not in RULES or LIVE (use - for a fact that is not a guard)"
   done
   for f in "${FACTS[@]}"; do
     [[ -n ${in_expect[$f]:-} ]] || tla_die "fact $f has no EXPECT entry: every fact must be caught by a rule, alone or in a listed combination, or be marked -"
@@ -407,7 +419,12 @@ tla_mutants() {
 tla_main() {
   local f
   tla_pending=0
+  [[ $BASHPID == "$$" ]] || tla_die "tla_main must run in the main shell, not in a pipe or a subshell"
   [[ -n ${work:-} ]] || tla_die "check.sh must call tla_init before tla_main"
+  # trap -p inside $(...) shows the parent's traps only from bash 4.4 on, so write it to a file.
+  trap -p EXIT >"$work/exit-trap"
+  grep -q tla_on_exit "$work/exit-trap" || tla_die "check.sh replaced the EXIT trap of the lib; do not set your own"
+  rm -f "$work/exit-trap"
   # An unset or empty variable must stop the run with exit 2: set -u would exit 1 ("a rule broke"), and an empty
   # RULES or COVERED would pass or write a lock that never goes stale.
   [[ -n ${SITE_RE:-} ]] || tla_die "check.sh must set SITE_RE"
