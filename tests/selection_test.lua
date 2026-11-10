@@ -2665,6 +2665,32 @@ describe("Range Selection Tests", function()
           assert.is_nil(mock_server.last_broadcast)
         end)
 
+        -- A new Claude terminal is not registered when BufEnter fires. The file changed before that, while you were in
+        -- another file, where nothing needs to be sent yet. The debounce is the first event that knows the terminal.
+        it("checks the held text in the debounce when the terminal was not registered at BufEnter", function()
+          ticks = { [1] = 5, [2] = 5, [3] = 5 }
+          _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
+            return ticks[bufnr]
+          end
+          _G.vim.test.add_buffer(3, "/path/to/c.txt", { "three" })
+          selection.enable(mock_server)
+          start_selecting(5)
+          release_selection(1, 5, 4)
+          settle()
+          go_to_buffer(3, 0) -- c.txt, a file
+          change_buffer_1({ "beta gamma" })
+          assert.are.equal("alpha", selection.get_latest_selection().text) -- nothing to send in c.txt yet
+
+          terminal_module.get_active_terminal_bufnr = function()
+            return 3 -- the terminal in buffer 3 is registered now
+          end
+          _G.vim.test.add_buffer(3, "term://~/project//4242:claude", { "claude> " })
+          fire_debounce()
+
+          assert_claude_holds_cursor("/path/to/a.txt", 4)
+          _G.vim._buffers[3] = nil
+        end)
+
         it("checks once after a burst of changes, such as a :%s", function()
           hold_alpha_and_enter_the_terminal()
           local original_schedule = _G.vim.schedule

@@ -449,9 +449,11 @@ function M.update_selection()
 
   local current_buf = vim.api.nvim_get_current_buf()
 
-  -- Do not update the selection in the Claude terminal; cancel any pending demotion.
+  -- Do not update the selection in the Claude terminal; cancel any pending demotion. A new terminal is not registered
+  -- when BufEnter fires, so the held text of the file you came from is checked here too, once the debounce knows it.
   if M.is_claude_terminal_buffer(current_buf) then
     M._cancel_demotion_timer()
+    demote_if_selection_text_changed()
     return
   end
 
