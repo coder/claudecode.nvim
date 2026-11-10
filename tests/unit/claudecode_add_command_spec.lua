@@ -174,14 +174,24 @@ describe("ClaudeCodeAdd command", function()
     before_each(function()
       claudecode.setup({ auto_start = false })
 
+      local raw_handler
       for _, call in ipairs(vim.api.nvim_create_user_command.calls) do
         if call.vals[1] == "ClaudeCodeAdd" then
-          command_handler = call.vals[2]
+          raw_handler = call.vals[2]
           break
         end
       end
 
-      assert.is_function(command_handler, "Command handler should be a function")
+      assert.is_function(raw_handler, "Command handler should be a function")
+
+      -- The command reads `opts.fargs`; tests pass `{ args = "..." }`, so derive
+      -- `fargs` by a plain whitespace split. Tests can also pass `fargs` directly.
+      command_handler = function(opts)
+        if opts.fargs == nil and opts.args ~= nil then
+          opts.fargs = opts.args == "" and {} or vim.split(opts.args, "%s+")
+        end
+        return raw_handler(opts)
+      end
     end)
 
     describe("validation", function()
@@ -354,6 +364,36 @@ describe("ClaudeCodeAdd command", function()
             lineEnd = 99,
           })
         end)
+
+        it("should handle a path containing spaces (Neovim-expanded `%`)", function()
+          vim.fn.filereadable = spy.new(function(path)
+            return path == "/existing/my file.lua" and 1 or 0
+          end)
+
+          command_handler({ args = "/existing/my\\ file.lua", fargs = { "/existing/my file.lua" } })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/my file.lua",
+            lineStart = nil,
+            lineEnd = nil,
+          })
+          assert.spy(mock_logger.error).was_not_called()
+        end)
+
+        it("should handle a path with spaces plus line numbers", function()
+          vim.fn.filereadable = spy.new(function(path)
+            return path == "/existing/my file.lua" and 1 or 0
+          end)
+
+          command_handler({ args = "/existing/my\\ file.lua 10 20", fargs = { "/existing/my file.lua", "10", "20" } })
+
+          assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
+            filePath = "/existing/my file.lua",
+            lineStart = 9,
+            lineEnd = 19,
+          })
+          assert.spy(mock_logger.error).was_not_called()
+        end)
       end)
 
       describe("line number validation", function()
@@ -496,7 +536,7 @@ describe("ClaudeCodeAdd command", function()
         return path, false
       end)
 
-      command_handler({ args = "/existing/file.lua" })
+      command_handler({ args = "/existing/file.lua", fargs = { "/existing/file.lua" } })
 
       assert.spy(mock_server.broadcast).was_called()
 
