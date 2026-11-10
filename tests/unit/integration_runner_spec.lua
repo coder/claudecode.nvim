@@ -135,11 +135,11 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
   after_each(function()
     if orphan_pid and is_running(orphan_pid) then
-      shell("kill -KILL " .. orphan_pid)
+      os.execute("kill -KILL " .. orphan_pid .. " 2> /dev/null")
     end
     for _, pid in ipairs(helper_pids) do
       if is_running(pid) then
-        shell("kill -KILL " .. pid)
+        os.execute("kill -KILL " .. pid .. " 2> /dev/null")
       end
     end
     temp_dir.remove(dir)
