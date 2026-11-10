@@ -56,7 +56,7 @@ end
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   local should_insert = focus and config.auto_insert ~= false
-  -- Snacks enters the window it opens. Without focus, the caller keeps its window (#423).
+  -- Snacks enters every window it opens (#423).
   local enter = nil
   if not focus then
     enter = false
@@ -151,8 +151,7 @@ local function resolve_split_size(val, total, default_frac)
   return math.max(1, math.floor(total * default_frac))
 end
 
--- Snacks' auto_insert runs `startinsert` on every BufEnter of the terminal buffer. Without focus, that insert would
--- survive the return to the caller's window (#423), so the buffer is set with BufEnter ignored.
+-- Snacks' auto_insert runs `startinsert` on BufEnter of the terminal buffer (#423).
 local function win_set_buf_without_bufenter(win, buf)
   local saved = vim.o.eventignore
   vim.o.eventignore = saved == "" and "BufEnter" or (saved .. ",BufEnter")
@@ -315,7 +314,7 @@ local function cc_show(term, focus, config)
     if focus then
       term._cc.orig_show(term)
     else
-      -- opts.enter is Snacks' own switch: it neither enters the window nor queues the insert for an unentered one.
+      -- In Snacks, opts.enter = false skips both entering the window and its queued insert.
       local snacks_opts = term.opts or {}
       local entered = snacks_opts.enter
       snacks_opts.enter = false

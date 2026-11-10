@@ -1,10 +1,5 @@
--- #423: showing the Snacks Claude terminal without focus (focus_after_send = false) must leave the caller's window and
--- mode alone. Snacks enters the windows it opens and queues a `startinsert` from start_insert (on_win) and from
--- auto_insert (a BufEnter autocmd on the terminal buffer). A queued insert survives the return to the caller's window,
--- so the caller ended up in insert mode, or in the terminal window, after `:ClaudeCodeSend`.
---
--- The mock models those two Snacks behaviours. Neovim runs the BufEnter autocmd when a window is given the terminal
--- buffer, unless 'eventignore' lists BufEnter. The real-Neovim check is scripts/ in the verify-claudecode-nvim skill.
+-- The mock models Snacks: it enters each window it opens unless opts.enter == false, and auto_insert queues
+-- `startinsert` on BufEnter of the terminal buffer.
 
 describe("claudecode.terminal.snacks show without focus (#423)", function()
   local snacks_provider
@@ -31,8 +26,6 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     return ignored:find("BufEnter", 1, true) ~= nil or ignored:find("all", 1, true) ~= nil
   end
 
-  -- Snacks Win:open_win: a new window is entered unless opts.enter == false; on_win queues the insert for an
-  -- entered window when the terminal was opened with start_insert.
   local function open_win(term)
     term.win = make_window(term.buf, term.opts.position == "float" and "editor" or "")
     if term.opts.enter ~= false then
@@ -218,7 +211,6 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     }
   end
 
-  -- Open Claude focused (as `:ClaudeCode` does), leave for the source window, then hide it.
   local function open_then_hide(cfg)
     snacks_provider.open("claude", {}, cfg, true)
     local term = snacks_provider._get_terminal_for_test()
