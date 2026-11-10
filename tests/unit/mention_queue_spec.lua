@@ -440,6 +440,20 @@ describe("The @ mention queue", function()
     assert.matches("connection failed while the @ mention /project/src/a%.lua was sent", errors[1])
   end)
 
+  it("D: handshakes of other clients do not postpone a flush that is due for a connected Claude", function()
+    local claude = claude_connects()
+    claude.handshake()
+    run(1000)
+    send("/project/a.lua")
+    for _ = 1, 10 do
+      claude_connects().handshake()
+      run(40)
+    end
+
+    assert.same({ "a.lua" }, names(claude.received()))
+    assert.same({}, errors)
+  end)
+
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()
     send("/project/first.lua")
     local claude = claude_connects()

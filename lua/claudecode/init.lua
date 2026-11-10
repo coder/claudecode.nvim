@@ -80,6 +80,17 @@ function M.is_claude_connected()
   end
 end
 
+---@return integer count The clients that count as connected for M.is_claude_connected
+local function connected_client_count()
+  local count = 0
+  for _, info in ipairs(require("claudecode.server.init").get_status().clients or {}) do
+    if info.state == "connected" and info.handshake_complete == true then
+      count = count + 1
+    end
+  end
+  return count
+end
+
 -- The @ mention queue. A send that does not go out at once waits in M.state.mention_queue, oldest first. A mention
 -- leaves the queue only when a connected Claude took it, when its wait timed out with an error, or when the
 -- integration stops. While the queue holds a mention, one of two timers runs:
@@ -228,7 +239,11 @@ end
 ---@param from_new_connection boolean|nil true after a handshake; otherwise the oldest mention goes out now
 function M.process_mention_queue(from_new_connection)
   if from_new_connection then
-    stop_timer("mention_timer")
+    -- A flush that is already due while another client was connected stays: repeated handshakes of a second client
+    -- must not postpone it again and again.
+    if not (M.state.mention_timer and connected_client_count() > 1) then
+      stop_timer("mention_timer")
+    end
     schedule_mention_flush(M.state.config.connection_wait_delay)
   else
     flush_mention_queue()
