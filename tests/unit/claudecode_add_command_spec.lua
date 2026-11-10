@@ -244,7 +244,7 @@ describe("ClaudeCodeAdd command", function()
         command_handler({ args = "/current/dir/src/routes/$post.tsx" })
 
         assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
-          filePath = "src/routes/$post.tsx",
+          filePath = "/current/dir/src/routes/$post.tsx",
           lineStart = nil,
           lineEnd = nil,
         })
@@ -503,11 +503,11 @@ describe("ClaudeCodeAdd command", function()
           })
         end)
 
-        it("should format cwd-relative paths with line numbers", function()
+        it("should send an in-cwd path as its absolute path with line numbers", function()
           command_handler({ args = "/current/dir/relative.lua 5" })
 
           assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
-            filePath = "relative.lua",
+            filePath = "/current/dir/relative.lua",
             lineStart = 4,
             lineEnd = nil,
           })

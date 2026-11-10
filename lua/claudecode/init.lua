@@ -355,14 +355,22 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     end
     return success, error_msg
   else
-    -- Claude not connected, queue the mention and launch terminal
-    queue_mention(file_path, start_line, end_line)
+    -- Claude not connected, queue the mention and launch terminal. Format it now, as
+    -- _broadcast_at_mention does, so a later :cd cannot change which file it names.
+    local format_ok, formatted_path, is_directory = pcall(M._format_path_for_at_mention, file_path)
+    if not format_ok then
+      return false, formatted_path
+    end
+    if is_directory then
+      start_line, end_line = nil, nil
+    end
+    queue_mention(formatted_path, start_line, end_line)
 
     -- Launch terminal with Claude Code
     local terminal = require("claudecode.terminal")
     terminal.open()
 
-    logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    logger.debug(context, "Queued @ mention and launched Claude Code: " .. formatted_path)
 
     return true, nil
   end
@@ -1275,31 +1283,15 @@ function M._format_path_for_at_mention(file_path)
     end
   end
 
-  local is_directory = vim.fn.isdirectory(file_path) == 1
-  local formatted_path = file_path
-
-  if is_directory then
-    local cwd = vim.fn.getcwd()
-    if string.find(file_path, cwd, 1, true) == 1 then
-      local relative_path = string.sub(file_path, #cwd + 2)
-      if relative_path ~= "" then
-        formatted_path = relative_path
-      else
-        formatted_path = "./"
-      end
-    end
-    if not string.match(formatted_path, "/$") then
-      formatted_path = formatted_path .. "/"
-    end
-  else
-    local cwd = vim.fn.getcwd()
-    if string.find(file_path, cwd, 1, true) == 1 then
-      local relative_path = string.sub(file_path, #cwd + 2)
-      if relative_path ~= "" then
-        formatted_path = relative_path
-      end
-    end
+  -- Send the absolute path. A path made relative to Neovim's cwd names a different file
+  -- when Claude's cwd differs (terminal.cwd, cwd_provider, git_repo_cwd, a CLI started
+  -- elsewhere) or after a :cd, and a text-prefix cwd match cut /work/foobar to "ar".
+  local formatted_path = vim.fn.fnamemodify(file_path, ":p")
+  local is_directory = vim.fn.isdirectory(formatted_path) == 1
+  if is_directory and not string.match(formatted_path, "/$") then
+    formatted_path = formatted_path .. "/"
   end
+  assert(formatted_path:sub(1, 1) == "/" or formatted_path:match("^%a:[/\\]"), "expected an absolute path")
 
   return formatted_path, is_directory
 end
