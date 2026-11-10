@@ -1818,6 +1818,30 @@ describe("claudecode.terminal.native toggle behavior", function()
         assert.is_not_nil(native_provider.get_active_bufnr())
       end)
 
+      it("should show the terminal that an open created and a toggle hid while the stop waited", function()
+        snacks_available = false
+        local opened = false
+        mock_vim.api.nvim_create_autocmd("TermClose", {
+          callback = function()
+            if not opened then
+              opened = true
+              native_provider.open("claude", {}, config)
+              native_provider.simple_toggle("claude", {}, config)
+            end
+          end,
+        })
+
+        assert.has_no.errors(function()
+          native_provider.open("claude", {}, config)
+        end)
+
+        local active = native_provider.get_active_bufnr()
+        assert.is_true(opened)
+        assert.is_not_nil(active)
+        assert.are.equal(1, running_count())
+        assert.are.equal(1, windows_showing(active))
+      end)
+
       it("should be stopped when close runs and the native provider tracks no terminal", function()
         local mock_state = _G.get_mock_state()
 

@@ -163,14 +163,20 @@ local function stop_snacks_terminal()
   end
 end
 
+-- Defined below. The safeguard in open_terminal shows a hidden terminal with it.
+local show_hidden_terminal
+
 local function open_terminal(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
-  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and the
-  -- check below finds it.
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and a
+  -- toggle may hide it again. The check below finds that terminal.
   stop_snacks_terminal()
 
   if is_valid() then -- Should not happen if called correctly, but as a safeguard
-    if focus then
+    if not winid then
+      -- A callback hid the terminal after it started
+      show_hidden_terminal(effective_config, focus)
+    elseif focus then
       -- Focus existing terminal: switch to terminal window and enter insert mode
       vim.api.nvim_set_current_win(winid)
       if effective_config.auto_insert ~= false then
@@ -365,7 +371,7 @@ local function hide_terminal()
   end
 end
 
-local function show_hidden_terminal(effective_config, focus)
+function show_hidden_terminal(effective_config, focus)
   -- Show an existing hidden terminal buffer in a new window
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
     return false
