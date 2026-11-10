@@ -1393,6 +1393,25 @@ describe("Tool: open_file", function()
         expect(success).to_be_false()
         assert_contains(err, "user boom")
       end)
+
+      it("does not check the file again when an autocommand closes the preview window as it gets the buffer", function()
+        -- The check would load this text, as :checktime does with 'autoread'.
+        buffers[30].disk = { "alpha", "beta", "fresh" }
+        local set_buf = _G.vim.api.nvim_win_set_buf
+        _G.vim.api.nvim_win_set_buf = spy.new(function(win, buf)
+          set_buf(win, buf)
+          win_buf[win] = nil -- autocmd BufWinEnter * ++nested if &previewwindow | close | endif
+        end)
+
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(success).to_be_false()
+        assert.are.same(
+          { code = -32000, message = "File operation error", data = "No preview window shows the file" },
+          err
+        )
+        assert.are.same({ "alpha", "beta", "gamma", "delta", "epsilon" }, buffers[30].lines)
+      end)
     end)
 
     describe("when the buffer was opened before its file existed", function()
