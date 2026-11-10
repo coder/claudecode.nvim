@@ -75,8 +75,8 @@ describe("openDiff in a new tab: terminal BufEnter handler", function()
   end)
 
   after_each(function()
-    package.loaded["claudecode.terminal"] = nil
     diff._cleanup_all_active_diffs("test cleanup")
+    package.loaded["claudecode.terminal"] = nil
     pcall(vim.fn.jobstop, job)
     vim.cmd("silent! tabonly!")
     vim.cmd("silent! only!")
@@ -132,19 +132,22 @@ describe("openDiff in a new tab: terminal BufEnter handler", function()
         local diff_tab_terminal_win = find_terminal_window_in_current_tab()
         assert.is_not_nil(diff_tab_terminal_win, "the diff tab shows the terminal in a window")
 
-        -- The user opens another file in the diff tab's terminal window. Entering that buffer fires BufEnter.
-        vim.api.nvim_set_current_win(diff_tab_terminal_win)
+        -- The test never enters that window while it shows the terminal: entering it queues a startinsert.
         vim.api.nvim_win_set_buf(diff_tab_terminal_win, vim.api.nvim_create_buf(true, false))
         assert.is_nil(find_terminal_window_in_current_tab(), "the diff tab no longer shows the terminal")
         assert.equal(1, count_terminal_handlers())
 
-        -- Leaving and entering windows fires more BufEnter events. The handler stays until its window closes.
-        vim.cmd("wincmd p")
-        vim.cmd("wincmd p")
+        -- Moving between the diff tab's windows fires BufEnter. The handler stays until its window closes.
+        for _ = 1, 3 do
+          vim.cmd("wincmd w")
+        end
         assert.equal(1, count_terminal_handlers())
 
         vim.api.nvim_win_close(diff_tab_terminal_win, true)
         assert.equal(0, count_terminal_handlers())
+
+        close_diff(1)
+        assert.equal("n", vim.api.nvim_get_mode().mode)
       end)
     end)
   end
