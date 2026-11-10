@@ -1350,14 +1350,19 @@ local function window_shows(win, buffer)
   return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buffer
 end
 
----Close the proposal window unless the user switched it to another buffer. 'diff' is window-local and survives `:edit`,
----so a kept split-layout window still needs `diffoff`.
+---Close the proposal window unless the user switched it to another buffer. A kept window gives back what the diff set
+---in it. In the split layout that is 'diff', which `:edit` clears only when the new buffer is in no other diff window,
+---so `:edit #` back to the file's own buffer leaves it on.
 ---@param diff_data table
 function M._close_proposal_window(diff_data)
   local win = diff_data.new_window
   if window_shows(win, diff_data.new_buffer) then
     pcall(vim.api.nvim_win_close, win, true)
-  elseif win and diff_data.layout ~= "unified" then
+  elseif win and diff_data.layout == "unified" then
+    if diff_data.signcolumn then
+      pcall(vim.api.nvim_set_option_value, "signcolumn", diff_data.signcolumn, { win = win })
+    end
+  elseif win then
     pcall(vim.api.nvim_win_call, win, function()
       vim.cmd("diffoff")
     end)

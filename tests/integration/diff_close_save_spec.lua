@@ -5,13 +5,6 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
   return
 end
 
-if vim.fn.has("nvim-0.9") ~= 1 then
-  describe("closing and saving a proposed diff", function()
-    pending("the unified layout needs Neovim 0.9")
-  end)
-  return
-end
-
 describe("closing and saving a proposed diff", function()
   local diff = require("claudecode.diff")
   local tools = require("claudecode.tools.init")
@@ -98,10 +91,20 @@ describe("closing and saving a proposed diff", function()
     vim.cmd("silent! only!")
     vim.cmd("silent! %bwipeout!")
     vim.fn.delete(dir, "rf")
+    vim.o.signcolumn = "auto"
     _G.claude_deferred_responses = nil
   end)
 
-  for _, layout in ipairs({ "vertical", "unified" }) do
+  local layouts = { "vertical" }
+  if vim.fn.has("nvim-0.9") == 1 then
+    layouts[#layouts + 1] = "unified"
+  else
+    describe("in the unified layout", function()
+      pending("the unified layout needs Neovim 0.9")
+    end)
+  end
+
+  for _, layout in ipairs(layouts) do
     local files = {
       { name = "an existing file", file = "existing.txt", open = "existing.txt" },
       { name = "a new file, with another file open", file = "fresh.txt", open = "existing.txt" },
@@ -201,6 +204,7 @@ describe("closing and saving a proposed diff", function()
           local suffix = is_new and (", with on_new_file_reject " .. reject_mode) or ""
           it("keeps the window that :edit switched to another buffer" .. suffix, function()
             local other = dir .. "/other.txt"
+            vim.o.signcolumn = "no"
             local state = propose({ on_new_file_reject = reject_mode })
 
             run_in(state.new_window, "edit " .. vim.fn.fnameescape(other))
@@ -215,7 +219,11 @@ describe("closing and saving a proposed diff", function()
             assert.equal(state.new_window, window_showing(other), "close_tab keeps the user's window")
             assert.equal(other, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(state.new_window)))
             assert.is_true(vim.api.nvim_buf_is_loaded(vim.fn.bufnr(other)), "the user's buffer stays")
-            assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "diff mode ends there")
+            assert.equal(
+              "no",
+              vim.api.nvim_get_option_value("signcolumn", { win = state.new_window }),
+              "the window gets its 'signcolumn' back"
+            )
             assert.equal(1, #answers, "one answer for one openDiff")
           end)
         end
@@ -257,7 +265,23 @@ describe("closing and saving a proposed diff", function()
         settle()
 
         assert.equal(state.target_window, window_showing(third), "close_tab keeps the user's window")
-        assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.target_window }), "diff mode ends there")
+      end)
+
+      -- `:edit other.txt` turns 'diff' off by itself. Going back to the file's own buffer does not, because that
+      -- buffer is still in diff mode in the other window, so only the cleanup can end the diff mode in the kept window.
+      it("turns off diff mode in a proposal window that :edit # switched back to the file", function()
+        local file = dir .. "/existing.txt"
+        vim.cmd("edit " .. vim.fn.fnameescape(file))
+        local state = open_diff(layout, file)
+        run_in(state.new_window, "edit #")
+        wait_for_answers(1)
+        assert.is_true(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "the switch keeps diff mode")
+
+        close_tab()
+        settle()
+
+        assert.equal(file, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(state.new_window)), "close_tab keeps it")
+        assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "diff mode ends there")
       end)
     end
 
