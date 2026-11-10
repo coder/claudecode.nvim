@@ -14,10 +14,11 @@ fail() {
 step() { echo "== $*"; }
 observe() { "$V" expr "luaeval('dofile(\"$OBSERVE\")')"; }
 wait_observed() {
-  local deadline=$((SECONDS + $2))
+  local filter=$1 secs=$2
+  local deadline=$((SECONDS + secs))
   while :; do
-    jq -e "$1" <<<"$(observe)" >/dev/null 2>&1 && return 0
-    ((SECONDS < deadline)) || fail "window state never matched: $1 ($(observe | jq -c '{mode,current_buf,current_is_float,visible_floats,visible_terminal_floats}'))"
+    jq -e "$filter" <<<"$(observe)" >/dev/null 2>&1 && return 0
+    ((SECONDS < deadline)) || fail "window state never matched: $filter ($(observe | jq -c '{mode,current_buf,current_is_float,visible_floats,visible_terminal_floats}'))"
     sleep 0.1
   done
 }

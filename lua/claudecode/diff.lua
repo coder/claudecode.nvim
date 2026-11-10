@@ -257,6 +257,12 @@ local function find_claudecode_terminal_window()
   return floating_fallback
 end
 
+---@class ClaudeCodeHiddenTerminalFloat
+---@field bufnr number? The terminal buffer
+---@field tab number The tab the float is in
+---@field diffs table<string, boolean> The tab_name of each open diff that needs it hidden
+
+---@type ClaudeCodeHiddenTerminalFloat?
 local hidden_terminal_float = nil
 
 ---Hide the Claude terminal when it floats over the tab of the diff window `diff_win`, until the diff `tab_name`
@@ -267,7 +273,7 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
   if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
     return
   end
-  pcall(function()
+  local ok, err = pcall(function()
     if not (diff_win and vim.api.nvim_win_is_valid(diff_win)) then
       return
     end
@@ -294,6 +300,9 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
       hidden_terminal_float = { bufnr = bufnr, tab = diff_tab, diffs = { [tab_name] = true } }
     end
   end)
+  if not ok then
+    logger.debug("diff", "Could not hide the Claude terminal float:", err)
+  end
 end
 
 ---Show the float that hide_terminal_float_for_diff hid, once the last diff that needed it hidden has closed.
@@ -308,12 +317,15 @@ local function show_terminal_float_after_diff(tab_name)
   end
   local bufnr = hidden_terminal_float.bufnr
   hidden_terminal_float = nil
-  pcall(function()
+  local ok, err = pcall(function()
     local terminal_module = require("claudecode.terminal")
     if terminal_module.get_active_terminal_bufnr() == bufnr then
       terminal_module.ensure_visible()
     end
   end)
+  if not ok then
+    logger.debug("diff", "Could not show the Claude terminal float:", err)
+  end
 end
 
 ---When the preview window is current, make the Claude terminal's window current if it is a tiled window in
