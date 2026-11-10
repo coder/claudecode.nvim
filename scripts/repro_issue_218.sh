@@ -394,7 +394,7 @@ echo "==> Launching Neovim under agent-tty…"
 CREATE_OUT="$WORK/create.json"
 "${ATTY[@]}" create --json --cols 150 --rows 44 -- \
   env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
-  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" >"$CREATE_OUT" &
+  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" >"$CREATE_OUT" 8>&- &
 CREATE_PID=$!
 wait "$CREATE_PID"
 CREATE_PID=""
