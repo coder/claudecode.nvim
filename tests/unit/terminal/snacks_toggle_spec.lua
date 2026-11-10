@@ -373,6 +373,21 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       assert.is_false(windows[win].config.hide)
     end)
 
+    it("restore_float ignores the token of an earlier hide when the float was shown without the provider", function()
+      local term = open_float()
+      local win = term.win
+      local earlier = snacks_provider.hide_float()
+
+      windows[win].config.hide = false
+      local later = snacks_provider.hide_float()
+      assert.is_truthy(later)
+      assert.are_not.equal(earlier, later, "a later hide has its own token")
+      assert.is_true(windows[win].config.hide)
+
+      snacks_provider.restore_float(earlier)
+      assert.is_true(windows[win].config.hide, "the earlier hide no longer says anything about the float")
+    end)
+
     it("restore_float keeps a float the user brought back and closed during the diff closed", function()
       local term = open_float()
       local win = term.win

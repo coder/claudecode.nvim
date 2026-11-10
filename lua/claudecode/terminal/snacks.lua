@@ -226,8 +226,8 @@ local function reapply_snacks_window_state(term, win)
 end
 
 ---How many times `cc_show` and `cc_hide` changed the terminal window. It says nothing about who changed it:
----`hide_float` hands out its value, and `restore_float` compares it, so that a float the user showed or hid in
----between stays as the user left it.
+---`hide_float` hands out its value as the token, and `restore_float` compares it, so that a float the user showed or
+---hid in between stays as the user left it.
 local window_changes = 0
 
 ---Hide the terminal window without disturbing the cursor anchor.
@@ -683,20 +683,20 @@ end
 
 ---Hide the terminal when it is a visible float, so that it does not cover a diff. A split stays as it is: a
 ---diff makes room for it. `restore_float` shows the float again.
----@return table|false token Opaque. Give it to `restore_float`. False when no float was hidden.
+---@return number|false token Opaque. Give it to `restore_float`. False when no float was hidden.
 function M.hide_float()
   if not (terminal and terminal:buf_valid() and cc_is_visible(terminal) and win_is_floating(terminal.win)) then
     return false
   end
   cc_hide(terminal)
-  return { terminal = terminal, window_changes = window_changes }
+  return window_changes
 end
 
 ---Show the float that `hide_float` hid, without focus. Does nothing once anything else has shown or hidden the
 ---terminal since, so a float that the user brought back and closed again, or hid again, stays as they left it.
----@param token table|false|nil What `hide_float` returned
+---@param token number|false|nil What `hide_float` returned
 function M.restore_float(token)
-  if type(token) == "table" and token.terminal == terminal and token.window_changes == window_changes then
+  if token == window_changes and terminal then
     cc_show(terminal, false, terminal._cc and terminal._cc.config)
   end
 end
