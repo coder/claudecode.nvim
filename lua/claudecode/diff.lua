@@ -3,6 +3,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 -- Window options for terminal display (internal type, not exposed in public API)
 ---@class WindowOptions
@@ -430,14 +431,14 @@ local function display_terminal_in_new_tab()
     vim.cmd("wincmd L")
   end
 
-  vim.api.nvim_win_set_buf(terminal_win, terminal_bufnr)
+  utils.win_set_buf_without_bufenter(terminal_win, terminal_bufnr)
 
   apply_window_options(terminal_win, terminal_options)
 
   -- Set up autocmd to enter terminal mode when focusing this terminal window
   local terminal_auto_insert = not config or not config.terminal or config.terminal.auto_insert ~= false
   if terminal_auto_insert then
-    vim.api.nvim_create_autocmd("BufEnter", {
+    local auto_enter_id = vim.api.nvim_create_autocmd("BufEnter", {
       buffer = terminal_bufnr,
       group = get_autocmd_group(),
       callback = function()
@@ -447,6 +448,15 @@ local function display_terminal_in_new_tab()
         end
       end,
       desc = "Auto-enter terminal mode when focusing Claude Code terminal",
+    })
+    vim.api.nvim_create_autocmd("WinClosed", {
+      group = get_autocmd_group(),
+      pattern = tostring(terminal_win),
+      once = true,
+      callback = function()
+        pcall(vim.api.nvim_del_autocmd, auto_enter_id)
+      end,
+      desc = "Drop the terminal auto-enter handler with the window it was made for",
     })
   end
 
@@ -1097,6 +1107,52 @@ function M._resolve_diff_as_rejected(tab_name)
   end
 end
 
+---Reject the diff once the proposed buffer is shown in no window, whether its last window closed (`:q`,
+---`:close`, `<C-w>c`, `:tabclose`) or switched to another buffer (`:edit`, `:buffer`, `:enew`).
+---A hidden buffer fires none of BufDelete, BufUnload and BufWipeout (issue #238), so the two events below stand in.
+---WinClosed is window-wide, not bound to one window id, because <C-w>v can show the proposal in several
+---windows or tabs. It fires before the window leaves the layout, so the closing window is excluded.
+---BufHidden is buffer-local and fires only after the last window stopped showing the buffer. It runs with that
+---buffer locked, and a new-file reject deletes buffers, so the reject waits for the next loop turn (E937 otherwise).
+---It then checks that the diff is still this one and still hidden, because another openDiff can reuse the tab name.
+---@param tab_name string The diff identifier
+---@param new_buffer number Proposed buffer ID
+---@param autocmd_ids number[] Receives the ids of the autocmds it creates
+function M._register_reject_when_hidden(tab_name, new_buffer, autocmd_ids)
+  local group = get_autocmd_group()
+  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    callback = function(args)
+      if not vim.api.nvim_buf_is_valid(new_buffer) then
+        return
+      end
+      local closing_win = tonumber(args.match)
+      local still_visible = false
+      for _, win in ipairs(vim.fn.win_findbuf(new_buffer)) do
+        if win ~= closing_win then
+          still_visible = true
+          break
+        end
+      end
+      if not still_visible then
+        M._resolve_diff_as_rejected(tab_name)
+      end
+    end,
+  })
+  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("BufHidden", {
+    group = group,
+    buffer = new_buffer,
+    callback = function()
+      vim.schedule(function()
+        local entry = active_diffs[tab_name]
+        if entry and entry.new_buffer == new_buffer and #vim.fn.win_findbuf(new_buffer) == 0 then
+          M._resolve_diff_as_rejected(tab_name)
+        end
+      end)
+    end,
+  })
+end
+
 ---Register autocmds for a specific diff
 ---@param tab_name string The diff identifier
 ---@param new_buffer number New file buffer ID
@@ -1120,38 +1176,7 @@ local function register_diff_autocmds(tab_name, new_buffer)
     end,
   })
 
-  -- WinClosed: reject when the proposed window is closed (`:q`, `:close`, `<C-w>c`, `:tabclose`).
-  -- The proposed buffer is scratch (bufhidden="hide"), so closing its window merely HIDES the
-  -- still-loaded buffer and none of BufDelete/BufUnload/BufWipeout below fire -> `:q` would never
-  -- resolve the diff and Claude would never receive DIFF_REJECTED (issue #238).
-  --
-  -- We do NOT bind to a single window-id pattern: the proposed buffer may be split into several
-  -- windows (<C-w>v), and rejecting just because the *tracked* window closed would prematurely
-  -- reject while the user still views a clone (and closing a clone would never match the pattern).
-  -- Instead we reject only once the proposed buffer is displayed in NO window (across all tabs;
-  -- a copy the user split into another tab defers rejection until that copy is closed too).
-  -- WinClosed fires BEFORE the closing window leaves the layout, so we exclude it (args.match).
-  -- _resolve_diff_as_rejected no-ops once status != "pending", so this is harmless after :w
-  -- (accept) or during _cleanup_diff_state (which deletes these autocmds before closing windows).
-  autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("WinClosed", {
-    group = get_autocmd_group(),
-    callback = function(args)
-      if not vim.api.nvim_buf_is_valid(new_buffer) then
-        return
-      end
-      local closing_win = tonumber(args.match)
-      local still_visible = false
-      for _, win in ipairs(vim.fn.win_findbuf(new_buffer)) do
-        if win ~= closing_win then
-          still_visible = true
-          break
-        end
-      end
-      if not still_visible then
-        M._resolve_diff_as_rejected(tab_name)
-      end
-    end,
-  })
+  M._register_reject_when_hidden(tab_name, new_buffer, autocmd_ids)
 
   -- Buffer deletion monitoring for rejection (multiple events to catch all deletion methods)
 
