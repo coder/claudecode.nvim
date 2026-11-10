@@ -1,6 +1,6 @@
 ---@brief [[
 --- Lock file management for Claude Code Neovim integration.
---- This module handles creation, removal and updating of lock files
+--- This module handles creation and removal of lock files
 --- which allow Claude Code CLI to discover the Neovim integration.
 ---@brief ]]
 ---@module 'claudecode.lockfile'
@@ -216,36 +216,19 @@ function M.remove(port)
     return false, "Lock file does not exist: " .. lock_path
   end
 
-  local ok, err = pcall(function()
-    return os.remove(lock_path)
-  end)
+  -- os.remove reports most failures (such as a read-only folder) as (nil, message, errno) without raising, so
+  -- check the return value as well as the pcall status.
+  local ok, removed, err = pcall(os.remove, lock_path)
 
   if not ok then
-    return false, "Failed to remove lock file: " .. (err or "unknown error")
+    return false, "Failed to remove lock file: " .. tostring(removed or "unknown error")
+  end
+
+  if not removed then
+    return false, "Failed to remove lock file: " .. tostring(err or "unknown error")
   end
 
   return true
-end
-
----Update the lock file for the given port
----@param port number The port number of the WebSocket server
----@return boolean success Whether the operation was successful
----@return string result_or_error The lock file path if successful, or error message if failed
----@return string? auth_token The authentication token if successful
-function M.update(port)
-  if not port or type(port) ~= "number" then
-    return false, "Invalid port number"
-  end
-
-  local exists = vim.fn.filereadable(M.lock_dir .. "/" .. port .. ".lock") == 1
-  if exists then
-    local remove_ok, remove_err = M.remove(port)
-    if not remove_ok then
-      return false, "Failed to update lock file: " .. remove_err
-    end
-  end
-
-  return M.create(port)
 end
 
 ---Read the authentication token from a lock file

@@ -182,23 +182,17 @@ end
 
 ---Runs the Ex command `command`, which can load the file of `buf` again. Run from Lua, an error in a user's
 ---autocommand stops that reload halfway: the buffer keeps its old text with empty lines added, but takes the file as
----read, so a later `:w` writes that text over the file without a warning. When `command` fails after the reload began,
----the buffer reads its file again under `:silent!`, which lets the read end as for a command the user types, and then
----the error is raised. Only then, because `:silent!` also hides errors from autocommands that check for them.
+---read, so a later `:w` writes that text over the file without a warning. When `command` fails and the buffer has no
+---unsaved changes, the buffer reads its file again under `:silent!`, which lets the read end as for a command the user
+---types, and then the error is raised. The read does not wait for a sign that the reload began: an error in a user's
+---BufReadPre autocommand stops the rest of the BufReadPre autocommands, so no autocommand of ours can tell. Only then,
+---because `:silent!` also hides errors from autocommands that check for them.
 ---@param buf integer
 ---@param command string
 local function run_reload_command(buf, command)
-  local reading = false
-  local autocmd = vim.api.nvim_create_autocmd("BufReadPre", {
-    buffer = buf,
-    callback = function()
-      reading = true
-    end,
-  })
   local ok, err = pcall(vim.cmd, command)
-  pcall(vim.api.nvim_del_autocmd, autocmd)
   if not ok then
-    if reading and vim.api.nvim_buf_is_loaded(buf) and not vim.api.nvim_buf_get_option(buf, "modified") then
+    if vim.api.nvim_buf_is_loaded(buf) and not vim.api.nvim_buf_get_option(buf, "modified") then
       vim.api.nvim_buf_call(buf, function()
         vim.cmd("silent! edit")
       end)
