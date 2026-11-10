@@ -1064,9 +1064,14 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 
 - Run: `mise run all` (format, lint, test)
 - Run: `mise run test` (Busted suite with coverage, in a random order whose seed it prints; `BUSTED_SEED=<seed> mise run test` repeats that order, and a test registered inside a `pairs()` loop fails the run) or one file with `busted -v tests/unit/<name>_spec.lua`
-- Run: `mise run check` (Lua syntax and `luacheck` on `lua/` and `tests/`)
+- `tests/lockfile_test.lua` writes lock files to the directory that `lockfile.lua` resolves, which is
+  `$CLAUDE_CONFIG_DIR/ide` when `CLAUDE_CONFIG_DIR` is set [lua/claudecode/lockfile.lua:get_lock_dir]. When that
+  directory does not exist, five of its tests fail. When it exists, the tests pass and leave five fake lock files
+  (`12345.lock` to `12349.lock`) in it. Unset `CLAUDE_CONFIG_DIR` before `mise run test`.
+- Run: `mise run check` (a Lua syntax check on `lua/`, then `luacheck` on `lua/` and `tests/`)
 - Run: `npm --prefix scripts run test:release-please-runner` (release runner and the `communique.toml` output budget,
-  after `npm --prefix scripts ci`, with `communique` on `PATH`)
+  after `npm --prefix scripts ci`, with a real `communique` binary on `PATH`, for example under `mise exec --`, not a
+  mise shim. See the [scripts README](./scripts/README.md).)
 
 ## Contributing
 
