@@ -159,7 +159,8 @@ describe("At Mention Edge Cases", function()
       mock_vim.fn.filereadable = function(path)
         return path == "~weird.txt" and 1 or 0
       end
-      -- Real Neovim reads a leading ~ as ~user, so :p leaves "~weird.txt" unchanged.
+      -- Real Neovim reads a leading ~ as ~user, so :p leaves "~weird.txt" unchanged, and
+      -- it simplifies "./" when it joins the cwd.
       local real_fnamemodify = mock_vim.fn.fnamemodify
       finally(function()
         mock_vim.fn.fnamemodify = real_fnamemodify
@@ -168,9 +169,23 @@ describe("At Mention Edge Cases", function()
         if mods == ":p" and path:sub(1, 1) == "~" then
           return path
         end
+        if mods == ":p" and path:sub(1, 2) == "./" then
+          return mock_vim.fn.getcwd() .. "/" .. path:sub(3)
+        end
         return real_fnamemodify(path, mods)
       end
       expect(init_module._format_path_for_at_mention("~weird.txt")).to_be("/Users/test/project/~weird.txt")
+    end)
+
+    it("adds the trailing / to a directory whose name ends in a backslash on POSIX", function()
+      local real_isdirectory = mock_vim.fn.isdirectory
+      finally(function()
+        mock_vim.fn.isdirectory = real_isdirectory
+      end)
+      mock_vim.fn.isdirectory = function(path)
+        return path == "/Users/test/project/odd\\" and 1 or 0
+      end
+      expect(init_module._format_path_for_at_mention("/Users/test/project/odd\\")).to_be("/Users/test/project/odd\\/")
     end)
 
     it("makes a relative path absolute against Neovim's cwd", function()
