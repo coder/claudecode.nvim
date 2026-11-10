@@ -282,6 +282,37 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     assert.is_false(windows[term.win].config.hide)
   end)
 
+  it("float: hide_float config-hides a visible float, and open() shows it again without focus", function()
+    snacks_provider.open("claude", {}, float_config(), true)
+    local term = snacks_provider._get_terminal_for_test()
+    local win = term.win
+    local other_win = make_window(nil, { relative = "" })
+    current_win = other_win
+
+    assert.is_true(snacks_provider.hide_float())
+    assert.is_true(windows[win].valid)
+    assert.is_true(windows[win].config.hide)
+
+    assert.is_false(snacks_provider.hide_float(), "a float that is already hidden is not hidden again")
+
+    snacks_provider.open("claude", {}, float_config(), false)
+    assert.is_false(windows[win].config.hide)
+    assert.are.equal(other_win, current_win, "showing the float does not move focus into it")
+  end)
+
+  it("split: hide_float leaves the window alone", function()
+    snacks_provider.open("claude", {}, split_config(), true)
+    local term = snacks_provider._get_terminal_for_test()
+
+    assert.is_false(snacks_provider.hide_float())
+    assert.is_true(windows[term.win].valid)
+    assert.is_false(windows[term.win].config.hide)
+  end)
+
+  it("hide_float is false before a terminal exists", function()
+    assert.is_false(snacks_provider.hide_float())
+  end)
+
   it("split close that errors (E444 last window) does not throw and keeps state sane", function()
     snacks_provider.open("claude", {}, split_config(), true)
     local term = snacks_provider._get_terminal_for_test()

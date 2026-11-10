@@ -243,15 +243,84 @@ local function find_claudecode_terminal_window()
       local win_config = vim.api.nvim_win_get_config(win)
       local is_floating = win_config.relative and win_config.relative ~= ""
 
-      if is_floating then
-        floating_fallback = floating_fallback or win
-      else
-        return win
+      -- A config-hidden float still lists the buffer but is not on screen.
+      if win_config.hide ~= true then
+        if is_floating then
+          floating_fallback = floating_fallback or win
+        else
+          return win
+        end
       end
     end
   end
 
   return floating_fallback
+end
+
+-- The Claude terminal's float, while a diff has it hidden: the terminal buffer, the tab it floats in, and the
+-- tab_name of each open diff that needs it hidden. Nil when no diff has hidden it.
+local hidden_terminal_float = nil
+
+---Hide the Claude terminal when it floats over the tab of the diff window `diff_win`, until the diff `tab_name`
+---closes. A float is not a tiled window, so the diff cannot make room for it as it does for a split: it would
+---cover the diff. A float stays when the user keeps terminal focus, when the diff is in another tab, and when the
+---user already hid it.
+---@param tab_name string The diff identifier
+---@param diff_win number? The diff's proposed window
+local function hide_terminal_float_for_diff(tab_name, diff_win)
+  if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+    return
+  end
+  -- A failure here must not fail the diff setup: the diff is already registered.
+  pcall(function()
+    if not (diff_win and vim.api.nvim_win_is_valid(diff_win)) then
+      return
+    end
+    local diff_tab = vim.api.nvim_win_get_tabpage(diff_win)
+    if hidden_terminal_float then
+      if hidden_terminal_float.tab == diff_tab then
+        hidden_terminal_float.diffs[tab_name] = true
+      end
+      return
+    end
+    local terminal_win = find_claudecode_terminal_window()
+    if
+      not (
+        terminal_win
+        and (vim.api.nvim_win_get_config(terminal_win).relative or "") ~= ""
+        and vim.api.nvim_win_get_tabpage(terminal_win) == diff_tab
+      )
+    then
+      return
+    end
+    local terminal_module = require("claudecode.terminal")
+    local bufnr = terminal_module.get_active_terminal_bufnr()
+    if terminal_module.hide_float() then
+      hidden_terminal_float = { bufnr = bufnr, tab = diff_tab, diffs = { [tab_name] = true } }
+    end
+  end)
+end
+
+---Show the float that hide_terminal_float_for_diff hid, once the last diff that needed it hidden has closed. The
+---float comes back without focus, as a terminal does in the original tab after a diff in its own tab. A terminal
+---that was closed or replaced in the meantime stays gone.
+---@param tab_name string The diff identifier
+local function show_terminal_float_after_diff(tab_name)
+  if not (hidden_terminal_float and hidden_terminal_float.diffs[tab_name]) then
+    return
+  end
+  hidden_terminal_float.diffs[tab_name] = nil
+  if next(hidden_terminal_float.diffs) ~= nil then
+    return
+  end
+  local bufnr = hidden_terminal_float.bufnr
+  hidden_terminal_float = nil
+  pcall(function()
+    local terminal_module = require("claudecode.terminal")
+    if terminal_module.get_active_terminal_bufnr() == bufnr then
+      terminal_module.ensure_visible()
+    end
+  end)
 end
 
 ---When the preview window is current, make the Claude terminal's window current if it is a tiled window in
@@ -1302,6 +1371,7 @@ function M._cleanup_diff_state(tab_name, reason)
     local inline = require("claudecode.diff_inline")
     inline.cleanup_inline_diff(tab_name, diff_data)
     active_diffs[tab_name] = nil
+    show_terminal_float_after_diff(tab_name)
     fire_diff_event("ClaudeCodeDiffClosed", {
       tab_name = tab_name,
       file_path = diff_data.old_file_path,
@@ -1402,6 +1472,7 @@ function M._cleanup_diff_state(tab_name, reason)
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil
+  show_terminal_float_after_diff(tab_name)
 
   -- Notify listeners that the diff has closed. Always emitted; pairs with
   -- ClaudeCodeDiffOpened. `reason` describes why (accepted/rejected/replaced/etc.).
@@ -1465,6 +1536,7 @@ function M._setup_blocking_diff(params, resolution_callback)
 
       local state = active_diffs[tab_name]
       if state then
+        hide_terminal_float_for_diff(tab_name, state.new_window)
         fire_diff_event("ClaudeCodeDiffOpened", {
           tab_name = tab_name,
           file_path = params.old_file_path,
@@ -1658,6 +1730,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       is_new_file = is_new_file,
       client_id = params.client_id,
     })
+
+    hide_terminal_float_for_diff(tab_name, diff_info.new_window)
 
     -- Notify listeners that a diff is now open. Always emitted (independent of
     -- auto_resize_terminal); pairs with ClaudeCodeDiffClosed. Handlers receive

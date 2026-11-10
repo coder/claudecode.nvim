@@ -18,6 +18,7 @@
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
 # VCN_CLIENT=<name> makes rpc, tool, await, connect and disconnect act as that client.
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
+# VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -438,7 +439,7 @@ cmd_launch() {
     env -i VCN_RUN_TAG="$state" TERM=xterm-256color COLORTERM=truecolor LANG=C.UTF-8 PATH=/usr/bin:/bin HOME="$state/home" \
     XDG_CONFIG_HOME="$state/home/.config" XDG_DATA_HOME="$state/home/.local/share" \
     XDG_STATE_HOME="$state/home/.local/state" XDG_CACHE_HOME="$state/home/.cache" \
-    CLAUDE_CONFIG_DIR="$state/claude" VCN_REPO="$REPO" VCN_SETUP="${VCN_SETUP-}" \
+    CLAUDE_CONFIG_DIR="$state/claude" VCN_REPO="$REPO" VCN_SETUP="${VCN_SETUP-}" VCN_RTP="${VCN_RTP-}" \
     "$nvim_exe" --listen "$NVIM_SOCK" -u "$SKILL_DIR/scripts/init.lua" "$@" | jq -r .result.sessionId)
   env_line SID "$sid" >>"$state/run.env"
   load
