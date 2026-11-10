@@ -393,30 +393,24 @@ async function testFenceTracking() {
   // One character at a time, so a rule that rejects a single character fails with its name. The marker itself is
   // left out: more markers make a longer run. After the markers, an opener takes any other character as info string,
   // and a closer takes only blanks, so any other character keeps the fence open.
+  // Every UTF-16 code unit but LF and CR, so no single character is left out.
   const characters = [];
-  for (let code = 0x20; code <= 0x7e; code += 1) {
-    characters.push(String.fromCharCode(code));
+  for (let code = 0; code <= 0xffff; code += 1) {
+    const character = String.fromCharCode(code);
+    if (character !== "\n" && character !== "\r") {
+      characters.push(character);
+    }
   }
-  characters.push(
-    "\v",
-    "\f",
-    "\u00a0",
-    "\u2003",
-    "\u3000",
-    "\u00e9",
-    "\u2028",
-    "\u0085",
-  );
   for (const marker of ["`", "~"]) {
     const fence = marker.repeat(3);
     for (const character of characters.filter((other) => other !== marker)) {
-      const name = JSON.stringify(character);
+      const name = `U+${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
       assert.equal(
         outside([fence + character, "## Real", fence, "## Real"]),
         3,
         `a fence of ${marker} can carry ${name} in its info string`,
       );
-      if (character !== " ") {
+      if (character !== " " && character !== "\t") {
         assert.equal(
           outside([
             fence,
@@ -604,6 +598,26 @@ async function testUnreleasedUpdaterFences() {
       ),
       released,
       `U+${character.codePointAt(0).toString(16).padStart(4, "0")} does not end a line`,
+    );
+  }
+
+  // A text without a line ending, and a missing changelog file, still work.
+  assert.equal(runner.normalizeCommuniqueBody("- Added x"), "- Added x");
+  assert.equal(
+    update(undefined),
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n",
+  );
+
+  // No code unit but LF and CR ends a line, so the backticks after it never open a fence.
+  for (let code = 0; code <= 0xffff; code += 1) {
+    const character = String.fromCharCode(code);
+    if (character === "\n" || character === "\r") {
+      continue;
+    }
+    assert.equal(
+      runner.normalizeCommuniqueBody(`## A\nNote${character}\`\`\`\n## B`),
+      `### A\nNote${character}\`\`\`\n### B`,
+      `U+${code.toString(16).padStart(4, "0")} does not end a line`,
     );
   }
 
