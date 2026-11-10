@@ -33,8 +33,9 @@ local CLOSE_REASONS = {
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
 ---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
----@field drained_bytes integer The bytes libuv had written to the socket when `is_client_reading` last saw progress
----@field last_drain number Timestamp of the last `is_client_reading` check that found the write queue empty or smaller
+---@field drained_bytes integer The bytes libuv had written to the socket when `sample_write_progress` last saw progress
+---@field last_drain number Timestamp of the last `sample_write_progress` check that found the write queue empty or smaller
+---@field write_stalled boolean|nil True after a ping timer tick that came on time found no write progress. The next such tick drops the client
 ---@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
 
 ---Create a new WebSocket client
@@ -98,9 +99,10 @@ local function stop_close_timer(client)
 end
 
 ---Start the deadline of a Close frame that was just queued. The ping timer sees only the clients in the server's list,
----and a client that broke the protocol, or that the server stopped, has left it with its frame still queued. The same
----rule applies to it: a socket that wrote no byte for a keepalive window is closed, and the queue with it. The window
----starts with the frame, and a Claude that reads keeps the socket open, as it does for the ping timer.
+---and a client that broke the protocol, or that the server stopped, has left it with its frame still queued. A socket
+---that wrote no byte for a keepalive window is closed, and the queue with it, as for the ping timer. The window starts
+---with the frame, and a Claude that reads keeps the socket open. One window without progress is enough here: the client
+---is leaving already, so a close that comes too early after a blocked loop costs only its Close frame.
 ---@param client WebSocketClient
 local function start_close_timer(client)
   local timeout = client.keepalive_timeout
@@ -125,7 +127,7 @@ local function start_close_timer(client)
     local handle = client.tcp_handle
     if not client.close_pending or handle:is_closing() then
       stop_close_timer(client)
-    elseif not M.is_client_reading(client, timeout) then
+    elseif not M.sample_write_progress(client) then
       stop_close_timer(client)
       client.close_pending = nil
       client.state = "closed"
@@ -481,25 +483,42 @@ function M.is_client_alive(client, timeout)
   return (now - client.last_pong) < timeout
 end
 
----Check that a client still reads what the server writes to it. The keepalive cannot tell: a Claude whose reader is
----stuck can still answer each ping, while replies and pings pile up in libuv's write queue, in Neovim's memory.
----The client reads when the queue is empty, or libuv wrote a byte of it since the last check. A client that reads
----slowly keeps writing progress, and so does one that is sent a single large message, however big. Call it at each ping
----tick: the clock of the window is the time since the last check that found progress.
+---Check whether libuv wrote a byte of the write queue of a client since the last check that saw progress, or the queue
+---is empty. A client that reads slowly makes progress, and so does one that is sent a single large message, however big.
 ---@param client WebSocketClient The client object
----@param timeout number Timeout in milliseconds: how long the queue may stay without progress
----@return boolean reading False when the queue went `timeout` without a byte written
-function M.is_client_reading(client, timeout)
-  assert(type(timeout) == "number", "Expected timeout to be a number")
-
+---@return boolean progress False when the queue is not empty and nothing of it was written since the last progress
+function M.sample_write_progress(client)
   local queue_size = client.tcp_handle:get_write_queue_size()
   local drained = client.queued_bytes - queue_size
-
-  local now = vim.loop.now()
   if queue_size == 0 or drained > client.drained_bytes then
-    client.drained_bytes, client.last_drain = drained, now
+    client.drained_bytes, client.last_drain = drained, vim.loop.now()
+    return true
   end
-  return (now - client.last_drain) < timeout
+  return false
+end
+
+---Check that a client still reads what the server writes to it. The keepalive cannot tell: a Claude whose reader is
+---stuck can still answer each ping, while replies and pings pile up in libuv's write queue, in Neovim's memory.
+---Call it at each ping tick. A tick that finds progress, or an empty queue, clears the count. A tick that finds none
+---drops the client only when the tick before it that counted found none too, so one tick is never the whole evidence.
+---A tick that came late, after the loop was blocked, is no evidence either way: libuv may not have reported yet what
+---Claude read during the block, so such a tick does not start the count and does not end it.
+---@param client WebSocketClient The client object
+---@param tick_on_time boolean False when the tick came late: more than 1.2 intervals after the one before it (`start_ping_timer`)
+---@return boolean reading False when this tick, and the one that counted before it, found no write progress
+function M.is_client_reading(client, tick_on_time)
+  if M.sample_write_progress(client) then
+    client.write_stalled = nil
+    return true
+  end
+  if not tick_on_time then
+    return true
+  end
+  if client.write_stalled then
+    return false
+  end
+  client.write_stalled = true
+  return true
 end
 
 ---Get client info for debugging

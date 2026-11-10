@@ -422,6 +422,9 @@ function M.start_ping_timer(server, interval)
     -- Detect potential system sleep: timer interval was significantly exceeded
     -- Allow 50% grace period (e.g., 45s instead of 30s) to account for system load
     local is_wake_from_sleep = elapsed > (interval * 1.5)
+    -- A tick that comes late, after the loop was blocked, may not have had a chance to see write progress: libuv can
+    -- still wait to report the bytes that Claude read during the block. Such a tick is no evidence of a stall.
+    local tick_on_time = elapsed <= (interval * 1.2)
 
     if is_wake_from_sleep then
       -- After system sleep/wake, reset all client pong and write-progress timestamps to prevent false timeouts
@@ -435,19 +438,23 @@ function M.start_ping_timer(server, interval)
       )
       for _, client in pairs(server.clients) do
         if client.state == "connected" then
-          -- The alive check below finds the fresh pong and clears `pong_overdue`, and the stall window restarts too.
+          -- The alive check below finds the fresh pong and clears `pong_overdue`. The stall count starts again too.
           client.last_pong = now
           client.last_drain = now
+          client.write_stalled = nil
         end
       end
     end
 
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
+        -- Every tick samples the write queue, so that "two ticks in a row" are consecutive ticks, whether the client
+        -- answered or not. Only a client that answers is dropped for a stall: see below.
+        local reading = client_manager.is_client_reading(client, tick_on_time)
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, timeout) then
           client.pong_overdue = nil
-          if client_manager.is_client_reading(client, timeout) then
+          if reading then
             client_manager.send_ping(client, "ping")
           else
             -- A Claude whose reader is stuck can still answer each ping, so only its write queue shows it. The queue
@@ -462,10 +469,10 @@ function M.start_ping_timer(server, interval)
             drop_client(server, client, "Not reading", "Write queue stalled")
           end
         elseif not client.pong_overdue then
-          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
-          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
-          -- finds the pong that was read in between, or drops the client. A client without a pong gets this second
-          -- chance whatever its write queue shows: the stall rule above judges only a client that answers.
+          -- A tick that Neovim runs late after a block can come before the loop has read the pong of the last ping.
+          -- The first tick that finds no pong for two intervals pings again. The next one finds the pong that was read
+          -- in between, or drops the client. A client without a pong gets this second chance whatever its write queue
+          -- shows: the stall rule above judges only a client that answers.
           client.pong_overdue = true
           client_manager.send_ping(client, "ping")
         else
