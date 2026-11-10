@@ -381,7 +381,53 @@ function M.stop_server(server)
   end
 end
 
----Start a periodic ping task to keep connections alive
+---Drop each of `clients` whose oldest ping has gone unanswered for `limit` ms, once Neovim has read their sockets. The
+---judgment runs in a libuv check handle, which libuv runs after the poll phase that reads the sockets, so every byte
+---that reached a socket before the loop time of the check has been read. A timer tick cannot judge: libuv can run it
+---before it reads the pong that Claude sent, after a block of the main loop in any callback, and Neovim 0.8 (libuv
+---1.44) runs the timers again at the end of a pass, so two ticks can run with no read between them. `vim.schedule` is
+---no help either: Neovim can run it before the read.
+---@param server TCPServer The server object
+---@param clients WebSocketClient[] The clients that the ping timer pinged in one tick
+---@param limit number Age in milliseconds of the oldest unanswered ping at which a client is dropped
+local function drop_unanswered_after_read(server, clients, limit)
+  local check = vim.loop.new_check()
+  if not check then
+    server.on_error("Failed to create keepalive check")
+    return
+  end
+
+  check:start(function()
+    check:stop()
+    check:close()
+    local now = vim.loop.now()
+
+    for _, client in ipairs(clients) do
+      local since = client.ping_unanswered_since
+      if server.clients[client.id] == client and client.state == "connected" and since and now - since >= limit then
+        -- Client connection timed out - log at INFO level (this is expected behavior)
+        require("claudecode.logger").one_line(
+          "info",
+          "server",
+          string.format("Closed %s: no reply for %ds", client.id, math.floor((now - since) / 1000))
+        )
+        -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
+        -- connection still ends without the client's Close frame, which is what 1006 means here.
+        client_manager.close_client(client, 1011, "Keepalive timeout")
+        -- The socket does not wait for the Close frame: a Claude that stopped answering may never read it. Closing
+        -- now drops the frame when Claude's window is full.
+        client.close_pending = nil
+        M._disconnect_client(server, client, 1006, "Connection timeout")
+      end
+    end
+  end)
+end
+
+---Start a periodic ping task to keep connections alive.
+---A tick pings every connected client and never drops one. A client whose oldest ping is `interval * 2.5` old is
+---dropped at the first read of its socket after a tick [drop_unanswered_after_read]. A Claude that answers each ping
+---within that time is never dropped, however the main loop blocks. A Claude that never answers is dropped after the
+---third tick that follows its first unanswered ping: the half interval keeps timer jitter from moving the drop.
 ---@param server TCPServer The server object
 ---@param interval number Ping interval in milliseconds (default: 30000)
 ---@return table? timer The timer handle, or nil if creation failed
@@ -404,7 +450,7 @@ function M.start_ping_timer(server, interval)
     local is_wake_from_sleep = elapsed > (interval * 1.5)
 
     if is_wake_from_sleep then
-      -- After system sleep/wake, reset all client pong timestamps to prevent false timeouts
+      -- After system sleep/wake, forget the pings that went unanswered to prevent false timeouts
       -- This gives clients a fresh keepalive window since the time jump isn't their fault
       require("claudecode.logger").debug(
         "server",
@@ -414,44 +460,28 @@ function M.start_ping_timer(server, interval)
         )
       )
       for _, client in pairs(server.clients) do
-        if client.state == "connected" then
-          client.last_pong = now
-        end
+        client.ping_unanswered_since = nil
       end
     end
 
+    local pinged = {}
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
-        -- Check if client is alive (local connections, so use standard timeout)
-        if client_manager.is_client_alive(client, interval * 2) then
-          client.pong_overdue = nil
-          client_manager.send_ping(client, "ping")
-        elseif not client.pong_overdue then
-          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
-          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
-          -- finds the pong that was read in between, or drops the client.
-          client.pong_overdue = true
-          client_manager.send_ping(client, "ping")
-        else
-          -- Client connection timed out - log at INFO level (this is expected behavior)
-          local time_since_pong = math.floor((now - client.last_pong) / 1000)
-          require("claudecode.logger").one_line(
-            "info",
-            "server",
-            string.format("Closed %s: no reply for %ds", client.id, time_since_pong)
-          )
-          -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
-          -- connection still ends without the client's Close frame, which is what 1006 means here.
-          client_manager.close_client(client, 1011, "Keepalive timeout")
-          -- The socket does not wait for the Close frame: a Claude that stopped answering may never read it. Closing
-          -- now drops the frame when Claude's window is full.
-          client.close_pending = nil
-          M._disconnect_client(server, client, 1006, "Connection timeout")
-        end
+        client_manager.send_ping(client, "ping")
+        -- libuv caches the loop time when a pass starts, and a callback that ran before this tick in the pass can have
+        -- blocked since. A ping stamped with that old time would look older than it is, and the check could drop a
+        -- Claude that had no time to answer it.
+        vim.loop.update_time()
+        client.ping_unanswered_since = client.ping_unanswered_since or vim.loop.now()
+        table.insert(pinged, client)
       end
     end
 
     last_run = now
+
+    if #pinged > 0 then
+      drop_unanswered_after_read(server, pinged, interval * 2.5)
+    end
   end)
 
   return timer

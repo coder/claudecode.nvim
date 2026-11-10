@@ -1,12 +1,13 @@
 --- A client that the plugin is done with must leave the server promptly, be reported once and have its socket closed,
 --- and a Claude that answers pings must never be dropped. These tests run the real tcp.lua and client.lua against a
 --- socket that works like libuv's: a write callback runs only when the test calls `done` (a Claude that does not read
---- never completes a write), and a second close of a handle is an error.
+--- never completes a write), and a second close of a handle is an error. The loop time is cached at the start of a pass
+--- of the main loop, and a check handle runs after the pass has read the sockets, as in libuv.
 require("tests.busted_setup")
 
 describe("The lifecycle of a WebSocket connection", function()
   local tcp, frame, server, callbacks, scheduled
-  local clock, saved
+  local clock, cached, checks, saved
   local token = "test-token-0123456789"
   local interval = 30000
 
@@ -22,8 +23,15 @@ describe("The lifecycle of a WebSocket connection", function()
     end
     tcp = require("claudecode.server.tcp")
     frame = require("claudecode.server.frame")
-    scheduled, clock = nil, 1000000
-    saved = { schedule = vim.schedule, now = vim.loop.now, new_timer = vim.loop.new_timer }
+    scheduled, clock, checks = nil, 1000000, {}
+    cached = clock
+    saved = {
+      schedule = vim.schedule,
+      now = vim.loop.now,
+      new_timer = vim.loop.new_timer,
+      new_check = vim.loop.new_check,
+      update_time = vim.loop.update_time,
+    }
     -- While `scheduled` is a list, scheduled callbacks wait in it, as they wait for the main loop in Neovim.
     vim.schedule = function(fn)
       if scheduled then
@@ -32,8 +40,27 @@ describe("The lifecycle of a WebSocket connection", function()
         fn()
       end
     end
+    -- `clock` is the time of the world. `cached` is the loop time: libuv sets it from `clock` when a pass of the main loop
+    -- starts, and after the poll that reads the sockets. A callback that blocks does not move it.
     vim.loop.now = function()
-      return clock
+      return cached
+    end
+    vim.loop.update_time = function()
+      cached = clock
+    end
+    vim.loop.new_check = function()
+      local handle = {}
+      function handle:start(callback)
+        self.callback = callback
+        table.insert(checks, self)
+      end
+      function handle:stop()
+        self.callback, self.stopped = nil, true
+      end
+      function handle:close()
+        self.closed = true
+      end
+      return handle
     end
     callbacks = {
       on_message = spy.new(function() end),
@@ -48,6 +75,7 @@ describe("The lifecycle of a WebSocket connection", function()
 
   after_each(function()
     vim.schedule, vim.loop.now, vim.loop.new_timer = saved.schedule, saved.now, saved.new_timer
+    vim.loop.new_check, vim.loop.update_time = saved.new_check, saved.update_time
   end)
 
   ---Accept a connection whose socket works like libuv's.
@@ -90,13 +118,17 @@ describe("The lifecycle of a WebSocket connection", function()
     end
   end
 
-  ---Start the ping timer on the server, and return the function that runs on each tick.
+  ---Start the ping timer on the server, and return the function that runs on each tick. A tick runs at the start of a
+  ---pass of the main loop, or at its end (libuv 1.44 runs the timers again after the check handles): the loop time is
+  ---the time of the world, unless `after_block` of the pass is set.
+  ---@return function tick Runs the timer callback. `tick(block)`: a callback that ran before it in its pass blocked for
+  ---`block` ms, so the loop time is that old
   local function start_ping_timer()
-    local tick
+    local callback
     vim.loop.new_timer = function()
       return {
-        start = function(_, _, _, callback)
-          tick = callback
+        start = function(_, _, _, timer_callback)
+          callback = timer_callback
         end,
         stop = function() end,
         close = function() end,
@@ -104,7 +136,32 @@ describe("The lifecycle of a WebSocket connection", function()
     end
     tcp.start_ping_timer(server, interval)
     vim.loop.new_timer = saved.new_timer
-    return tick
+    return function(block)
+      cached = clock
+      clock = clock + (block or 0)
+      callback()
+    end
+  end
+
+  ---The poll of a pass of the main loop, with the read of Claude's socket that the test makes, then the check handles
+  ---that the ticks since the last poll started.
+  ---@param handle table|nil The socket of the client that Claude wrote to
+  ---@param data string|nil What Claude wrote
+  local function poll(handle, data)
+    cached = clock
+    if handle then
+      handle._read_cb(nil, data)
+    end
+    local pending = checks
+    checks = {}
+    for _, check in ipairs(pending) do
+      check.callback()
+      assert.is_true(check.stopped and check.closed, "a check handle stayed running or open after it ran")
+    end
+  end
+
+  local function pong()
+    return frame.create_frame(frame.OPCODE.PONG, "ping", true, true)
   end
 
   local function parse(write)
@@ -139,55 +196,219 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.equals(2, #writes, "the 101 reply and a ping")
       assert.equals(frame.OPCODE.PING, parse(writes[2]).opcode)
     end)
+  end)
 
-    it("still drops a client that never answers, at the second tick that finds no pong", function()
+  describe("when a Claude never answers a ping", function()
+    it("drops it at the first read of its socket after the fourth tick, and not at the tick", function()
       local tick = start_ping_timer()
       local client, writes, handle = connect_and_upgrade()
 
       clock = clock + interval
-      tick() -- the client is 1 interval old: a ping
+      tick() -- the first ping
+      poll()
+      for _ = 1, 2 do
+        clock = clock + interval
+        tick() -- the first ping is 1, then 2 intervals old
+        poll()
+      end
+      assert.is_not_nil(server.clients[client.id], "the client was dropped before its ping was 2.5 intervals old")
       clock = clock + interval
-      tick() -- no pong for 2 intervals: the first such tick pings again and does not drop
-      assert.is_not_nil(server.clients[client.id], "the client was dropped at the first tick that found no pong")
-      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
-      clock = clock + interval
-      tick() -- still no pong: the second such tick drops the client
+      tick() -- the first ping is 3 intervals old, and Neovim did not read the socket since this tick
+      assert.is_not_nil(server.clients[client.id], "a tick dropped the client before the socket was read")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      poll()
 
       assert.is_nil(server.clients[client.id])
       assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Connection timeout")
       assert.equals(1011, close_status(writes[#writes]))
       assert.is_true(handle:is_closing())
     end)
-  end)
 
-  describe("when the ping timer runs late, below the wake threshold, with Claude's pong still unread", function()
-    -- libuv runs timers before it reads sockets. A tick that Neovim runs late after a block finds the pong of the last ping
-    -- still in the socket, so its last_pong is a whole interval older than the tick before it. A block of up to 1.5
-    -- intervals is not a wake, so last_pong is not reset.
-    it("does not drop a Claude that answers every ping, and forgets the late tick once Claude answers", function()
+    it("drops it at the first read after a late tick that finds its ping 2.5 intervals old", function()
       local tick = start_ping_timer()
-      local client, writes, handle = connect_and_upgrade()
-      local pong = frame.create_frame(frame.OPCODE.PONG, "ping", true, true)
+      local client = connect_and_upgrade()
 
       clock = clock + interval
       tick()
-      handle._read_cb(nil, pong)
-      clock = clock + interval
-      tick() -- Neovim blocks right after this ping, before it reads the pong, for 1.3 intervals
+      poll()
       clock = clock + 1.3 * interval
       tick()
+      poll() -- the first ping is 1.3 intervals old
+      assert.is_not_nil(server.clients[client.id])
+      clock = clock + 1.3 * interval
+      tick()
+      poll() -- the first ping is 2.6 intervals old: the third tick is not needed
 
-      assert.is_not_nil(server.clients[client.id], "the client was dropped by a late tick")
-      assert.spy(callbacks.on_disconnect).was_not_called()
-      handle._read_cb(nil, pong) -- the loop reads the pong after the late tick
+      assert.is_nil(server.clients[client.id])
+    end)
+
+    it("counts the time from the first ping that went unanswered, after Claude answered before", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
       clock = clock + interval
       tick()
-      clock = clock + 1.3 * interval -- a second late tick, again with the pong unread
-      tick()
+      poll(handle, pong()) -- Claude answers the first ping
+      for _ = 1, 4 do
+        clock = clock + interval
+        tick()
+        assert.is_not_nil(server.clients[client.id])
+        poll()
+      end
 
-      assert.is_not_nil(server.clients[client.id], "the first late tick counted against the second one")
+      assert.is_nil(server.clients[client.id], "the ping of the second tick was unanswered for 3 intervals")
+    end)
+
+    it("does not drop a Claude whose pong waits in the socket when its ping is 3 intervals old", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
+      clock = clock + interval
+      tick()
+      poll() -- Claude answers after this poll
+      for _ = 1, 2 do
+        clock = clock + interval
+        tick()
+        poll()
+      end
+      clock = clock + interval
+      tick() -- the ping of the first tick is 3 intervals old, and its pong was not read yet
+      poll(handle, pong())
+
+      assert.is_not_nil(server.clients[client.id], "the check ran before the pong was read")
       assert.spy(callbacks.on_disconnect).was_not_called()
-      assert.equals(frame.OPCODE.PING, parse(writes[#writes]).opcode)
+    end)
+  end)
+
+  describe("when the main loop blocks before the pongs of a Claude that answers every ping are read", function()
+    -- libuv runs timers before it reads sockets, and Neovim 0.8 (libuv 1.44) runs the timers a second time at the end
+    -- of a pass, after the check handles. A tick that Neovim runs late after a block finds the pongs of the last pings
+    -- unread, and two late ticks can run with no read between them.
+    it("does not drop it when two late ticks run with no read between them", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
+      clock = clock + interval
+      tick()
+      poll() -- Claude answers after this poll
+      clock = clock + interval
+      tick()
+      poll(handle, pong())
+      clock = clock + interval
+      tick() -- ping 3
+      poll()
+      -- A check callback blocks for 1.3 intervals right after the ping. The timers run again at the end of the pass, and
+      -- a vim.schedule callback blocks for 1.3 intervals before the next pass reads the socket.
+      clock = clock + 1.3 * interval
+      tick()
+      clock = clock + 1.3 * interval
+      tick()
+      assert.is_not_nil(server.clients[client.id], "a late tick dropped the client")
+
+      poll(handle, pong() .. pong() .. pong())
+
+      assert.is_not_nil(server.clients[client.id], "the check of a late tick dropped the client")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+
+    it("does not drop it however many late ticks run with no read between them", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
+      for _ = 1, 20 do
+        clock = clock + 1.3 * interval
+        tick()
+      end
+      assert.is_not_nil(server.clients[client.id], "a late tick dropped the client")
+      poll(handle, pong() .. pong() .. pong())
+
+      assert.is_not_nil(server.clients[client.id], "the check of a late tick dropped the client")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+
+    it(
+      "stamps a ping with the time of the world, not the loop time cached before an earlier callback blocked",
+      function()
+        local tick = start_ping_timer()
+        local client = connect_and_upgrade()
+
+        clock = clock + interval
+        tick(100000) -- a timer that ran before the ping timer in this pass blocked for 100 s
+        poll() -- Claude had no time to answer yet
+
+        assert.is_not_nil(server.clients[client.id], "the ping was dropped for the age of the loop time")
+      end
+    )
+
+    it("forgets the pings that went unanswered when Neovim wakes from sleep", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
+      clock = clock + interval
+      tick()
+      poll()
+      clock = clock + interval
+      tick()
+      poll()
+      clock = clock + 10 * interval -- the machine slept: Claude slept too, and answers once it is awake
+      tick()
+      poll()
+      assert.is_not_nil(server.clients[client.id], "the wake was not forgiven")
+      poll(handle, pong())
+
+      assert.is_not_nil(server.clients[client.id])
+    end)
+  end)
+
+  describe("when a client leaves between a tick and the check that follows it", function()
+    local one_line
+
+    before_each(function()
+      one_line = spy.on(require("claudecode.logger"), "one_line")
+    end)
+
+    after_each(function()
+      one_line:revert()
+    end)
+
+    ---Four ticks, with a poll after each but the last. Claude never answered: at the fourth tick its oldest ping is 3
+    ---intervals old, and the check of that tick is the next to run.
+    local function tick_four_times(tick)
+      for round = 1, 4 do
+        clock = clock + interval
+        tick()
+        if round < 4 then
+          poll()
+        end
+      end
+    end
+
+    it("does not report a client that hung up, and logs nothing about it", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tick_four_times(tick)
+
+      handle._read_cb(nil, nil) -- Claude hangs up before the pass reads anything else
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "EOF")
+      poll()
+
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      assert.spy(one_line).was_not_called()
+    end)
+
+    it("does not drop a client that is closing", function()
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      tick_four_times(tick)
+      scheduled = {} -- on_close waits for the loop
+      handle._read_cb(nil, frame.create_frame(frame.OPCODE.CLOSE, "\3\232", true, true))
+      assert.equals("closing", client.state)
+      local written = #writes
+      poll()
+
+      assert.equals(written, #writes, "a Close frame followed the reply to Claude's Close frame")
+      assert.spy(callbacks.on_disconnect).was_not_called()
     end)
   end)
 
@@ -282,9 +503,10 @@ describe("The lifecycle of a WebSocket connection", function()
       local client, writes, handle = connect_and_upgrade()
       tcp.send_to_client(server, client.id, string.rep("x", 262144))
 
-      for _ = 1, 3 do
+      for _ = 1, 4 do
         clock = clock + interval
         tick()
+        poll()
       end
 
       assert.is_nil(server.clients[client.id])

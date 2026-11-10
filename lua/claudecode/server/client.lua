@@ -30,7 +30,7 @@ local CLOSE_REASONS = {
 ---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
----@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
+---@field ping_unanswered_since number|nil Loop time of the oldest ping that no pong has answered. nil when none waits
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -193,9 +193,6 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         end
         client.handshake_complete = true
         client.state = "connected"
-        -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
-        -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
-        client.last_pong = vim.loop.now()
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
           on_open(client)
@@ -286,6 +283,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       client.tcp_handle:write(pong_frame)
     elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
+      client.ping_unanswered_since = nil
     end
   end
   client.buffer = client.buffer:sub(offset)
@@ -371,21 +369,6 @@ function M.close_client(client, code, reason)
     client.state = "closed"
     client.tcp_handle:close()
   end
-end
-
----Check if a client connection is alive
----@param client WebSocketClient The client object
----@param timeout number Timeout in milliseconds (default: 30000)
----@return boolean alive True if the client is considered alive
-function M.is_client_alive(client, timeout)
-  timeout = timeout or 30000 -- 30 seconds default
-
-  if client.state ~= "connected" then
-    return false
-  end
-
-  local now = vim.loop.now()
-  return (now - client.last_pong) < timeout
 end
 
 ---Get client info for debugging
