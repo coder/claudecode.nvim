@@ -200,16 +200,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # The cache key comes from the version and sha256 that check.sh pins, so a new pin gets a new
-      # entry. check.sh checks that sha256 on every run, a restored jar included.
-      - name: Read the TLC jar that check.sh pins
+      # The cache key comes from the version and sha256 that the shared harness pins, so a new pin
+      # gets a new entry. Every check.sh checks that sha256 on every run, a restored jar included.
+      - name: Read the TLC jar that the shared harness pins
         id: tlc
         run: |
-          check=.agents/skills/verify-diff-lifecycle/check.sh
-          version=$(sed -n 's/^TLC_VERSION=//p' "$check")
-          sha256=$(sed -n 's/^TLC_SHA256=//p' "$check")
+          lib=scripts/tla/check-lib.sh
+          version=$(sed -n 's/^TLC_VERSION=//p' "$lib")
+          sha256=$(sed -n 's/^TLC_SHA256=//p' "$lib")
           if [[ ! $version =~ ^[0-9.]+$ || ! $sha256 =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $check"
+            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $lib"
             exit 1
           fi
           {

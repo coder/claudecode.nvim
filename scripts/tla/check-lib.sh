@@ -16,6 +16,7 @@
 #                function printing the CONSTANTS lines (indented, without the facts) for run NAME,
 #                KIND is "inv" or "live"
 #   CONSTRAINT   optional state constraint name
+#   MUTANT_NOTES optional array of lines that --mutants prints after its last row, before its closing line
 #
 # Exit codes: 0 pass, 1 rule broken, 2 tool or script error (or TypeOK broken), 3 stale.
 set -euo pipefail
@@ -25,8 +26,7 @@ if ((BASH_VERSINFO[0] < 4)); then
   exit 2
 fi
 
-# Keep this pin equal to the one in .agents/skills/verify-diff-lifecycle/check.sh: CI caches that jar and passes it
-# as TLC_JAR, and a different pin here fails the sha256 check below.
+# CI reads these two pin lines to key its jar cache and passes that jar as TLC_JAR. A check.sh must not set its own pin.
 TLC_VERSION=1.7.4
 TLC_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 TLC_JAR="${TLC_JAR:-${XDG_CACHE_HOME:-$HOME/.cache}/claudecode-nvim-tla/tla2tools-$TLC_VERSION.jar}"
@@ -38,6 +38,7 @@ declare -A fact
 FACTS=()
 LIVE=()
 CONSTRAINT=""
+MUTANT_NOTES=()
 declare -A EXPECT
 
 sha256() {
@@ -268,7 +269,7 @@ tla_check() {
 tla_mutants() {
   local status=0 f p rule name rc want
   local -A rule_hit
-  local hits assigns parts
+  local hits assigns parts note
   echo "== mutants: each guard removed alone, each rule checked alone"
   for f in "${FACTS[@]}"; do
     [[ -n ${EXPECT[$f]:-} || " ${!EXPECT[*]} " == *"+$f "* || " ${!EXPECT[*]} " == *" $f+"* ]] || {
@@ -324,6 +325,7 @@ tla_mutants() {
       [[ $status == 2 ]] || status=1
     fi
   done
+  for note in "${MUTANT_NOTES[@]+"${MUTANT_NOTES[@]}"}"; do echo "$note"; done
   [[ $status == 0 ]] && echo "== mutants: every guard is caught" || echo "== mutants: FAILED"
   if [[ $status == 0 && $stale == 1 ]]; then
     echo "== RESULT: STALE, UNVERIFIED (the mutants pass, but nobody has checked the model against the changed code)"
