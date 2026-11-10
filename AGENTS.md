@@ -28,6 +28,7 @@
 - Modules/files: lower_snake_case; return a module table `M` with documented functions (EmmyLua annotations encouraged).
 - Avoid one-letter names; prefer explicit, testable functions.
 - `openFile` write protection: rely only on buffer state that Neovim exposes, and on `new_file_buffers` (`lua/claudecode/tools/open_file.lua`), the one Lua record that stands in for an internal flag (BF_NEW). Do not add Lua-side tracking for another internal buffer flag Neovim has no API for, such as BF_NOTEDITED or BF_READERR. State that gap in `lua/claudecode/tools/README.md` instead.
+- Claude terminal float and diffs: the plugin does not store who hid the float, and it does not show the float again after a diff. A diff hides the float only after a live check that a window of the terminal is a float in the diff's own tab (`hide_terminal_float_for_diff` in `lua/claudecode/diff.lua`). The user reopens it with `:ClaudeCode` or `:ClaudeCodeFocus`. Do not add a record of which diff hid the float or a step that restores it: such a record went stale when the user moved or closed the float.
 
 ## Testing Guidelines
 

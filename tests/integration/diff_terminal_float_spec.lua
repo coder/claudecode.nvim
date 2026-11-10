@@ -356,6 +356,20 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(1, float.hide_calls, "only the first diff hid the float")
   end)
 
+  it("leaves a float in another tab alone when a split shows the terminal in the diff's tab", function()
+    setup_diff({ layout = "vertical" })
+    local first_tab = vim.api.nvim_get_current_tabpage()
+
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    vim.cmd("botright vsplit")
+    vim.api.nvim_win_set_buf(0, float.buf)
+    vim.cmd("wincmd p")
+    open_diff("second.txt")
+
+    assert.equal(0, float.hide_calls, "a tiled terminal window is not a float, so there is nothing to hide")
+    assert.equal(1, #visible_floats(first_tab), "the float in the first tab does not cover this diff")
+  end)
+
   it("hides a float the user re-created in another tab while an earlier diff is still open", function()
     setup_diff({ layout = "vertical" })
 
