@@ -132,7 +132,7 @@ describe("a held selection with the real plugin", function()
       if kind:find("bufhidden") then
         vim.bo[scratch].bufhidden = "wipe"
       end
-      wait(100)
+      wait(20) -- inside the debounce: the popup is closed before the plugin has looked at it
 
       assert.has_no.errors(function()
         if kind:find("bufhidden") then
