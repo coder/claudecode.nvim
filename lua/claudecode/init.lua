@@ -355,14 +355,22 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     end
     return success, error_msg
   else
-    -- Claude not connected, queue the mention and launch terminal
-    queue_mention(file_path, start_line, end_line)
+    -- Claude not connected, queue the mention and launch terminal. Format the path as
+    -- _broadcast_at_mention does, so the next client gets what a connected one would.
+    local format_ok, formatted_path, is_directory = pcall(M._format_path_for_at_mention, file_path)
+    if not format_ok then
+      return false, formatted_path
+    end
+    if is_directory then
+      start_line, end_line = nil, nil
+    end
+    queue_mention(formatted_path, start_line, end_line)
 
     -- Launch terminal with Claude Code
     local terminal = require("claudecode.terminal")
     terminal.open()
 
-    logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    logger.debug(context, "Queued @ mention and launched Claude Code: " .. formatted_path)
 
     return true, nil
   end

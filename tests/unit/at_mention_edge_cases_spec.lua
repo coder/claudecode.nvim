@@ -147,6 +147,62 @@ describe("At Mention Edge Cases", function()
     end)
   end)
 
+  describe("send_at_mention while Claude is disconnected", function()
+    local opened
+
+    before_each(function()
+      opened = 0
+      package.loaded["claudecode.terminal"] = {
+        open = function()
+          opened = opened + 1
+        end,
+      }
+      init_module.state.server = { broadcast = function() end }
+      init_module.state.config = { connection_timeout = 10000 }
+      init_module.state.mention_queue = {}
+      init_module.is_claude_connected = function()
+        return false
+      end
+    end)
+
+    after_each(function()
+      package.loaded["claudecode.terminal"] = nil
+      if init_module.state.connection_timer then
+        init_module.state.connection_timer = nil
+      end
+    end)
+
+    it("queues the cwd-relative path, as a connected send would send it", function()
+      local success = init_module.send_at_mention("/Users/test/project/src/file.lua", 1, 2)
+
+      expect(success).to_be_true()
+      expect(#init_module.state.mention_queue).to_be(1)
+      local queued = init_module.state.mention_queue[1]
+      expect(queued.file_path).to_be("src/file.lua")
+      expect(queued.start_line).to_be(1)
+      expect(queued.end_line).to_be(2)
+      expect(opened).to_be(1)
+    end)
+
+    it("queues a directory with a trailing slash and no line numbers", function()
+      init_module.send_at_mention("/Users/test/project/lua", 1, 2)
+
+      local queued = init_module.state.mention_queue[1]
+      expect(queued.file_path).to_be("lua/")
+      expect(queued.start_line).to_be_nil()
+      expect(queued.end_line).to_be_nil()
+    end)
+
+    it("queues nothing and opens no terminal for a path the formatter refuses", function()
+      local success, err = init_module.send_at_mention("", 1, 2)
+
+      expect(success).to_be_false()
+      assert_contains(err, "file_path must be a non-empty string")
+      expect(#init_module.state.mention_queue).to_be(0)
+      expect(opened).to_be(0)
+    end)
+  end)
+
   describe("broadcast_at_mention error handling", function()
     it("should handle format_path_for_at_mention errors gracefully", function()
       -- Mock a running server
