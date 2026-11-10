@@ -22,11 +22,13 @@
 # Source the lib once, do not set your own EXIT trap after it, and call tla_main directly (not in a pipe or a subshell).
 # The lib's EXIT handler removes the work dir and refuses a check.sh that never reached tla_main.
 #
-# Misuse exits 2, never 0 or 1. tla_init refuses an empty here, SKILL or MODEL and a missing model file. tla_main
+# Misuse exits 2, never 0 or 1 (one limit, below). tla_init refuses an empty here, SKILL or MODEL and a missing model file. tla_main
 # refuses an empty SITE_RE, COVERED, RULES or FACTS, a missing tla_constants, a covered_block file that COVERED omits,
 # and, in every mode, an EXPECT key with a space or a non-fact, a fact without an entry, and a value that is not in
 # RULES, LIVE or "-". It also refuses a missing tla_init, a replaced EXIT trap and a call from a pipe or a subshell.
-# The EXIT handler refuses a check.sh that ends without calling tla_main, and the lib refuses a second source.
+# The EXIT handler refuses a check.sh that ends without calling tla_main, and the lib refuses a second source. The limit:
+# a check.sh that replaces the EXIT trap loses that last check, so one that also never runs tla_main in the main shell
+# can exit 0.
 #
 # Exit codes: 0 pass, 1 rule broken, 2 tool or script error (or TypeOK broken), 3 stale.
 set -euo pipefail
@@ -45,7 +47,7 @@ tla_lib_sourced=1
 # CI reads these two pin lines to key its jar cache and passes that jar as TLC_JAR. A check.sh must not set its own pin.
 TLC_VERSION=1.7.4
 TLC_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
-TLC_JAR="${TLC_JAR:-${XDG_CACHE_HOME:-$HOME/.cache}/claudecode-nvim-tla/tla2tools-$TLC_VERSION.jar}"
+TLC_JAR="${TLC_JAR:-}" # empty: tla_fetch_jar picks a path under the cache dir, so --hash-only and --record need no HOME
 JAVA="${JAVA:-java}"
 
 blocks=()
@@ -137,6 +139,10 @@ tla_parse_args() {
 }
 
 tla_fetch_jar() {
+  if [[ -z $TLC_JAR ]]; then
+    [[ -n ${XDG_CACHE_HOME:-} || -n ${HOME:-} ]] || tla_die "cannot place the TLC jar: set TLC_JAR, XDG_CACHE_HOME or HOME"
+    TLC_JAR=${XDG_CACHE_HOME:-$HOME/.cache}/claudecode-nvim-tla/tla2tools-$TLC_VERSION.jar
+  fi
   if [[ ! -f $TLC_JAR ]]; then
     mkdir -p "$(dirname "$TLC_JAR")" || exit 2
     curl -fsSL -o "$TLC_JAR.tmp" "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar" || {
@@ -343,7 +349,7 @@ tla_check_expect() {
       [[ " ${FACTS[*]} " == *" $p "* ]] || tla_die "EXPECT key \"$f\" names \"$p\", which is not in FACTS"
       in_expect[$p]=1
     done
-    [[ ${EXPECT[$f]} == - || " ${RULES[*]} ${LIVE[*]:-} " == *" ${EXPECT[$f]} "* ]] ||
+    [[ -n ${EXPECT[$f]} && (${EXPECT[$f]} == - || " ${RULES[*]} ${LIVE[*]:-} " == *" ${EXPECT[$f]} "*) ]] ||
       tla_die "EXPECT key \"$f\" names the rule \"${EXPECT[$f]}\", which is not in RULES or LIVE (use - for a fact that is not a guard)"
   done
   for f in "${FACTS[@]}"; do

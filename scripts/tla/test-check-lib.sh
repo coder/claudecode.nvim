@@ -184,6 +184,8 @@ run env TOY_EXPECT= "$check" --hash-only
 expect "--hash-only refuses an empty EXPECT" 2 "EXPECT is empty"
 run env TOY_EXPECT='[Guard]=Bund [Other]=- [InitBad]=- [TypeBadInit]=-' "$check"
 expect "a plain run refuses an EXPECT value that is not a rule" 2 "not in RULES or LIVE"
+run env TOY_EXPECT='[Guard]= [Other]=- [InitBad]=- [TypeBadInit]=-' "$check"
+expect "a plain run refuses an empty EXPECT value (no LIVE)" 2 "not in RULES or LIVE"
 run env TOY_LIVE=Reach TOY_EXPECT='[Guard]=Bound [Other]=Reach [InitBad]=- [TypeBadInit]=-' "$check" --hash-only
 expect "an EXPECT value can be a LIVE property" 0 "covered.lock matches"
 run env TOY_EXPECT='[Guard]=Bound [Other+InitBad+TypeBadInit]=-' "$check" --mutants
@@ -208,6 +210,11 @@ else
   failed=$((failed + 1))
   echo "FAIL  MUTANT_NOTES print before the closing line"
 fi
+
+run env -i PATH="$PATH" TMPDIR="$TMPDIR" "$check" --hash-only
+expect "--hash-only needs no HOME" 0 "covered.lock matches"
+run env -i PATH="$PATH" TMPDIR="$TMPDIR" "$check"
+expect "a plain run without HOME, XDG_CACHE_HOME and TLC_JAR exits 2" 2 "set TLC_JAR, XDG_CACHE_HOME or HOME"
 
 quoted="$root/tmp q'dir"
 mkdir -p "$quoted"
