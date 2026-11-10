@@ -77,7 +77,7 @@ Module map (direct files):
 - `diff_inline.lua`: `setup_inline_diff`, `compute_inline_diff`, `extract_new_content`, `render_diff_buffer`, `resolve_inline_as_saved`, `resolve_inline_as_rejected`, and `cleanup_inline_diff` [diff_inline.lua:M.setup_inline_diff]
 - `selection.lua`: `enable(server, visual_demotion_delay_ms)`, `disable`, `get_latest_selection`, `get_visual_selection`, `get_cursor_position(winid?)`, `is_claude_terminal_buffer`, `send_current_selection`, `get_range_selection`, `send_at_mention_for_visual_selection`, and the autocmd handlers `on_cursor_moved`, `on_mode_changed`, and `on_text_changed` [selection.lua:M.enable]
 - `selection.lua` internals: `state`, `debounce_update`, `update_selection`, `handle_selection_demotion`, `get_visual_selection_from_marks`, `flush_visual_selection`, `has_selection_changed`, and `send_selection_update` [selection.lua:M.update_selection]
-- `lockfile.lua`: `lock_dir`, `generate_auth_token`, `create(port, auth_token?) -> ok, path, token`, `remove`, `update`, `get_auth_token`, and `get_workspace_folders` [lockfile.lua:M.create]
+- `lockfile.lua`: `lock_dir`, `generate_auth_token`, `create(port, auth_token?) -> ok, path, token`, `remove`, `get_auth_token`, and `get_workspace_folders` [lockfile.lua:M.create]
 - `integrations.lua`: `get_selected_files_from_tree()` dispatches on filetype to `_get_nvim_tree_selection`, `_get_neotree_selection`, `_get_oil_selection`, `_get_mini_files_selection`, `_get_mini_files_selection_with_range(start_line, end_line)`, `_get_netrw_selection`, and `_get_snacks_picker_selection` [integrations.lua:M.get_selected_files_from_tree]
 - `visual_commands.lua`: `create_visual_command_wrapper`, `exit_visual_and_schedule`, `validate_visual_mode`, `get_visual_range`, `get_tree_state`, `capture_visual_selection_data`, and `get_files_from_visual_selection` [visual_commands.lua:M.create_visual_command_wrapper]
 - `cwd.lua`: `resolve(term_cfg, ctx)` and `git_root(start_dir)` [cwd.lua:M.resolve]
@@ -91,8 +91,8 @@ Module map (direct files):
 
 - `setup` runs `config.apply` before logger, terminal, and diff setup. The auto-start runs only after `diff.setup` [init.lua:M.setup]
 - `start` refuses with "Already running". The auth token must be a string of length 10 or more. If `server.start` fails, `start` returns the error at once. If the lock file fails, `start` stops the server and clears its state [init.lua:M.start]
-- `start` requires the token returned by `lockfile.create` to equal the generated token. Otherwise it stops the server [init.lua:M.start]
-- `stop` returns "Not running" without a server. When `lockfile.remove` returns an error, `stop` only logs a warning. `lockfile.remove` returns `true` even when `os.remove` fails without raising (for example in a read-only directory), so that failure is silent and the lock file stays [init.lua:M.stop] [lockfile.lua:M.remove]
+- `start` requires the token returned by `lockfile.create` to equal the generated token. Otherwise it removes the lock file, stops the server, and clears its state. When `lockfile.remove` returns an error, it only logs that error as a warning and still returns the mismatch error [init.lua:M.start]
+- `stop` returns "Not running" without a server. When `lockfile.remove` returns an error, `stop` only logs that error as a warning. `lockfile.remove` returns that error when `os.remove` fails, also when it fails without raising (for example in a read-only directory), so the lock file stays and the failure is logged [init.lua:M.stop] [lockfile.lua:M.remove]
 - The auth token is 32 lowercase hex characters from `vim.loop.random` or `/dev/urandom`. It never comes from `math.random` [lockfile.lua:get_random_bytes]
 - The lock directory is `$CLAUDE_CONFIG_DIR/ide` when that variable is set, else `~/.claude/ide`. It is resolved once when the module loads [lockfile.lua:M.lock_dir]
 - `lockfile.create` requires a port in 1..65535 and a caller token of 10..500 characters. It writes JSON `{ pid, workspaceFolders, ideName = "Neovim", transport = "ws", authToken }` [lockfile.lua:M.create]
@@ -111,7 +111,7 @@ Module map (direct files):
 
 - Line numbers sent to Claude are 0-indexed. `:ClaudeCodeAdd` converts the 1-indexed input [init.lua:M._create_commands]
 - A mention sent while disconnected goes to the queue, and the terminal opens. The queue drops mentions older than `queue_timeout` and is cleared after `connection_timeout` [init.lua:M.process_mention_queue]
-- Selection tracking is a no-op unless it is enabled. Updates are debounced by 100 ms. Claude terminal buffers are skipped [selection.lua:M.update_selection]
+- Selection tracking is a no-op unless it is enabled. Updates are debounced by 100 ms, except that leaving visual mode, editing or consuming the held text and moving the cursor away from a held selection report at once [selection.lua:M.flush_visual_selection] [selection.lua:reconcile_held_selection]. Entering another file waits for the debounce. Claude terminal buffers are skipped [selection.lua:M.update_selection]
 - The automatic paths send `selection_changed` only when the selection differs from the last one sent [selection.lua:M.update_selection] [selection.lua:M.flush_visual_selection]. `send_current_selection` sends with no change check [selection.lua:M.send_current_selection]
 - Select mode (`gh`, or `v`, `V` and CTRL-V when `'selectmode'` contains `cmd`) is tracked like Visual mode [selection.lua:is_visual_mode], and a command such as a `<cmd>ClaudeCodeSend<CR>` mapping takes the visual path there [visual_commands.lua:M.create_visual_command_wrapper]. The visual path ends Select mode. For a mapping made with `mode = "v"` (`:vmap`), Neovim queues a key that restores Select mode after the mapping, and the visual path cancels it with `gV` [visual_commands.lua:M.exit_visual_and_schedule]
 - A visual selection is flushed on visual exit. The flush is skipped if the buffer changed during visual mode [selection.lua:M.flush_visual_selection]
@@ -146,7 +146,7 @@ Module map (direct files):
 ## Side Effects
 
 - `:ClaudeCodeCloseAllDiffs` can load an accepted diff's file into a listed buffer and replace its lines with the accepted text, leaving the buffer modified. For a text without a final line break it adds a buffer-local `BufWritePost`/`BufReadPost` autocmd that restores `'fixeol'` once [diff.lua:M.close_saved_diffs]
-- `start` binds a `127.0.0.1` TCP port and writes the lock file. It enables selection tracking only when `track_selection` is true. `stop` removes the lock file and stops the server [init.lua:M.start]
+- `start` binds a `127.0.0.1` TCP port and writes the lock file. It enables selection tracking only when `track_selection` is true. `stop` removes the lock file, or logs a warning when it cannot, and stops the server [init.lua:M.start]
 - `lockfile.create` creates the lock directory with mode 0700. It then tries to chmod an existing directory to 0700 through `pcall` and ignores the result, so on platforms without `fs_chmod` the old mode stays. It writes a temp file opened `wx` with mode 0600, then renames it to `<port>.lock` [lockfile.lua:M.create]
 - The terminal env gets `ENABLE_IDE_INTEGRATION=true`, `FORCE_CODE_TERMINAL=true`, `CLAUDE_CODE_SSE_PORT=<port>` only while the server runs, the user `env` (merged last, so it can override these), and the merged `no_proxy`/`NO_PROXY` [terminal.lua:get_claude_command_and_env]
 - `terminal.setup` can replace the global `vim.paste` through `paste_fix.apply` [terminal.lua:M.setup]
