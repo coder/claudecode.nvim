@@ -1456,6 +1456,41 @@ describe("claudecode.terminal.native toggle behavior", function()
       )
     end
 
+    -- A terminal that a reloaded module adopted follows the auto_close of that module's setup. Showing it again moves
+    -- it to a new window, so the window that the module copy that started it tracks is gone, and only the eager
+    -- cleanup of the adopting copy can close the exited terminal's window.
+    for _, auto_close in ipairs({ true, false }) do
+      it(
+        "should use the auto_close of the adopting module when open runs in the exit gap (auto_close="
+          .. tostring(auto_close)
+          .. ")",
+        function()
+          local mock_state = _G.get_mock_state()
+          local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = auto_close }
+          native_provider.open("claude", {}, term_config)
+          local exited_bufnr = native_provider.get_active_bufnr()
+          package.loaded["claudecode.terminal.native"] = nil
+          native_provider = require("claudecode.terminal.native")
+          native_provider.setup({ auto_close = auto_close })
+          native_provider.open("claude", {}, term_config)
+          assert.are.equal(exited_bufnr, native_provider.get_active_bufnr())
+          native_provider.simple_toggle("claude", {}, term_config)
+          native_provider.simple_toggle("claude", {}, term_config)
+          assert.are.equal(1, windows_showing(exited_bufnr))
+          local run_scheduled = defer_scheduled()
+
+          mock_state.exit_job(exited_bufnr)
+          native_provider.open("claude", {}, term_config)
+          run_scheduled()
+
+          local active = native_provider.get_active_bufnr()
+          assert.are_not.equal(exited_bufnr, active)
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+          assert.are.equal(auto_close and 0 or 1, windows_showing(exited_bufnr))
+        end
+      )
+    end
+
     for _, focus in ipairs({ true, false }) do
       it(
         "should show Claude when open (focus=" .. tostring(focus) .. ") runs after you showed a file in its window",
