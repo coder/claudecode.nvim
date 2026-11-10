@@ -26,7 +26,7 @@ Layers, top to bottom:
 - `tools/call` delegates to `tools.handle_invoke` and returns a `_deferred` table for blocking tools [server/init.lua:M.register_handlers]
 - `M.send(client, method, params) -> boolean`: sends a JSON-RPC notification to one client [server/init.lua:M.send]
 - `M.send_response(client, id, result, error_data) -> boolean`: a `nil` id is sent as JSON `null` (`vim.NIL`) [server/init.lua:M.send_response]
-- `M.broadcast(method, params) -> boolean`: sends a notification to all clients [server/init.lua:M.broadcast]
+- `M.broadcast(method, params, on_written?) -> boolean`: sends a notification to every `connected` client, and returns true only when at least one took it. When one did, `on_written(written)` runs once after the last write finished, with how many writes succeeded: a socket that fails during the write reports it only there [server/init.lua:M.broadcast] [server/tcp.lua:M.broadcast]
 - `M.get_status() -> { running, port, client_count, clients }`. `clients` is present only while the server runs [server/init.lua:M.get_status]
 - Internal dispatch: `M._handle_message`, `M._handle_request`, `M._handle_notification`, and `M._setup_deferred_response` [server/init.lua:M._handle_message]
 
@@ -91,7 +91,7 @@ Layers, top to bottom:
 ## Side Effects
 
 - `M.start` changes the global tool registry (`tools.setup`), opens a listening TCP handle, and starts a `vim.loop` ping timer [server/init.lua:M.start]
-- On connect, the server schedules `claudecode.process_mention_queue(true)` [server/init.lua:M.start]
+- When a client completed its WebSocket handshake (`on_open`, called from the 101 write callback in `client.lua`), the server schedules `claudecode.process_mention_queue(true)`. `on_connect` runs at the TCP accept, before the handshake, and only logs [server/init.lua:M.start] [server/client.lua:M.process_data]
 - On disconnect, the server schedules `diff.close_diffs_for_client(client.id, "client disconnected")`, only when `package.loaded["claudecode.diff"]` is set [server/init.lua:M.start]
 - `M.stop` calls `diff.close_pending_diffs("server stopping")` when `package.loaded["claudecode.diff"]` is set, resets `_G.claude_deferred_responses`, and clears `M.state.auth_token` [server/init.lua:M.stop]
 - `M.start` logs only the auth token length, not the token [server/init.lua:M.start]
