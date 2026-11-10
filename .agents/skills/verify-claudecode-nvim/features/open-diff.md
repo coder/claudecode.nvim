@@ -10,6 +10,7 @@ Claude proposes new file contents with the `openDiff` tool. Neovim shows the cur
 - `diff-accept-command` answers `FILE_SAVED` when the user runs `:ClaudeCodeDiffAccept`.
 - `diff-reject-quit` answers `DIFF_REJECTED` plus the tab name when the user closes the proposal with `:q`.
 - `diff-reject-command` answers `DIFF_REJECTED` when the user runs `:ClaudeCodeDiffDeny`.
+- `diff-reject-leave` answers `DIFF_REJECTED` plus the tab name when the user switches the proposal window to another buffer, for example with `:e other.txt`.
 - `diff-finalize` closes the diff windows on `close_tab` and shows the file as Claude wrote it.
 - `diff-new-file` shows a proposal for a path that does not exist as `<tab_name> (NEW FILE - proposed)` next to an empty `<path> (NEW FILE)` buffer. A reject closes it without `close_tab`, and no file is created.
 - `diff-refuse-unsaved` answers error `-32000` `Diff setup failed` when the file's buffer has unsaved changes. The error `data` says `Cannot create diff: file has unsaved changes`.
@@ -36,6 +37,7 @@ Steps:
 - **Finalize.** Claude writes the answer and closes the tab. Run `jq -j '.result.content[1].text' "$OUT/diff-accept-write-response.json" > "$WORK/hello.txt"`, then `$V tool c1 close_tab '{"tab_name":"✻ [Claude Code] hello.txt (d1) ⧉"}'` and `$V await c1`. The answer text is `TAB_CLOSED`. `$V until "winnr('\$') . &diff . bufname()" 10hello.txt` and `$V until "join(getline(1, '\$'), '|')" 'alpha|BETA|GAMMA user edit'` pass. The buffer reloads about 100 ms after `close_tab` answers, so wait for the text with `until`.
 - **Accept with the command.** Open a diff with id `d2` and tab `✻ [Claude Code] hello.txt (d2) ⧉` as in the first step, then run `$V keys ':ClaudeCodeDiffAccept' Enter` and `$V await d2`. The answer is `FILE_SAVED` with the proposed text. Both windows stay until `close_tab`. Close them with `$V tool c2 close_tab '{"tab_name":"✻ [Claude Code] hello.txt (d2) ⧉"}'`, so the next diff opens in this tab page.
 - **Reject with `:q`.** Open a diff with id `d3`, then run `$V keys ':q' Enter` and `$V await d3`. The answer is `DIFF_REJECTED`, then the tab name. `$V expr "winnr('\$')"` prints `1`. `$V tool c3 close_tab '{"tab_name":"✻ [Claude Code] hello.txt (d3) ⧉"}'` and `$V await c3` answer `TAB_CLOSED`.
+- **Reject by leaving the proposal.** Open a diff with id `d3b`, then run `$V keys ':e other.txt' Enter` and `$V await d3b`. The answer is `DIFF_REJECTED`, then the tab name. The window now shows `other.txt`. Close the diff with `$V tool c3b close_tab '{"tab_name":"✻ [Claude Code] hello.txt (d3b) ⧉"}'` and `$V await c3b`.
 - **Reject with the command.** Open a diff with id `d4`, then run `$V keys ':ClaudeCodeDiffDeny' Enter` and `$V await d4`. The answer is `DIFF_REJECTED`, then the tab name. `$V expr "winnr('\$')"` prints `2` until `close_tab`. Close it with `$V tool c4 close_tab '{"tab_name":"✻ [Claude Code] hello.txt (d4) ⧉"}'`, `$V await c4`, and `$V until "winnr('\$')" 1`.
 - **Reuse a tab name.** Open a diff with id `d5` and tab `✻ [Claude Code] hello.txt (d5) ⧉`, then send openDiff id `d6` with the same `tab_name`. `$V await d5` answers `DIFF_REJECTED`, and the d6 proposal replaces it.
 - **Close a pending diff.** With d6 still unanswered, run `$V tool c6 close_tab '{"tab_name":"✻ [Claude Code] hello.txt (d5) ⧉"}'`. It answers `TAB_CLOSED`, `$V await d6` answers `DIFF_REJECTED`, and `$V until "winnr('\$') . &diff" 10` passes.
@@ -60,3 +62,4 @@ Steps:
   - The buffer is not modifiable. The edit step fails with `E21: Cannot make changes, 'modifiable' is off`, so `:w` answers `FILE_SAVED` with the proposal text and no user edits.
   - The `-` and `+` marks are drawn on screen only. `$V expr "join(getline(1, '\$'), '|')"` prints both versions, `alpha|beta|BETA|gamma`.
   - A second unified diff opens in the same tab page as a third window, not in a new tab page.
+  - `:q` rejects as in the split layout: `$V keys ':q' Enter`, then `$V await d3` answers `DIFF_REJECTED` and `$V expr "winnr('\$')"` prints `1`. When the window stays and the screen shows `E37: No write since last change`, the proposal buffer has `'bufhidden'` `wipe` instead of `hide`.
