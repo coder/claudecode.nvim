@@ -154,7 +154,15 @@ end
 -- Snacks' auto_insert runs `startinsert` on BufEnter of the terminal buffer (#423).
 local function win_set_buf_without_bufenter(win, buf)
   local saved = vim.o.eventignore
-  vim.o.eventignore = saved == "" and "BufEnter" or (saved .. ",BufEnter")
+  -- A `-BufEnter` entry wins wherever it stands in the list, so it has to go for this call.
+  local ignored = {}
+  for entry in saved:gmatch("[^,]+") do
+    if entry:lower() ~= "-bufenter" then
+      table.insert(ignored, entry)
+    end
+  end
+  table.insert(ignored, "BufEnter")
+  vim.o.eventignore = table.concat(ignored, ",")
   local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
   vim.o.eventignore = saved
   if not ok then

@@ -13,6 +13,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local pending_insert
   local bufenter_handlers
   local bufenter_ignored_during_set_buf
+  local eventignore_during_set_buf
   local shows
   local mock_snacks
 
@@ -23,9 +24,18 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     return id
   end
 
+  -- Neovim 0.12: a `-BufEnter` entry un-ignores the event wherever it stands in the list.
   local function ignores_bufenter()
-    local ignored = vim.o.eventignore
-    return ignored:find("BufEnter", 1, true) ~= nil or ignored:find("all", 1, true) ~= nil
+    local ignored = false
+    for entry in vim.o.eventignore:gmatch("[^,]+") do
+      entry = entry:lower()
+      if entry == "-bufenter" then
+        return false
+      elseif entry == "bufenter" or entry == "all" then
+        ignored = true
+      end
+    end
+    return ignored
   end
 
   local function open_win(term)
@@ -47,6 +57,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     pending_insert = false
     bufenter_handlers = {}
     bufenter_ignored_during_set_buf = nil
+    eventignore_during_set_buf = nil
     shows = {}
     source_win = make_window(500, "")
     current_win = source_win
@@ -133,6 +144,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         nvim_win_set_buf = function(w, b)
           windows[w].buf = b
           bufenter_ignored_during_set_buf = ignores_bufenter()
+          eventignore_during_set_buf = vim.o.eventignore
           if bufenter_handlers[b] and not ignores_bufenter() then
             bufenter_handlers[b]()
           end
@@ -418,6 +430,25 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       assert_shown_and_caller_untouched(term)
       assert.are.equal("CursorHold", vim.o.eventignore)
     end)
+
+    local cases = {
+      { value = "CursorHold", during = "CursorHold,BufEnter" },
+      { value = "all,-BufEnter", during = "all,BufEnter" },
+      { value = "-bufenter,CursorHold", during = "CursorHold,BufEnter" },
+    }
+    for _, case in ipairs(cases) do
+      it("holds " .. case.during .. " during the call and comes back to " .. case.value, function()
+        local cfg = config()
+        local term = open_then_hide(cfg)
+        vim.o.eventignore = case.value
+
+        snacks_provider.open("claude", {}, cfg, false)
+
+        assert_shown_and_caller_untouched(term)
+        assert.are.equal(case.during, eventignore_during_set_buf)
+        assert.are.equal(case.value, vim.o.eventignore)
+      end)
+    end
 
     it("is back to the caller's value when the unfocused show fails", function()
       local cfg = config()
