@@ -1,7 +1,7 @@
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua 2a23b89a8274ad0b
+file lua/claudecode/init.lua f7c7fff32489cedd
 block start                  7bf331d94d09a034
-block stop                   a9958aa6dee75143
+block stop                   d754def6d5865650
 site lua/claudecode/init.lua: selection.disable() @ function M.stop()
 site lua/claudecode/init.lua: selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms) @ function M.start(show_startup_notification)
 == lua/claudecode/selection.lua
@@ -130,9 +130,9 @@ site lua/claudecode/selection.lua: sel_to_send = M.state.latest_selection @ func
 site lua/claudecode/selection.lua: selection_tick = nil, @ M.state = {
 site lua/claudecode/selection.lua: visual_entry = nil, @ M.state = {
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua f1dca3428031fc70
-block broadcast              08f2c98a6b720581
-block on_connect             0d7c99e3efe3d088
+file lua/claudecode/server/init.lua d6e881211c59f191
+block broadcast              fc69234ae8ed7cf0
+block on_connect             76ac805b2bc6ad4f
 == lua/claudecode/tools/get_current_selection.lua
 file lua/claudecode/tools/get_current_selection.lua 5fb9ade5d26239ae
 block current_tool           7d8f6acd15d97423
