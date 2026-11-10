@@ -135,7 +135,7 @@ describe("At Mention Edge Cases", function()
         return init_module._format_path_for_at_mention("/Users/test/project/config.lua")
       end)
       expect(success).to_be_true()
-      expect(result).to_be("config.lua")
+      expect(result).to_be("/Users/test/project/config.lua")
     end)
 
     it("should handle valid directory path", function()
@@ -143,7 +143,102 @@ describe("At Mention Edge Cases", function()
         return init_module._format_path_for_at_mention("/Users/test/project/lua")
       end)
       expect(success).to_be_true()
-      expect(result).to_be("lua/")
+      expect(result).to_be("/Users/test/project/lua/")
+    end)
+  end)
+
+  describe("absolute mention paths", function()
+    it("keeps a path that only shares the cwd as a text prefix", function()
+      mock_vim.fn.filereadable = function(path)
+        return path == "/Users/test/projectX/a.lua" and 1 or 0
+      end
+      expect(init_module._format_path_for_at_mention("/Users/test/projectX/a.lua")).to_be("/Users/test/projectX/a.lua")
+    end)
+
+    it("keeps a relative name that starts with ~ in the cwd", function()
+      mock_vim.fn.filereadable = function(path)
+        return path == "~weird.txt" and 1 or 0
+      end
+      -- Real Neovim reads a leading ~ as ~user, so :p leaves "~weird.txt" unchanged, and
+      -- it simplifies "./" when it joins the cwd.
+      local real_fnamemodify = mock_vim.fn.fnamemodify
+      finally(function()
+        mock_vim.fn.fnamemodify = real_fnamemodify
+      end)
+      mock_vim.fn.fnamemodify = function(path, mods)
+        if mods == ":p" and path:sub(1, 1) == "~" then
+          return path
+        end
+        if mods == ":p" and path:sub(1, 2) == "./" then
+          return mock_vim.fn.getcwd() .. "/" .. path:sub(3)
+        end
+        return real_fnamemodify(path, mods)
+      end
+      expect(init_module._format_path_for_at_mention("~weird.txt")).to_be("/Users/test/project/~weird.txt")
+    end)
+
+    it("adds the trailing / to a directory whose name ends in a backslash on POSIX", function()
+      local real_isdirectory = mock_vim.fn.isdirectory
+      finally(function()
+        mock_vim.fn.isdirectory = real_isdirectory
+      end)
+      mock_vim.fn.isdirectory = function(path)
+        return path == "/Users/test/project/odd\\" and 1 or 0
+      end
+      expect(init_module._format_path_for_at_mention("/Users/test/project/odd\\")).to_be("/Users/test/project/odd\\/")
+    end)
+
+    it("makes a relative path absolute against Neovim's cwd", function()
+      expect(init_module._format_path_for_at_mention("src/file.lua")).to_be("/Users/test/project/src/file.lua")
+    end)
+  end)
+
+  describe("send_at_mention while Claude is disconnected", function()
+    local opened
+
+    before_each(function()
+      opened = 0
+      package.loaded["claudecode.terminal"] = {
+        open = function()
+          opened = opened + 1
+        end,
+      }
+      init_module.state.server = { broadcast = function() end }
+      init_module.state.config = { connection_timeout = 10000 }
+      init_module.state.mention_queue = {}
+      init_module.is_claude_connected = function()
+        return false
+      end
+    end)
+
+    after_each(function()
+      package.loaded["claudecode.terminal"] = nil
+      init_module.state.connection_timer = nil
+    end)
+
+    it("queues the absolute path, so a later :cd cannot change the file", function()
+      expect(init_module.send_at_mention("src/file.lua", 1, 2)).to_be_true()
+      local queued = init_module.state.mention_queue[1]
+      expect(queued.file_path).to_be("/Users/test/project/src/file.lua")
+      expect(queued.start_line).to_be(1)
+      expect(queued.end_line).to_be(2)
+      expect(opened).to_be(1)
+    end)
+
+    it("queues a directory with a trailing slash and no line numbers", function()
+      init_module.send_at_mention("/Users/test/project/lua", 1, 2)
+      local queued = init_module.state.mention_queue[1]
+      expect(queued.file_path).to_be("/Users/test/project/lua/")
+      expect(queued.start_line).to_be_nil()
+      expect(queued.end_line).to_be_nil()
+    end)
+
+    it("queues nothing and opens no terminal for a path the formatter refuses", function()
+      local success, err = init_module.send_at_mention("", 1, 2)
+      expect(success).to_be_false()
+      assert_contains(err, "file_path must be a non-empty string")
+      expect(#init_module.state.mention_queue).to_be(0)
+      expect(opened).to_be(0)
     end)
   end)
 
@@ -297,7 +392,7 @@ describe("At Mention Edge Cases", function()
         return init_module._format_path_for_at_mention("/Users/test/project/file with spaces.lua")
       end)
       expect(success).to_be_true()
-      expect(result).to_be("file with spaces.lua")
+      expect(result).to_be("/Users/test/project/file with spaces.lua")
     end)
 
     it("should handle paths with special characters", function()
@@ -309,7 +404,7 @@ describe("At Mention Edge Cases", function()
         return init_module._format_path_for_at_mention("/Users/test/project/file-name_test.lua")
       end)
       expect(success).to_be_true()
-      expect(result).to_be("file-name_test.lua")
+      expect(result).to_be("/Users/test/project/file-name_test.lua")
     end)
 
     it("should handle very long paths", function()
