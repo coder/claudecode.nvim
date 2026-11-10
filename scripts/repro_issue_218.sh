@@ -36,8 +36,11 @@
 # The run works on a COPY of fixtures/issue-218 in a temp directory (the copy keeps
 # the committed lazy-lock.json), so it never modifies a tracked file. The temp
 # directory is removed on exit. Plugins are installed into stdpath("data") of the
-# fixture's NVIM_APPNAME ($XDG_DATA_HOME/issue-218 or issue-218norm), outside the
-# temp directory, and `Lazy! restore` pins them to the commits in that lock file.
+# fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
+# issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
+# commits in that lock file. The exception is lazy.nvim itself: restore does not move
+# it, so it stays at the `stable` commit that the bootstrap in
+# fixtures/issue-218/lua/config/lazy.lua clones.
 #
 # Exit code:
 #   0  default run: Neovim terminated after the accept (the crash was observed).
