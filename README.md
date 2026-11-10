@@ -556,8 +556,8 @@ vim.api.nvim_create_autocmd("FileType", {
 
 The Claude terminal runs in terminal mode. There Neovim sends your keys to Claude Code, so `<C-w>h` and your Normal-mode
 window mappings do nothing. A single `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on
-it itself (#53, #77). With the `snacks` provider, two `<Esc>` presses less than about 200 ms apart do leave terminal
-mode, but the first one still reaches Claude Code.
+it itself (#53, #77). With the `snacks` provider, a double-tap of `<Esc>` (two presses within about 200 ms) does
+leave terminal mode, but the first press still reaches Claude Code.
 
 The plugin maps no key that leaves terminal mode or moves between windows, so you choose them:
 
@@ -566,8 +566,8 @@ The plugin maps no key that leaves terminal mode or moves between windows, so yo
   window. When you come back to it from another window with the default `terminal.auto_insert = true`, `:ClaudeCodeFocus`
   enters terminal mode with either provider, and `<C-w>l` and the other window commands do so only with `snacks`. With
   `auto_insert = false`, none of them do.
-- A shorter key is a mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer Filetype above). It exists on the
-  Claude buffer only, so other terminals keep their keys, and a single `<Esc>` still goes to Claude Code.
+- A shorter key is a mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer Filetype above). It exists on
+  the Claude buffer only, so other terminals keep their keys, and a single `<Esc>` still goes to Claude Code.
 
 To switch windows with `<C-h>`, `<C-j>`, `<C-k>` and `<C-l>` (each key leaves terminal mode and moves to the window in
 that direction, or stays in the Claude window when there is none):
