@@ -931,7 +931,7 @@ end
 ---`origin` is gone (it was another diff's window). Only when the window the cursor was in before the diff's windows
 ---closed (`cursor_window`) closed with them: Neovim gives the cursor to the window that takes the space, such as the
 ---Claude terminal, and a cursor the user moved to another window during the diff stays there. After a failed setup,
----which the user cannot have moved away from, pass no `cursor_window`.
+---which the user cannot have moved away from, or after the user closed the proposed window, pass no `cursor_window`.
 ---@param saved DiffWindowSizes|nil
 ---@param origin NvimWin|nil
 ---@param cursor_window NvimWin|nil
@@ -1348,9 +1348,11 @@ function M._cleanup_diff_state(tab_name, reason)
       pcall(terminal_module.ensure_visible)
     end
   else
-    local cursor_window = vim.api.nvim_get_current_win()
+    local proposed_open = diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window)
+    -- A `:q` in the proposed window already gave the cursor to the window that took its space, so restore it anyway.
+    local cursor_window = proposed_open and vim.api.nvim_get_current_win() or nil
     -- Close new diff window if still open (only if not in a new tab)
-    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
+    if proposed_open then
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
     end
 
