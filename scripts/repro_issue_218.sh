@@ -38,9 +38,10 @@
 # directory is removed on exit. Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
-# commits in that lock file. The exception is lazy.nvim itself: restore does not move
-# it, so it stays at the `stable` commit that the bootstrap in
-# fixtures/issue-218/lua/config/lazy.lua clones.
+# commits in that lock file. The exception is lazy.nvim itself on the first run (empty
+# data dir): at startup it rewrites its own lock entry to the `stable` commit that the
+# bootstrap in fixtures/issue-218/lua/config/lazy.lua clones, so the pin does not apply
+# to it. Later runs restore it to the pinned commit.
 #
 # Exit code:
 #   0  default run: Neovim terminated after the accept (the crash was observed).
@@ -48,7 +49,9 @@
 #   1  default run: Neovim kept running (the crash was NOT observed on this build and
 #      checkout, which is the expected result once the crash is fixed).
 #      control run: Neovim terminated (unexpected).
-#      Either run: agent-tty or nvim is missing, or no agent-tty session could be created.
+#      Either run: agent-tty, nvim or jq is missing, or no agent-tty session could be created.
+#   2  Either run: Neovim did not show "Repro218 ready" within 10 s after :Repro218, so the
+#      run never reached the ready state and checked nothing.
 
 # Note: no `set -e` — agent-tty subcommands can return non-zero on benign
 # conditions (e.g. a `wait` that times out), and we handle outcomes explicitly.
@@ -65,6 +68,10 @@ command -v agent-tty >/dev/null 2>&1 || {
 }
 command -v "$NVIM_BIN" >/dev/null 2>&1 || {
   echo "ERROR: nvim binary '$NVIM_BIN' not found (set NVIM_BIN)." >&2
+  exit 1
+}
+command -v jq >/dev/null 2>&1 || {
+  echo "ERROR: jq not found on PATH (required to read the agent-tty JSON output)." >&2
   exit 1
 }
 
@@ -135,7 +142,14 @@ fi
 echo "==> :Repro218 (open new-file markdown diff in a new tab)…"
 "${ATTY[@]}" type "$SID" ":Repro218" --json >/dev/null 2>&1
 "${ATTY[@]}" send-keys "$SID" "Enter" --json >/dev/null 2>&1
-"${ATTY[@]}" wait "$SID" --text "Repro218 ready" --timeout 10000 --json >/dev/null 2>&1 || true
+"${ATTY[@]}" wait "$SID" --text "Repro218 ready" --timeout 10000 --json >/dev/null 2>&1
+READY_RC=$?
+if [[ "$READY_RC" -ne 0 ]]; then
+  # Without the ready state the :w below checks nothing, so any verdict would be meaningless.
+  echo "ERROR: Neovim did not show 'Repro218 ready' within 10 s (agent-tty wait exit $READY_RC)." >&2
+  echo "       The run never reached the ready state, so it reached no verdict." >&2
+  exit 2
+fi
 "${ATTY[@]}" wait "$SID" --screen-stable-ms 1200 --json >/dev/null 2>&1 || true
 
 echo "==> :w (accept the diff)…"
