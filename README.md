@@ -554,10 +554,11 @@ vim.api.nvim_create_autocmd("FileType", {
 
 ### Leaving Terminal Mode in the Claude Terminal
 
-The Claude terminal runs in terminal mode. There Neovim sends your keys to Claude Code, so `<C-w>h` and your Normal-mode
-window mappings do nothing. A single `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on
-it itself (#53, #77). With the `snacks` provider, a double-tap of `<Esc>` (two presses within about 200 ms) does
-leave terminal mode, but the first press still reaches Claude Code.
+With the `native` and `snacks` providers (`external` and `none` create no Neovim buffer), the Claude terminal runs in
+terminal mode. There Neovim sends your keys to Claude Code, so `<C-w>h` and your Normal-mode window mappings do
+nothing. A single `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on it itself (#53,
+#77). With the `snacks` provider, a double-tap of `<Esc>` (two presses within about 200 ms) does leave terminal mode,
+but the first press still reaches Claude Code.
 
 The plugin maps no key that leaves terminal mode or moves between windows, so you choose them:
 
