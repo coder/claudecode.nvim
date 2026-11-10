@@ -224,7 +224,7 @@ describe("ClaudeCodeAdd command", function()
           filePath = "/home/user/test.lua",
           lineStart = nil,
           lineEnd = nil,
-        })
+        }, match._)
       end)
 
       it("should handle absolute paths", function()
@@ -244,10 +244,10 @@ describe("ClaudeCodeAdd command", function()
         command_handler({ args = "/current/dir/src/routes/$post.tsx" })
 
         assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
-          filePath = "src/routes/$post.tsx",
+          filePath = "/current/dir/src/routes/$post.tsx",
           lineStart = nil,
           lineEnd = nil,
-        })
+        }, match._)
         assert.spy(mock_logger.error).was_not_called()
       end)
 
@@ -271,7 +271,7 @@ describe("ClaudeCodeAdd command", function()
           filePath = "/existing/file.lua",
           lineStart = nil,
           lineEnd = nil,
-        })
+        }, match._)
         assert.spy(mock_logger.debug).was_called()
       end)
 
@@ -282,7 +282,7 @@ describe("ClaudeCodeAdd command", function()
           filePath = "/existing/dir/",
           lineStart = nil,
           lineEnd = nil,
-        })
+        }, match._)
         assert.spy(mock_logger.debug).was_called()
       end)
 
@@ -306,7 +306,7 @@ describe("ClaudeCodeAdd command", function()
 
         command_handler({ args = "/current/dir/src/test.lua" })
 
-        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", match.is_table())
+        assert.spy(mock_server.broadcast).was_called_with("at_mentioned", match.is_table(), match._)
         assert.spy(mock_logger.debug).was_called()
       end)
 
@@ -317,7 +317,7 @@ describe("ClaudeCodeAdd command", function()
           filePath = "/existing/dir/",
           lineStart = nil,
           lineEnd = nil,
-        })
+        }, match._)
       end)
     end)
 
@@ -329,7 +329,7 @@ describe("ClaudeCodeAdd command", function()
           filePath = "/existing/file.lua",
           lineStart = 0,
           lineEnd = 2,
-        })
+        }, match._)
       end)
     end)
 
@@ -342,7 +342,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/file.lua",
             lineStart = nil,
             lineEnd = nil,
-          })
+          }, match._)
         end)
 
         it("should parse file path with start line", function()
@@ -352,7 +352,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/file.lua",
             lineStart = 49,
             lineEnd = nil,
-          })
+          }, match._)
         end)
 
         it("should parse file path with start and end lines", function()
@@ -362,7 +362,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/file.lua",
             lineStart = 49,
             lineEnd = 99,
-          })
+          }, match._)
         end)
 
         it("should handle a path containing spaces (Neovim-expanded `%`)", function()
@@ -376,7 +376,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/my file.lua",
             lineStart = nil,
             lineEnd = nil,
-          })
+          }, match._)
           assert.spy(mock_logger.error).was_not_called()
         end)
 
@@ -391,7 +391,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/my file.lua",
             lineStart = 9,
             lineEnd = 19,
-          })
+          }, match._)
           assert.spy(mock_logger.error).was_not_called()
         end)
       end)
@@ -455,7 +455,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/dir/",
             lineStart = nil,
             lineEnd = nil,
-          })
+          }, match._)
           assert.spy(mock_logger.debug).was_called()
         end)
       end)
@@ -468,7 +468,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/file.lua",
             lineStart = 49,
             lineEnd = 49, -- 50 - 1 (converted to 0-indexed)
-          })
+          }, match._)
         end)
 
         it("should handle large line numbers", function()
@@ -478,7 +478,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/file.lua",
             lineStart = 999,
             lineEnd = 1999,
-          })
+          }, match._)
         end)
 
         it("should handle single line specification", function()
@@ -488,7 +488,7 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/existing/file.lua",
             lineStart = 41,
             lineEnd = nil,
-          })
+          }, match._)
         end)
       end)
 
@@ -500,17 +500,17 @@ describe("ClaudeCodeAdd command", function()
             filePath = "/home/user/test.lua",
             lineStart = 9,
             lineEnd = 19,
-          })
+          }, match._)
         end)
 
-        it("should format cwd-relative paths with line numbers", function()
+        it("should send an in-cwd path as its absolute path with line numbers", function()
           command_handler({ args = "/current/dir/relative.lua 5" })
 
           assert.spy(mock_server.broadcast).was_called_with("at_mentioned", {
-            filePath = "relative.lua",
+            filePath = "/current/dir/relative.lua",
             lineStart = 4,
             lineEnd = nil,
-          })
+          }, match._)
         end)
       end)
     end)

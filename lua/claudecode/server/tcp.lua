@@ -10,6 +10,7 @@ local M = {}
 ---@field clients table<string, WebSocketClient> Table of connected clients
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
+---@field on_open function Callback for a client whose WebSocket handshake completed
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
 
@@ -148,6 +149,7 @@ function M.create_server(config, callbacks, auth_token)
     clients = {},
     on_message = callbacks.on_message or function() end,
     on_connect = callbacks.on_connect or function() end,
+    on_open = callbacks.on_open or function() end,
     on_disconnect = callbacks.on_disconnect or function() end,
     on_error = callbacks.on_error or function() end,
   }
@@ -220,11 +222,21 @@ function M._handle_new_connection(server)
       M._disconnect_client(server, cl, code, reason)
     end, function(cl, error_msg)
       M._disconnect_client(server, cl, 1006, "Client error: " .. error_msg)
-    end, server.auth_token)
+    end, server.auth_token, server.on_open)
   end)
 
-  -- Notify about new connection
+  -- Notify about the TCP connection. on_open follows once its WebSocket handshake completes.
   server.on_connect(client)
+end
+
+---Close the socket of a client that left the server, unless it is closing already or the write callback of its Close
+---frame will close it: closing it now would cancel that frame.
+---@param client WebSocketClient The client whose socket to close
+local function release_socket(client)
+  if client.close_pending or client.tcp_handle:is_closing() then
+    return
+  end
+  client.tcp_handle:close()
 end
 
 ---Disconnect a client and remove it from the server.
@@ -255,6 +267,9 @@ function M._disconnect_client(server, client, code, reason)
   -- Idempotency: a client can hit multiple disconnect paths (e.g. CLOSE frame
   -- followed by a TCP EOF). Only notify/remove once.
   if not server.clients[client.id] then
+    -- The server dropped this client already, perhaps by stopping before this event ran, and nothing else will close
+    -- its socket.
+    release_socket(client)
     return
   end
 
@@ -268,10 +283,7 @@ end
 function M._remove_client(server, client)
   if server.clients[client.id] then
     server.clients[client.id] = nil
-
-    if not client.tcp_handle:is_closing() then
-      client.tcp_handle:close()
-    end
+    release_socket(client)
   end
 end
 
@@ -295,10 +307,39 @@ end
 ---Broadcast a message to all connected clients
 ---@param server TCPServer The server object
 ---@param message string The message to broadcast
-function M.broadcast(server, message)
-  for _, client in pairs(server.clients) do
-    client_manager.send_message(client, message)
+---@param on_written fun(written: integer)|nil When a client took the message: called once, after the last write
+---  finished, with how many writes succeeded. A socket that fails during the write reports it only here.
+---@return integer sent How many clients took the message: those whose state is "connected"
+function M.broadcast(server, message, on_written)
+  local sent, pending, written, dispatched, reported = 0, 0, 0, false, false
+  local function finish()
+    if dispatched and not reported and pending == 0 and sent > 0 then
+      reported = true
+      on_written(written)
+    end
   end
+  for _, client in pairs(server.clients) do
+    if client.state == "connected" then
+      sent = sent + 1
+      if on_written then
+        pending = pending + 1
+        client_manager.send_message(client, message, function(err)
+          pending = pending - 1
+          if not err then
+            written = written + 1
+          end
+          finish()
+        end)
+      else
+        client_manager.send_message(client, message)
+      end
+    end
+  end
+  if on_written then
+    dispatched = true
+    finish()
+  end
+  return sent
 end
 
 ---Get the number of connected clients
@@ -321,18 +362,6 @@ function M.get_clients_info(server)
     table.insert(clients, client_manager.get_client_info(client))
   end
   return clients
-end
-
----Close a specific client connection
----@param server TCPServer The server object
----@param client_id string The client ID
----@param code number|nil Close code
----@param reason string|nil Close reason
-function M.close_client(server, client_id, code, reason)
-  local client = server.clients[client_id]
-  if client then
-    client_manager.close_client(client, code, reason)
-  end
 end
 
 ---Stop the TCP server
@@ -407,6 +436,9 @@ function M.start_ping_timer(server, interval)
           -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
           -- connection still ends without the client's Close frame, which is what 1006 means here.
           client_manager.close_client(client, 1011, "Keepalive timeout")
+          -- The socket does not wait for the Close frame: a Claude that stopped answering may never read it. Closing
+          -- now drops the frame when Claude's window is full.
+          client.close_pending = nil
           M._disconnect_client(server, client, 1006, "Connection timeout")
         end
       end

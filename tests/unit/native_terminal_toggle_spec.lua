@@ -289,7 +289,13 @@ describe("claudecode.terminal.native toggle behavior", function()
         columns = 120,
         lines = 40,
       },
+      keymap = {
+        set = function() end,
+      },
       fn = {
+        maparg = function()
+          return {}
+        end,
         termopen = function(cmd, opts)
           local jobid = mock_state.next_jobid
           mock_state.next_jobid = mock_state.next_jobid + 1
@@ -464,6 +470,77 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       local mock_state = _G.get_mock_state()
       assert.are.equal("claudecode", mock_state.buffers[bufnr].options.filetype)
+    end)
+  end)
+
+  describe("Ctrl-Z in terminal mode (#194)", function()
+    local keymap_calls
+
+    before_each(function()
+      keymap_calls = {}
+      local mock_state = _G.get_mock_state()
+      mock_vim.keymap.set = function(mode, lhs, rhs, opts)
+        table.insert(keymap_calls, {
+          mode = mode,
+          lhs = lhs,
+          rhs = rhs,
+          opts = opts,
+          filetype_then = mock_state.buffers[opts.buffer].options.filetype,
+        })
+      end
+      mock_vim.fn.termopen = function()
+        return 12345
+      end
+    end)
+
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+
+    it("maps <C-z> to :suspend on the Claude terminal buffer and on no other buffer", function()
+      native_provider.open("claude", {}, config, true)
+
+      local bufnr = native_provider.get_active_bufnr()
+      assert.are.equal(1, #keymap_calls)
+      assert.are.equal("t", keymap_calls[1].mode)
+      assert.are.equal("<C-z>", keymap_calls[1].lhs)
+      assert.are.equal("<Cmd>suspend<CR>", keymap_calls[1].rhs)
+      assert.are.equal(bufnr, keymap_calls[1].opts.buffer)
+    end)
+
+    it("maps it before the filetype is set, so a FileType claudecode autocmd sees the mapping", function()
+      native_provider.open("claude", {}, config, true)
+
+      assert.are.equal(1, #keymap_calls)
+      assert.is_nil(keymap_calls[1].filetype_then)
+      local mock_state = _G.get_mock_state()
+      assert.are.equal("claudecode", mock_state.buffers[native_provider.get_active_bufnr()].options.filetype)
+    end)
+
+    it("maps the buffer once: opening again, hiding and showing it add no mapping", function()
+      native_provider.open("claude", {}, config, true)
+      native_provider.open("claude", {}, config, true)
+      native_provider.simple_toggle("claude", {}, config)
+      native_provider.simple_toggle("claude", {}, config)
+      native_provider.focus_toggle("claude", {}, config)
+
+      assert.are.equal(1, #keymap_calls)
+    end)
+
+    it("maps no buffer when termopen fails", function()
+      local mock_state = _G.get_mock_state()
+      mock_state.windows[1] = { bufnr = 0 }
+      mock_state.current_win = 1
+      mock_vim.api.nvim_buf_delete = function(bufnr)
+        mock_state.buffers[bufnr] = nil
+      end
+      mock_vim.notify = function() end
+      mock_vim.log = { levels = { ERROR = 4 } }
+      mock_vim.fn.termopen = function()
+        return -1
+      end
+
+      native_provider.open("claude", {}, config, true)
+
+      assert.are.equal(0, #keymap_calls)
     end)
   end)
 
@@ -1306,6 +1383,251 @@ describe("claudecode.terminal.native toggle behavior", function()
       mock_state.exit_job(exited_bufnr)
 
       assert.are.equal(0, windows_showing(exited_bufnr))
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+  end)
+
+  describe("tracked terminal whose job or window changed behind the plugin's back", function()
+    local function windows_showing(bufnr)
+      local count = 0
+      for _, win in pairs(_G.get_mock_state().windows) do
+        if win.bufnr == bufnr then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    local function window_showing(bufnr)
+      for winid, win in pairs(_G.get_mock_state().windows) do
+        if win.bufnr == bufnr then
+          return winid
+        end
+      end
+      return nil
+    end
+
+    local function running_count()
+      local count = 0
+      for _ in pairs(_G.get_mock_state().running_jobs) do
+        count = count + 1
+      end
+      return count
+    end
+
+    local function keep_only_window_of(bufnr)
+      local mock_state = _G.get_mock_state()
+      for winid, win in pairs(mock_state.windows) do
+        if win.bufnr ~= bufnr then
+          mock_state.windows[winid] = nil
+        end
+      end
+      mock_state.current_win = window_showing(bufnr)
+    end
+
+    -- Shows another buffer in a window, as `:e notes.txt` does. The terminal buffer stays loaded and hidden.
+    local function show_notes_in(winid)
+      local notes_bufnr = mock_vim.api.nvim_create_buf(true, false)
+      mock_vim.api.nvim_win_set_buf(winid, notes_bufnr)
+      return notes_bufnr
+    end
+
+    -- Queues vim.schedule callbacks. The returned function runs them, as the event loop does on its next turn.
+    local function defer_scheduled()
+      local queued = {}
+      mock_vim.schedule = function(callback)
+        table.insert(queued, callback)
+      end
+      return function()
+        local callbacks = queued
+        queued = {}
+        for _, callback in ipairs(callbacks) do
+          callback()
+        end
+      end
+    end
+
+    local entries = {
+      {
+        "open",
+        function(term_config)
+          native_provider.open("claude", {}, term_config)
+        end,
+      },
+      {
+        "open without focus",
+        function(term_config)
+          native_provider.open("claude", {}, term_config, false)
+        end,
+      },
+      {
+        "simple_toggle",
+        function(term_config)
+          native_provider.simple_toggle("claude", {}, term_config)
+        end,
+      },
+      {
+        "focus_toggle",
+        function(term_config)
+          native_provider.focus_toggle("claude", {}, term_config)
+        end,
+      },
+    }
+
+    for _, auto_close in ipairs({ true, false }) do
+      for _, entry in ipairs(entries) do
+        local entry_name, start = entry[1], entry[2]
+        it(
+          "should start Claude when "
+            .. entry_name
+            .. " runs after the job exited and before the exit cleanup (auto_close="
+            .. tostring(auto_close)
+            .. ")",
+          function()
+            local mock_state = _G.get_mock_state()
+            local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = auto_close }
+            native_provider.open("claude", {}, term_config)
+            local exited_bufnr = native_provider.get_active_bufnr()
+            local run_scheduled = defer_scheduled()
+
+            mock_state.exit_job(exited_bufnr)
+            assert.is_nil(native_provider.get_active_bufnr())
+            start(term_config)
+            run_scheduled()
+
+            local active = native_provider.get_active_bufnr()
+            assert.is_not_nil(active)
+            assert.are_not.equal(exited_bufnr, active)
+            assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+            assert.are.equal(1, running_count())
+            assert.are.equal(1, windows_showing(active))
+            -- auto_close closes the exited terminal's window. Without it, its output stays visible.
+            assert.are.equal(auto_close and 0 or 1, windows_showing(exited_bufnr))
+          end
+        )
+      end
+    end
+
+    -- The exit cleanup follows the auto_close of the config that started the job, as the scheduled on_exit does.
+    for _, started_with in ipairs({ true, false }) do
+      it(
+        "should use the auto_close the job started with when open runs in the exit gap with auto_close="
+          .. tostring(not started_with),
+        function()
+          local mock_state = _G.get_mock_state()
+          local start_config = { split_side = "right", split_width_percentage = 0.3, auto_close = started_with }
+          native_provider.open("claude", {}, start_config)
+          local exited_bufnr = native_provider.get_active_bufnr()
+          local run_scheduled = defer_scheduled()
+
+          mock_state.exit_job(exited_bufnr)
+          native_provider.open(
+            "claude",
+            {},
+            { split_side = "right", split_width_percentage = 0.3, auto_close = not started_with }
+          )
+          run_scheduled()
+
+          assert.are.equal(started_with and 0 or 1, windows_showing(exited_bufnr))
+        end
+      )
+    end
+
+    -- A terminal that a reloaded module adopted follows the auto_close of that module's setup. Showing it again moves
+    -- it to a new window, so the window that the module copy that started it tracks is gone, and only the eager
+    -- cleanup of the adopting copy can close the exited terminal's window.
+    for _, auto_close in ipairs({ true, false }) do
+      it(
+        "should use the auto_close of the adopting module when open runs in the exit gap (auto_close="
+          .. tostring(auto_close)
+          .. ")",
+        function()
+          local mock_state = _G.get_mock_state()
+          local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = auto_close }
+          native_provider.open("claude", {}, term_config)
+          local exited_bufnr = native_provider.get_active_bufnr()
+          package.loaded["claudecode.terminal.native"] = nil
+          native_provider = require("claudecode.terminal.native")
+          native_provider.setup({ auto_close = auto_close })
+          native_provider.open("claude", {}, term_config)
+          assert.are.equal(exited_bufnr, native_provider.get_active_bufnr())
+          native_provider.simple_toggle("claude", {}, term_config)
+          native_provider.simple_toggle("claude", {}, term_config)
+          assert.are.equal(1, windows_showing(exited_bufnr))
+          local run_scheduled = defer_scheduled()
+
+          mock_state.exit_job(exited_bufnr)
+          native_provider.open("claude", {}, term_config)
+          run_scheduled()
+
+          local active = native_provider.get_active_bufnr()
+          assert.are_not.equal(exited_bufnr, active)
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+          assert.are.equal(auto_close and 0 or 1, windows_showing(exited_bufnr))
+        end
+      )
+    end
+
+    for _, focus in ipairs({ true, false }) do
+      it(
+        "should show Claude when open (focus=" .. tostring(focus) .. ") runs after you showed a file in its window",
+        function()
+          local mock_state = _G.get_mock_state()
+          local term_config = { split_side = "right", split_width_percentage = 0.3 }
+          native_provider.open("claude", {}, term_config)
+          local claude_bufnr = native_provider.get_active_bufnr()
+          local claude_winid = window_showing(claude_bufnr)
+          local notes_bufnr = show_notes_in(claude_winid)
+          mock_state.current_win = 1
+
+          native_provider.open("claude", {}, term_config, focus)
+
+          assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+          assert.are.equal(1, windows_showing(claude_bufnr))
+          assert.are.equal(1, running_count())
+          -- The window that shows your file keeps it.
+          assert.are.equal(notes_bufnr, mock_state.windows[claude_winid].bufnr)
+          local current_bufnr = mock_state.windows[mock_state.current_win].bufnr
+          assert.are.equal(focus and claude_bufnr or 0, current_bufnr)
+        end
+      )
+    end
+
+    for _, entry in ipairs({ entries[3], entries[4] }) do
+      local entry_name, toggle = entry[1], entry[2]
+      it("should keep Claude running and raise no error when " .. entry_name .. " hides its only window", function()
+        local mock_state = _G.get_mock_state()
+        local term_config = { split_side = "right", split_width_percentage = 0.3 }
+        native_provider.open("claude", {}, term_config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        keep_only_window_of(claude_bufnr)
+
+        assert.has_no.errors(function()
+          toggle(term_config)
+        end)
+
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+        assert.are.equal(1, windows_showing(claude_bufnr))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[claude_bufnr].jobid])
+      end)
+    end
+
+    it("should leave a window that shows another buffer open when the job exits after a wipe (auto_close)", function()
+      local mock_state = _G.get_mock_state()
+      local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = true }
+      native_provider.open("claude", {}, term_config)
+      local claude_bufnr = native_provider.get_active_bufnr()
+      local claude_winid = window_showing(claude_bufnr)
+      local on_exit, claude_jobid = mock_state.buffers[claude_bufnr].on_exit, mock_state.buffers[claude_bufnr].jobid
+      local notes_bufnr = show_notes_in(claude_winid)
+      -- A buffer-delete plugin wipes Claude's buffer. The wipe ends the job, and the job's on_exit runs later.
+      mock_vim.api.nvim_buf_delete(claude_bufnr, { force = true })
+      assert.is_nil(mock_state.buffers[claude_bufnr])
+
+      on_exit(claude_jobid, 0, "exit")
+
+      assert.is_not_nil(mock_state.windows[claude_winid])
+      assert.are.equal(notes_bufnr, mock_state.windows[claude_winid].bufnr)
       assert.is_nil(native_provider.get_active_bufnr())
     end)
   end)

@@ -99,3 +99,76 @@ describe("claudecode.utils.parse_command", function()
     assert.are.same({ "claude", "--model", "opus[1m]" }, utils.parse_command("claude --model opus[1m]"))
   end)
 end)
+
+describe("claudecode.utils.map_terminal_suspend", function()
+  local utils = require("claudecode.utils")
+  local original_vim
+  local sets
+  local existing_mapping
+  local lookups
+
+  before_each(function()
+    original_vim = _G.vim
+    sets = {}
+    lookups = {}
+    existing_mapping = {}
+    _G.vim = {
+      api = {
+        nvim_buf_call = function(bufnr, fn)
+          lookups.bufnr = bufnr
+          return fn()
+        end,
+      },
+      fn = {
+        maparg = function(lhs, mode, abbreviation, as_dict)
+          lookups.query = { lhs = lhs, mode = mode, abbreviation = abbreviation, as_dict = as_dict }
+          return existing_mapping
+        end,
+      },
+      keymap = {
+        set = function(mode, lhs, rhs, opts)
+          table.insert(sets, { mode = mode, lhs = lhs, rhs = rhs, opts = opts })
+        end,
+      },
+    }
+  end)
+
+  after_each(function()
+    _G.vim = original_vim
+  end)
+
+  it("maps <C-z> in terminal mode on that buffer to :suspend", function()
+    utils.map_terminal_suspend(7)
+
+    assert.are.equal(1, #sets)
+    assert.are.equal("t", sets[1].mode)
+    assert.are.equal("<C-z>", sets[1].lhs)
+    assert.are.equal("<Cmd>suspend<CR>", sets[1].rhs)
+    assert.are.equal(7, sets[1].opts.buffer)
+    assert.is_string(sets[1].opts.desc)
+  end)
+
+  it("asks for the mapping the buffer already has, as a dictionary", function()
+    utils.map_terminal_suspend(7)
+
+    assert.are.equal(7, lookups.bufnr)
+    assert.are.same({ lhs = "<C-z>", mode = "t", abbreviation = false, as_dict = true }, lookups.query)
+  end)
+
+  it("keeps a buffer-local terminal-mode <C-z> mapping that already exists", function()
+    existing_mapping = { lhs = "<C-Z>", rhs = "<C-z>", buffer = 1 }
+
+    utils.map_terminal_suspend(7)
+
+    assert.are.equal(0, #sets)
+  end)
+
+  it("still maps the buffer when the existing <C-z> mapping is global", function()
+    existing_mapping = { lhs = "<C-Z>", rhs = "<Cmd>ToggleTerm<CR>", buffer = 0 }
+
+    utils.map_terminal_suspend(7)
+
+    assert.are.equal(1, #sets)
+    assert.are.equal(7, sets[1].opts.buffer)
+  end)
+end)

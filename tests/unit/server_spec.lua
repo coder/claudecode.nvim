@@ -171,7 +171,7 @@ describe("WebSocket Server", function()
     server.stop()
   end)
 
-  it("should broadcast to all clients", function()
+  it("should broadcast to all clients, and report whether a connected client took it", function()
     -- Start server first
     local config = { port_range = { min = 10000, max = 65535 } }
     server.start(config)
@@ -179,12 +179,109 @@ describe("WebSocket Server", function()
     local method = "test_method"
     local params = { foo = "bar" }
 
-    local success = server.broadcast(method, params)
+    -- The @ mention queue keeps a mention that no client took, so a broadcast to nobody must not report success.
+    local ok, success_without_client = pcall(server.broadcast, method, params)
+    local written = {}
+    local function add_client(id, state)
+      server.state.server.clients[id] = {
+        id = id,
+        state = state,
+        tcp_handle = {
+          write = function(_, data)
+            table.insert(written, id)
+          end,
+          is_closing = function()
+            return false
+          end,
+          close = function() end,
+        },
+      }
+    end
+    add_client("closing_client", "closing")
+    local ok_closing, success_with_closing_client = pcall(server.broadcast, method, params)
+    add_client("connected_client", "connected")
+    local ok_connected, success_with_connected_client = pcall(server.broadcast, method, params)
 
-    expect(success).to_be_true()
-
-    -- Clean up
+    -- Clean up first, so that a failed assertion does not leave the server running for the next test.
+    server.state.server.clients = {}
     server.stop()
+
+    assert.is_true(ok and ok_closing and ok_connected)
+    expect(success_without_client).to_be_false()
+    expect(success_with_closing_client).to_be_false()
+    expect(success_with_connected_client).to_be_true()
+    assert.same({ "connected_client" }, written)
+  end)
+
+  it("reports once, after the last write finished, how many writes of a broadcast succeeded", function()
+    server.start({ port_range = { min = 10000, max = 65535 } })
+    local pending_writes = {}
+    local function add_client(id, sync_error)
+      server.state.server.clients[id] = {
+        id = id,
+        state = "connected",
+        tcp_handle = {
+          write = function(_, _, callback)
+            if sync_error ~= nil then
+              callback(sync_error or nil)
+            else
+              table.insert(pending_writes, callback)
+            end
+          end,
+          is_closing = function()
+            return false
+          end,
+          close = function() end,
+        },
+      }
+    end
+    local reports = {}
+    local function on_written(count)
+      table.insert(reports, count)
+    end
+
+    local results = {}
+    -- No client: nothing to report.
+    results.none = server.broadcast("m", {}, on_written)
+    local reports_without_client = #reports
+    -- Two clients whose writes finish later, one with an error.
+    add_client("a")
+    add_client("b")
+    results.async = server.broadcast("m", {}, on_written)
+    local reports_before_writes = #reports
+    pending_writes[1]("ECONNRESET")
+    local reports_after_first_write = #reports
+    pending_writes[2]()
+    local async_reports = vim.deepcopy(reports)
+    -- Writes that finish at once, both failed.
+    server.state.server.clients = {}
+    reports = {}
+    add_client("c", "EPIPE")
+    add_client("d", "EPIPE")
+    results.sync = server.broadcast("m", {}, on_written)
+    local sync_failed_reports = vim.deepcopy(reports)
+    -- Writes that finish at once, one failed and two succeeded: the report must wait for the last of them, whatever
+    -- order pairs() visits the clients in.
+    server.state.server.clients = {}
+    reports = {}
+    add_client("e", "EPIPE")
+    add_client("f", false)
+    add_client("g", false)
+    results.sync_mixed = server.broadcast("m", {}, on_written)
+
+    server.state.server.clients = {}
+    server.stop()
+
+    assert.is_false(results.none)
+    assert.equals(0, reports_without_client)
+    assert.is_true(results.async)
+    assert.equals(0, reports_before_writes)
+    assert.equals(0, reports_after_first_write)
+    assert.same({ 1 }, async_reports)
+    assert.is_true(results.sync)
+    assert.same({ 0 }, sync_failed_reports)
+    assert.is_true(results.sync_mixed)
+    assert.same({ 2 }, reports)
   end)
 
   describe("invalid JSON-RPC messages", function()

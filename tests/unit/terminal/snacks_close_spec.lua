@@ -107,7 +107,11 @@ describe("claudecode.terminal.snacks close", function()
           return { channel = buf and buf.jobid or 0, buftype = "terminal" }
         end,
       }),
+      keymap = { set = function() end },
       fn = {
+        maparg = function()
+          return {}
+        end,
         has = function(feature)
           return feature == "nvim-0.10" and 1 or 0
         end,
@@ -153,6 +157,9 @@ describe("claudecode.terminal.snacks close", function()
         return false
       end,
       api = {
+        nvim_buf_call = function(_, fn)
+          return fn()
+        end,
         nvim_buf_is_valid = function(bufnr)
           return state.buffers[bufnr] ~= nil
         end,
