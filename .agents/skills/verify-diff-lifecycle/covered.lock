@@ -121,7 +121,7 @@ site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, 
 == lua/claudecode/health.lua
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua 7e6ff751741f47cc
+file lua/claudecode/init.lua ed8c4a4934f36ef7
 block user_close_all     10e024fd8ada1c16
 site lua/claudecode/init.lua: local pending = diff.close_pending_diffs("user command") @ function M._create_commands()
 site lua/claudecode/init.lua: local rejected = diff.close_rejected_diffs("user command") @ function M._create_commands()
@@ -165,13 +165,13 @@ file lua/claudecode/terminal.lua a797eb121b1499bf
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 0157d786e1649b41
+file lua/claudecode/terminal/native.lua 6afce4bc72cbd8dd
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua 99df791240ab8bab
+file lua/claudecode/terminal/snacks.lua 135334573ac9759f
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 == lua/claudecode/tools/close_all_diff_tabs.lua
@@ -205,7 +205,7 @@ file lua/claudecode/tools/open_file.lua 46f73ca7efb9f393
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua b4e8e9d00d7fe4b9
+file lua/claudecode/types.lua cdfafd3c2d090ef1
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua fec39728f0301703
 == lua/claudecode/visual_commands.lua

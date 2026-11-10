@@ -235,7 +235,7 @@ function M.process_mention_queue(from_new_connection)
   end
 end
 
----Format a mention the way Claude receives it: a cwd-relative path, and no line numbers for a directory.
+---Format a mention the way Claude receives it: an absolute path, and no line numbers for a directory.
 ---@param file_path string
 ---@param start_line number|nil
 ---@param end_line number|nil
@@ -357,7 +357,7 @@ function M.send_at_mention(file_path, start_line, end_line, context)
     local terminal = require("claudecode.terminal")
     terminal.open()
 
-    logger.debug(context, "Queued @ mention and launched Claude Code: " .. file_path)
+    logger.debug(context, "Queued @ mention and launched Claude Code: " .. mention.file_path)
 
     return true, nil
   end
@@ -1252,26 +1252,6 @@ function M.get_version()
   }
 end
 
----The part of path below dir, or nil when path is not dir or inside it. A sibling such as /project2 is not inside
----/project, and every absolute path is inside /.
----@param path string
----@param dir string
----@return string|nil relative "" for dir itself
-local function relative_to(path, dir)
-  if dir == "" or path:sub(1, #dir) ~= dir then
-    return nil
-  end
-  local rest = path:sub(#dir + 1)
-  if rest == "" or dir:match("[/\\]$") then
-    return rest
-  end
-  local separator = rest:sub(1, 1)
-  if separator == "/" or separator == "\\" then
-    return rest:sub(2)
-  end
-  return nil
-end
-
 ---Format file path for at mention (exposed for testing)
 ---@param file_path string The file path to format
 ---@return string formatted_path The formatted path
@@ -1290,22 +1270,19 @@ function M._format_path_for_at_mention(file_path)
     end
   end
 
-  local is_directory = vim.fn.isdirectory(file_path) == 1
-  local formatted_path = file_path
-  local relative_path = relative_to(file_path, vim.fn.getcwd())
-
-  if is_directory then
-    if relative_path == "" then
-      formatted_path = "./"
-    elseif relative_path then
-      formatted_path = relative_path
-    end
-    if not string.match(formatted_path, "/$") then
-      formatted_path = formatted_path .. "/"
-    end
-  elseif relative_path and relative_path ~= "" then
-    formatted_path = relative_path
+  -- Send the absolute path. A path made relative to Neovim's cwd names a different file
+  -- when Claude's cwd differs (terminal.cwd, cwd_provider, git_repo_cwd, a CLI started
+  -- elsewhere) or after a :cd, and a text-prefix cwd match cut /work/foobar to "ar".
+  -- :p makes the path absolute for this platform. It reads a leading ~ as ~user, and the
+  -- callers expand ~/ first, so a leading ~ here is part of a file name in the cwd.
+  local input = file_path:sub(1, 1) == "~" and ("./" .. file_path) or file_path
+  local formatted_path = vim.fn.fnamemodify(input, ":p")
+  local is_windows = vim.fn.has("win32") == 1
+  local is_directory = vim.fn.isdirectory(formatted_path) == 1
+  if is_directory and not formatted_path:match(is_windows and "[/\\]$" or "/$") then
+    formatted_path = formatted_path .. "/"
   end
+  assert(is_windows or formatted_path:sub(1, 1) == "/", "expected an absolute path, got: " .. formatted_path)
 
   return formatted_path, is_directory
 end

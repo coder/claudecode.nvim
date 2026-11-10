@@ -420,7 +420,7 @@ describe("The @ mention queue", function()
 
     assert.same({}, claude.received())
     assert.equals(1, #errors)
-    assert.matches("connection failed while the @ mention a.lua was sent", errors[1])
+    assert.matches("connection failed while the @ mention /project/a%.lua was sent", errors[1])
   end)
 
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()
@@ -613,15 +613,6 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
-  it("G, control: a queued file outside the cwd keeps its absolute path, though it shares the cwd's prefix", function()
-    send("/project2/a.lua")
-    local claude = claude_connects()
-    claude.handshake()
-    run(1500)
-
-    assert.same({ "/project2/a.lua" }, claude.received())
-  end)
-
   it("G: a bad path sent while Claude is not connected returns an error and queues nothing", function()
     local ok, err = claudecode.send_at_mention("", nil, nil, "test")
 
@@ -633,14 +624,15 @@ describe("The @ mention queue", function()
     assert.equals(0, terminal_opens)
   end)
 
-  it("G: a queued mention reaches Claude with the same cwd-relative path as a connected send", function()
-    send("/project/src/queued.lua")
+  it("G: a queued mention reaches Claude with the same absolute path as a connected send", function()
+    -- Relative input, as :ClaudeCodeAdd src/queued.lua passes it: both paths must make it absolute at the send.
+    send("src/queued.lua")
     local claude = claude_connects()
     claude.handshake()
     run(1500)
-    send("/project/src/connected.lua")
+    send("src/connected.lua")
     run(1000)
 
-    assert.same({ "src/queued.lua", "src/connected.lua" }, claude.received())
+    assert.same({ "/project/src/queued.lua", "/project/src/connected.lua" }, claude.received())
   end)
 end)

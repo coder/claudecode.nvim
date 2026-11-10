@@ -128,36 +128,21 @@ describe("At Mention Functionality", function()
       expect(files[1]).to_be("/Users/test/project/lua")
 
       local formatted_path = init_module._format_path_for_at_mention(files[1])
-      expect(formatted_path).to_be("lua/")
+      expect(formatted_path).to_be("/Users/test/project/lua/")
     end)
 
-    it("should handle relative path conversion", function()
+    it("should send an in-cwd file as its absolute path", function()
       local file_path = "/Users/test/project/lua/config.lua"
       local formatted_path = init_module._format_path_for_at_mention(file_path)
 
-      expect(formatted_path).to_be("lua/config.lua")
+      expect(formatted_path).to_be("/Users/test/project/lua/config.lua")
     end)
 
     it("should handle root project directory", function()
       local dir_path = "/Users/test/project"
       local formatted_path = init_module._format_path_for_at_mention(dir_path)
 
-      expect(formatted_path).to_be("./")
-    end)
-
-    it("keeps the absolute path of a file in a sibling directory that shares the cwd's prefix", function()
-      local formatted_path = init_module._format_path_for_at_mention("/Users/test/project2/a.lua")
-
-      expect(formatted_path).to_be("/Users/test/project2/a.lua")
-    end)
-
-    it("makes a path relative to a cwd of /", function()
-      mock_vim.fn.getcwd = function()
-        return "/"
-      end
-      local formatted_path = init_module._format_path_for_at_mention("/tmp/a.lua")
-
-      expect(formatted_path).to_be("tmp/a.lua")
+      expect(formatted_path).to_be("/Users/test/project/")
     end)
   end)
 
@@ -221,7 +206,7 @@ describe("At Mention Functionality", function()
       expect(files[1]).to_be("/Users/test/project/tests")
 
       local formatted_path = init_module._format_path_for_at_mention(files[1])
-      expect(formatted_path).to_be("tests/")
+      expect(formatted_path).to_be("/Users/test/project/tests/")
     end)
 
     it("should handle multiple marked files in nvim-tree", function()
@@ -368,9 +353,9 @@ describe("At Mention Functionality", function()
       end
 
       expect(#formatted_files).to_be(3)
-      expect(formatted_files[1]).to_be("init.lua")
-      expect(formatted_files[2]).to_be("lua/")
-      expect(formatted_files[3]).to_be("config.lua")
+      expect(formatted_files[1]).to_be("/Users/test/project/init.lua")
+      expect(formatted_files[2]).to_be("/Users/test/project/lua/")
+      expect(formatted_files[3]).to_be("/Users/test/project/config.lua")
     end)
   end)
 end)
