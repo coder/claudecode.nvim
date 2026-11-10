@@ -20,8 +20,9 @@
 #   MUTANT_NOTES optional array of lines that --mutants prints after its last row, before its closing line
 #
 # tla_init exits 2 when here, SKILL or MODEL is empty or the model file is missing. tla_main exits 2 when SITE_RE,
-# COVERED, RULES or FACTS is empty, when tla_constants is not defined, and when a covered_block file is not in COVERED.
-# --mutants exits 2 when an EXPECT key names something that is not a fact.
+# COVERED, RULES or FACTS is empty, when tla_constants is not defined, when a covered_block file is not in COVERED,
+# and, in every mode, when EXPECT has a key with a space or a non-fact, or lacks an entry for a fact. A check.sh that
+# calls tla_main without tla_init, or ends without calling tla_main, exits 2 too.
 #
 # Exit codes: 0 pass, 1 rule broken, 2 tool or script error (or TypeOK broken), 3 stale.
 set -euo pipefail
@@ -58,6 +59,19 @@ tla_die() {
   echo "ERROR: $*" >&2
   exit 2
 }
+
+# EXIT handler: removes the work dir, and turns a check.sh that never called tla_main into exit 2. Such a script would
+# exit 0 and print nothing, and a CI loop reads that as a pass. tla_main clears tla_pending.
+tla_pending=1
+tla_on_exit() {
+  local status=$?
+  [[ ${keep:-0} == 1 || -z ${work:-} ]] || rm -rf "$work"
+  if [[ $tla_pending == 1 && $status == 0 ]]; then
+    echo "ERROR: check.sh ended without calling tla_main" >&2
+    exit 2
+  fi
+}
+trap tla_on_exit EXIT
 
 # Print the block that starts at the first line matching $2 in file $1, up to the `end` at the same indentation.
 block() {
@@ -306,33 +320,32 @@ tla_check() {
   exit "$result"
 }
 
-# Each fact set FALSE alone (or a listed A+B combination), each rule checked alone. The mutant must break the
-# rule EXPECT names, and every rule must break at least once, or the rule is vacuous.
-tla_mutants() {
-  local status=0 f p rule name rc want
-  local -A rule_hit in_expect
-  local hits assigns parts note
-  echo "== mutants: each guard removed alone, each rule checked alone"
+# EXPECT must give every fact an entry, alone or in an A+B combination, and name nothing else. Every mode checks it:
+# CI runs the plain check, not --mutants, and a wrong key must not pass there.
+tla_check_expect() {
+  local f p parts
+  local -A in_expect
+  ((${#EXPECT[@]} > 0)) || tla_die "EXPECT is empty; every fact needs an entry"
   for f in "${!EXPECT[@]}"; do
-    [[ $f != *[[:space:]]* ]] || {
-      echo "ERROR: EXPECT key \"$f\" has a space; quote an A+B key, [\"A+B\"]=Rule (shfmt -w rewrites an unquoted one)" >&2
-      exit 2
-    }
+    [[ $f != *[[:space:]]* ]] || tla_die "EXPECT key \"$f\" has a space; quote an A+B key, [\"A+B\"]=Rule (shfmt -w rewrites an unquoted one)"
     IFS=+ read -ra parts <<<"$f"
     for p in "${parts[@]}"; do
-      [[ " ${FACTS[*]} " == *" $p "* ]] || {
-        echo "ERROR: EXPECT key \"$f\" names \"$p\", which is not in FACTS" >&2
-        exit 2
-      }
+      [[ " ${FACTS[*]} " == *" $p "* ]] || tla_die "EXPECT key \"$f\" names \"$p\", which is not in FACTS"
       in_expect[$p]=1
     done
   done
   for f in "${FACTS[@]}"; do
-    [[ -n ${in_expect[$f]:-} ]] || {
-      echo "  $f has no EXPECT entry: every fact must be caught by a rule, alone or in a listed combination"
-      status=2
-    }
+    [[ -n ${in_expect[$f]:-} ]] || tla_die "fact $f has no EXPECT entry: every fact must be caught by a rule, alone or in a listed combination, or be marked -"
   done
+}
+
+# Each fact set FALSE alone (or a listed A+B combination), each rule checked alone. The mutant must break the
+# rule EXPECT names, and every rule must break at least once, or the rule is vacuous.
+tla_mutants() {
+  local status=0 f p rule name rc want
+  local -A rule_hit
+  local hits assigns parts note
+  echo "== mutants: each guard removed alone, each rule checked alone"
   for f in "${!EXPECT[@]}"; do
     # "-" marks a fact that is not a guard (it switches an environment step on or off): nothing must catch it.
     [[ ${EXPECT[$f]} != - ]] || continue
@@ -393,6 +406,8 @@ tla_mutants() {
 # Call after the facts are set. Runs the lock comparison, then the model or the mutants.
 tla_main() {
   local f
+  tla_pending=0
+  [[ -n ${work:-} ]] || tla_die "check.sh must call tla_init before tla_main"
   # An unset or empty variable must stop the run with exit 2: set -u would exit 1 ("a rule broke"), and an empty
   # RULES or COVERED would pass or write a lock that never goes stale.
   [[ -n ${SITE_RE:-} ]] || tla_die "check.sh must set SITE_RE"
@@ -406,6 +421,7 @@ tla_main() {
       exit 2
     }
   done
+  tla_check_expect
   if [[ $hash_only == 0 ]]; then
     echo "== code facts (TRUE = guard present)"
     for f in "${FACTS[@]}"; do printf '  %-30s %s\n' "$f" "${fact[$f]}"; done
@@ -432,7 +448,5 @@ tla_init() {
   work=$(mktemp -d "${TMPDIR:-/tmp}/$SKILL.XXXXXX")
   if [[ $keep == 1 ]]; then
     echo "work dir: $work"
-  else
-    trap 'rm -rf "$work"' EXIT
   fi
 }

@@ -48,7 +48,7 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$here/../../../scripts/tla/check-lib.sh"
 [[ -n ${TOY_NO_SKILL-} ]] || SKILL=verify-toy
 MODEL=${TOY_MODEL-Toy}
-tla_init "$@"
+[[ -n ${TOY_NO_INIT-} ]] || tla_init "$@"
 covered_block step lua/toy.lua '^function M\.step\('
 eval "COVERED=(${TOY_COVERED-lua/toy.lua lua/other.lua})"
 [[ -n ${TOY_NO_SITE_RE-} ]] || SITE_RE=return
@@ -66,8 +66,12 @@ tla_constants() {
   [[ -z ${TOY_MKDIR-} ]] || mkdir -p "$work/$TOY_MKDIR"
   return "${TOY_CALLBACK_RC-0}"
 }
-tla_main "$@"
+[[ -z ${TOY_NO_CONSTANTS-} ]] || unset -f tla_constants
+[[ -n ${TOY_NO_MAIN-} ]] || tla_main "$@"
 SH
+# A script that sources the lib and then calls neither tla_init nor tla_main.
+printf '#!/usr/bin/env bash\nsource "$(dirname "$0")/../../../scripts/tla/check-lib.sh"\n' >"$skill/noop.sh"
+chmod +x "$skill/noop.sh"
 chmod +x "$check"
 git -C "$repo" init -q
 
@@ -136,6 +140,18 @@ run env TOY_MODEL=NoSuchModel "$check"
 expect "a missing model file exits 2" 2 "no model at"
 run env TOY_FACTS= "$check"
 expect "empty FACTS exits 2" 2 "FACTS is empty"
+run env TOY_NO_CONSTANTS=1 "$check" --hash-only
+expect "--hash-only without tla_constants exits 2" 2 "must define tla_constants"
+run env TOY_NO_CONSTANTS=1 "$check" --record
+expect "--record without tla_constants exits 2" 2 "must define tla_constants"
+run env TOY_NO_MAIN=1 "$check"
+expect "a check.sh that never calls tla_main exits 2" 2 "without calling tla_main"
+run env TOY_NO_MAIN=1 "$check" --keep
+expect "a check.sh that never calls tla_main exits 2 with --keep" 2 "without calling tla_main"
+run env TOY_NO_INIT=1 "$check"
+expect "tla_main without tla_init exits 2" 2 "must call tla_init"
+run "$skill/noop.sh"
+expect "a script that calls neither tla_init nor tla_main exits 2" 2 "without calling tla_main"
 run env TOY_CALLBACK_RC=1 "$check"
 expect "a failing tla_constants exits 2" 2 "tla_constants failed"
 run env TOY_LIVE=Reach TOY_MKDIR=live-Reach.cfg JAVA="$root/fakebin/java" "$check"
@@ -144,6 +160,14 @@ run env TOY_EXPECT='[Guard+Othr]=Bound [Other]=- [InitBad]=- [TypeBadInit]=-' "$
 expect "an EXPECT key that names a non-fact exits 2" 2 "not in FACTS"
 run env TOY_EXPECT='[Guard + Other]=Bound [InitBad]=- [TypeBadInit]=-' "$check" --mutants
 expect "an EXPECT key with a space exits 2" 2 "has a space"
+run env TOY_EXPECT='[Guard+Othr]=Bound [Other]=- [InitBad]=- [TypeBadInit]=-' "$check"
+expect "a plain run refuses an EXPECT key that names a non-fact" 2 "not in FACTS"
+run env TOY_EXPECT='[Guard + Other]=Bound [InitBad]=- [TypeBadInit]=-' "$check"
+expect "a plain run refuses an EXPECT key with a space" 2 "has a space"
+run env TOY_EXPECT='[Guard]=Bound [Other]=- [InitBad]=-' "$check"
+expect "a plain run refuses a fact with no EXPECT entry" 2 "has no EXPECT entry"
+run env TOY_EXPECT= "$check" --hash-only
+expect "--hash-only refuses an empty EXPECT" 2 "EXPECT is empty"
 run env TOY_EXPECT='[Guard]=Bound [Other+InitBad+TypeBadInit]=-' "$check" --mutants
 expect "the middle fact of an A+B+C EXPECT key has an entry" 0 "every guard is caught"
 run "$check" --mutants
@@ -191,6 +215,16 @@ else
   expect "an unreadable covered file exits 2" 2 "not readable"
 fi
 chmod 644 "$repo/lua/other.lua"
+
+chmod 000 "$skill/model/Toy.tla"
+if [[ -r $skill/model/Toy.tla ]]; then
+  skipped=$((skipped + 1))
+  echo "skip  an unreadable model exits 2 (this user can read any file)"
+else
+  run "$check"
+  expect "an unreadable model exits 2" 2 "cannot copy the model"
+fi
+chmod 644 "$skill/model/Toy.tla"
 
 echo "COUNT cases=$n failed=$failed skipped=$skipped"
 [[ $failed == 0 ]]

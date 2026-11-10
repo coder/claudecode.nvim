@@ -104,7 +104,7 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - `formatChangelogSection` asserts a non-empty version and a `YYYY-MM-DD` date, and writes `## [VERSION] - DATE` without a `v` prefix [release-please-runner.js:formatChangelogSection].
 - `resolvePrettierBin` uses `PRETTIER_BIN`, then `scripts/node_modules/.bin/prettier`, then `prettier` on `PATH` [release-please-runner.js:resolvePrettierBin].
 - `main` creates releases before release PRs [release-please-runner.js:main].
-- A `check.sh` that leaves `SKILL`, `MODEL` (or its model file), `SITE_RE`, `COVERED`, `RULES` or `FACTS` empty, lists a `covered_block` file that `COVERED` omits, or names a non-fact in `EXPECT` exits 2. It never exits 0 or 1 [check-lib.sh:tla_init, tla_main, tla_coverage, tla_mutants].
+- A `check.sh` exits 2, in every mode, when `SKILL`, `MODEL` (or its model file), `SITE_RE`, `COVERED`, `RULES` or `FACTS` is empty, when it defines no `tla_constants`, when a `covered_block` file is missing from `COVERED`, when `EXPECT` has a key with a space, a key that names a non-fact, or no entry for a fact, and when it calls `tla_main` without `tla_init` or ends without calling `tla_main`. It never exits 0 or 1 for these [check-lib.sh:tla_init, tla_main, tla_check_expect, tla_coverage, tla_on_exit].
 
 ## Side Effects
 
