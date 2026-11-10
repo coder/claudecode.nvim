@@ -40,7 +40,6 @@ describe("openDiff in a new tab", function()
   end)
 
   after_each(function()
-    package.loaded["claudecode.terminal"] = nil
     diff._cleanup_all_active_diffs("test cleanup")
     pcall(vim.fn.jobstop, job)
     vim.cmd("silent! tabonly!")
@@ -48,6 +47,7 @@ describe("openDiff in a new tab", function()
     vim.cmd("silent! %bwipeout!")
     vim.fn.delete(dir, "rf")
     _G.claude_deferred_responses = nil
+    package.loaded["claudecode.terminal"] = nil
   end)
 
   local client = { id = "new_tab_spec_client" }
