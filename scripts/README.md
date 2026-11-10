@@ -2,13 +2,14 @@
 
 ## Overview
 
-`scripts/` holds developer and release tooling for claudecode.nvim. Nothing here is loaded by the plugin at runtime. The directory has three groups:
+`scripts/` holds developer and release tooling for claudecode.nvim. Nothing here is loaded by the plugin at runtime. The directory has four groups:
 
 1. Test harnesses (`run_integration_tests_individually.sh`, `manual_test_helper.lua`).
 2. Standalone reproductions of GitHub issues (`repro_issue_*.lua`, `repro_issue_*.sh`). `repro_issue_70_probe.lua` matches that pattern, but it is a helper that `repro_issue_70.sh` runs.
 3. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`, `package-lock.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`. It also runs the pinned `communique` binary with the repo's `communique.toml` against a fake Anthropic API, to check that one release-notes submission fits the configured output budget.
+4. TLA+ model-check tooling in `tla/`: `check-lib.sh`, the harness that every `.agents/skills/verify-*/check.sh` sources, and `test-check-lib.sh`, its tests.
 
-CI runs five of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh`, `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"`, and `scripts/manual_test_helper.lua` (by absolute path, from a directory outside the repo) on Neovim stable and v0.8.0, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
+CI runs six of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh`, `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"`, and `scripts/manual_test_helper.lua` (by absolute path, from a directory outside the repo) on Neovim stable and v0.8.0, `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`), and `./scripts/tla/test-check-lib.sh`. The same job also runs every `.agents/skills/verify-*/check.sh`, and each of those sources `scripts/tla/check-lib.sh`.
 
 `mise.toml` provisions `websocat` for `repro_issue_238.sh`, `repro_issue_248.sh`, and `repro_issue_277.sh`, `jq` for the repro scripts that parse JSON, and `communique` for the release tooling. It does not provide `agent-tty`, which `repro_issue_70.sh`, `repro_issue_218.sh`, and `repro_issue_277.sh` need. `repro_issue_277.sh` also needs `git` and `perl`, and `repro_issue_70.sh` needs the `claude` CLI [repro_issue_70.sh:MISSING dependency] [repro_issue_218.sh:agent-tty] [repro_issue_277.sh:MISSING dependency].
 
@@ -20,6 +21,12 @@ For a manual WebSocket check, create an empty out file, then run `mise exec -- n
 
 - `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout -k 5s 30s`, and prints totals [run_integration_tests_individually.sh:run_test_file].
 - `manual_test_helper.lua` is run with `:luafile` in a Neovim that has the plugin on its `runtimepath`. It calls the `claudecode.tools.open_diff` handler in a coroutine and reports whether it yields [manual_test_helper.lua:test_opendiff_directly]. CI fails unless it opens the repo's `README.md` and the handler yields [.github/workflows/test.yml:Manual openDiff helper works outside the repo].
+
+### TLA+ model checks
+
+- `tla/check-lib.sh` is sourced by each `.agents/skills/verify-*/check.sh`. The check sets `SKILL`, `MODEL`, `COVERED`, `SITE_RE`, `FACTS`, `RULES`, `LIVE`, `EXPECT`, `CONSTRAINT` and `tla_constants`, declares its facts, then calls `tla_init "$@"` first and `tla_main "$@"` last. The header of the file lists the contract [check-lib.sh:tla_init, tla_main].
+- The options are `--mutants`, `--keep`, `--record` and `--hash-only`. The exit codes are 0 (pass), 1 (a rule broke), 2 (tool or script error, or a broken `TypeOK`) and 3 (the covered code changed since `covered.lock` was recorded) [check-lib.sh:tla_parse_args, tla_check, tla_mutants, tla_lock].
+- `tla/test-check-lib.sh [PATH_TO_CHECK_LIB]` builds a toy skill on the lib in a scratch git repo and runs real TLC on a one-variable model. It prints one line per case and a `COUNT cases=N failed=N skipped=N` line, and exits 1 when a case fails [test-check-lib.sh:expect].
 
 ### Issue reproductions
 
@@ -67,6 +74,9 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - `formatChangelogSection` asserts a non-empty version and a `YYYY-MM-DD` date, and writes `## [VERSION] - DATE` without a `v` prefix [release-please-runner.js:formatChangelogSection].
 - release-please reads its config and manifest from the remote target branch (`RELEASE_PLEASE_TARGET_BRANCH`, else the default branch when the variable is unset), not from the local checkout. An empty `RELEASE_PLEASE_TARGET_BRANCH` does not fall back to the default branch, because the runner uses `??`. Local edits to `release-please-config.json` take effect only after you push them [release-please-runner.js:main].
 - The runner imports internal modules from `release-please/build/src/`, so it depends on the file layout of the pinned `release-please` version [release-please-runner.js:Simple, Changelog].
+- `resolvePrettierBin` uses `PRETTIER_BIN`, then `scripts/node_modules/.bin/prettier`, then `prettier` on `PATH` [release-please-runner.js:resolvePrettierBin].
+- `main` creates releases before release PRs [release-please-runner.js:main].
+- A `check.sh` exits 2, in every mode, when `SKILL`, `MODEL` (or its model file), `SITE_RE`, `COVERED`, `RULES` or `FACTS` is empty, when it defines no `tla_constants`, when a `covered_block` file is missing from `COVERED`, when `EXPECT` has a key with a space, a key that names a non-fact, no entry for a fact, or a value that is not in `RULES`, `LIVE` or `-`, and when it calls `tla_main` without `tla_init`, in a pipe or a subshell, replaces the lib's `EXIT` trap, sources the lib twice, or ends without calling `tla_main`. It never exits 0 or 1 for these, with one limit: a `check.sh` that replaces the lib's `EXIT` trap loses the last check, so one that also never runs `tla_main` in the main shell can exit 0 [check-lib.sh:tla_init, tla_main, tla_check_expect, tla_coverage, tla_on_exit].
 
 ## Side Effects
 
@@ -82,12 +92,15 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - Without `--cleanup`, `repro_issue_248.sh` disconnects without `close_tab`. The server then rejects and closes that client's pending diffs, so `:DiffState` shows `active_diffs=0`. With `--cleanup` it calls `closeAllDiffTabs` first [repro_issue_248.sh:CLEANUP].
 - When `--out` is omitted, `repro_issue_238.sh` writes the frames to a `mktemp` file `repro238.frames.*` and does not delete it. Its `EXIT` trap removes only the request file [repro_issue_238.sh:OUT, REQ].
 - `repro_issue_283.lua` binds TCP sockets on `127.0.0.1`. `repro_issue_283.sh` starts a background Neovim and kills it on exit [repro_issue_283.lua:listener:bind] [repro_issue_283.sh:cleanup].
+- A `check.sh` makes a work dir `${TMPDIR:-/tmp}/<skill>.XXXXXX` and removes it on exit, except with `--keep`. `--record` rewrites the skill's `covered.lock`. When the TLC jar is missing, it downloads TLC 1.7.4 to `${XDG_CACHE_HOME:-$HOME/.cache}/claudecode-nvim-tla/` (or to `TLC_JAR`), and it keeps the file only when its sha256 matches the pin [check-lib.sh:tla_init, tla_lock, tla_fetch_jar].
+- `test-check-lib.sh` makes one `mktemp -d` directory and removes it on exit. In it, it runs `git init` and TLC [test-check-lib.sh:root].
 - `release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and pull requests through the GitHub API [release-please-runner.js:main].
 - `release-please-runner.js` spawns `communique generate` with the full environment, API keys included [release-please-runner.js:createCommuniqueChangelogNotes, runCommuniqueBinary].
 - `test-release-please-runner.js` starts an HTTP server on a random `127.0.0.1` port and runs `git` and `communique` in a temp directory that it removes afterward [test-release-please-runner.js:testCommuniqueConfigFitsReleaseNotes].
 
 ## Verification
 
+- Run: `scripts/tla/test-check-lib.sh` (needs `java`, and downloads the TLC jar when it is missing).
 - Run: `mise exec -- npm --prefix scripts run test:release-please-runner` (needs `npm --prefix scripts ci` first). `mise exec --` puts the real `communique` binary that `mise install` provides on `PATH`. The mise shim fails, as `test-release-please-runner.js` above describes.
 - Run: `mise run format-check`. treefmt formats and lints `scripts/` with `shfmt` and `shellcheck` (`*.sh`), `stylua` (`*.lua`), and `prettier` (`*.js`, `*.json`, `*.md`).
 - `mise run check` runs `luacheck` on `lua/` and `tests/` only, so it does not cover `scripts/`.

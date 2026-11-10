@@ -691,6 +691,29 @@ describe("Selection module", function()
     end)
   end)
 
+  it("should read the cursor and buffer of the given window", function()
+    _G.vim.test.add_buffer(42, "/other/window.lua", { "one", "two", "three" })
+    local old_get_cursor, old_get_buf = _G.vim.api.nvim_win_get_cursor, _G.vim.api.nvim_win_get_buf
+    finally(function()
+      _G.vim.api.nvim_win_get_cursor, _G.vim.api.nvim_win_get_buf = old_get_cursor, old_get_buf
+    end)
+    _G.vim.api.nvim_win_get_cursor = function(winid)
+      assert(winid == 1042, "read the cursor of window " .. tostring(winid))
+      return { 3, 2 }
+    end
+    _G.vim.api.nvim_win_get_buf = function(winid)
+      assert(winid == 1042, "read the buffer of window " .. tostring(winid))
+      return 42
+    end
+
+    local cursor_pos = selection.get_cursor_position(1042)
+
+    assert(cursor_pos.filePath == "/other/window.lua", "got " .. tostring(cursor_pos.filePath))
+    assert(cursor_pos.selection.start.line == 2)
+    assert(cursor_pos.selection.start.character == 2)
+    assert(cursor_pos.selection.isEmpty == true)
+  end)
+
   it("should get cursor position in normal mode", function()
     local old_win_get_cursor = _G.vim.api.nvim_win_get_cursor
     _G.vim.api.nvim_win_get_cursor = function()
@@ -1739,6 +1762,24 @@ describe("Range Selection Tests", function()
         assert(selection.is_claude_terminal_buffer(8) == true)
       end)
 
+      it("matches claude in the command whatever its case, and keeps a later //<digits>: in the command", function()
+        _G.vim.test.add_buffer(12, "term://~/proj//123:Claude --resume", { "" })
+        _G.vim.test.add_buffer(13, "term://~/proj//124:sh -c claude-x //9:y", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(12) == true)
+        assert(selection.is_claude_terminal_buffer(13) == true)
+      end)
+
+      it("is false for a terminal whose cwd, not its command, contains claude", function()
+        _G.vim.test.add_buffer(11, "term://~/src/claudecode.nvim//321:/bin/bash", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(11) == false)
+      end)
+
       it("is false for a file buffer and for another terminal", function()
         _G.vim.test.add_buffer(9, "/path/to/test.lua", { "" })
         _G.vim.test.add_buffer(10, "term://~/proj//789:sh", { "" })
@@ -2108,6 +2149,70 @@ describe("Range Selection Tests", function()
         assert.is_nil(selection.state.last_active_visual_selection)
         assert_claude_holds_cursor("/path/to/a.txt", 0)
         assert.is_nil(selection.state.demotion_timer)
+      end)
+
+      -- Starting another selection ends the hold on the first one. An operator then consumes the second selection
+      -- before the in-visual debounce, so nothing was sent for it, and the first one is still in latest_selection with
+      -- its text intact. The debounce does nothing in the Claude terminal, so the cursor goes out at once.
+      it("reports the cursor when an operator consumes a different selection than the held one", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4) -- Claude holds "alpha"
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma" })
+        start_selecting(5) -- a second selection, on "gamma"
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamm" }) -- d deletes its last character
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 14)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 14) -- no timer has fired
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        go_to_buffer(2, 0)
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 14)
+      end)
+
+      it("does not report early when Claude holds only a cursor and an operator consumes a selection", function()
+        selection.enable(mock_server)
+        _G.vim.test.set_cursor(0, 1, 2)
+        selection.update_selection() -- Claude holds the cursor
+        assert.is_true(selection.get_latest_selection().selection.isEmpty)
+        mock_server.last_broadcast = nil
+
+        start_selecting(5)
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamm" })
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 14)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+
+        assert.is_nil(mock_server.last_broadcast) -- nothing to replace: the debounce reports the cursor
+      end)
+
+      it("reads the live selection again at once when its text changes in visual mode", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        _G.vim._marks = { v = { 0, 1, 1, 0 } }
+        _G.vim.test.set_cursor(0, 1, 4)
+        fire_autocmd("CursorMoved")
+        fire_debounce()
+        assert.are.equal("alpha", selection.get_latest_selection().text) -- read at changedtick 5
+
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "ALPHA beta gamma" }) -- a plugin edits while you select
+        _G.vim.test.set_cursor(0, 1, 3)
+        fire_autocmd("CursorMoved")
+
+        assert.are.equal("ALPH", selection.get_latest_selection().text) -- before the debounce fires
       end)
 
       -- Finding 1, HeldEndsWhenMoved (path B): ve, Esc, l, h within one debounce.

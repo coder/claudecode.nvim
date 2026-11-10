@@ -201,10 +201,11 @@ jobs:
           grep -qF "Old file: $REPO/README.md" <<<"$output" || { echo "FAIL: the helper did not open $REPO/README.md"; exit 1; }
           grep -qF "openDiff is properly blocking!" <<<"$output" || { echo "FAIL: the openDiff coroutine did not suspend"; exit 1; }
 
-  # covered.lock records the lua/ and plugin/ code that the openDiff lifecycle model was last
-  # confirmed against. check.sh model-checks that lifecycle with TLC on the runner's Java, then
-  # compares the lock. Advisory: Required does not need this job, so a broken rule or a stale
-  # lock shows red without blocking a merge.
+  # Each .agents/skills/verify-*/check.sh model-checks one subsystem with TLC on the runner's Java,
+  # then compares its covered.lock, which records the code that model was last confirmed against.
+  # scripts/tla/test-check-lib.sh tests the harness that all of them share.
+  # Advisory: Required does not need this job, so a broken rule or a stale lock shows red without
+  # blocking a merge.
   covered-lock:
     runs-on: ubuntu-latest
 
@@ -214,16 +215,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # The cache key comes from the version and sha256 that check.sh pins, so a new pin gets a new
-      # entry. check.sh checks that sha256 on every run, a restored jar included.
-      - name: Read the TLC jar that check.sh pins
+      # The cache key comes from the version and sha256 that the shared harness pins, so a new pin
+      # gets a new entry. Every check.sh checks that sha256 on every run, a restored jar included.
+      - name: Read the TLC jar that the shared harness pins
         id: tlc
         run: |
-          check=.agents/skills/verify-diff-lifecycle/check.sh
-          version=$(sed -n 's/^TLC_VERSION=//p' "$check")
-          sha256=$(sed -n 's/^TLC_SHA256=//p' "$check")
+          lib=scripts/tla/check-lib.sh
+          version=$(sed -n 's/^TLC_VERSION=//p' "$lib")
+          sha256=$(sed -n 's/^TLC_SHA256=//p' "$lib")
           if [[ ! $version =~ ^[0-9.]+$ || ! $sha256 =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $check"
+            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $lib"
             exit 1
           fi
           {
@@ -237,10 +238,25 @@ jobs:
           path: ${{ steps.tlc.outputs.jar }}
           key: ${{ steps.tlc.outputs.key }}
 
-      - name: Model-check the openDiff lifecycle and compare covered.lock
+      # Every check runs, so one red model does not hide another.
+      - name: Model-check each subsystem and compare its covered.lock
         env:
           TLC_JAR: ${{ steps.tlc.outputs.jar }}
-        run: .agents/skills/verify-diff-lifecycle/check.sh
+        run: |
+          status=0
+          for check in .agents/skills/verify-*/check.sh; do
+            echo "::group::$check"
+            "$check" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      # A toy skill on scripts/tla/check-lib.sh with a one-variable model. It runs even when a model above is red.
+      - name: Test the TLC harness
+        if: ${{ !cancelled() }}
+        env:
+          TLC_JAR: ${{ steps.tlc.outputs.jar }}
+        run: scripts/tla/test-check-lib.sh
 
   required:
     name: Required

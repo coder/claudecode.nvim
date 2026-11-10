@@ -117,6 +117,26 @@ describe("a held selection with the real plugin", function()
     assert.are.equal("alpha", selection.get_latest_selection().text)
   end)
 
+  it("reports the cursor when an operator consumes a different selection, before you enter the terminal", function()
+    start({ provider = "none" }, 50)
+    open_file("alpha beta gamma")
+    local file_buf = vim.api.nvim_get_current_buf()
+    vim.cmd("terminal sh -c 'sleep 60' claude")
+    local term_buf = vim.api.nvim_get_current_buf()
+    vim.cmd("stopinsert")
+    vim.cmd("buffer " .. file_buf)
+    wait(200)
+    select_and_release() -- Claude holds "alpha"
+
+    press("$vd") -- a second selection, on the last character, consumed before the debounce
+    vim.cmd("buffer " .. term_buf) -- and the Claude terminal, where the debounce does nothing
+    wait(300)
+
+    local held = selection.get_latest_selection()
+    assert.is_true(held.selection.isEmpty)
+    assert.are.equal(14, held.selection.start.character)
+  end)
+
   -- A popup that wipes itself when you leave it: its buffer number is gone at the next event, and the plugin must
   -- neither raise nor keep the selection of a file you left.
   for _, kind in ipairs({ "bufhidden=wipe left with :buffer #", "nvim_buf_delete of the displayed buffer" }) do
