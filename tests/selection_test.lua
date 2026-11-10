@@ -1825,5 +1825,258 @@ describe("Range Selection Tests", function()
         assert(selection.state.demotion_timer == nil)
       end)
     end)
+
+    describe("a held selection follows the buffer and the cursor", function()
+      local original_get_current_buf
+
+      -- Fake timers: a timer runs only when a test fires it. Each helper below is one key or command with the
+      -- autocmds it fires, so a test reads like the keys the user typed.
+      local function fire_debounce()
+        local timer = selection.state.debounce_timer
+        assert(timer ~= nil, "no debounce timer is pending")
+        timer:fire()
+      end
+
+      local function fire_demotion()
+        local timer = selection.state.demotion_timer
+        assert(timer ~= nil, "no demotion timer is pending")
+        timer:fire()
+      end
+
+      -- Default delays: the debounce fires, and the demotion it arms fires before anything else happens.
+      local function settle()
+        if selection.state.debounce_timer then
+          fire_debounce()
+        end
+        if selection.state.demotion_timer then
+          fire_demotion()
+        end
+      end
+
+      -- v, V or gv: ModeChanged to visual mode.
+      local function start_selecting(tick)
+        _G.vim._changedtick = tick
+        _G.vim.test.set_mode("v")
+        _G.vim.v.event = { old_mode = "n", new_mode = "v" }
+        selection.on_mode_changed()
+      end
+
+      -- Esc: Neovim sets '< and '>, then ModeChanged to normal mode with the cursor where it stands.
+      local function release_selection(first_col, last_col, cursor_col)
+        _G.vim.test.set_mode("n")
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, first_col, 0 }, ["'>"] = { 0, 1, last_col, 0 } }
+        _G.vim.test.set_cursor(0, 1, cursor_col)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+      end
+
+      -- A motion in normal mode: CursorMoved.
+      local function move_cursor(col)
+        _G.vim.test.set_cursor(0, 1, col)
+        selection.on_cursor_moved()
+      end
+
+      -- x on the cursor: the text changes, the cursor stays, TextChanged and CursorMoved fire.
+      local function delete_at_cursor(tick, line)
+        _G.vim._changedtick = tick
+        _G.vim.test.add_buffer(1, "/path/to/test.lua", { line })
+        selection.on_cursor_moved()
+        selection.on_text_changed()
+      end
+
+      -- :b <buffer>, with the cursor at col: BufEnter. Buffer 2 is b.txt.
+      local function go_to_buffer(bufnr, col)
+        _G.vim.api.nvim_get_current_buf = function()
+          return bufnr
+        end
+        _G.vim.test.set_cursor(0, 1, col)
+        selection.on_cursor_moved()
+      end
+
+      local function assert_claude_holds_cursor(path, col)
+        local held = selection.get_latest_selection()
+        assert(held ~= nil)
+        assert.are.equal(path, held.filePath)
+        assert.are.equal(true, held.selection.isEmpty)
+        assert.are.equal(col, held.selection.start.character)
+        assert.are.equal(held, mock_server.last_broadcast.data)
+      end
+
+      before_each(function()
+        original_get_current_buf = _G.vim.api.nvim_get_current_buf
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma" })
+        _G.vim.test.add_buffer(2, "/path/to/b.txt", { "one two" })
+        _G.vim.test.set_cursor(0, 1, 0)
+      end)
+
+      after_each(function()
+        _G.vim.api.nvim_get_current_buf = original_get_current_buf
+        _G.vim._buffers[2] = nil
+      end)
+
+      it("keeps the selection while the cursor stays and the text is unchanged", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        mock_server.last_broadcast = nil
+
+        -- CursorMoved fires again at the same position, as it does after x, and the text is the same.
+        selection.on_cursor_moved()
+        selection.on_text_changed()
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      it("keeps the selection while you are in the Claude terminal, and when you come back", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        mock_server.last_broadcast = nil
+
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        go_to_buffer(2, 0)
+        settle()
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      -- Finding 1, HeldEndsWhenMoved (path A): vb, Esc, gv, d. The cursor ends on the column where the first
+      -- release left it, so the deleted text looked like a held selection.
+      it("ends when you select again and an operator deletes the text (vb Esc gv d)", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 0)
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        start_selecting(5) -- gv
+        assert.is_nil(selection.state.cursor_at_flush)
+        assert.is_nil(selection.state.last_active_visual_selection)
+
+        -- d: the changedtick moves, visual mode ends, the cursor lands on column 0 again.
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { " beta gamma" })
+        _G.vim.test.set_mode("n")
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+        selection.on_text_changed()
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 0)
+      end)
+
+      it("ends at once when an operator consumes a selection that Claude already holds", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        -- The debounce ran in visual mode: Claude holds the live selection.
+        local live = {
+          text = "alpha",
+          filePath = "/path/to/a.txt",
+          fileUrl = "file:///path/to/a.txt",
+          selection = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 5 }, isEmpty = false },
+        }
+        selection.state.last_active_visual_selection = { bufnr = 1, selection_data = live, timestamp = 0 }
+        selection.state.latest_selection = live
+
+        -- d: the flush sees the changedtick move and skips. What it skips is not held any more.
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { " beta gamma" })
+        _G.vim.test.set_mode("n")
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+        assert.is_nil(selection.state.last_active_visual_selection)
+        selection.on_text_changed()
+        fire_debounce() -- the debounce alone is enough: no demotion delay for text that is gone
+
+        assert_claude_holds_cursor("/path/to/a.txt", 0)
+        assert.is_nil(selection.state.demotion_timer)
+      end)
+
+      -- Finding 1, HeldEndsWhenMoved (path B): ve, Esc, l, h within one debounce.
+      it("ends when the cursor moves away and back before the debounce fires (ve Esc l h)", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        move_cursor(5) -- l
+        move_cursor(4) -- h, 30 ms later: the debounce has not fired yet
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      -- Finding 2, NoDeletedText: viw, Esc, x, x.
+      it("ends when you edit the selected text without moving the cursor (viw Esc x x)", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        delete_at_cursor(6, "alph beta gamma") -- x
+        settle()
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+
+        delete_at_cursor(7, "alphbeta gamma") -- x
+        settle()
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      -- Finding 3, SameFile: a long visual_demotion_delay_ms, so the demotion is still pending (it never fires
+      -- in this test until the end).
+      it("never holds another file's cursor after you come back (:b b.txt, :b a.txt)", function()
+        selection.enable(mock_server, 1000)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce() -- arms the demotion; the selection is held
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        local pending_demotion = selection.state.demotion_timer
+        assert(pending_demotion ~= nil)
+
+        go_to_buffer(2, 0)
+        fire_debounce()
+        assert_claude_holds_cursor("/path/to/b.txt", 0)
+
+        go_to_buffer(1, 4) -- the cursor is back where it was released
+        fire_debounce()
+        assert.are.equal(pending_demotion, selection.state.demotion_timer)
+        pending_demotion:fire()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      -- Finding 4, ClaudeSeesCursor: a long visual_demotion_delay_ms, release, move right, wait, move back.
+      it("never holds a cursor position you left (Esc l, wait, h)", function()
+        selection.enable(mock_server, 1000)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce()
+        local pending_demotion = selection.state.demotion_timer
+        assert(pending_demotion ~= nil)
+
+        move_cursor(5) -- l
+        fire_debounce()
+        assert_claude_holds_cursor("/path/to/a.txt", 5)
+
+        move_cursor(4) -- h
+        fire_debounce()
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+
+        pending_demotion:fire()
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+    end)
   end)
 end)
