@@ -343,9 +343,12 @@ describe("TCP server disconnect handling", function()
     tcp.start_ping_timer(server, 30000)
     vim.loop.new_timer = new_timer
 
+    tick() -- the first tick that finds no pong pings again: a late tick finds the pong of the last ping unread
+    assert.equals(frame.OPCODE.PING, assert(frame.parse_frame(writes[1])).opcode)
+    assert.is_not_nil(server.clients[client.id])
     tick()
 
-    local close = assert(frame.parse_frame(writes[1]))
+    local close = assert(frame.parse_frame(writes[2]))
     assert.equals(frame.OPCODE.CLOSE, close.opcode)
     assert.equals(1011, close.payload:byte(1) * 256 + close.payload:byte(2))
     assert.spy(server.on_disconnect).was_called_with(client, 1006, "Connection timeout")

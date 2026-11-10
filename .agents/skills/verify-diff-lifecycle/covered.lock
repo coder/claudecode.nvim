@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 35f1bc960cb293e4
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 5122f3b1001d039a
+file lua/claudecode/diff.lua dafdb61030481d9d
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -104,10 +104,10 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 3770f9353892b435
+file lua/claudecode/diff_inline.lua 030b11f673d241a6
 block inline_saved           53e3ff9a47388fc9
 block inline_rejected        3a098216eef4b774
-block setup_inline           8c4389f743d8fe71
+block setup_inline           f0fbec5c93abe57f
 site lua/claudecode/diff_inline.lua: diff._cleanup_diff_state(tab_name, "setup failed") @ local function cleanup_unregistered_inline_setup(tab_name, partial)
 site lua/claudecode/diff_inline.lua: diff._register_diff_state(tab_name, { @ function M.setup_inline_diff(params, resolution_callback, config)
 site lua/claudecode/diff_inline.lua: diff._resolve_diff_as_rejected(tab_name) @ function M.setup_inline_diff(params, resolution_callback, config)
@@ -139,7 +139,7 @@ file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
 file lua/claudecode/selection.lua 0fa651cc95e0af0d
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua 3454ff62e057b632
+file lua/claudecode/server/client.lua 5789c6ff18045f9f
 block create_client          647b7523dea26af6
 == lua/claudecode/server/frame.lua
 file lua/claudecode/server/frame.lua 3c50766875878d56
@@ -161,7 +161,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua a291c2d0f65ef167
+file lua/claudecode/server/tcp.lua f1f9833b4322b1ae
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
@@ -211,7 +211,7 @@ file lua/claudecode/tools/open_file.lua 6c7154d5427af9df
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua cdfafd3c2d090ef1
+file lua/claudecode/types.lua beb7511d7913a58f
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua 97fae24d0ce4e33b
 == lua/claudecode/visual_commands.lua
