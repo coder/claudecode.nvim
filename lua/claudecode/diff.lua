@@ -438,7 +438,7 @@ local function display_terminal_in_new_tab()
   -- Set up autocmd to enter terminal mode when focusing this terminal window
   local terminal_auto_insert = not config or not config.terminal or config.terminal.auto_insert ~= false
   if terminal_auto_insert then
-    vim.api.nvim_create_autocmd("BufEnter", {
+    local auto_enter_id = vim.api.nvim_create_autocmd("BufEnter", {
       buffer = terminal_bufnr,
       group = get_autocmd_group(),
       callback = function()
@@ -448,6 +448,15 @@ local function display_terminal_in_new_tab()
         end
       end,
       desc = "Auto-enter terminal mode when focusing Claude Code terminal",
+    })
+    vim.api.nvim_create_autocmd("WinClosed", {
+      group = get_autocmd_group(),
+      pattern = tostring(terminal_win),
+      once = true,
+      callback = function()
+        pcall(vim.api.nvim_del_autocmd, auto_enter_id)
+      end,
+      desc = "Drop the terminal auto-enter handler with the window it was made for",
     })
   end
 
