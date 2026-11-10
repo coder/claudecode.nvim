@@ -886,7 +886,7 @@ end
 function M.is_claude_terminal_buffer(bufnr)
   -- A terminal buffer is named term://{cwd}//{pid}:{cmd}. Look for claude in the command
   -- only, so a shell started in a directory such as claudecode.nvim does not count.
-  local term_cmd = vim.api.nvim_buf_get_name(bufnr):match("^term://.*//%d+:(.*)$")
+  local term_cmd = vim.api.nvim_buf_get_name(bufnr):match("^term://.-//%d+:(.*)$")
   if term_cmd and term_cmd:lower():find("claude", 1, true) then
     return true
   end

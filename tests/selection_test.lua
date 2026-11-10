@@ -1758,6 +1758,16 @@ describe("Range Selection Tests", function()
         assert(selection.is_claude_terminal_buffer(8) == true)
       end)
 
+      it("matches claude in the command whatever its case, and keeps a later //<digits>: in the command", function()
+        _G.vim.test.add_buffer(12, "term://~/proj//123:Claude --resume", { "" })
+        _G.vim.test.add_buffer(13, "term://~/proj//124:sh -c claude-x //9:y", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(12) == true)
+        assert(selection.is_claude_terminal_buffer(13) == true)
+      end)
+
       it("is false for a terminal whose cwd, not its command, contains claude", function()
         _G.vim.test.add_buffer(11, "term://~/src/claudecode.nvim//321:/bin/bash", { "" })
         terminal_module.get_active_terminal_bufnr = function()
