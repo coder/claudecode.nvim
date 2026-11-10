@@ -27,6 +27,7 @@
 - Linting: `luacheck` with settings in `.luacheckrc` (uses `luajit+busted` std).
 - Modules/files: lower_snake_case; return a module table `M` with documented functions (EmmyLua annotations encouraged).
 - Avoid one-letter names; prefer explicit, testable functions.
+- `openFile` write protection: rely only on buffer state that Neovim exposes (options and the plugin's own records). Do not add Lua-side tracking that stands in for internal buffer flags Neovim has no API for, such as BF_NOTEDITED or BF_READERR. State the gap in `lua/claudecode/tools/README.md` instead.
 
 ## Testing Guidelines
 
