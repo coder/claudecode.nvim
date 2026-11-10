@@ -1,0 +1,10 @@
+return {
+  statsfile = "luacov.stats.out",
+  reportfile = "luacov.report.out",
+
+  -- Lua patterns, matched anywhere in the file's path without the `.lua`.
+  include = {
+    "lua/claudecode/",
+    "plugin/",
+  },
+}

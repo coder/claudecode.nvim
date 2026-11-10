@@ -916,17 +916,17 @@ local vim = {
 
   -- Additional missing vim functions
   wait = function(timeout, condition, interval, fast_only)
-    -- Optimized mock implementation for faster test execution
-    local start_time = os.clock()
-    interval = interval or 10 -- Reduced from 200ms to 10ms for faster polling
+    assert(timeout == nil or type(timeout) == "number", "vim.wait: timeout must be a number")
+    assert(condition == nil or type(condition) == "function", "vim.wait: condition must be a function")
+    assert(interval == nil or type(interval) == "number", "vim.wait: interval must be a number")
     timeout = timeout or 1000
+    interval = interval or 10
 
-    while (os.clock() - start_time) * 1000 < timeout do
+    local polls = math.floor(timeout / math.max(interval, 1)) + 1
+    for _ = 1, polls do
       if condition and condition() then
         return true
       end
-      -- Add a small sleep to prevent busy-waiting and reduce CPU usage
-      os.execute("sleep 0.001") -- 1ms sleep
     end
 
     return false
