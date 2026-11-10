@@ -1977,9 +1977,9 @@ describe("Range Selection Tests", function()
         settle()
         assert.are.equal("alpha", selection.get_latest_selection().text)
 
-        start_selecting(5) -- gv: the old selection is not held any more, and Claude still has it until an update
-        assert.is_true(selection.state.cursor_at_flush.left)
-        assert.are.equal("alpha", selection.get_latest_selection().text)
+        start_selecting(5) -- gv: a new selection replaces the held one
+        assert.is_nil(selection.state.cursor_at_flush)
+        assert.is_nil(selection.state.last_active_visual_selection)
 
         -- d: the changedtick moves, visual mode ends, the cursor lands on column 0 again.
         _G.vim._changedtick = 6
@@ -2004,6 +2004,7 @@ describe("Range Selection Tests", function()
           selection = { start = { line = 0, character = 0 }, ["end"] = { line = 0, character = 5 }, isEmpty = false },
         }
         selection.state.last_active_visual_selection = { bufnr = 1, selection_data = live, timestamp = 0 }
+        selection.state.selection_tick = { bufnr = 1, tick = 5 }
         selection.state.latest_selection = live
 
         -- d: the flush sees the changedtick move and skips. What it skips is not held any more.
@@ -2097,6 +2098,29 @@ describe("Range Selection Tests", function()
         settle()
 
         assert_claude_holds_cursor("/path/to/a.txt", 5)
+      end)
+
+      it("holds no deleted text after you leave, come back, edit and go to the terminal quickly", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce() -- arms the demotion
+        local demotion = selection.state.demotion_timer
+        assert(demotion ~= nil)
+
+        enter_buffer(2)
+        demotion:fire() -- in b.txt: the held state of a.txt is resolved, and nothing is reported yet
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        enter_buffer(1)
+        _G.vim.test.set_cursor(0, 1, 4)
+        change_text(6, "alph beta gamma") -- x, still before the debounce fires
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        go_to_buffer(2, 0)
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
 
       -- Finding 3, SameFile: a long visual_demotion_delay_ms, so the demotion is still pending (it never fires
