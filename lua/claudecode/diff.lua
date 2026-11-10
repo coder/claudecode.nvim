@@ -1313,12 +1313,34 @@ function M._create_diff_view_from_window(
   }
 end
 
+local CLEANUP_RETRY_MS = 100
+
+---True while Neovim refuses to change windows: the command-line window is open (E11), or text is locked (E565, as
+---inside an `<expr>` mapping or a handler that waits in the event loop). A switch to the current window does nothing
+---and raises in both states.
+---@return boolean
+local function windows_locked()
+  return not pcall(vim.api.nvim_set_current_win, vim.api.nvim_get_current_win())
+end
+
 ---Clean up diff state and resources
 ---@param tab_name string The diff identifier
 ---@param reason string Reason for cleanup
 function M._cleanup_diff_state(tab_name, reason)
   local diff_data = active_diffs[tab_name]
   if not diff_data then
+    return
+  end
+
+  -- While windows cannot change, the closes below fail or raise, and the entry would leave `active_diffs` with its
+  -- windows still on screen. So the whole cleanup waits with the entry registered. The retry runs only while the
+  -- entry is still this one, because a new diff can take the tab name before it fires.
+  if windows_locked() then
+    vim.defer_fn(function()
+      if active_diffs[tab_name] == diff_data then
+        M._cleanup_diff_state(tab_name, reason)
+      end
+    end, CLEANUP_RETRY_MS)
     return
   end
 
