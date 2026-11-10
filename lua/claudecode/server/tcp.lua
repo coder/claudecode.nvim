@@ -285,6 +285,20 @@ function M._remove_client(server, client)
   end
 end
 
+---Drop a client that the ping timer gave up on, and report it at once. RFC 6455 reserves 1006, so the Close frame says
+---1011, as other servers do for a keepalive timeout. The connection still ends without the client's Close frame, which
+---is what 1006 means here. The socket does not wait for that frame: a Claude that stopped answering or reading may
+---never read it, and the frame waits behind everything queued for it. Closing now drops the frame and the queue.
+---@param server TCPServer The server object
+---@param client WebSocketClient The client to drop
+---@param close_reason string The reason in the Close frame
+---@param disconnect_reason string The reason that `on_disconnect` gets, with the code 1006
+local function drop_client(server, client, close_reason, disconnect_reason)
+  client_manager.close_client(client, 1011, close_reason)
+  client.close_pending = nil
+  M._disconnect_client(server, client, 1006, disconnect_reason)
+end
+
 ---Send a message to a specific client
 ---@param server TCPServer The server object
 ---@param client_id string The client ID
@@ -373,7 +387,7 @@ function M.start_ping_timer(server, interval)
     local is_wake_from_sleep = elapsed > (interval * 1.5)
 
     if is_wake_from_sleep then
-      -- After system sleep/wake, reset all client pong timestamps to prevent false timeouts
+      -- After system sleep/wake, reset all client pong and write-progress timestamps to prevent false timeouts
       -- This gives clients a fresh keepalive window since the time jump isn't their fault
       require("claudecode.logger").debug(
         "server",
@@ -385,6 +399,7 @@ function M.start_ping_timer(server, interval)
       for _, client in pairs(server.clients) do
         if client.state == "connected" then
           client.last_pong = now
+          client.last_drain = now
         end
       end
     end
@@ -393,7 +408,20 @@ function M.start_ping_timer(server, interval)
       if client.state == "connected" then
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, interval * 2) then
-          client_manager.send_ping(client, "ping")
+          if client_manager.is_client_reading(client, interval * 2) then
+            client_manager.send_ping(client, "ping")
+          else
+            -- A Claude whose reader is stuck can still answer each ping, so only its write queue shows it. The queue
+            -- is Neovim's memory: it goes with the client.
+            local time_since_drain = math.floor((now - client.last_drain) / 1000)
+            local queued_kb = math.floor(client.tcp_handle:get_write_queue_size() / 1024)
+            require("claudecode.logger").one_line(
+              "info",
+              "server",
+              string.format("Closed %s: not reading for %ds, %d KB queued", client.id, time_since_drain, queued_kb)
+            )
+            drop_client(server, client, "Not reading", "Write queue stalled")
+          end
         else
           -- Client connection timed out - log at INFO level (this is expected behavior)
           local time_since_pong = math.floor((now - client.last_pong) / 1000)
@@ -402,13 +430,7 @@ function M.start_ping_timer(server, interval)
             "server",
             string.format("Closed %s: no reply for %ds", client.id, time_since_pong)
           )
-          -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
-          -- connection still ends without the client's Close frame, which is what 1006 means here.
-          client_manager.close_client(client, 1011, "Keepalive timeout")
-          -- The socket does not wait for the Close frame: a Claude that stopped answering may never read it. Closing
-          -- now drops the frame when Claude's window is full.
-          client.close_pending = nil
-          M._disconnect_client(server, client, 1006, "Connection timeout")
+          drop_client(server, client, "Keepalive timeout", "Connection timeout")
         end
       end
     end

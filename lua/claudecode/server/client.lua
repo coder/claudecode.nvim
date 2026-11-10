@@ -30,6 +30,9 @@ local CLOSE_REASONS = {
 ---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
+---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
+---@field drained_bytes integer The bytes libuv had written to the socket when `is_client_reading` last saw progress
+---@field last_drain number Timestamp of the last `is_client_reading` check that found the write queue empty or smaller
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -46,9 +49,22 @@ function M.create_client(tcp_handle)
     handshake_complete = false,
     last_ping = 0,
     last_pong = vim.loop.now(),
+    queued_bytes = 0,
+    drained_bytes = 0,
+    last_drain = vim.loop.now(),
   }
 
   return client
+end
+
+---Write to the socket of a client. Every write goes through here, so `queued_bytes` counts them all: the bytes still in
+---libuv's write queue are `queued_bytes - drained_bytes`, and `is_client_reading` tells a stalled queue from a slow one.
+---@param client WebSocketClient
+---@param data string
+---@param callback function? Optional callback: function(err)
+local function write(client, data, callback)
+  client.queued_bytes = client.queued_bytes + #data
+  client.tcp_handle:write(data, callback)
 end
 
 ---Adds a data frame to the message the client is sending. A text message arrives as one TEXT frame with FIN set, or
@@ -172,7 +188,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         client.state = "closing"
       end
 
-      client.tcp_handle:write(response_from_handshake, function(err)
+      write(client, response_from_handshake, function(err)
         if err or not success then
           -- on_error removes the client from the server and closes its socket. A server that stopped while the reply
           -- was written has already dropped the client, so the socket is closed here too.
@@ -194,6 +210,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
         -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
         client.last_pong = vim.loop.now()
+        client.last_drain = client.last_pong
         logger.debug("client", "WebSocket connection established for client:", client.id)
 
         if #client.buffer > 0 then
@@ -263,7 +280,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
       if client.state == "connected" then
         local close_frame = frame.create_close_frame(code, reason)
-        client.tcp_handle:write(close_frame)
+        write(client, close_frame)
         client.state = "closing"
       end
 
@@ -278,7 +295,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       break
     elseif opcode == frame.OPCODE.PING then
       local pong_frame = frame.create_pong_frame(parsed_frame.payload)
-      client.tcp_handle:write(pong_frame)
+      write(client, pong_frame)
     elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
     end
@@ -305,7 +322,7 @@ function M.send_message(client, message, callback)
   -- Every outbound message passes here. A buffer name or path in it can hold any bytes, and the client drops the
   -- connection on a text frame that is not valid UTF-8.
   local text_frame = frame.create_text_frame(utils.valid_utf8(message))
-  client.tcp_handle:write(text_frame, callback)
+  write(client, text_frame, callback)
 end
 
 ---Send a ping to a client
@@ -317,7 +334,7 @@ function M.send_ping(client, data)
   end
 
   local ping_frame = frame.create_ping_frame(data or "")
-  client.tcp_handle:write(ping_frame)
+  write(client, ping_frame)
   client.last_ping = vim.loop.now()
 end
 
@@ -351,7 +368,7 @@ function M.close_client(client, code, reason)
     -- The write callback closes the socket, so nothing may close it first: that would cancel the frame. libuv always
     -- invokes the callback (on success or error), so the socket is never left open.
     client.close_pending = true
-    client.tcp_handle:write(close_frame, function()
+    write(client, close_frame, function()
       client.close_pending = nil
       client.state = "closed"
       if not client.tcp_handle:is_closing() then
@@ -381,6 +398,27 @@ function M.is_client_alive(client, timeout)
 
   local now = vim.loop.now()
   return (now - client.last_pong) < timeout
+end
+
+---Check that a client still reads what the server writes to it. The keepalive cannot tell: a Claude whose reader is
+---stuck can still answer each ping, while replies and pings pile up in libuv's write queue, in Neovim's memory.
+---The client reads when the queue is empty, or libuv wrote a byte of it since the last check. A client that reads
+---slowly keeps writing progress, and so does one that is sent a single large message, however big. Call it at each ping
+---tick: the clock of the window is the time since the last check that found progress.
+---@param client WebSocketClient The client object
+---@param timeout number Timeout in milliseconds: how long the queue may stay without progress
+---@return boolean reading False when the queue went `timeout` without a byte written
+function M.is_client_reading(client, timeout)
+  assert(type(timeout) == "number", "Expected timeout to be a number")
+
+  local queue_size = client.tcp_handle:get_write_queue_size()
+  local drained = client.queued_bytes - queue_size
+
+  local now = vim.loop.now()
+  if queue_size == 0 or drained > client.drained_bytes then
+    client.drained_bytes, client.last_drain = drained, now
+  end
+  return (now - client.last_drain) < timeout
 end
 
 ---Get client info for debugging

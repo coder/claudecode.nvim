@@ -1240,6 +1240,9 @@ local vim = {
           end
           return true
         end,
+        get_write_queue_size = function(self)
+          return 0
+        end,
         close = function(self)
           return true
         end,

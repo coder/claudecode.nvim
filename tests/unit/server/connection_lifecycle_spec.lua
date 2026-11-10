@@ -50,9 +50,10 @@ describe("The lifecycle of a WebSocket connection", function()
     vim.schedule, vim.loop.now, vim.loop.new_timer = saved.schedule, saved.now, saved.new_timer
   end)
 
-  ---Accept a connection whose socket works like libuv's.
+  ---Accept a connection whose socket works like libuv's. `handle:get_write_queue_size()` counts the bytes of the writes
+  ---that wait, and `handle.drain(n)` lets the kernel accept `n` bytes of them, the oldest write first.
   ---@return table client
-  ---@return table writes Each write: { data = string, done = function(err) }
+  ---@return table writes Each write: { data = string, left = integer, done = function(err) }
   ---@return table handle
   local function connect()
     tcp._handle_new_connection(server)
@@ -61,7 +62,30 @@ describe("The lifecycle of a WebSocket connection", function()
     local closed = false
     function handle:write(data, callback)
       assert(not closed, "write after close")
-      table.insert(writes, { data = data, done = callback or function() end })
+      local write = { data = data, left = #data }
+      function write.done(err)
+        write.left = 0
+        if callback then
+          callback(err)
+        end
+      end
+      table.insert(writes, write)
+    end
+    function handle:get_write_queue_size()
+      local size = 0
+      for _, write in ipairs(writes) do
+        size = size + write.left
+      end
+      return size
+    end
+    function handle.drain(bytes)
+      for _, write in ipairs(writes) do
+        local taken = math.min(write.left, bytes)
+        write.left, bytes = write.left - taken, bytes - taken
+        if taken > 0 and write.left == 0 then
+          write.done()
+        end
+      end
     end
     function handle:close()
       assert(not closed, "handle is already closing")
@@ -256,6 +280,142 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.spy(callbacks.on_disconnect).was_called(1)
       assert.equals(1011, close_status(writes[#writes]))
       assert.is_true(handle:is_closing(), "the socket waits for a Claude that does not read")
+    end)
+  end)
+
+  -- A PONG keeps the keepalive window open, so only the write queue can show that Claude stopped reading. The queue
+  -- counts as stalled when libuv wrote no byte of it for two intervals, the window of the keepalive.
+  describe("when Claude answers each ping but stops reading", function()
+    local reply = string.rep("x", 262144)
+
+    ---Claude's PONG reaches the server, then one interval passes and the ping timer runs.
+    local function pong_and_tick(tick, handle)
+      handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+      clock = clock + interval
+      tick()
+    end
+
+    it("closes the client once the write queue stalls for two intervals, and frees the queue", function()
+      local tick = start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+
+      -- Every interval Neovim queues another reply, and Claude reads none of them.
+      for _ = 1, 2 do
+        tcp.send_to_client(server, client.id, reply)
+        pong_and_tick(tick, handle)
+      end
+      assert.is_not_nil(server.clients[client.id], "the client was dropped before the window ended")
+      assert.is_true(handle:get_write_queue_size() > 2 * #reply)
+
+      tcp.send_to_client(server, client.id, reply)
+      pong_and_tick(tick, handle)
+
+      assert.is_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_called(1)
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+      assert.equals(1011, close_status(writes[#writes]))
+      assert.is_true(handle:is_closing(), "the socket still holds the queue")
+    end)
+
+    it("reports the stall as one info line", function()
+      local logger = require("claudecode.logger")
+      local lines = {}
+      local saved_one_line = logger.one_line
+      logger.one_line = function(level, component, text)
+        table.insert(lines, { level = level, component = component, text = text })
+      end
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+
+      for _ = 1, 3 do
+        pong_and_tick(tick, handle)
+      end
+      logger.one_line = saved_one_line
+
+      assert.same({ { level = "info", component = "server", text = "Closed " .. client.id .. ": not reading for 60s, 256 KB queued" } }, lines)
+    end)
+
+    it("keeps a client that reads slowly, although its queue keeps growing", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
+      -- Neovim queues a reply every interval and the kernel takes 1 KB of the queue: Claude reads, but slowly.
+      for _ = 1, 20 do
+        tcp.send_to_client(server, client.id, reply)
+        handle.drain(1024)
+        pong_and_tick(tick, handle)
+      end
+
+      assert.is_not_nil(server.clients[client.id], "a Claude that reads was dropped")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      assert.is_true(handle:get_write_queue_size() > 19 * #reply)
+    end)
+
+    it("keeps a client that is sent one large message, however long it takes to read", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      local large = string.rep("x", 16 * 1024 * 1024)
+      tcp.send_to_client(server, client.id, large)
+
+      -- Claude reads 1 MB per interval, so the message needs 16 intervals, many times the window.
+      for _ = 1, 20 do
+        handle.drain(1024 * 1024)
+        pong_and_tick(tick, handle)
+      end
+
+      assert.is_not_nil(server.clients[client.id], "a Claude that reads one large message was dropped")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+      assert.is_true(handle:get_write_queue_size() < 1024, "only the pings of the last intervals are left")
+    end)
+
+    it("counts the window from the last byte Claude read, not from the connection", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+
+      -- Claude reads for five intervals. Then it stops.
+      for _ = 1, 5 do
+        handle.drain(1024)
+        pong_and_tick(tick, handle)
+      end
+      assert.is_not_nil(server.clients[client.id])
+      pong_and_tick(tick, handle) -- no progress for one interval
+      assert.is_not_nil(server.clients[client.id], "the window ended after one interval")
+      pong_and_tick(tick, handle) -- no progress for two
+
+      assert.is_nil(server.clients[client.id])
+    end)
+
+    it("keeps a client that reads every ping, so that its queue is empty at each tick", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+
+      for _ = 1, 10 do
+        handle.drain(math.huge)
+        pong_and_tick(tick, handle)
+      end
+
+      assert.is_not_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+
+    it("gives the client a fresh window after Neovim slept, as it does for the keepalive", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      pong_and_tick(tick, handle)
+
+      -- The machine sleeps for ten minutes. The timer runs first when it wakes, before Claude could read.
+      clock = clock + 600000
+      tick()
+      assert.is_not_nil(server.clients[client.id], "the sleep counted against the client")
+
+      pong_and_tick(tick, handle)
+      assert.is_not_nil(server.clients[client.id], "the window did not restart at the wake")
+      pong_and_tick(tick, handle)
+
+      assert.is_nil(server.clients[client.id])
     end)
   end)
 end)
