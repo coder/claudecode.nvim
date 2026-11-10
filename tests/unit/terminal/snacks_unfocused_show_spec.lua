@@ -369,17 +369,18 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         self.win = nil
       end
       current_win = source_win
-      assert.is_true(snacks_provider.hide_float())
+      local token = snacks_provider.hide_float()
+      assert.is_truthy(token)
       assert.is_nil(term.win)
       pending_insert = false
-      return term
+      return term, token
     end
 
     it("re-creates the float without entering it or queuing an insert", function()
       local cfg = config({ position = "float" })
-      local term = float_hidden_by_a_diff(cfg)
+      local term, token = float_hidden_by_a_diff(cfg)
 
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
 
       assert_shown_and_caller_untouched(term)
       assert.are.equal(1, #shows)
@@ -389,9 +390,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
     it("leaves a user's snacks_win_opts.enter to decide", function()
       local cfg = config({ position = "float", enter = true })
-      local term = float_hidden_by_a_diff(cfg)
+      local term, token = float_hidden_by_a_diff(cfg)
 
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
 
       assert.are.equal(1, #shows)
       assert.is_true(shows[1].enter)

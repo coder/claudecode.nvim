@@ -310,12 +310,13 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       local term, other_win = open_float()
       local win = term.win
 
-      assert.is_true(snacks_provider.hide_float())
+      local token = snacks_provider.hide_float()
+      assert.is_truthy(token)
       assert.is_true(windows[win].valid)
       assert.is_true(windows[win].config.hide)
       assert.is_false(snacks_provider.hide_float(), "a float that is already hidden is not hidden again")
 
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
       assert.is_false(windows[win].config.hide)
       assert.are.equal(other_win, current_win, "showing the float does not move focus into it")
     end)
@@ -324,10 +325,11 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       snacks_provider.open("claude", {}, split_config(), true)
       local term = snacks_provider._get_terminal_for_test()
 
-      assert.is_false(snacks_provider.hide_float())
+      local token = snacks_provider.hide_float()
+      assert.is_false(token)
       assert.is_true(windows[term.win].valid)
       assert.is_false(windows[term.win].config.hide)
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
       assert.is_true(windows[term.win].valid)
     end)
 
@@ -339,21 +341,49 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       local term = open_float()
       windows[term.win].config.hide = true
 
+      snacks_provider.restore_float(snacks_provider.hide_float())
       snacks_provider.restore_float()
       assert.is_true(windows[term.win].config.hide, "a float the user hid stays hidden")
+    end)
+
+    it("restore_float does nothing without the token of a hide", function()
+      local term = open_float()
+      snacks_provider.hide_float()
+
+      snacks_provider.restore_float()
+      snacks_provider.restore_float({})
+      assert.is_true(windows[term.win].config.hide)
+    end)
+
+    it("restore_float ignores the token of an earlier hide once a later hide has happened", function()
+      local term = open_float()
+      local win = term.win
+      local earlier = snacks_provider.hide_float()
+
+      snacks_provider.simple_toggle("claude", {}, float_config())
+      assert.is_false(windows[win].config.hide, "the user brought it back")
+      local later = snacks_provider.hide_float()
+      assert.is_truthy(later)
+      assert.is_true(windows[win].config.hide)
+
+      snacks_provider.restore_float(earlier)
+      assert.is_true(windows[win].config.hide, "the earlier hide no longer says anything about the float")
+
+      snacks_provider.restore_float(later)
+      assert.is_false(windows[win].config.hide)
     end)
 
     it("restore_float keeps a float the user brought back and closed during the diff closed", function()
       local term = open_float()
       local win = term.win
-      snacks_provider.hide_float()
+      local token = snacks_provider.hide_float()
 
       snacks_provider.simple_toggle("claude", {}, float_config())
       assert.is_false(windows[win].config.hide, "the user brought it back")
       windows[win].valid = false
       term.win = nil
 
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
       assert.is_nil(term.win)
       assert.spy(open_show_spy).was_not_called()
     end)
@@ -361,13 +391,13 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     it("restore_float keeps a float the user brought back and hid again hidden", function()
       local term = open_float()
       local win = term.win
-      snacks_provider.hide_float()
+      local token = snacks_provider.hide_float()
 
       snacks_provider.simple_toggle("claude", {}, float_config())
       snacks_provider.simple_toggle("claude", {}, float_config())
       assert.is_true(windows[win].config.hide)
 
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
       assert.is_true(windows[win].config.hide)
     end)
 
@@ -382,10 +412,11 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         local term = open_float()
         local win = term.win
 
-        assert.is_true(snacks_provider.hide_float())
+        local token = snacks_provider.hide_float()
+        assert.is_truthy(token)
         assert.is_false(windows[win].valid)
 
-        snacks_provider.restore_float()
+        snacks_provider.restore_float(token)
         assert.spy(open_show_spy).was_called(1)
         assert.are.equal("editor", windows[term.win].config.relative)
       end)
@@ -393,18 +424,18 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
 
     it("restore_float does not bring back a terminal that was closed during the diff", function()
       local term = open_float()
-      snacks_provider.hide_float()
+      local token = snacks_provider.hide_float()
       term.buf = nil
 
       assert.has_no.errors(function()
-        snacks_provider.restore_float()
+        snacks_provider.restore_float(token)
       end)
       assert.spy(open_show_spy).was_not_called()
     end)
 
     it("restore_float leaves a terminal that replaced the hidden one alone", function()
       local term = open_float()
-      snacks_provider.hide_float()
+      local token = snacks_provider.hide_float()
       term.buf = nil
 
       snacks_provider.open("claude", {}, float_config(), true)
@@ -413,7 +444,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       snacks_provider.simple_toggle("claude", {}, float_config())
       assert.is_true(windows[replacement.win].config.hide, "the user hid the new terminal")
 
-      snacks_provider.restore_float()
+      snacks_provider.restore_float(token)
       assert.is_true(windows[replacement.win].config.hide)
     end)
   end)

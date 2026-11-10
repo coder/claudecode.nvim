@@ -225,9 +225,10 @@ local function reapply_snacks_window_state(term, win)
   end)
 end
 
----The terminal whose float hide_float hid, until anything else shows the terminal.
----@type table?
-local float_hidden_for_diff = nil
+---How many times `cc_show` and `cc_hide` changed the terminal window. It says nothing about who changed it:
+---`hide_float` hands out its value, and `restore_float` compares it, so that a float the user showed or hid in
+---between stays as the user left it.
+local window_changes = 0
 
 ---Hide the terminal window without disturbing the cursor anchor.
 ---@param term table Snacks terminal instance
@@ -235,6 +236,7 @@ local function cc_hide(term)
   if not cc_is_visible(term) then
     return
   end
+  window_changes = window_changes + 1
   local logger = require("claudecode.logger")
   local win = term.win
   if win_is_floating(win) then
@@ -276,7 +278,7 @@ end
 ---@param config table Effective terminal config (split_side, split_width_percentage)
 ---@return boolean shown
 local function cc_show(term, focus, config)
-  float_hidden_for_diff = nil
+  window_changes = window_changes + 1
   if not (term and term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
     return false
   end
@@ -681,22 +683,20 @@ end
 
 ---Hide the terminal when it is a visible float, so that it does not cover a diff. A split stays as it is: a
 ---diff makes room for it. `restore_float` shows the float again.
----@return boolean hidden Whether a float was hidden
+---@return table|false token Opaque. Give it to `restore_float`. False when no float was hidden.
 function M.hide_float()
   if not (terminal and terminal:buf_valid() and cc_is_visible(terminal) and win_is_floating(terminal.win)) then
     return false
   end
   cc_hide(terminal)
-  float_hidden_for_diff = terminal
-  return true
+  return { terminal = terminal, window_changes = window_changes }
 end
 
 ---Show the float that `hide_float` hid, without focus. Does nothing once anything else has shown or hidden the
 ---terminal since, so a float that the user brought back and closed again, or hid again, stays as they left it.
-function M.restore_float()
-  local hidden = float_hidden_for_diff
-  float_hidden_for_diff = nil
-  if hidden and hidden == terminal then
+---@param token table|false|nil What `hide_float` returned
+function M.restore_float(token)
+  if type(token) == "table" and token.terminal == terminal and token.window_changes == window_changes then
     cc_show(terminal, false, terminal._cc and terminal._cc.config)
   end
 end

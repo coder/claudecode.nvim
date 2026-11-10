@@ -5,7 +5,7 @@ With `terminal.provider = "snacks"` and `snacks_win_opts.position = "float"`, Cl
 ## Sub-features
 
 - `float-hide` hides the float, and its backdrop, when a split or unified diff opens, and leaves the diff window focused in Normal mode.
-- `float-restore` shows the float again when `close_tab` closes the diff while the user is still in the diff's tab and no other window shows the terminal, with the cursor back where it was when the diff opened. In another tab the float stays hidden.
+- `float-restore` shows the float again when `close_tab` closes the diff while the user is still in the diff's tab, no other window shows the terminal, and the user did not show or hide the float in between, with the cursor back where it was when the diff opened. In another tab the float stays hidden.
 - `float-keep-focus` leaves the float on screen, with focus, when `diff_opts.keep_terminal_focus = true`.
 
 ## How to get to it (user POV)

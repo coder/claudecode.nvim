@@ -1201,6 +1201,20 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
           hide_float:was_called(1)
         end)
 
+        it("hide_float returns the token that the provider's hide_float returns", function()
+          local token = { window_changes = 7 }
+          terminal_wrapper.setup({
+            provider = provider_with({
+              hide_float = function()
+                return token
+              end,
+              restore_float = function() end,
+            }),
+          })
+
+          assert.are.equal(token, terminal_wrapper.hide_float())
+        end)
+
         it("hide_float returns false when the provider hid nothing", function()
           terminal_wrapper.setup({
             provider = provider_with({
@@ -1231,11 +1245,19 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         end)
 
         it("restore_float calls the provider's restore_float", function()
-          local restore_float = spy.new(function() end)
-          terminal_wrapper.setup({ provider = provider_with({ restore_float = restore_float }) })
+          local received = {}
+          terminal_wrapper.setup({
+            provider = provider_with({
+              restore_float = function(...)
+                received[#received + 1] = { n = select("#", ...), ... }
+              end,
+            }),
+          })
 
-          terminal_wrapper.restore_float()
-          restore_float:was_called(1)
+          local token = { window_changes = 7 }
+          terminal_wrapper.restore_float(token)
+          assert.are.equal(1, #received)
+          assert.are.equal(token, received[1][1], "the provider gets the token that hide_float returned")
         end)
 
         it("restore_float does nothing for a provider that has no restore_float", function()

@@ -638,21 +638,22 @@ end
 
 ---Hides the Claude terminal when it is a floating window, so that it does not cover a diff. A provider has a float
 ---to hide only when it implements both `hide_float` and `restore_float`.
----@return boolean hidden True when a visible float was hidden
+---@return any token Opaque, truthy: give it to `restore_float`. False when no visible float was hidden.
 function M.hide_float()
   local provider = get_provider()
   if not (provider.hide_float and provider.restore_float) then
     return false
   end
-  return provider.hide_float() == true
+  return provider.hide_float() or false
 end
 
 ---Shows the float that `hide_float` hid, without focus. Does nothing when the user has shown or hidden the terminal
 ---since.
-function M.restore_float()
+---@param token any What `hide_float` returned
+function M.restore_float(token)
   local provider = get_provider()
   if provider.restore_float then
-    provider.restore_float()
+    provider.restore_float(token)
   end
 end
 

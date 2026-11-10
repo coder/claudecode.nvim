@@ -990,22 +990,32 @@ local function visible_terminal_windows()
   return wins
 end
 
----Whether another open diff hid the Claude terminal's float in `tab`.
+---The newest other open diff that hid the Claude terminal's float, in `tab` or, without `tab`, in any tab. The
+---newest one, so that a diff that shares its hide gets the hide that is still current, and not an older one that the
+---user has undone since.
 ---@param tab_name string The diff identifier to leave out
----@param tab number
----@return boolean
-local function other_diff_hid_float(tab_name, tab)
+---@param tab number? Only a diff that hid the float in this tab
+---@return table? other The other diff's state
+local function other_diff_that_hid_float(tab_name, tab)
+  local newest = nil
   for other_name, other in pairs(active_diffs) do
-    if other_name ~= tab_name and other.hid_terminal_float_tab == tab then
-      return true
+    local hid = other.hid_terminal_float
+    if
+      other_name ~= tab_name
+      and hid
+      and (tab == nil or hid.tab == tab)
+      and (newest == nil or other.open_order > newest.open_order)
+    then
+      newest = other
     end
   end
-  return false
+  return newest
 end
 
 ---Hide the Claude terminal's float when it covers the tab of the diff window `diff_win`. A float is not a tiled
----window, so the diff cannot make room for it. The diff keeps the tab in `hid_terminal_float_tab`, and a second diff
----in that tab shares it, so the float comes back when the last of them closes.
+---window, so the diff cannot make room for it. The diff keeps what it needs to bring the float back in its own
+---`hid_terminal_float` (the tab, and the token that `hide_float` returned). A second diff in that tab, with the float
+---already hidden, takes the same token, so that the float comes back when the last of them closes.
 ---@param tab_name string The diff identifier
 ---@param diff_win number? The diff's proposed window
 local function hide_terminal_float_for_diff(tab_name, diff_win)
@@ -1021,14 +1031,16 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
     local shown = visible_terminal_windows()
     for _, win in ipairs(shown) do
       if vim.api.nvim_win_get_tabpage(win) == diff_tab and (vim.api.nvim_win_get_config(win).relative or "") ~= "" then
-        if require("claudecode.terminal").hide_float() then
-          diff_data.hid_terminal_float_tab = diff_tab
+        local token = require("claudecode.terminal").hide_float()
+        if token then
+          diff_data.hid_terminal_float = { tab = diff_tab, token = token }
         end
         return
       end
     end
-    if #shown == 0 and other_diff_hid_float(tab_name, diff_tab) then
-      diff_data.hid_terminal_float_tab = diff_tab
+    local other = #shown == 0 and other_diff_that_hid_float(tab_name, diff_tab) or nil
+    if other then
+      diff_data.hid_terminal_float = other.hid_terminal_float
     end
   end)
   if not ok then
@@ -1037,17 +1049,18 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
 end
 
 ---Show the float that this diff hid, once the last diff that hid it has closed. It comes back without focus, and
----only while the user is in the diff's tab and nothing else shows the terminal. Otherwise it stays hidden.
+---only while the user is in the diff's tab, nothing else shows the terminal, and the provider finds the terminal as
+---this diff left it. Otherwise it stays hidden.
 ---@param tab_name string The diff identifier
 ---@param diff_data table The diff's state
 local function show_terminal_float_after_diff(tab_name, diff_data)
-  local tab = diff_data.hid_terminal_float_tab
-  if not tab or other_diff_hid_float(tab_name, tab) then
+  local hid = diff_data.hid_terminal_float
+  if not hid or other_diff_that_hid_float(tab_name) then
     return
   end
   local ok, err = pcall(function()
-    if vim.api.nvim_get_current_tabpage() == tab and #visible_terminal_windows() == 0 then
-      require("claudecode.terminal").restore_float()
+    if vim.api.nvim_get_current_tabpage() == hid.tab and #visible_terminal_windows() == 0 then
+      require("claudecode.terminal").restore_float(hid.token)
     end
   end)
   if not ok then
