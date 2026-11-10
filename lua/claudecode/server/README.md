@@ -26,7 +26,7 @@ Layers, top to bottom:
 - `tools/call` delegates to `tools.handle_invoke` and returns a `_deferred` table for blocking tools [server/init.lua:M.register_handlers]
 - `M.send(client, method, params) -> boolean`: sends a JSON-RPC notification to one client [server/init.lua:M.send]
 - `M.send_response(client, id, result, error_data) -> boolean`: a `nil` id is sent as JSON `null` (`vim.NIL`) [server/init.lua:M.send_response]
-- `M.broadcast(method, params) -> boolean`: sends a notification to every `connected` client, and returns true only when at least one took it [server/init.lua:M.broadcast]
+- `M.broadcast(method, params, on_written?) -> boolean`: sends a notification to every `connected` client, and returns true only when at least one took it. When one did, `on_written(written)` runs once after the last write finished, with how many writes succeeded: a socket that fails during the write reports it only there [server/init.lua:M.broadcast] [server/tcp.lua:M.broadcast]
 - `M.get_status() -> { running, port, client_count, clients }`. `clients` is present only while the server runs [server/init.lua:M.get_status]
 - Internal dispatch: `M._handle_message`, `M._handle_request`, `M._handle_notification`, and `M._setup_deferred_response` [server/init.lua:M._handle_message]
 

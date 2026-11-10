@@ -121,7 +121,7 @@ site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, 
 == lua/claudecode/health.lua
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua cd570b67f5c23a17
+file lua/claudecode/init.lua 7e6ff751741f47cc
 block user_close_all     10e024fd8ada1c16
 site lua/claudecode/init.lua: local pending = diff.close_pending_diffs("user command") @ function M._create_commands()
 site lua/claudecode/init.lua: local rejected = diff.close_rejected_diffs("user command") @ function M._create_commands()
@@ -142,7 +142,7 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua dcac9fddf1ad3be3
+file lua/claudecode/server/init.lua d6e881211c59f191
 block server_stop        4dae0bf675cf2cc1
 block on_disconnect      9110ffdfd72d4ea6
 block handle_request     b74ff7dc2e55a2b8
@@ -155,9 +155,9 @@ site lua/claudecode/server/init.lua: diff.close_pending_diffs("server stopping")
 site lua/claudecode/server/init.lua: if _G.claude_deferred_responses then @ function M.stop()
 site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ function M._setup_deferred_response(deferred_info)
 == lua/claudecode/server/mock.lua
-file lua/claudecode/server/mock.lua b2726250730d062f
+file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 2ec384dd58cfbbd7
+file lua/claudecode/server/tcp.lua 2f78d4f315ed2a1c
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
