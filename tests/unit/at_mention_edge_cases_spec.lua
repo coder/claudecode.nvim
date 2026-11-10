@@ -155,6 +155,24 @@ describe("At Mention Edge Cases", function()
       expect(init_module._format_path_for_at_mention("/Users/test/projectX/a.lua")).to_be("/Users/test/projectX/a.lua")
     end)
 
+    it("keeps a relative name that starts with ~ in the cwd", function()
+      mock_vim.fn.filereadable = function(path)
+        return path == "~weird.txt" and 1 or 0
+      end
+      -- Real Neovim reads a leading ~ as ~user, so :p leaves "~weird.txt" unchanged.
+      local real_fnamemodify = mock_vim.fn.fnamemodify
+      finally(function()
+        mock_vim.fn.fnamemodify = real_fnamemodify
+      end)
+      mock_vim.fn.fnamemodify = function(path, mods)
+        if mods == ":p" and path:sub(1, 1) == "~" then
+          return path
+        end
+        return real_fnamemodify(path, mods)
+      end
+      expect(init_module._format_path_for_at_mention("~weird.txt")).to_be("/Users/test/project/~weird.txt")
+    end)
+
     it("makes a relative path absolute against Neovim's cwd", function()
       expect(init_module._format_path_for_at_mention("src/file.lua")).to_be("/Users/test/project/src/file.lua")
     end)

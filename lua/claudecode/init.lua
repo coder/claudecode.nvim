@@ -1286,12 +1286,18 @@ function M._format_path_for_at_mention(file_path)
   -- Send the absolute path. A path made relative to Neovim's cwd names a different file
   -- when Claude's cwd differs (terminal.cwd, cwd_provider, git_repo_cwd, a CLI started
   -- elsewhere) or after a :cd, and a text-prefix cwd match cut /work/foobar to "ar".
-  local formatted_path = vim.fn.fnamemodify(file_path, ":p")
+  local function is_absolute(path)
+    return path:sub(1, 1) == "/" or path:match("^%a:[/\\]") ~= nil or path:sub(1, 2) == "\\\\"
+  end
+  -- Join a relative path to the cwd first: :p reads a leading ~ as ~user and would
+  -- leave a file named "~notes.txt" relative.
+  local absolute_input = is_absolute(file_path) and file_path or (vim.fn.getcwd() .. "/" .. file_path)
+  local formatted_path = vim.fn.fnamemodify(absolute_input, ":p")
   local is_directory = vim.fn.isdirectory(formatted_path) == 1
-  if is_directory and not string.match(formatted_path, "/$") then
+  if is_directory and not formatted_path:match("[/\\]$") then
     formatted_path = formatted_path .. "/"
   end
-  assert(formatted_path:sub(1, 1) == "/" or formatted_path:match("^%a:[/\\]"), "expected an absolute path")
+  assert(is_absolute(formatted_path), "expected an absolute path, got: " .. formatted_path)
 
   return formatted_path, is_directory
 end
