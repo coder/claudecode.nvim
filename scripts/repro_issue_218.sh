@@ -29,6 +29,12 @@
 #   NVIM_BIN=/path/to/nvim scripts/repro_issue_218.sh
 #   scripts/repro_issue_218.sh --no-render-markdown   # control (expects survival)
 #
+# The run works on a COPY of fixtures/issue-218 in a temp directory (the copy keeps
+# the committed lazy-lock.json), so it never modifies a tracked file. The temp
+# directory is removed on exit. Plugins are installed into stdpath("data") of the
+# fixture's NVIM_APPNAME ($XDG_DATA_HOME/issue-218 or issue-218norm), outside the
+# temp directory, and `Lazy! restore` pins them to the commits in that lock file.
+#
 # Exit code: 0 if the expected outcome was observed, 1 otherwise.
 
 # Note: no `set -e` — agent-tty subcommands can return non-zero on benign
@@ -51,22 +57,32 @@ command -v "$NVIM_BIN" >/dev/null 2>&1 || {
 
 WORK="$(mktemp -d)"
 AGENT_HOME="$WORK/atty"
+ATTY=(agent-tty --home "$AGENT_HOME")
+SID=""
+# shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
+cleanup() {
+  if [[ -n "$SID" ]]; then
+    "${ATTY[@]}" destroy "$SID" --json >/dev/null 2>&1 || true
+  fi
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
 mkdir -p "$AGENT_HOME" # agent-tty requires its --home dir to exist before `create`
 EXITF="$WORK/nvim_exit.txt"
 : >"$EXITF"
 
+# Run a COPY of the fixture, committed lazy-lock.json included: `Lazy!` writes that
+# lock file, and it must not write the tracked one in the checkout.
 if [[ "$WANT_RM" -eq 1 ]]; then
   APPNAME="issue-218"
-  CONFHOME="$REPO_ROOT/fixtures"
 else
-  # Build a sibling fixture without render-markdown.lua (the control).
-  APPNAME="issue-218norm"
-  CONFHOME="$WORK/fixtures-norm"
-  mkdir -p "$CONFHOME/$APPNAME/lua/plugins"
-  cp -R "$REPO_ROOT/fixtures/issue-218/lua/config" "$CONFHOME/$APPNAME/lua/config"
-  cp "$REPO_ROOT/fixtures/issue-218/lua/plugins/dev-claudecode.lua" "$CONFHOME/$APPNAME/lua/plugins/"
-  cp "$REPO_ROOT/fixtures/issue-218/lua/plugins/snacks.lua" "$CONFHOME/$APPNAME/lua/plugins/"
-  printf 'require("config.lazy")\n' >"$CONFHOME/$APPNAME/init.lua"
+  APPNAME="issue-218norm" # the control: the same fixture without render-markdown.lua
+fi
+CONFHOME="$WORK/config"
+mkdir -p "$CONFHOME"
+cp -R "$REPO_ROOT/fixtures/issue-218" "$CONFHOME/$APPNAME"
+if [[ "$WANT_RM" -eq 0 ]]; then
+  rm "$CONFHOME/$APPNAME/lua/plugins/render-markdown.lua"
 fi
 
 echo "Repo:        $REPO_ROOT"
@@ -75,8 +91,10 @@ echo "render-md:   $([[ $WANT_RM -eq 1 ]] && echo INSTALLED || echo REMOVED)"
 echo "Workdir:     $WORK"
 echo
 
-echo "==> Installing fixture plugins (lazy sync)…"
-NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" "$NVIM_BIN" --headless "+Lazy! sync" "+qa" >/dev/null 2>&1 || true
+echo "==> Installing fixture plugins at the commits in lazy-lock.json (lazy restore)…"
+# The copy is outside the checkout, so CLAUDECODE_DEV_DIR tells the fixture which checkout to load.
+NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$REPO_ROOT" \
+  "$NVIM_BIN" --headless "+Lazy! restore" "+qa" >/dev/null 2>&1 || true
 
 # Wrapper launcher that captures Neovim's RAW exit status (139 = SIGSEGV).
 LAUNCH="$WORK/launch.sh"
@@ -84,6 +102,7 @@ cat >"$LAUNCH" <<EOF
 #!/bin/bash
 export NVIM_APPNAME="$APPNAME"
 export XDG_CONFIG_HOME="$CONFHOME"
+export CLAUDECODE_DEV_DIR="$REPO_ROOT"
 cd "$WORK"
 "$NVIM_BIN"
 echo "RAW=\$?" > "$EXITF"
@@ -91,16 +110,12 @@ exit \$?
 EOF
 chmod +x "$LAUNCH"
 
-ATTY=(agent-tty --home "$AGENT_HOME")
 echo "==> Launching Neovim under agent-tty…"
 SID="$("${ATTY[@]}" create --json --cols 150 --rows 44 -- "$LAUNCH" | jq -r '.result.sessionId')"
 if [[ -z "$SID" || "$SID" == "null" ]]; then
   echo "ERROR: failed to create agent-tty session." >&2
   exit 1
 fi
-# shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
-cleanup() { "${ATTY[@]}" destroy "$SID" --json >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
 "${ATTY[@]}" wait "$SID" --screen-stable-ms 1800 --json >/dev/null 2>&1 || true
 
