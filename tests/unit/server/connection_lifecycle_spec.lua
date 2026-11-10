@@ -359,16 +359,13 @@ describe("The lifecycle of a WebSocket connection", function()
       end
       logger.one_line = saved_one_line
 
-      assert.same(
+      assert.same({
         {
-          {
-            level = "info",
-            component = "server",
-            text = "Closed " .. client.id .. ": not reading for 60s, 256 KB queued",
-          },
+          level = "info",
+          component = "server",
+          text = "Closed " .. client.id .. ": not reading for 60s, 256 KB queued",
         },
-        lines
-      )
+      }, lines)
     end)
 
     it("keeps a client that reads slowly, although its queue keeps growing", function()
