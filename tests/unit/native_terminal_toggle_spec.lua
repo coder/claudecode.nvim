@@ -1555,6 +1555,163 @@ describe("claudecode.terminal.native toggle behavior", function()
     end)
   end)
 
+  describe("after a module reload", function()
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+
+    local function windows_showing(bufnr)
+      local count = 0
+      for _, win in pairs(_G.get_mock_state().windows) do
+        if win.bufnr == bufnr then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    local function running_count()
+      local count = 0
+      for _ in pairs(_G.get_mock_state().running_jobs) do
+        count = count + 1
+      end
+      return count
+    end
+
+    -- :Lazy reload clears the plugin's modules and runs setup again. The new copy tracks nothing.
+    local function reload_native()
+      package.loaded["claudecode.terminal.native"] = nil
+      native_provider = require("claudecode.terminal.native")
+      native_provider.setup({})
+    end
+
+    local entries = {
+      {
+        "open",
+        function()
+          native_provider.open("claude", {}, config)
+        end,
+      },
+      {
+        "simple_toggle",
+        function()
+          native_provider.simple_toggle("claude", {}, config)
+        end,
+      },
+      {
+        "focus_toggle",
+        function()
+          native_provider.focus_toggle("claude", {}, config)
+        end,
+      },
+    }
+
+    for _, entry in ipairs(entries) do
+      local entry_name, start = entry[1], entry[2]
+      it("should show the hidden terminal instead of starting a second one when " .. entry_name .. " runs", function()
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        native_provider.simple_toggle("claude", {}, config)
+        assert.are.equal(0, windows_showing(claude_bufnr))
+        reload_native()
+
+        start()
+
+        assert.are.equal(1, running_count())
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+        assert.are.equal(1, windows_showing(claude_bufnr))
+      end)
+    end
+
+    for _, hidden in ipairs({ false, true }) do
+      it("should stop the job and delete the buffer when close runs (hidden=" .. tostring(hidden) .. ")", function()
+        local mock_state = _G.get_mock_state()
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        local claude_jobid = mock_state.buffers[claude_bufnr].jobid
+        if hidden then
+          native_provider.simple_toggle("claude", {}, config)
+        end
+        reload_native()
+
+        native_provider.close()
+
+        assert.is_nil(mock_state.running_jobs[claude_jobid])
+        assert.is_nil(mock_state.buffers[claude_bufnr])
+        assert.is_nil(native_provider.get_active_bufnr())
+      end)
+    end
+
+    describe("a Claude that the snacks provider started", function()
+      local snacks_bufnr, snacks_winid, snacks_jobid = 50, 500, 5000
+      local snacks_closed, notices
+
+      before_each(function()
+        local mock_state = _G.get_mock_state()
+        snacks_closed = 0
+        notices = {}
+        mock_vim.log = { levels = { WARN = 3, ERROR = 4 } }
+        mock_vim.notify = function(message, level)
+          table.insert(notices, { message = message, level = level })
+        end
+        mock_state.buffers[snacks_bufnr] = {
+          name = "term://claude",
+          options = { buftype = "terminal", channel = snacks_jobid },
+          vars = { claudecode_snacks_terminal = true },
+          jobid = snacks_jobid,
+        }
+        mock_state.windows[snacks_winid] = { bufnr = snacks_bufnr }
+        mock_state.running_jobs[snacks_jobid] = true
+        -- The snacks provider stops its own Claude and wipes the buffer.
+        package.loaded["claudecode.terminal.snacks"] = {
+          is_available = function()
+            return true
+          end,
+          close = function()
+            snacks_closed = snacks_closed + 1
+            mock_state.running_jobs[snacks_jobid] = nil
+            mock_state.buffers[snacks_bufnr] = nil
+            mock_state.windows[snacks_winid] = nil
+          end,
+        }
+      end)
+
+      after_each(function()
+        package.loaded["claudecode.terminal.snacks"] = nil
+      end)
+
+      for _, entry in ipairs(entries) do
+        local entry_name, start = entry[1], entry[2]
+        it("should be stopped before the native provider starts its own when " .. entry_name .. " runs", function()
+          local mock_state = _G.get_mock_state()
+
+          start()
+
+          assert.are.equal(1, snacks_closed)
+          assert.are.equal(1, #notices)
+          assert.are.equal(mock_vim.log.levels.WARN, notices[1].level)
+          assert.is_nil(mock_state.running_jobs[snacks_jobid])
+          assert.are.equal(1, running_count())
+          assert.is_not_nil(native_provider.get_active_bufnr())
+        end)
+      end
+
+      it("should be left alone when the native provider adopts its own terminal", function()
+        local mock_state = _G.get_mock_state()
+        -- The native Claude starts while no snacks Claude runs. The snacks Claude appears after the reload.
+        mock_state.buffers[snacks_bufnr].vars.claudecode_snacks_terminal = nil
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        reload_native()
+        mock_state.buffers[snacks_bufnr].vars.claudecode_snacks_terminal = true
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(0, snacks_closed)
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+        assert.are.equal(2, running_count())
+      end)
+    end)
+  end)
+
   describe("simple_toggle behavior", function()
     it("should always hide terminal when visible, regardless of focus", function()
       local cmd_string = "claude"

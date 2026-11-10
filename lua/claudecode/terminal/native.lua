@@ -4,6 +4,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local owned = require("claudecode.terminal.owned")
 local utils = require("claudecode.utils")
 
 local bufnr = nil
@@ -15,7 +16,8 @@ local tip_shown = false
 
 -- Set on each terminal buffer this provider starts. Unlike the state above, a buffer variable survives a reload
 -- of this module, so the next module instance can adopt the terminal.
-local OWNED_MARK = "claudecode_native_terminal"
+local OWNED_MARK = owned.NATIVE_MARK
+local job_ended = owned.job_ended
 
 ---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
@@ -38,14 +40,6 @@ local function is_last_window(win)
     end
   end
   return true
-end
-
--- A marked buffer has no job until termopen runs, and keeps its mark after the job exits until the on_exit of the
--- module copy that started it runs. jobpid raises for a job that exited or was stopped. jobwait({ id }, 0) would
--- instead block until a stopped job exits.
-local function job_ended(buf)
-  local channel = vim.bo[buf].channel
-  return channel ~= 0 and not pcall(vim.fn.jobpid, channel)
 end
 
 local function is_valid()
@@ -119,8 +113,63 @@ local function forget_ended_terminal()
   end
 end
 
+---Tracks a terminal that this provider started but lost track of, for example after a module reload. A window
+---may or may not show it.
+---@return boolean adopted
+local function adopt_existing_terminal()
+  local buf = owned.find(OWNED_MARK)
+  if not buf then
+    return false
+  end
+  local win = nil
+  for _, other in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(other) == buf then
+      win = other
+      break
+    end
+  end
+  bufnr, winid, jobid = buf, win, vim.bo[buf].channel
+  job_auto_close = config.auto_close
+  local adopted_jobid = jobid
+  -- The job's on_exit runs in the module copy that started it, for example the one before a reload.
+  -- Clearing the group first keeps one handler per buffer, however many reloads adopt it.
+  local group = vim.api.nvim_create_augroup("ClaudeCodeNativeAdopted", { clear = false })
+  vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
+  vim.api.nvim_create_autocmd("TermClose", {
+    group = group,
+    buffer = buf,
+    once = true,
+    callback = function()
+      vim.schedule(function()
+        forget_exited_job(adopted_jobid, config.auto_close)
+      end)
+    end,
+  })
+  logger.debug("terminal", "Recovered existing Claude terminal in buffer", buf, "window", win)
+  return true
+end
+
+---Stops a Claude that the snacks provider started before a reload. The provider choice changed since, so nothing
+---controls that Claude, and it would run beside the one that this provider starts.
+local function stop_snacks_terminal()
+  if not owned.find(owned.SNACKS_MARK) then
+    return
+  end
+  local ok, snacks_provider = pcall(require, "claudecode.terminal.snacks")
+  if ok and snacks_provider.is_available() then
+    vim.notify(
+      "Stopped the Claude that the snacks provider started, because the native provider is in use.",
+      vim.log.levels.WARN
+    )
+    snacks_provider.close()
+  end
+end
+
 local function open_terminal(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and the
+  -- check below finds it.
+  stop_snacks_terminal()
 
   if is_valid() then -- Should not happen if called correctly, but as a safeguard
     if focus then
@@ -235,7 +284,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 end
 
 local function close_terminal()
-  if not is_valid() then
+  if not is_valid() and not adopt_existing_terminal() then
     return
   end
   local closing_bufnr, closing_jobid = bufnr, jobid
@@ -366,37 +415,17 @@ local function show_hidden_terminal(effective_config, focus)
   return true
 end
 
----Tracks a visible terminal that this provider started but lost track of, for example after a module reload.
----@return boolean adopted
-local function adopt_existing_terminal()
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) and vim.b[buf][OWNED_MARK] and not job_ended(buf) then
-      for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_get_buf(win) == buf then
-          bufnr, winid, jobid = buf, win, vim.bo[buf].channel
-          job_auto_close = config.auto_close
-          local adopted_jobid = jobid
-          -- The job's on_exit runs in the module copy that started it, for example the one before a reload.
-          -- Clearing the group first keeps one handler per buffer, however many reloads adopt it.
-          local group = vim.api.nvim_create_augroup("ClaudeCodeNativeAdopted", { clear = false })
-          vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
-          vim.api.nvim_create_autocmd("TermClose", {
-            group = group,
-            buffer = buf,
-            once = true,
-            callback = function()
-              vim.schedule(function()
-                forget_exited_job(adopted_jobid, config.auto_close)
-              end)
-            end,
-          })
-          logger.debug("terminal", "Recovered existing Claude terminal in buffer", buf, "window", win)
-          return true
-        end
-      end
+---Focuses an adopted terminal, or shows it when no window displays it (it was hidden when the module reloaded).
+---@param effective_config table
+---@param focus boolean
+local function focus_adopted(effective_config, focus)
+  if winid then
+    if focus then
+      focus_terminal()
     end
+  else
+    show_hidden_terminal(effective_config, focus)
   end
-  return false
 end
 
 ---Setup the terminal module
@@ -426,10 +455,8 @@ function M.open(cmd_string, env_table, effective_config, focus)
     end
   else
     if adopt_existing_terminal() then
-      if focus then
-        focus_terminal() -- Focus recovered terminal
-      end
-      -- If focus=false, preserve user context by staying in current window
+      -- Focus the recovered terminal, or show it when it is hidden. If focus=false, preserve user context.
+      focus_adopted(effective_config, focus)
     else
       open_terminal(cmd_string, env_table, effective_config, focus)
     end
@@ -465,7 +492,7 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
     else
       -- No terminal process exists, check if there's an existing one we lost track of
       if adopt_existing_terminal() then
-        focus_terminal()
+        focus_adopted(effective_config, true)
       else
         -- No existing terminal found, create a new one
         open_terminal(cmd_string, env_table, effective_config)
@@ -509,7 +536,10 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
     if adopt_existing_terminal() then
       -- Check if we're currently in this recovered terminal
       local current_win_id = vim.api.nvim_get_current_win()
-      if winid == current_win_id then
+      if not winid then
+        -- The recovered terminal is hidden, show it
+        show_hidden_terminal(effective_config, true)
+      elseif winid == current_win_id then
         -- We're in the recovered terminal, hide it
         hide_terminal()
       else
