@@ -50,10 +50,15 @@ const UNRELEASED_HEADING_PATTERN = /^#{2,3} \[?Unreleased\]?[ \t]*$/;
 // hand-staged drafts use Keep-a-Changelog `### Added`-style subsections.
 const NEXT_SECTION_PATTERN = /^##? /;
 const TITLE_PATTERN = /^# .+$/;
+// CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
+// one rule (see `splitLines`), so a fence pattern never sees a bare CR inside a
+// line.
+const LINE_ENDING_PATTERN = /\r\n|\r|\n/g;
 // CommonMark fences: up to three spaces of indent, then three or more backticks
 // or tildes. A backtick opener cannot have a backtick after it. A closer can
-// have nothing after it but blanks. A line can end in the `\r` of a CRLF line
-// ending, and `.` does not match `\r`, so no pattern here uses it.
+// have nothing after it but blanks. A caller that splits on `\n` alone leaves
+// the `\r` of a CRLF ending on a line, so the patterns allow one there. `.` does
+// not match `\r`, so no pattern here uses it.
 const FENCE_OPEN_PATTERN = /^ {0,3}(?:(`{3,})[^`]*|(~{3,})[^\n]*)$/;
 const FENCE_CLOSE_PATTERN = /^ {0,3}(`{3,}|~{3,})[ \t\r]*$/;
 
@@ -119,6 +124,28 @@ function buildCommuniqueArgs(invocation) {
 }
 
 /**
+ * Splits `text` into lines by CommonMark's rule: a line ends with LF, CR, or
+ * CR LF. `endings[i]` is the ending after `lines[i]`, and the last one is "".
+ * Joining each line with its ending gives `text` back.
+ */
+function splitLines(text) {
+  assert.equal(typeof text, "string", "text must be a string");
+  const lines = text.split(LINE_ENDING_PATTERN);
+  const endings = [...(text.match(LINE_ENDING_PATTERN) ?? []), ""];
+  assert.equal(lines.length, endings.length, "each line needs an ending");
+  return { lines, endings };
+}
+
+/**
+ * Matches `pattern` against `line` and keeps no state. A `g` or `y` flag on a
+ * shared pattern keeps `lastIndex` after a match, and the next line would then
+ * start its match there: a fence would open or close late, or never.
+ */
+function matchLine(pattern, line) {
+  return new RegExp(pattern).exec(line);
+}
+
+/**
  * The fence that is open after `line`: the opener's marker (for example
  * "````" or "~~~") or null. A fence closes only on a marker of the same
  * character that is at least as long as the opener's. An unclosed fence runs
@@ -132,10 +159,10 @@ function nextOpenFence(openFence, line) {
   assert.equal(typeof line, "string", "line must be a string");
 
   if (openFence === null) {
-    const opener = FENCE_OPEN_PATTERN.exec(line);
+    const opener = matchLine(FENCE_OPEN_PATTERN, line);
     return opener === null ? null : (opener[1] ?? opener[2]);
   }
-  const closer = FENCE_CLOSE_PATTERN.exec(line);
+  const closer = matchLine(FENCE_CLOSE_PATTERN, line);
   const closes =
     closer !== null &&
     closer[1][0] === openFence[0] &&
@@ -153,18 +180,18 @@ function normalizeCommuniqueBody(body) {
   const withoutLeadingHeading = body
     .trim()
     .replace(/^#{1,3} \[?v?\d[^\n]*\n*/, "");
+  const { lines, endings } = splitLines(withoutLeadingHeading);
   let openFence = null;
-  return withoutLeadingHeading
-    .split("\n")
-    .map((line) => {
+  return lines
+    .map((line, i) => {
       const outsideFence = openFence === null;
       openFence = nextOpenFence(openFence, line);
       if (outsideFence && openFence === null && /^## /.test(line)) {
-        return `### ${line.slice(3)}`;
+        return `### ${line.slice(3)}${endings[i]}`;
       }
-      return line;
+      return `${line}${endings[i]}`;
     })
-    .join("\n")
+    .join("")
     .trim();
 }
 
@@ -322,9 +349,10 @@ class UnreleasedAwareChangelog {
   }
 
   updateContent(content) {
-    const existing = (content ?? "").replace(/\r\n/g, "\n");
+    // Every line ending becomes LF, as CRLF already did.
+    const { lines } = splitLines(content ?? "");
+    const existing = lines.join("\n");
     const entry = this.changelogEntry.trim();
-    const lines = existing.split("\n");
 
     const unreleasedIndex = findLineOutsideFences(lines, 0, (line) =>
       UNRELEASED_HEADING_PATTERN.test(line),

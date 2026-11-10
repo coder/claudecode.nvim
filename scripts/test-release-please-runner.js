@@ -475,6 +475,22 @@ async function testFenceTracking() {
     3,
     "fence tracking starts at line 0, so a fence that opens before `start` still hides its lines",
   );
+  // From every `start`, the search finds the first line outside a fence at or after it, however far back a fence
+  // opened.
+  const fenced = ["a", "```", "x", "```", "b", "~~~", "y", "~~~", "c"];
+  for (let start = 0; start <= fenced.length; start += 1) {
+    assert.equal(
+      runner.findLineOutsideFences(fenced, start, anyLine),
+      [0, 4, 8].find((line) => line >= start) ?? -1,
+      `the first line outside a fence from line ${start}`,
+    );
+  }
+  // A fence with no lines between its opener and closer, right after another fence, still closes.
+  assert.equal(
+    outside(["```", "x", "```", "```", "```", "## Real"]),
+    5,
+    "an empty fence right after a closed fence opens and closes",
+  );
 
   // The Communique body keeps headings inside a longer or tilde fence as is.
   assert.equal(
@@ -489,13 +505,23 @@ async function testFenceTracking() {
     ),
     "### A\n\n~~~md\n```\n## Not a heading\n~~~\n\n### B",
   );
-  // The body is split on `\n` only, so CRLF lines keep their `\r`.
+  // A line ends with LF, CR, or CRLF, and the body keeps each ending as it is.
   for (const marker of ["```", "~~~"]) {
+    for (const ending of ["\n", "\r\n", "\r"]) {
+      assert.equal(
+        runner.normalizeCommuniqueBody(
+          ["## A", marker, "## inside", marker, "## B"].join(ending),
+        ),
+        ["### A", marker, "## inside", marker, "### B"].join(ending),
+        `${marker} fence with ${JSON.stringify(ending)} line endings`,
+      );
+    }
     assert.equal(
       runner.normalizeCommuniqueBody(
-        `## A\r\n${marker}\r\n## inside\r\n${marker}\r\n## B`,
+        `## A\r\n${marker}\r## inside\n${marker}\r\n## B`,
       ),
-      `### A\r\n${marker}\r\n## inside\r\n${marker}\r\n### B`,
+      `### A\r\n${marker}\r## inside\n${marker}\r\n### B`,
+      `${marker} fence with mixed line endings`,
     );
   }
 }
@@ -504,30 +530,70 @@ async function testUnreleasedUpdaterFences() {
   const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
   const released =
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
+  const update = (content) =>
+    new runner.UnreleasedAwareChangelog({
+      changelogEntry: entry,
+    }).updateContent(content);
+  const previous = "\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
 
+  // Each case is [existing changelog, updated changelog].
+  const cases = [];
   // A four-backtick fence in the draft flipped the fence state for the rest of
   // the file, so the existing release below it was dropped.
   for (const [open, close] of [
     ["````md", "````"],
     ["~~~md", "~~~"],
   ]) {
-    const updated = new runner.UnreleasedAwareChangelog({
-      changelogEntry: entry,
-    }).updateContent(
-      `# Changelog\n\n## [Unreleased]\n\n${open}\n\`\`\`\n## Not a heading\n${close}\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n`,
-    );
-    assert.equal(updated, released);
+    cases.push([
+      `# Changelog\n\n## [Unreleased]\n\n${open}\n\`\`\`\n## Not a heading\n${close}${previous}`,
+      released,
+    ]);
+  }
+  // Text right after a closing fence, and a short fence inside a long one.
+  cases.push([
+    `# Changelog\n\n## [Unreleased]\n\n\`\`\`text\nExample\n\`\`\`\nText after the fence${previous}`,
+    released,
+  ]);
+  cases.push([
+    `# Changelog\n\n## [Unreleased]\n\n\`\`\`\`\n\`\`\`\n## Not a release\n\`\`\`\`${previous}`,
+    released,
+  ]);
+  // Without an Unreleased heading the entry goes under the title, or under a new title.
+  cases.push([`# Changelog${previous}`, released]);
+  cases.push([
+    "Existing text\n\nMore text\n",
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\nExisting text\n\nMore text\n",
+  ]);
+  // An Unreleased heading inside a fence is not the anchor.
+  cases.push([
+    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n- Draft\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+  ]);
+
+  // A line ends with LF, CR, or CRLF. A bare CR ends a fence line like the others, and the
+  // updated changelog has LF endings only.
+  for (const ending of ["\n", "\r\n", "\r"]) {
+    for (const [existing, updated] of cases) {
+      assert.equal(
+        update(existing.replace(/\n/g, ending)),
+        updated,
+        `${JSON.stringify(existing)} with ${JSON.stringify(ending)} line endings`,
+      );
+    }
   }
 
-  // An Unreleased heading inside a fence is not the anchor.
-  const updated = new runner.UnreleasedAwareChangelog({
-    changelogEntry: entry,
-  }).updateContent(
-    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n- Draft\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+  // One bare CR in an LF file: right after a closing fence, and inside an opener line.
+  assert.equal(
+    update(
+      "# Changelog\n\n## [Unreleased]\n\n```text\nExample\n```\rText after the fence\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+    ),
+    released,
   );
   assert.equal(
-    updated,
-    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+    update(
+      "# Changelog\n\n## [Unreleased]\n\n````\r```\n## Not a release\n````\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+    ),
+    released,
   );
 }
 
