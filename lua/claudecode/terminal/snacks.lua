@@ -476,6 +476,8 @@ function M.open(cmd_string, env_table, config, focus)
       -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter
     end
+    -- Snacks.terminal.open has already fired FileType, so a <C-z> mapping that a user's handler set stays.
+    utils.map_terminal_suspend(term_instance.buf)
     terminal = term_instance
   else
     terminal = nil

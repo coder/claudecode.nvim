@@ -900,10 +900,14 @@ function M.flush_visual_selection()
   -- residual non-broadcast, not a regression.
   local entry = M.state.visual_entry
   if entry and entry.bufnr == current_buf and vim.api.nvim_buf_get_changedtick(current_buf) ~= entry.tick then
-    -- The operator consumed the selection, and with it any selection held from before or sent by the
-    -- in-visual update: report the cursor now.
+    -- The operator consumed the selection. Starting it already ended the hold on any selection from before,
+    -- whether or not that one's text is intact, and an in-visual update may have sent this one: report the
+    -- cursor now. The debounce does nothing in the Claude terminal, so waiting could leave a selection there.
     clear_held_state()
-    demote_if_selection_text_changed()
+    local held = M.state.latest_selection
+    if held and not held.selection.isEmpty then
+      M.update_selection()
+    end
     return
   end
 
