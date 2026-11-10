@@ -776,6 +776,9 @@ describe("Tool: open_file", function()
       asked, events, autocmds = false, {}, {}
       _G.vim.v = {}
       _G.vim.api.nvim_create_autocmd = spy.new(function(event, opts)
+        if opts.buffer and not buffers[opts.buffer] then
+          error("Invalid buffer id: " .. opts.buffer) -- as in Neovim, for a buffer that was wiped
+        end
         autocmds[#autocmds + 1] = { event = event, buffer = opts.buffer, callback = opts.callback }
         return #autocmds
       end)
