@@ -424,6 +424,61 @@ describe("Tool: open_file", function()
     expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
   end)
 
+  for _, case in ipairs({
+    { name = "a floating window", config = { relative = "editor" } },
+    { name = "a nofile buffer", buftype = "nofile" },
+    { name = "a prompt buffer", buftype = "prompt" },
+    { name = "a neo-tree sidebar", filetype = "neo-tree" },
+    { name = "a neo-tree popup", filetype = "neo-tree-popup" },
+    { name = "an NvimTree sidebar", filetype = "NvimTree" },
+    { name = "an oil buffer", filetype = "oil" },
+    { name = "a mini.files window", filetype = "minifiles" },
+    { name = "a netrw buffer", filetype = "netrw" },
+    { name = "an aerial outline", filetype = "aerial" },
+    { name = "a tagbar outline", filetype = "tagbar" },
+  }) do
+    it("does not open into " .. case.name .. "; picks the plain editor", function()
+      _G.vim.api.nvim_list_wins = spy.new(function()
+        return { 1000, 2000 }
+      end)
+      _G.vim.api.nvim_win_get_buf = spy.new(function(win)
+        return win == 1000 and 10 or 20
+      end)
+      _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
+        if buf == 10 and option == "buftype" then
+          return case.buftype or ""
+        elseif buf == 10 and option == "filetype" then
+          return case.filetype or ""
+        end
+        return ""
+      end)
+      _G.vim.api.nvim_win_get_config = spy.new(function(win)
+        return win == 1000 and case.config or {}
+      end)
+      local called_win
+      _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+        called_win = win
+        return callback()
+      end)
+
+      expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
+      expect(called_win).to_be(2000)
+      expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+    end)
+  end
+
+  it("accepts startLine = 1 for an empty file, which opens as one empty line", function()
+    buffer_lines = { "" }
+    _G.vim.fn.readfile = spy.new(function()
+      return {} -- readfile() returns no lines for an empty file
+    end)
+
+    local success, result = pcall(open_file_handler, { filePath = "test.txt", startLine = 1 })
+
+    expect(success).to_be_true()
+    expect(result.content[1].text).to_be("Opened file and selected lines 1 to 1")
+  end)
+
   describe("with no suitable editor window", function()
     -- Like Neovim, wincmd t and l move to the top-left window and to its right, wincmd j to the window below, and
     -- vsplit and {N}split make a new current window next to or above the current one, showing the same buffer.
@@ -1207,6 +1262,47 @@ describe("Tool: open_file", function()
         assert.are.same({ "Opened file and selected lines 2 to 2", false }, { result.content[1].text, asked })
       end)
     end)
+
+    describe(
+      "when an autocommand fails as the preview window gets a loaded buffer that Neovim does not check",
+      function()
+        before_each(function()
+          buffers[30].loaded = true
+          -- Neovim skips its file check, so openFile turns the check off itself by setting 'buftype' for a moment.
+          _G.vim.o.eventignore = "FileChangedShell"
+        end)
+
+        it("fails with the error of the autocommand and gives the buffer its 'buftype' back", function()
+          _G.vim.api.nvim_create_autocmd("BufEnter", {
+            buffer = 30,
+            callback = function()
+              error("user boom")
+            end,
+          })
+
+          local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+          expect(success).to_be_false()
+          assert_contains(err, "user boom")
+          expect(buffers[30].buftype or "").to_be("")
+        end)
+
+        it("fails with the error of the autocommand when the autocommand wipes the buffer first", function()
+          _G.vim.api.nvim_create_autocmd("BufEnter", {
+            buffer = 30,
+            callback = function()
+              buffers[30] = nil
+              error("user boom")
+            end,
+          })
+
+          local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+          expect(success).to_be_false()
+          assert_contains(err, "user boom")
+        end)
+      end
+    )
 
     describe("when the buffer was opened before its file existed", function()
       -- Neovim fires BufNewFile for it. Claude then creates the file.

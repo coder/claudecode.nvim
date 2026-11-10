@@ -352,6 +352,89 @@ describe("Tool: get_open_editors", function()
     expect(#parsed_result.tabs).to_be(0)
   end)
 
+  describe("tab details", function()
+    -- One loaded, listed buffer per entry of `buffers`, numbered from 1. Buffer 1 is the current buffer.
+    local function open_editors(buffers, latest_selection)
+      package.loaded["claudecode.selection"] = {
+        get_latest_selection = function()
+          return latest_selection
+        end,
+      }
+      _G.vim.api.nvim_list_bufs = spy.new(function()
+        local numbers = {}
+        for number = 1, #buffers do
+          numbers[number] = number
+        end
+        return numbers
+      end)
+      _G.vim.api.nvim_buf_is_loaded = spy.new(function()
+        return true
+      end)
+      _G.vim.fn.buflisted = spy.new(function()
+        return 1
+      end)
+      _G.vim.api.nvim_buf_get_name = spy.new(function(number)
+        return buffers[number].name
+      end)
+      _G.vim.api.nvim_buf_get_option = spy.new(function(number, option)
+        if option == "filetype" then
+          return buffers[number].filetype or ""
+        end
+        return false
+      end)
+      local success, result = pcall(get_open_editors_handler, {})
+      expect(success).to_be_true()
+      return require("tests.busted_setup").json_decode(result.content[1].text).tabs
+    end
+
+    after_each(function()
+      package.loaded["claudecode.selection"] = nil
+    end)
+
+    it("marks terminal, bracketed and blank names as untitled", function()
+      local tabs = open_editors({
+        { name = "/path/to/a.lua" },
+        { name = "term://~/project//123:zsh" },
+        { name = "[Scratch]" },
+        { name = "   " },
+      })
+
+      expect(tabs[1].isUntitled).to_be_false()
+      expect(tabs[2].isUntitled).to_be_true()
+      expect(tabs[3].isUntitled).to_be_true()
+      expect(tabs[4].isUntitled).to_be_true()
+    end)
+
+    it("reports plaintext when the buffer has no filetype", function()
+      local tabs = open_editors({ { name = "/path/to/a.lua", filetype = "lua" }, { name = "/path/to/notes" } })
+
+      expect(tabs[1].languageId).to_be("lua")
+      expect(tabs[2].languageId).to_be("plaintext")
+    end)
+
+    it("attaches the latest selection to the active tab only, as not reversed", function()
+      local selection = {
+        text = "x",
+        selection = { start = { line = 1, character = 2 }, ["end"] = { line = 3, character = 4 } },
+      }
+
+      local tabs = open_editors({ { name = "/path/to/a.lua" }, { name = "/path/to/b.lua" } }, selection)
+
+      assert.are.same({
+        start = { line = 1, character = 2 },
+        ["end"] = { line = 3, character = 4 },
+        isReversed = false,
+      }, tabs[1].selection)
+      expect(tabs[2].selection).to_be_nil()
+    end)
+
+    it("attaches no selection when there is none", function()
+      local tabs = open_editors({ { name = "/path/to/a.lua" } })
+
+      expect(tabs[1].selection).to_be_nil()
+    end)
+  end)
+
   it("should filter out buffers with no file path", function()
     _G.vim.api.nvim_list_bufs = spy.new(function()
       return { 1 }
