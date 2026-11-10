@@ -553,6 +553,11 @@ function M.start(show_startup_notification)
 
   -- Verify that the auth token in the lock file matches what we generated
   if returned_auth_token ~= auth_token then
+    -- create already wrote the file. Its token is not the server's, so remove it as stop does, before the server goes.
+    local remove_success, remove_error = lockfile.remove(M.state.port)
+    if not remove_success then
+      logger.warn("init", "Failed to remove lock file: " .. tostring(remove_error))
+    end
     server.stop()
     M.state.server = nil
     M.state.port = nil

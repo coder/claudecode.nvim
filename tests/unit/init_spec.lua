@@ -301,6 +301,62 @@ describe("claudecode.init", function()
     end)
   end)
 
+  describe("start with a lock file whose token does not match", function()
+    local real_create
+    local real_remove
+
+    before_each(function()
+      real_create = mock_lockfile.create
+      real_remove = mock_lockfile.remove
+      -- The generated token is "mock-auth-token-12345". create wrote a file that holds another one.
+      mock_lockfile.create = function()
+        return true, "/mock/path/12345.lock", "some-other-token-99999"
+      end
+    end)
+
+    after_each(function()
+      mock_lockfile.create = real_create
+      mock_lockfile.remove = real_remove
+    end)
+
+    it("should stop the server and remove the lock file that create wrote", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      mock_server.stop.calls = {}
+      mock_lockfile.remove.calls = {}
+
+      local success, err = claudecode.start(false)
+
+      assert(success == false)
+      assert(err == "Authentication token mismatch between server and lock file", tostring(err))
+      assert(#mock_server.stop.calls == 1, "Server stop was not called once")
+      assert(#mock_lockfile.remove.calls == 1, "Lock file was not removed")
+      assert(mock_lockfile.remove.calls[1].vals[1] == 12345, "Lock file removed for the wrong port")
+      assert(claudecode.state.server == nil)
+      assert(claudecode.state.port == nil)
+      assert(claudecode.state.auth_token == nil)
+    end)
+
+    it("should still fail with the mismatch error when the lock file cannot be removed", function()
+      local claudecode = require("claudecode")
+      claudecode.setup({ auto_start = false })
+      mock_server.stop.calls = {}
+      local remove_calls = 0
+      mock_lockfile.remove = function()
+        remove_calls = remove_calls + 1
+        return false, "Failed to remove lock file: /mock/path/12345.lock: Permission denied"
+      end
+
+      local success, err = claudecode.start(false)
+
+      assert(success == false)
+      assert(err == "Authentication token mismatch between server and lock file", tostring(err))
+      assert(remove_calls == 1, "Lock file removal was not tried once")
+      assert(#mock_server.stop.calls == 1, "Server stop was not called once")
+      assert(claudecode.state.server == nil)
+    end)
+  end)
+
   describe("ClaudeCode command with arguments", function()
     local mock_terminal
 
