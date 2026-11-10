@@ -1775,11 +1775,16 @@ describe("claudecode.terminal.native toggle behavior", function()
             delete(bufnr, opts)
           end
         end
+        local logged_errors = {}
+        package.loaded["claudecode.logger"].error = function(_, message)
+          table.insert(logged_errors, message)
+        end
 
         native_provider.open("claude", {}, config)
 
         assert.is_not_nil(mock_state.buffers[snacks_bufnr])
         assert.are.same({}, notices)
+        assert.are.same({ "Could not stop the Claude that the snacks provider started." }, logged_errors)
       end)
 
       -- Stopping a Claude waits for its job to exit, which runs scheduled callbacks and TermClose autocmds. An open()

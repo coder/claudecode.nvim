@@ -431,6 +431,19 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.truthy(logged_errors[1]:find("exited with code 129", 1, true))
     end)
 
+    -- Snacks sets the buffer of an instance to nil when it closes. The job exits and fires TermClose after that.
+    it("raises no Lua error when the instance closed before the job exited", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      local on_term_close = state.buffers[claude.buf].snacks_term_close
+
+      claude:close()
+
+      assert.has_no.errors(on_term_close)
+      assert.are.equal(1, #logged_errors)
+      assert.truthy(logged_errors[1]:find("exited with code 129", 1, true))
+    end)
+
     it("is not reported when the native provider stops the Claude directly", function()
       snacks_provider.open("claude", {}, config, true)
       local claude_bufnr = started[1].buf
@@ -563,6 +576,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
       assert.is_not_nil(state.buffers[native_bufnr])
       assert.are.same({}, notices)
+      assert.are.same({ "Could not stop the Claude that the native provider started." }, logged_errors)
     end)
 
     -- Stopping a Claude waits for its job to exit, which runs scheduled callbacks and TermClose autocmds. An open()
