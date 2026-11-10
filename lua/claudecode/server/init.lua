@@ -88,7 +88,7 @@ function M.start(config, auth_token)
       end
     end,
     on_error = function(error_msg)
-      logger.error("server", "WebSocket server error:", error_msg)
+      logger.one_line("error", "server", error_msg)
     end,
   }
 
@@ -156,7 +156,8 @@ function M._handle_message(client, message)
   end
 
   if type(parsed) ~= "table" or parsed.jsonrpc ~= "2.0" then
-    M.send_response(client, parsed.id, nil, {
+    local request_id = type(parsed) == "table" and parsed.id or nil
+    M.send_response(client, request_id, nil, {
       code = -32600,
       message = "Invalid Request",
       data = "Not a valid JSON-RPC 2.0 request",
@@ -273,6 +274,37 @@ function M._handle_notification(client, notification)
   end
 end
 
+---@param value any
+---@return string size Byte length of a string, entry count of a table, otherwise the type name
+local function describe_size(value)
+  if type(value) == "string" then
+    return #value .. " bytes"
+  elseif type(value) ~= "table" then
+    return type(value)
+  end
+  local count = 0
+  for _ in pairs(value) do
+    count = count + 1
+  end
+  return count .. " entries"
+end
+
+---Summarize tool arguments or a tool result for debug logs. Values can hold file contents (openDiff's
+---new_file_contents) or selected text, and debug logs reach :messages, so only key names and sizes are kept.
+---@param value any
+---@return string summary For example `{new_file_contents=120 bytes, tab_name=18 bytes}`
+local function describe_fields(value)
+  if type(value) ~= "table" then
+    return describe_size(value)
+  end
+  local fields = {}
+  for key, field in pairs(value) do
+    table.insert(fields, tostring(key) .. "=" .. describe_size(field))
+  end
+  table.sort(fields)
+  return "{" .. table.concat(fields, ", ") .. "}"
+end
+
 ---Register message handlers for the server
 function M.register_handlers()
   M.state.handlers = {
@@ -309,10 +341,10 @@ function M.register_handlers()
     ["tools/call"] = function(client, params)
       logger.debug(
         "server",
-        "Received tools/call. Tool: ",
+        "Received tools/call:",
         params and params.name,
-        " Arguments: ",
-        vim.inspect(params and params.arguments)
+        "arguments:",
+        describe_fields(params and params.arguments)
       )
       local result_or_error_table = tools.handle_invoke(client, params)
 
@@ -323,8 +355,10 @@ function M.register_handlers()
         return result_or_error_table
       end
 
-      -- Log the response for debugging
-      logger.debug("server", "Response - tools/call", params and params.name .. ":", vim.inspect(result_or_error_table))
+      local err = result_or_error_table.error
+      local outcome = err and ("error " .. tostring(err.code) .. " " .. tostring(err.message))
+        or ("result " .. describe_fields(result_or_error_table.result))
+      logger.debug("server", "Response - tools/call", params and params.name .. ":", outcome)
 
       if result_or_error_table.error then
         return nil, result_or_error_table.error
@@ -377,7 +411,8 @@ function M.send_response(client, id, result, error_data)
 
   local response = {
     jsonrpc = "2.0",
-    id = id,
+    -- JSON-RPC requires "id": null when the request id is unknown. A Lua nil would drop the field.
+    id = id == nil and vim.NIL or id,
   }
 
   if error_data then

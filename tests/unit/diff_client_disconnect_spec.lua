@@ -2,10 +2,18 @@
 --- client disconnects (or via the manual "close all diffs" path).
 require("tests.busted_setup")
 local diff = require("claudecode.diff")
+local temp_dir = require("tests.helpers.temp_dir")
 
 describe("issue #248: closing orphaned diffs", function()
-  local file_a = "/tmp/issue248_a.txt"
-  local file_b = "/tmp/issue248_b.txt"
+  local dir, file_a, file_b
+  setup(function()
+    dir = temp_dir.new()
+    file_a = dir .. "/issue248_a.txt"
+    file_b = dir .. "/issue248_b.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
 
   before_each(function()
     for _, path in ipairs({ file_a, file_b }) do

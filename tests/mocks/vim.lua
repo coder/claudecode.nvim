@@ -137,6 +137,13 @@ local vim = {
 
       local lines = vim._buffers[bufnr].lines or {}
       local result = {}
+      -- Negative indexes count from the end, as in Neovim: end_line = -1 means through the last line.
+      if start < 0 then
+        start = #lines + 1 + start
+      end
+      if end_line < 0 then
+        end_line = #lines + 1 + end_line
+      end
 
       for i = start + 1, end_line do
         table.insert(result, lines[i] or "")
@@ -150,7 +157,11 @@ local vim = {
         return nil
       end
 
-      return vim._buffers[bufnr].options and vim._buffers[bufnr].options[name] or nil
+      local options = vim._buffers[bufnr].options
+      if not options then
+        return nil
+      end
+      return options[name]
     end,
 
     nvim_buf_delete = function(bufnr, opts)
@@ -202,7 +213,8 @@ local vim = {
       vim._buffers[bufnr] = {
         name = "",
         lines = {},
-        options = {},
+        -- As in Neovim, a scratch buffer is 'buftype' nofile and any other buffer is a file buffer.
+        options = { buftype = scratch and "nofile" or "", fileformat = "unix", fileencoding = "", bomb = false },
         listed = listed,
         scratch = scratch,
       }
@@ -213,7 +225,11 @@ local vim = {
       if not vim._buffers[bufnr] then
         vim._buffers[bufnr] = { lines = {}, options = {} }
       end
-      vim._buffers[bufnr].lines = replacement or {}
+      if (vim._buffers[bufnr].options or {}).modifiable == false then
+        error("Vim:E21: Cannot make changes, 'modifiable' is off")
+      end
+      -- A Neovim buffer always has at least one line.
+      vim._buffers[bufnr].lines = (replacement and #replacement > 0) and replacement or { "" }
     end,
 
     nvim_buf_set_option = function(bufnr, name, value)
@@ -231,8 +247,8 @@ local vim = {
     end,
 
     nvim_buf_is_loaded = function(bufnr)
-      -- In our mock, all valid buffers are considered loaded
-      return vim._buffers[bufnr] ~= nil
+      -- Every buffer is loaded, except one that bufadd() created and bufload() has not loaded yet, as in Neovim.
+      return vim._buffers[bufnr] ~= nil and vim._buffers[bufnr].unloaded ~= true
     end,
 
     nvim_list_bufs = function()
@@ -293,12 +309,20 @@ local vim = {
     end,
 
     nvim_list_wins = function()
-      -- Return a list of window IDs for the current tab
+      -- As in Neovim, the windows of every tab, in tab order.
       local wins = {}
-      local list = vim._tab_windows[vim._current_tabpage] or {}
-      for _, winid in ipairs(list) do
-        if vim._windows[winid] then
-          table.insert(wins, winid)
+      local tabs = {}
+      for tab in pairs(vim._tab_windows) do
+        if vim._tabs[tab] then
+          tabs[#tabs + 1] = tab
+        end
+      end
+      table.sort(tabs)
+      for _, tab in ipairs(tabs) do
+        for _, winid in ipairs(vim._tab_windows[tab]) do
+          if vim._windows[winid] then
+            table.insert(wins, winid)
+          end
         end
       end
       if #wins == 0 then
@@ -423,6 +447,10 @@ local vim = {
       return (vim._windows[winid] and vim._windows[winid].width) or 80
     end,
 
+    nvim_win_get_height = function(winid)
+      return (vim._windows[winid] and vim._windows[winid].height) or 24
+    end,
+
     nvim_get_current_tabpage = function()
       return vim._current_tabpage
     end,
@@ -531,6 +559,33 @@ local vim = {
       return 12345
     end,
 
+    -- The mock keeps no split tree, so a tab's tiled windows form one row.
+    winlayout = function(tabnr)
+      local leaves = {}
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabnr or 0)) do
+        if (vim.api.nvim_win_get_config(win).relative or "") == "" then
+          leaves[#leaves + 1] = { "leaf", win }
+        end
+      end
+      if #leaves == 1 then
+        return leaves[1]
+      end
+      return { "row", leaves }
+    end,
+
+    -- Every code point is one cell wide here. Real Neovim gives most CJK characters two.
+    strdisplaywidth = function(text)
+      return select(2, text:gsub("[^\128-\191]", ""))
+    end,
+
+    strcharpart = function(text, start, len)
+      local chars = {}
+      for char in text:gmatch("[^\128-\191][\128-\191]*") do
+        table.insert(chars, char)
+      end
+      return table.concat(chars, "", start + 1, math.min(start + len, #chars))
+    end,
+
     expand = function(path)
       return path:gsub("~", "/home/user")
     end,
@@ -554,8 +609,57 @@ local vim = {
       return -1
     end,
 
+    bufadd = function(name)
+      local existing = vim.fn.bufnr(name)
+      if existing ~= -1 then
+        return existing
+      end
+      local bufnr = vim.api.nvim_create_buf(false, false)
+      vim.api.nvim_buf_set_name(bufnr, name)
+      vim._buffers[bufnr].unloaded = true
+      return bufnr
+    end,
+
+    -- Reads the file into a buffer that has no lines yet, as loading it would.
+    bufload = function(bufnr)
+      local buf = vim._buffers[bufnr]
+      if buf then
+        buf.unloaded = nil
+      end
+      if not buf or #buf.lines > 0 then
+        return
+      end
+      local file = io.open(buf.name, "rb")
+      if not file then
+        return
+      end
+      local text = file:read("*a")
+      file:close()
+      buf.lines = vim.split((text:gsub("\n$", "")), "\n", { plain = true })
+      buf.options = buf.options or {}
+      buf.options.eol = text:sub(-1) == "\n"
+    end,
+
     buflisted = function(bufnr)
       return vim._buffers[bufnr] and vim._buffers[bufnr].listed and 1 or 0
+    end,
+
+    bufexists = function(buf)
+      if type(buf) == "number" then
+        return vim._buffers[buf] and 1 or 0
+      end
+      return vim.fn.bufnr(buf) ~= -1 and 1 or 0
+    end,
+
+    isdirectory = function(path)
+      local file = io.open(path, "r")
+      if not file then
+        return 0
+      end
+      -- Opening a directory works on Linux and macOS, and reading it fails with EISDIR.
+      local _, _, errno = file:read(1)
+      file:close()
+      return errno == 21 and 1 or 0
     end,
 
     mkdir = function(path, flags)
@@ -586,6 +690,12 @@ local vim = {
     fnamemodify = function(path, modifier)
       if modifier == ":t" then
         return path:match("([^/]+)$") or path
+      end
+      if modifier == ":h" then
+        return path:match("^(.+)/[^/]*$") or (path:sub(1, 1) == "/" and "/" or ".")
+      end
+      if modifier == ":p" and path:sub(1, 1) ~= "/" then
+        return vim.fn.getcwd() .. "/" .. path
       end
       return path
     end,
@@ -657,13 +767,13 @@ local vim = {
       vim._tab_windows[new_tab] = { winid }
       vim._current_window = winid
     elseif command:match("vsplit") then
-      -- Split current window vertically; new window shows same buffer
+      -- Split current window vertically; new window shows same buffer and, sharing its row, has its height
       local cur = vim._current_window
       local curtab = vim._current_tabpage
       local bufnr = vim._windows[cur] and vim._windows[cur].buf or 1
       local winid = vim._next_winid
       vim._next_winid = vim._next_winid + 1
-      vim._windows[winid] = { buf = bufnr, width = 80 }
+      vim._windows[winid] = { buf = bufnr, width = 80, height = vim._windows[cur] and vim._windows[cur].height }
       vim._win_tab[winid] = curtab
       local list = vim._tab_windows[curtab] or {}
       table.insert(list, winid)
@@ -686,6 +796,8 @@ local vim = {
       local path = command:sub(6)
       -- Remove surrounding quotes if any
       path = path:gsub("^'", ""):gsub("'$", "")
+      -- Undo the mock's fnameescape(), which escapes only spaces. A literal backslash stays.
+      path = path:gsub("\\ ", " ")
       -- Find or create buffer for this path
       local bufnr = -1
       for id, b in pairs(vim._buffers) do
@@ -914,6 +1026,26 @@ local vim = {
     return copy
   end,
 
+  deep_equal = function(a, b)
+    if a == b then
+      return true
+    end
+    if type(a) ~= "table" or type(b) ~= "table" then
+      return false
+    end
+    for k, v in pairs(a) do
+      if not vim.deep_equal(v, b[k]) then
+        return false
+      end
+    end
+    for k in pairs(b) do
+      if a[k] == nil then
+        return false
+      end
+    end
+    return true
+  end,
+
   --- Mock implementation of vim.diff using a simple LCS-based diff algorithm.
   --- Supports result_type = "indices" which returns a list of hunks.
   --- Each hunk is {start_a, count_a, start_b, count_b}.
@@ -1083,6 +1215,9 @@ local vim = {
   --- Stub for the `vim.loop` module.
   --- Provides minimal implementations for TCP and timer functionalities
   --- required by some plugin tests.
+  -- The command line at 80 columns with 'ruler' and 'showcmd' on. A longer message stops at "Press ENTER".
+  v = { echospace = 68 },
+
   loop = {
     new_tcp = function()
       return {

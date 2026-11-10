@@ -75,8 +75,13 @@ describe("ClaudeCode command arguments integration", function()
       return 1
     end
     vim.api.nvim_win_close = function() end
-    vim.api.nvim_buf_is_valid = function()
-      return false
+    -- Buffers left by earlier tests stay invalid, so the provider never adopts a stale terminal.
+    local stale_bufs = {}
+    for bufnr in pairs(vim._buffers) do
+      stale_bufs[bufnr] = true
+    end
+    vim.api.nvim_buf_is_valid = function(bufnr)
+      return vim._buffers[bufnr] ~= nil and not stale_bufs[bufnr]
     end
     vim.api.nvim_win_is_valid = function()
       return true

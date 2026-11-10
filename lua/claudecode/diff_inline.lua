@@ -15,18 +15,6 @@ local function get_diff_fn()
   return (vim.text and vim.text.diff) or vim.diff
 end
 
---- Capture all values of a call together with their exact count.
---- `{ f() }` + `#t` cannot be used when `f` may return a `nil` in the middle of
---- its result list (e.g. `display_terminal_in_new_tab` returns nil for the
---- terminal window in `hide_terminal_in_new_tab` mode): the `nil` is a hole and
---- `#t` may report a border before it, so later values (the new-tab handle) are
---- silently dropped. Pairs with `unpack(results, i, results.n)`.
----@param ... any
----@return table results Array of all arguments, with `.n` set to the count.
-local function pack_results(...)
-  return { n = select("#", ...), ... }
-end
-
 -- ── Highlight groups ──────────────────────────────────────────────
 
 local function setup_highlights()
@@ -154,9 +142,13 @@ function M.render_diff_buffer(buf, lines, line_types)
   end
 end
 
---- Create a scratch editor window when the current tab only has terminal/sidebar windows.
+--- Create a scratch editor window when the current tab only has terminal/sidebar windows. It splits the current
+--- window, or the Claude terminal's window when the preview window is current.
 ---@return number win_id Window ID of the created scratch editor window
+---@return number split_win The window it split
 local function create_fallback_editor_window()
+  require("claudecode.diff")._leave_preview_window()
+  local split_win = vim.api.nvim_get_current_win()
   vim.cmd("rightbelow vsplit")
   local fallback_win = vim.api.nvim_get_current_win()
 
@@ -177,7 +169,7 @@ local function create_fallback_editor_window()
     error(err)
   end
 
-  return fallback_win
+  return fallback_win, split_win
 end
 
 --- Clean up inline diff resources if setup fails before state registration.
@@ -218,6 +210,9 @@ local function cleanup_unregistered_inline_setup(tab_name, partial)
     if partial.fallback_window and vim.api.nvim_win_is_valid(partial.fallback_window) then
       pcall(vim.api.nvim_win_close, partial.fallback_window, true)
     end
+
+    diff._restore_cursor(partial.window_sizes, partial.cursor_origin)
+    diff._restore_window_sizes(partial.window_sizes)
   end
 
   if partial.new_buffer and vim.api.nvim_buf_is_valid(partial.new_buffer) then
@@ -319,17 +314,25 @@ function M.setup_inline_diff(params, resolution_callback, config)
     original_tab_number = original_tab_number,
     autocmd_ids = autocmd_ids,
   }
+  -- Varargs, not unpack: unpack stops at the first nil, such as a nil terminal window from
+  -- _display_terminal_in_new_tab, and drops the new tab handle after it.
   local function guard_inline_setup(action)
-    -- pack_results (not `{ pcall(action) }`) so a nil in the middle of the
-    -- returned values -- e.g. the nil terminal window from
-    -- display_terminal_in_new_tab() under hide_terminal_in_new_tab -- does not
-    -- truncate the list and drop the trailing new-tab handle.
-    local results = pack_results(pcall(action))
-    if not results[1] then
-      cleanup_unregistered_inline_setup(tab_name, partial_setup)
-      error(results[2])
+    local function finish(ok, ...)
+      if not ok then
+        cleanup_unregistered_inline_setup(tab_name, partial_setup)
+        error((...))
+      end
+      return ...
     end
-    return unpack(results, 2, results.n)
+    return finish(pcall(action))
+  end
+
+  -- Save the terminal window width so we can restore it after the diff closes. Do it before a new tab exists: the
+  -- new tab goes right after the current one, so its terminal window can come first in the window list.
+  local term_win = diff._find_claudecode_terminal_window()
+  local term_width = nil
+  if term_win and vim.api.nvim_win_is_valid(term_win) then
+    term_width = vim.api.nvim_win_get_width(term_win)
   end
 
   if config and config.diff_opts and config.diff_opts.open_in_new_tab then
@@ -344,18 +347,14 @@ function M.setup_inline_diff(params, resolution_callback, config)
     created_new_tab = true
   end
 
-  -- Save terminal window width so we can restore it after the diff closes
-  local term_win = diff._find_claudecode_terminal_window()
-  local term_width = nil
-  if term_win and vim.api.nvim_win_is_valid(term_win) then
-    term_width = vim.api.nvim_win_get_width(term_win)
-  end
-
   -- Open a vsplit for the inline diff buffer
   -- When in a new tab, use a window from the current tab rather than the global
   -- search which could return a window from the original tab
   local editor_win
   local fallback_window
+  local fallback_split_win
+  local window_sizes
+  local cursor_origin
   if created_new_tab then
     local tab_wins = vim.api.nvim_tabpage_list_wins(0)
     for _, w in ipairs(tab_wins) do
@@ -370,8 +369,14 @@ function M.setup_inline_diff(params, resolution_callback, config)
     end
   else
     editor_win = diff._find_main_editor_window()
+    window_sizes = diff._save_window_sizes(
+      editor_win and vim.api.nvim_win_get_tabpage(editor_win) or vim.api.nvim_get_current_tabpage()
+    )
+    cursor_origin = vim.api.nvim_get_current_win()
+    partial_setup.window_sizes = window_sizes
+    partial_setup.cursor_origin = cursor_origin
     if not editor_win then
-      fallback_window = guard_inline_setup(create_fallback_editor_window)
+      fallback_window, fallback_split_win = guard_inline_setup(create_fallback_editor_window)
       partial_setup.fallback_window = fallback_window
       editor_win = fallback_window
     end
@@ -431,11 +436,10 @@ function M.setup_inline_diff(params, resolution_callback, config)
   -- Restore terminal width after opening the split
   guard_inline_setup(function()
     if terminal_win_in_new_tab and vim.api.nvim_win_is_valid(terminal_win_in_new_tab) then
-      local terminal_config = config.terminal or {}
-      local split_width = terminal_config.split_width_percentage or 0.30
-      local total_width = vim.o.columns
-      local terminal_width = math.floor(total_width * split_width)
-      vim.api.nvim_win_set_width(terminal_win_in_new_tab, terminal_width)
+      diff._resize_terminal_for_diff(terminal_win_in_new_tab, "diff")
+    elseif term_win and term_win == fallback_split_win then
+      -- The fallback split took its columns from the terminal, so its old width would leave the diff none.
+      diff._resize_terminal_for_diff(term_win, "diff")
     elseif term_win and vim.api.nvim_win_is_valid(term_win) then
       local win_config = vim.api.nvim_win_get_config(term_win)
       local is_floating = win_config.relative and win_config.relative ~= ""
@@ -476,6 +480,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
       new_window = diff_win,
       target_window = editor_win,
       fallback_window = fallback_window,
+      window_sizes = window_sizes,
+      cursor_origin = cursor_origin,
       lines = lines,
       line_types = line_types,
       is_new_file = is_new_file,
@@ -593,6 +599,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
       end
     end
   else
+    local cursor_window = vim.api.nvim_get_current_win()
     -- Close the diff split window
     if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
       pcall(vim.api.nvim_win_close, diff_data.new_window, true)
@@ -601,6 +608,9 @@ function M.cleanup_inline_diff(tab_name, diff_data)
     if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
       pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
     end
+
+    diff._restore_cursor(diff_data.window_sizes, diff_data.cursor_origin, cursor_window)
+    diff._restore_window_sizes(diff_data.window_sizes)
 
     -- Restore terminal width
     if diff_data.term_win and vim.api.nvim_win_is_valid(diff_data.term_win) then

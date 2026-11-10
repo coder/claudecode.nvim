@@ -130,7 +130,18 @@ if not _G.vim then
       return {}
     end,
     cmd = function() end, ---@type fun(command: string):nil
-    api = {}, ---@type table
+    -- openFile creates its BufNewFile autocommands when it loads.
+    api = { ---@type table
+      nvim_create_augroup = function()
+        return 1
+      end,
+      nvim_create_autocmd = function()
+        return 1
+      end,
+      nvim_list_bufs = function()
+        return {}
+      end,
+    },
     fn = { ---@type vim_fn_table
       mode = function()
         return "n"

@@ -14,10 +14,16 @@
 
 [settings]
 # Maintain a committed mise.lock pinning resolved URLs + checksums for the
-# binary-download tools (the integrity role flake.lock used to play).
-# Caveats: the conda-backed luajit only locks the platform it was resolved on
-# (Linux CI backfills its entry on first install); source-built tools (lua,
-# neovim) and npm-backed prettier record a URL/version but no checksum.
+# tools (the integrity role flake.lock used to play). Keep it complete: when it
+# lacks an entry that `mise lock` would write, a plain `mise install` writes
+# that entry again and downloads the tool to do it, so a slow www.lua.org once
+# failed CI's "Set up mise" step. CI runs `mise install --locked`, which fails
+# when a tool is missing from this file and never rewrites it.
+# npm-backed prettier records a version but no checksum, and the conda-backed
+# luajit records its conda packages only for the platform it was locked on.
+# The vfox backend (lua, neovim) records a checksum but does not compare its
+# download with it: Lua builds from the lua.org tarball unchecked, and the
+# Neovim plugin checks the upstream checksum instead.
 # Regenerate with: mise lock -p linux-x64,macos-arm64
 lockfile = true
 
@@ -34,7 +40,7 @@ lua = "5.5.0"
 neovim = "0.12.3"
 
 # Node provides the runtime for prettier (installed via the npm backend).
-node = "26.3.0"
+node = "26.12.1"
 
 # treefmt drives every formatter/linter below (replaces `nix fmt`).
 "github:numtide/treefmt" = "2.5.0"
@@ -115,7 +121,16 @@ TEST_FILES=$(find tests -type f -name "*_test.lua" -o -name "*_spec.lua" | sort)
 echo "Found test files:"
 echo "$TEST_FILES"
 if [ -n "$TEST_FILES" ]; then
-  ./.luarocks/bin/busted --coverage -v $TEST_FILES
+  # Random file and test order catches a test that needs another to run first. The seed fixes the order.
+  SEED=${BUSTED_SEED:-$(date +%s)}
+  case $SEED in
+  '' | *[!0-9]*)
+    echo "BUSTED_SEED must be a non-negative integer, got '$SEED'" >&2
+    exit 2
+    ;;
+  esac
+  echo "Test order seed: $SEED (rerun this order with BUSTED_SEED=$SEED mise run test)"
+  ./.luarocks/bin/busted --coverage -v --shuffle --seed="$SEED" $TEST_FILES
 else
   echo "No test files found"
 fi

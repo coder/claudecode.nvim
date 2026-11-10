@@ -18,15 +18,22 @@ end
 local function setup_terminal_events(term_instance, config)
   local logger = require("claudecode.logger")
 
+  -- A terminal opened while this one was closing is the tracked one now, so keep tracking it.
+  local function forget()
+    if terminal == term_instance then
+      terminal = nil
+    end
+  end
+
   -- Handle command completion/exit - only if auto_close is enabled
   if config.auto_close then
     term_instance:on("TermClose", function()
-      if vim.v.event.status ~= 0 then
+      if vim.v.event.status ~= 0 and not term_instance._cc.closing then
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 
       -- Clean up
-      terminal = nil
+      forget()
       vim.schedule(function()
         term_instance:close({ buf = true })
         vim.cmd.checktime()
@@ -37,7 +44,7 @@ local function setup_terminal_events(term_instance, config)
   -- Handle buffer deletion
   term_instance:on("BufWipeout", function()
     logger.debug("terminal", "Terminal buffer wiped")
-    terminal = nil
+    forget()
   end, { buf = true })
 end
 
@@ -330,6 +337,7 @@ end
 ---@field orig_toggle fun(self: table) Snacks' original Win:toggle
 ---@field config table Effective terminal config captured at open time
 ---@field kind? "float"|"split" Window kind recorded at hide time
+---@field closing? boolean Set by close(), so the job's exit status is not reported as a failure
 
 -- Monkeypatch the Snacks terminal instance so hide/show/toggle -- including any
 -- the user wires to Snacks keymaps (e.g. self:hide() in snacks_win_opts.keys) --
@@ -390,8 +398,23 @@ function M.open(cmd_string, env_table, config, focus)
   -- "opus[1m]" (e.g. zsh aborts with "no matches found"). parse_command keeps
   -- quoted arguments intact and expands a leading "~". Mirrors native.
   local cmd = utils.parse_command(cmd_string)
-  local term_instance = Snacks.terminal.open(cmd, opts)
-  if term_instance and term_instance:buf_valid() then
+  -- Snacks shows its window before it calls termopen, and termopen raises for a
+  -- command that is not executable. Capture the instance so that window can be closed.
+  local shown_instance
+  local user_on_buf = opts.win.on_buf
+  opts.win.on_buf = function(instance)
+    shown_instance = instance
+    if user_on_buf then
+      user_on_buf(instance)
+    end
+  end
+  local opened, open_result = pcall(Snacks.terminal.open, cmd, opts)
+  local term_instance = opened and open_result or nil
+  -- When errors are silenced, termopen returns -1 instead of raising and leaves a plain buffer.
+  local started = term_instance
+    and term_instance:buf_valid()
+    and vim.api.nvim_buf_get_option(term_instance.buf, "buftype") == "terminal"
+  if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     terminal = term_instance
@@ -399,7 +422,9 @@ function M.open(cmd_string, env_table, config, focus)
     terminal = nil
     local logger = require("claudecode.logger")
     local error_details = {}
-    if not term_instance then
+    if not opened then
+      table.insert(error_details, tostring(open_result):match("^[^\n]*"))
+    elseif not term_instance then
       table.insert(error_details, "Snacks.terminal.open() returned nil")
     elseif not term_instance:buf_valid() then
       table.insert(error_details, "terminal instance is invalid")
@@ -409,16 +434,25 @@ function M.open(cmd_string, env_table, config, focus)
       if term_instance.win and not vim.api.nvim_win_is_valid(term_instance.win) then
         table.insert(error_details, "window is invalid")
       end
+    else
+      table.insert(error_details, "no terminal job started")
     end
 
-    local context = string.format("cmd='%s', opts=%s", cmd_string, vim.inspect(opts))
+    local leftover = term_instance or shown_instance
+    if leftover then
+      leftover:close({ buf = true })
+    end
+
     local error_msg = string.format(
-      "Failed to open Claude terminal using Snacks. Details: %s. Context: %s",
+      "Failed to open Claude terminal using Snacks. Details: %s. Context: cmd='%s'",
       table.concat(error_details, ", "),
-      context
+      cmd_string
     )
     vim.notify(error_msg, vim.log.levels.ERROR)
-    logger.debug("terminal", error_msg)
+    -- env values can be user secrets, so the log names only the env keys.
+    local env_keys = vim.tbl_keys(opts.env or {})
+    table.sort(env_keys)
+    logger.debug("terminal", error_msg .. ", opts=" .. vim.inspect(vim.tbl_extend("force", opts, { env = env_keys })))
   end
 end
 
@@ -427,8 +461,39 @@ function M.close()
   if not is_available() then
     return
   end
-  if terminal and terminal:buf_valid() then
-    terminal:close()
+  if not (terminal and terminal:buf_valid()) then
+    return
+  end
+  local closing = terminal
+  local closing_bufnr = closing.buf
+  local jobid = vim.bo[closing_bufnr].channel
+  -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not reuse this one.
+  terminal = nil
+
+  -- Snacks wipes the buffer on close. Deleting a terminal buffer while a write to its job is pending hangs
+  -- Neovim (neovim/neovim#42508), so stop the job first and wait for TermClose. The wait runs the event loop.
+  -- A job that reads its input, like Claude, takes the pending writes there and exits. A job that stopped
+  -- reading (for example `yes`, or `cat` after a large multi-line send) keeps them pending, the wait times
+  -- out, and Neovim can still hang once the buffer is wiped. This code does not prevent that.
+  -- An exited Claude (auto_close = false) has nothing to wait for.
+  if jobid > 0 and vim.fn.jobwait({ jobid }, 0)[1] == -1 then
+    closing._cc.closing = true
+    local exited = false
+    vim.api.nvim_create_autocmd("TermClose", {
+      buffer = closing_bufnr,
+      once = true,
+      callback = function()
+        exited = true
+      end,
+    })
+    vim.fn.jobstop(jobid)
+    -- The auto_close handler or a user's TermClose autocmd can wipe the buffer first.
+    vim.wait(1000, function()
+      return exited or not vim.api.nvim_buf_is_valid(closing_bufnr)
+    end, 10)
+  end
+  if closing:buf_valid() then
+    closing:close()
   end
 end
 
