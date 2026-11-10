@@ -83,7 +83,6 @@
 ---@field is_available fun(): boolean
 ---@field ensure_visible? function
 ---@field hide_float? fun(): boolean Hide the terminal when it is a visible float, so that it does not cover a diff; true when it hid one
----@field restore_float? fun() Show the float that hide_float hid, without focus; does nothing once the user has shown or hidden the terminal
 ---@field _get_terminal_for_test fun(): table?
 
 -- Terminal configuration

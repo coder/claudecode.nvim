@@ -356,49 +356,6 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     assert.is_true(term.opts.enter)
   end)
 
-  describe("restore_float, which shows the float a diff hid (#180)", function()
-    -- Before Neovim 0.10 hide_float closes the float, so restore_float has Snacks re-create it.
-    local function float_hidden_by_a_diff(cfg)
-      snacks_provider.open("claude", {}, cfg, true)
-      local term = snacks_provider._get_terminal_for_test()
-      vim.fn.has = function()
-        return 0
-      end
-      term._cc.orig_hide = function(self)
-        windows[self.win].valid = false
-        self.win = nil
-      end
-      current_win = source_win
-      assert.is_true(snacks_provider.hide_float())
-      assert.is_nil(term.win)
-      pending_insert = false
-      return term
-    end
-
-    it("re-creates the float without entering it or queuing an insert", function()
-      local cfg = config({ position = "float" })
-      local term = float_hidden_by_a_diff(cfg)
-
-      snacks_provider.restore_float()
-
-      assert_shown_and_caller_untouched(term)
-      assert.are.equal(1, #shows)
-      assert.is_false(shows[1].enter)
-      assert.is_nil(term.opts.enter)
-    end)
-
-    it("leaves a user's snacks_win_opts.enter to decide", function()
-      local cfg = config({ position = "float", enter = true })
-      local term = float_hidden_by_a_diff(cfg)
-
-      snacks_provider.restore_float()
-
-      assert.are.equal(1, #shows)
-      assert.is_true(shows[1].enter)
-      assert.are.equal(term.win, current_win)
-    end)
-  end)
-
   it("creating the terminal without focus keeps the caller's window and queues no insert", function()
     snacks_provider.open("claude", {}, config(), false)
 

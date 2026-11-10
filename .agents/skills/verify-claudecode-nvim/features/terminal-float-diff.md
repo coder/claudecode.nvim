@@ -1,11 +1,11 @@
 # Review a diff while the Claude terminal is a Snacks float
 
-With `terminal.provider = "snacks"` and `snacks_win_opts.position = "float"`, Claude's terminal is a floating window over the editor. A float cannot make room for a diff, so the plugin hides it while a diff is open in the float's tab and shows it again when the diff closes. The diff window has focus, and no floating window covers either diff window. With `diff_opts.keep_terminal_focus = true`, the float stays on screen with focus and covers the diff.
+With `terminal.provider = "snacks"` and `snacks_win_opts.position = "float"`, Claude's terminal is a floating window over the editor. A float cannot make room for a diff, so the plugin hides it when a diff opens in the float's tab. It stays hidden when the diff closes, and `:ClaudeCodeFocus` brings it back. The diff window has focus, and no floating window covers either diff window. With `diff_opts.keep_terminal_focus = true`, the float stays on screen with focus and covers the diff.
 
 ## Sub-features
 
 - `float-hide` hides the float, and its backdrop, when a split or unified diff opens, and leaves the diff window focused in Normal mode.
-- `float-restore` shows the float again when `close_tab` closes the diff, with the cursor back where it was when the diff opened.
+- `float-stays-hidden` leaves the float hidden after `close_tab`, so nothing covers the user's editor window.
 - `float-keep-focus` leaves the float on screen, with focus, when `diff_opts.keep_terminal_focus = true`.
 
 ## How to get to it (user POV)
@@ -36,7 +36,7 @@ Steps:
 - **Open the float.** Run `$V keys ':ClaudeCodeFocus' Enter`. `$V capture float-1-terminal` shows the banner line from `fake-terminal.sh` in the float. The mode is `t` and the current window is the float.
 - **Open the diff.** Run `$V tool f1 openDiff "$(jq -nc --arg p "$WORK/hello.txt" '{old_file_path:$p,new_file_path:$p,new_file_contents:"alpha\nBETA\ngamma\n",tab_name:"✻ [Claude Code] hello.txt (f1) ⧉"}')"`. With `keep_terminal_focus = false`, `$V until "bufname() =~# '(proposed)$'" 1` passes (`(unified diff)$` for the unified layout), `$V screenshot float-2-open` shows both diff windows with no float over them, and the observer below reports `visible_floats` 0.
 - **Observe.** `$V expr "luaeval('dofile(\"$PWD/.agents/skills/verify-claudecode-nvim/scripts/observe-windows.lua\")')"` prints one JSON object: `mode`, `current_buf`, `current_is_float`, each window's rectangle, `visible_floats`, `visible_terminal_floats`, and `covered` (per diff window, the cells a visible float covers). A `covered_cells` above 0 means a float hides part of the diff.
-- **Close.** Run `$V tool c1 close_tab "$(jq -nc '{tab_name:"✻ [Claude Code] hello.txt (f1) ⧉"}')"`. The answer is `TAB_CLOSED`, `visible_terminal_floats` is 1 again, and the cursor is back in the float.
+- **Close.** Run `$V tool c1 close_tab "$(jq -nc '{tab_name:"✻ [Claude Code] hello.txt (f1) ⧉"}')"`. The answer is `TAB_CLOSED`, and `visible_floats` stays 0 with the float hidden. `$V keys ':ClaudeCodeFocus' Enter` brings it back.
 - **Proof.** On a fresh launch with the config above, run `.agents/skills/verify-claudecode-nvim/scripts/journey-snacks-float-diff.sh`. It reads the layout and `keep_terminal_focus` from the running plugin, drives the steps, and prints `PASS snacks-float-diff <layout> <nokeep|keep>` or `FAIL: <reason>`. It writes `snacks-float-<layout>-<focus>-1-terminal`, `-2-open` and `-3-closed` screen captures, PNGs and window-state JSON, plus a WebM, to `$OUT`.
 
 ## Gotchas

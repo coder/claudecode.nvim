@@ -1172,7 +1172,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         assert.are.equal(456, bufnr)
       end)
 
-      describe("hide_float and restore_float", function()
+      describe("hide_float", function()
         local function provider_with(overrides)
           return vim.tbl_extend("force", {
             setup = spy.new(function() end),
@@ -1189,61 +1189,32 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
           }, overrides)
         end
 
-        it("hide_float returns what the provider's hide_float returns", function()
+        it("returns what the provider's hide_float returns", function()
           local hide_float = spy.new(function()
             return true
           end)
-          terminal_wrapper.setup({
-            provider = provider_with({ hide_float = hide_float, restore_float = spy.new(function() end) }),
-          })
+          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
 
           assert.is_true(terminal_wrapper.hide_float())
           hide_float:was_called(1)
         end)
 
-        it("hide_float returns false when the provider hid nothing", function()
+        it("returns false when the provider hid nothing", function()
           terminal_wrapper.setup({
             provider = provider_with({
               hide_float = function()
                 return false
               end,
-              restore_float = function() end,
             }),
           })
 
           assert.is_false(terminal_wrapper.hide_float())
         end)
 
-        it("hide_float returns false for a provider that has no hide_float", function()
-          terminal_wrapper.setup({ provider = provider_with({ restore_float = function() end }) })
-
-          assert.is_false(terminal_wrapper.hide_float())
-        end)
-
-        it("hide_float hides nothing when the provider has no restore_float to bring it back", function()
-          local hide_float = spy.new(function()
-            return true
-          end)
-          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
-
-          assert.is_false(terminal_wrapper.hide_float())
-          hide_float:was_not_called()
-        end)
-
-        it("restore_float calls the provider's restore_float", function()
-          local restore_float = spy.new(function() end)
-          terminal_wrapper.setup({ provider = provider_with({ restore_float = restore_float }) })
-
-          terminal_wrapper.restore_float()
-          restore_float:was_called(1)
-        end)
-
-        it("restore_float does nothing for a provider that has no restore_float", function()
+        it("returns false for a provider that has no hide_float", function()
           terminal_wrapper.setup({ provider = provider_with({}) })
 
-          assert.has_no.errors(function()
-            terminal_wrapper.restore_float()
-          end)
+          assert.is_false(terminal_wrapper.hide_float())
         end)
       end)
 

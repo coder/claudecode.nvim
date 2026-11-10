@@ -64,14 +64,19 @@ else
 fi
 jq -c '{layout:"'"$layout"'",keep_terminal_focus:'"$keep"',visible_floats,diff_windows,covered}' "$OUT/$P-2-open.json"
 
-step "Claude closes the diff tab; the float comes back and the cursor returns to it"
+step "Claude closes the diff tab; a float that the diff hid stays hidden"
 "$V" tool close1 close_tab "$(jq -nc --arg t "$TAB" '{tab_name:$t}')"
 [[ $("$V" await close1 10 | jq -r '.result.content[0].text') == TAB_CLOSED ]] || fail "close_tab did not answer TAB_CLOSED"
-wait_observed '.visible_terminal_floats == 1 and .diff_windows == 0' 10
+wait_observed '.diff_windows == 0' 10
 "$V" capture "$P-3-closed" >/dev/null
 "$V" screenshot "$P-3-closed" >/dev/null
 observe >"$OUT/$P-3-closed.json"
-jq -e '.current_is_float and .visible_terminal_floats == 1' "$OUT/$P-3-closed.json" >/dev/null ||
-  fail "focus did not return to the float, where the user was when the diff opened"
+if [[ $keep == 1 ]]; then
+  jq -e '.current_is_float and .visible_terminal_floats == 1' "$OUT/$P-3-closed.json" >/dev/null ||
+    fail "keep_terminal_focus: the float and its focus should stay"
+else
+  jq -e '.visible_floats == 0 and .current_is_float == false' "$OUT/$P-3-closed.json" >/dev/null ||
+    fail "the float came back or took focus: $(jq -c '{mode,current_buf,visible_floats}' "$OUT/$P-3-closed.json")"
+fi
 "$V" record "$P" >/dev/null
 echo "PASS snacks-float-diff $layout $focus; evidence in $OUT"
