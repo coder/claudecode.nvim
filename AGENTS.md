@@ -6,7 +6,8 @@
 - `plugin/`: Lightweight loader that guards startup and optional auto-setup.
 - `tests/`: Busted test suite (`unit/`, `integration/`, `helpers/`, `mocks/`).
 - `fixtures/`: Minimal Neovim configs for manual and integration testing.
-- `scripts/`: Development helpers; `dev-config.lua` aids local testing.
+- `scripts/`: Development and release helpers.
+- `dev-config.lua` (repo root): lazy.nvim spec for local development.
 
 ## Build, Test, and Development Commands
 

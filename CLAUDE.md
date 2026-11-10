@@ -254,7 +254,7 @@ The plugin implements authentication using 128-bit tokens (32-char lowercase hex
 
 1. Start the plugin: `:ClaudeCodeStart`
 2. Check lock file contains `authToken`: `cat ~/.claude/ide/*.lock | jq .authToken`
-3. Test WebSocket connection with auth: run `.agents/skills/verify-claudecode-nvim/scripts/ws-client.mjs` (it reads the token from the lock file), or use the `websocat` commands below
+3. Test WebSocket connection with auth: create an empty out file, then run `mise exec -- node .agents/skills/verify-claudecode-nvim/scripts/ws-client.mjs <lock file> <out file> <in file>` from the repo root (it reads the token from the lock file, sends each line you append to the out file, and appends each reply to the in file), or use the `websocat` commands below
 4. Verify authentication in logs: Set `log_level = "debug"` in config
 
 **Testing Authentication Failures**:
