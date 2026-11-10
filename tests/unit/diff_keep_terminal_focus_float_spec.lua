@@ -1,4 +1,5 @@
 require("tests.busted_setup")
+local temp_dir = require("tests.helpers.temp_dir")
 
 -- Regression test for #150:
 -- When diff_opts.keep_terminal_focus = true and the Claude terminal lives in a floating window,
@@ -7,8 +8,15 @@ require("tests.busted_setup")
 describe("Diff keep_terminal_focus with floating terminal", function()
   local diff
 
-  local test_old_file = "/tmp/claudecode_keep_focus_old.txt"
-  local test_new_file = "/tmp/claudecode_keep_focus_new.txt"
+  local dir, test_old_file, test_new_file
+  setup(function()
+    dir = temp_dir.new()
+    test_old_file = dir .. "/claudecode_keep_focus_old.txt"
+    test_new_file = dir .. "/claudecode_keep_focus_new.txt"
+  end)
+  teardown(function()
+    temp_dir.remove(dir)
+  end)
   local tab_name = "keep-focus-float"
 
   local editor_win = 1000

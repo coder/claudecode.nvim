@@ -1,17 +1,12 @@
 {
   "name": "claudecode.nvim Development",
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "features": {
-    "ghcr.io/devcontainers/features/git:1": {}
+    "ghcr.io/devcontainers-extra/features/mise:1": {}
   },
   "customizations": {
     "vscode": {
-      "settings": {
-        "terminal.integrated.defaultProfile.linux": "bash"
-      },
-      "extensions": ["jnoortheen.nix-ide"]
+      "extensions": ["hverlin.mise-vscode"]
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",

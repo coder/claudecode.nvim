@@ -47,6 +47,16 @@ describe("Configuration", function()
     expect(final_config.env).to_be_table() -- Should inherit default empty table
   end)
 
+  it("should not load terminal module while applying configuration", function()
+    package.loaded["claudecode.terminal"] = nil
+
+    local final_config = config.apply({ auto_start = false, log_level = "info" })
+
+    expect(final_config.terminal).to_be_table()
+    expect(final_config.terminal.provider).to_be("auto")
+    expect(package.loaded["claudecode.terminal"]).to_be_nil()
+  end)
+
   it("should reject invalid port range", function()
     local invalid_config = {
       port_range = { min = -1, max = 65536 },
@@ -177,6 +187,66 @@ describe("Configuration", function()
         layout = "vertical",
         open_in_new_tab = false,
         keep_terminal_focus = "invalid", -- Should be boolean
+      },
+      env = {},
+      models = {
+        { name = "Test Model", value = "test" },
+      },
+    }
+
+    local success, _ = pcall(function()
+      config.validate(invalid_config)
+    end)
+
+    expect(success).to_be_false()
+  end)
+
+  it("should accept valid auto_resize_terminal configuration", function()
+    local user_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = {
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = false,
+        auto_resize_terminal = false,
+      },
+      env = {},
+      models = {
+        { name = "Test Model", value = "test" },
+      },
+    }
+
+    local final_config = config.apply(user_config)
+    expect(final_config.diff_opts.auto_resize_terminal).to_be_false()
+  end)
+
+  it("should default auto_resize_terminal to true", function()
+    local final_config = config.apply({ auto_start = true, log_level = "info" })
+    expect(final_config.diff_opts.auto_resize_terminal).to_be_true()
+  end)
+
+  it("should reject invalid auto_resize_terminal configuration", function()
+    local invalid_config = {
+      port_range = { min = 10000, max = 65535 },
+      auto_start = true,
+      log_level = "info",
+      track_selection = true,
+      visual_demotion_delay_ms = 50,
+      connection_wait_delay = 200,
+      connection_timeout = 10000,
+      queue_timeout = 5000,
+      diff_opts = {
+        layout = "vertical",
+        open_in_new_tab = false,
+        keep_terminal_focus = false,
+        auto_resize_terminal = "yes", -- Should be boolean
       },
       env = {},
       models = {

@@ -10,6 +10,7 @@ local claudecode_server_module = require("claudecode.server.init")
 local defaults = {
   split_side = "right",
   split_width_percentage = 0.30,
+  diff_split_width_percentage = nil, -- optional terminal width while a diff is active; defaults to split_width_percentage
   provider = "auto",
   show_native_term_exit_tip = true,
   terminal_cmd = nil,
@@ -17,8 +18,10 @@ local defaults = {
     external_terminal_cmd = nil,
   },
   auto_close = true,
+  auto_insert = true,
   env = {},
   snacks_win_opts = {},
+  fix_streamed_paste = "auto", -- work around Neovim <0.12.2 paste fragmentation (#161): true|false|"auto"
   -- Working directory control
   cwd = nil, -- static cwd override
   git_repo_cwd = false, -- resolve to git root when spawning
@@ -268,6 +271,7 @@ local function build_config(opts_override)
     split_side = effective_config.split_side,
     split_width_percentage = effective_config.split_width_percentage,
     auto_close = effective_config.auto_close,
+    auto_insert = effective_config.auto_insert,
     snacks_win_opts = effective_config.snacks_win_opts,
     cwd = resolved_cwd,
   }
@@ -282,7 +286,56 @@ local function is_terminal_visible(bufnr)
   end
 
   local bufinfo = vim.fn.getbufinfo(bufnr)
-  return bufinfo and #bufinfo > 0 and #bufinfo[1].windows > 0
+  if not (bufinfo and #bufinfo > 0) then
+    return false
+  end
+  -- A config-hidden window (e.g. a Snacks float parked via
+  -- nvim_win_set_config({hide=true}) to dodge the climbing-cursor bug #240/#183)
+  -- still lists the buffer but is not actually on screen; don't count it.
+  for _, win in ipairs(bufinfo[1].windows or {}) do
+    if vim.api.nvim_win_is_valid(win) then
+      local ok, cfg = pcall(vim.api.nvim_win_get_config, win)
+      if not (ok and cfg and cfg.hide == true) then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+---Builds a no_proxy value that is guaranteed to exclude the loopback hosts
+---(localhost, 127.0.0.1, ::1) from any proxy, merging the given existing values
+---(each a comma-separated list, nils allowed) order-preserving and de-duplicated.
+---See issue #70: Claude must never proxy its loopback IDE WebSocket connection.
+---@param ... string? Existing no_proxy/NO_PROXY values to merge ahead of the loopback hosts
+---@return string combined The merged no_proxy value with loopback hosts guaranteed present
+local function no_proxy_with_loopback(...)
+  local entries = {}
+  local seen = {}
+
+  local function add_entry(entry)
+    entry = entry:gsub("^%s+", ""):gsub("%s+$", "")
+    if entry ~= "" and not seen[entry] then
+      seen[entry] = true
+      entries[#entries + 1] = entry
+    end
+  end
+
+  -- select() (not ipairs over {...}) so a nil source does not truncate the rest.
+  for i = 1, select("#", ...) do
+    local value = select(i, ...)
+    if type(value) == "string" then
+      for entry in value:gmatch("[^,]+") do
+        add_entry(entry)
+      end
+    end
+  end
+
+  for _, host in ipairs({ "localhost", "127.0.0.1", "::1" }) do
+    add_entry(host)
+  end
+
+  return table.concat(entries, ",")
 end
 
 ---Gets the claude command string and necessary environment variables
@@ -320,6 +373,18 @@ local function get_claude_command_and_env(cmd_args)
   for key, value in pairs(defaults.env) do
     env_table[key] = value
   end
+
+  -- Issue #70: Claude honors http_proxy/all_proxy (proxy-from-env semantics) and, without a
+  -- localhost exclusion, tunnels even its ws://127.0.0.1:<port> IDE connection through the
+  -- proxy, so the handshake never reaches our server and queued @ mentions time out. Guarantee
+  -- the loopback hosts bypass the proxy. This runs LAST -- after the config merge above and
+  -- regardless of the inherited env (termopen layers env_table over the parent env) -- so the
+  -- loopback exclusion always holds. We merge, rather than clobber, every existing source: the
+  -- inherited shell no_proxy/NO_PROXY and any value the user set via the `env` config option.
+  local combined_no_proxy =
+    no_proxy_with_loopback(os.getenv("no_proxy"), os.getenv("NO_PROXY"), env_table["no_proxy"], env_table["NO_PROXY"])
+  env_table["no_proxy"] = combined_no_proxy
+  env_table["NO_PROXY"] = combined_no_proxy
 
   return cmd_string, env_table
 end
@@ -401,6 +466,15 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
           vim.log.levels.WARN
         )
       end
+    elseif k == "diff_split_width_percentage" then
+      if v == nil or (type(v) == "number" and v > 0 and v < 1) then
+        defaults.diff_split_width_percentage = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for diff_split_width_percentage: " .. tostring(v),
+          vim.log.levels.WARN
+        )
+      end
     elseif k == "provider" then
       if type(v) == "table" or v == "snacks" or v == "native" or v == "external" or v == "auto" or v == "none" then
         defaults.provider = v
@@ -447,11 +521,28 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       else
         vim.notify("claudecode.terminal.setup: Invalid value for auto_close: " .. tostring(v), vim.log.levels.WARN)
       end
+    elseif k == "auto_insert" then
+      if type(v) == "boolean" then
+        defaults.auto_insert = v
+      else
+        vim.notify("claudecode.terminal.setup: Invalid value for auto_insert: " .. tostring(v), vim.log.levels.WARN)
+      end
     elseif k == "snacks_win_opts" then
       if type(v) == "table" then
         defaults.snacks_win_opts = v
       else
         vim.notify("claudecode.terminal.setup: Invalid value for snacks_win_opts", vim.log.levels.WARN)
+      end
+    elseif k == "fix_streamed_paste" then
+      if type(v) == "boolean" or v == "auto" then
+        defaults.fix_streamed_paste = v
+      else
+        vim.notify(
+          "claudecode.terminal.setup: Invalid value for fix_streamed_paste: "
+            .. tostring(v)
+            .. " (expected true, false, or 'auto')",
+          vim.log.levels.WARN
+        )
       end
     elseif k == "cwd" then
       if v == nil or type(v) == "string" then
@@ -491,6 +582,9 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
 
   -- Setup providers with config
   get_provider().setup(defaults)
+
+  -- Streamed-paste compatibility shim for #161 (no-op on Neovim >= 0.12.2).
+  require("claudecode.terminal.paste_fix").apply(defaults.fix_streamed_paste)
 end
 
 ---Opens or focuses the Claude terminal.
@@ -555,6 +649,103 @@ end
 ---@return number|nil The buffer number if an active terminal is found, otherwise nil.
 function M.get_active_terminal_bufnr()
   return get_provider().get_active_bufnr()
+end
+
+---Sends raw text to the running Claude Code terminal's job channel, as if it were
+---typed at the prompt. By default a trailing carriage return submits the line.
+---
+---Only works for the in-editor providers ("native"/"snacks"). The "external" and
+---"none" providers run Claude outside Neovim and expose no buffer, so this warns and
+---returns false. This function is synchronous and does NOT open the terminal: it
+---requires one to already be running, otherwise it warns and returns false. The
+---`:ClaudeCodeSendText` command is a thin wrapper around this.
+---
+---Multi-line text is wrapped in bracketed-paste markers (ESC[200~ ... ESC[201~) so
+---embedded newlines arrive as one literal pasted block rather than several premature
+---submits; the submit carriage return is sent after the closing marker so it still
+---triggers submission. `chansend` writes straight to the PTY and bypasses `vim.paste`,
+---so the `fix_streamed_paste` shim is irrelevant here.
+---@param text string The text to send. Must be a non-empty string.
+---@param opts { submit?: boolean, focus?: boolean }? `submit` (default true) appends a carriage return so Claude submits the line; `focus` (default false) focuses the terminal after a successful send.
+---@return boolean success Whether the text was written to a terminal channel.
+function M.send_to_terminal(text, opts)
+  local logger = require("claudecode.logger")
+
+  if type(text) ~= "string" or text == "" then
+    logger.warn("terminal", "send_to_terminal: no text provided")
+    return false
+  end
+
+  opts = opts or {}
+  local submit = opts.submit ~= false
+
+  local bufnr = M.get_active_terminal_bufnr()
+  if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
+    local provider_name = type(defaults.provider) == "string" and defaults.provider or "custom"
+    if provider_name == "none" or provider_name == "external" then
+      logger.warn(
+        "terminal",
+        string.format(
+          "Cannot send text: terminal.provider=%q runs Claude outside Neovim, so there is no pane to "
+            .. "write to. Use the 'native' or 'snacks' provider to send text programmatically.",
+          provider_name
+        )
+      )
+    else
+      logger.warn("terminal", "Cannot send text: no Claude terminal is currently running.")
+    end
+    return false
+  end
+
+  -- termopen() sets both b:terminal_job_id and the 'channel' option to the job id. The 'channel'
+  -- fallback covers a Neovim that stops setting b:terminal_job_id, which is deprecated.
+  local chan = vim.b[bufnr] and vim.b[bufnr].terminal_job_id
+  if not chan or chan == 0 then
+    chan = vim.bo[bufnr].channel
+  end
+  if not chan or chan == 0 then
+    logger.warn("terminal", "Cannot send text: no terminal job channel for buffer " .. tostring(bufnr))
+    return false
+  end
+
+  -- Normalize line endings so the ONLY submit byte is the trailing CR added below.
+  -- A bare "\r" is Enter at Claude's prompt, so any interior CR (e.g. CRLF or old-Mac
+  -- text from a programmatic caller) would otherwise fire one or more premature submits
+  -- -- the exact failure mode the bracketed-paste wrapping exists to prevent.
+  local normalized = (text:gsub("\r\n", "\n"):gsub("\r", "\n"))
+
+  local payload = normalized
+  if string.find(normalized, "\n", 1, true) then
+    -- Multi-line: bracketed paste so the newlines arrive as one literal block.
+    payload = "\27[200~" .. normalized .. "\27[201~"
+  end
+  if submit then
+    payload = payload .. "\r"
+  end
+
+  -- chansend can reject (0 bytes) or error if the channel is closed -- e.g. a recovered
+  -- terminal whose process already exited but whose buffer is still valid. Honor that
+  -- instead of reporting a false success.
+  local ok_send, written = pcall(vim.fn.chansend, chan, payload)
+  if not ok_send or written == 0 then
+    logger.warn("terminal", "Cannot send text: the Claude terminal channel is closed (the process may have exited).")
+    return false
+  end
+  logger.debug(
+    "terminal",
+    string.format(
+      "send_to_terminal: wrote %d byte(s) to channel %s (submit=%s)",
+      #payload,
+      tostring(chan),
+      tostring(submit)
+    )
+  )
+
+  if opts.focus then
+    M.open()
+  end
+
+  return true
 end
 
 ---Gets the managed terminal instance for testing purposes.

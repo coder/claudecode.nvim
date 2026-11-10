@@ -13,6 +13,9 @@ M.OPCODE = {
   PONG = 0xA,
 }
 
+-- The largest payload of one frame, and of one message however many fragments it arrives in.
+M.MAX_PAYLOAD_LENGTH = 100 * 1024 * 1024
+
 ---@class WebSocketFrame
 ---@field fin boolean Final fragment flag
 ---@field opcode number Frame opcode
@@ -22,19 +25,31 @@ M.OPCODE = {
 ---@field payload string Frame payload data
 
 ---Parse a WebSocket frame from binary data
+---
+---Failure is disambiguated via the optional third return value:
+---  * incomplete input ("need more bytes") returns `nil, 0` with NO third value. Once the frame's header has arrived,
+---    the fourth value is the length of the whole frame.
+---  * a fatal protocol violation returns `nil, 0, <close_code>, <problem>` where the close
+---    code is the RFC 6455 status to send in the Close frame (1002/1007/1009)
 ---@param data string The binary frame data
+---@param start integer|nil Byte of data where the frame starts (default 1), so a caller can parse many frames from one
+---  buffer without copying the rest of it after each one
 ---@return WebSocketFrame|nil frame The parsed frame, or nil if incomplete/invalid
 ---@return number bytes_consumed Number of bytes consumed from input
-function M.parse_frame(data)
+---@return number|nil close_code WebSocket close code for fatal protocol violations
+---@return string|integer|nil detail For a violation, what broke the protocol, short enough for one line of :messages.
+---  For an incomplete frame whose header has arrived, the frame's length in bytes.
+function M.parse_frame(data, start)
   if type(data) ~= "string" then
     return nil, 0
   end
+  start = start or 1
 
-  if #data < 2 then
+  if #data < start + 1 then
     return nil, 0 -- Need at least 2 bytes for basic header
   end
 
-  local pos = 1
+  local pos = start
   local byte1 = data:byte(pos)
   local byte2 = data:byte(pos + 1)
 
@@ -65,18 +80,20 @@ function M.parse_frame(data)
   }
 
   if not valid_opcodes[opcode] then
-    return nil, 0 -- Invalid opcode
+    return nil, 0, 1002, string.format("Reserved opcode 0x%X", opcode)
   end
 
   -- Check for reserved bits (must be 0)
   if rsv1 or rsv2 or rsv3 then
-    return nil, 0 -- Protocol error
+    return nil, 0, 1002, "Reserved bits set"
   end
 
   -- Control frames must have fin=1 and payload ≤ 125 (RFC 6455 Section 5.5)
   if opcode >= M.OPCODE.CLOSE then
-    if not fin or payload_len > 125 then
-      return nil, 0 -- Protocol violation
+    if not fin then
+      return nil, 0, 1002, "Fragmented control frame"
+    elseif payload_len > 125 then
+      return nil, 0, 1002, "Control frame over 125 bytes"
     end
   end
 
@@ -102,14 +119,14 @@ function M.parse_frame(data)
     -- Note: Technically should be > 65535, but some implementations may vary
 
     -- Prevent extremely large payloads (DOS protection)
-    if actual_payload_len > 100 * 1024 * 1024 then -- 100MB limit
-      return nil, 0
+    if actual_payload_len > M.MAX_PAYLOAD_LENGTH then
+      return nil, 0, 1009, "WebSocket frame too big"
     end
   end
 
   -- Additional payload length validation
   if actual_payload_len < 0 then
-    return nil, 0 -- Invalid negative length
+    return nil, 0, 1002, "Negative payload length"
   end
 
   -- Read mask if present
@@ -124,7 +141,7 @@ function M.parse_frame(data)
 
   -- Check if we have enough data for payload
   if #data < pos + actual_payload_len - 1 then
-    return nil, 0 -- Incomplete frame
+    return nil, 0, nil, pos - start + actual_payload_len
   end
 
   -- Read payload
@@ -136,21 +153,16 @@ function M.parse_frame(data)
     payload = utils.apply_mask(payload, mask)
   end
 
-  -- Validate text frame payload is valid UTF-8
-  if opcode == M.OPCODE.TEXT and not utils.is_valid_utf8(payload) then
-    return nil, 0 -- Invalid UTF-8 in text frame
-  end
-
   -- Basic validation for close frame payload
   if opcode == M.OPCODE.CLOSE and actual_payload_len > 0 then
     if actual_payload_len == 1 then
-      return nil, 0 -- Close frame with 1 byte payload is invalid
+      return nil, 0, 1002, "Close frame with a 1-byte payload"
     end
     -- Allow most close codes for compatibility, only validate UTF-8 for reason text
     if actual_payload_len > 2 then
       local reason = payload:sub(3)
       if not utils.is_valid_utf8(reason) then
-        return nil, 0 -- Invalid UTF-8 in close reason
+        return nil, 0, 1007, "Invalid UTF-8 in close reason"
       end
     end
   end
@@ -164,7 +176,7 @@ function M.parse_frame(data)
     payload = payload,
   }
 
-  return frame, pos - 1
+  return frame, pos - start
 end
 
 ---Create a WebSocket frame
@@ -272,43 +284,6 @@ end
 ---@return boolean is_control True if it's a control frame
 function M.is_control_frame(opcode)
   return opcode >= 0x8
-end
-
----Validate a WebSocket frame
----@param frame WebSocketFrame The frame to validate
----@return boolean valid True if the frame is valid
----@return string|nil error Error message if invalid
-function M.validate_frame(frame)
-  -- Control frames must not be fragmented
-  if M.is_control_frame(frame.opcode) and not frame.fin then
-    return false, "Control frames must not be fragmented"
-  end
-
-  -- Control frames must have payload <= 125 bytes
-  if M.is_control_frame(frame.opcode) and frame.payload_length > 125 then
-    return false, "Control frame payload too large"
-  end
-
-  -- Check for valid opcodes
-  local valid_opcodes = {
-    [M.OPCODE.CONTINUATION] = true,
-    [M.OPCODE.TEXT] = true,
-    [M.OPCODE.BINARY] = true,
-    [M.OPCODE.CLOSE] = true,
-    [M.OPCODE.PING] = true,
-    [M.OPCODE.PONG] = true,
-  }
-
-  if not valid_opcodes[frame.opcode] then
-    return false, "Invalid opcode: " .. frame.opcode
-  end
-
-  -- Text frames must contain valid UTF-8
-  if frame.opcode == M.OPCODE.TEXT and not utils.is_valid_utf8(frame.payload) then
-    return false, "Text frame contains invalid UTF-8"
-  end
-
-  return true
 end
 
 return M

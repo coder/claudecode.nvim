@@ -4,6 +4,29 @@ local M = {}
 
 local logger = require("claudecode.logger")
 local terminal = require("claudecode.terminal")
+local utils = require("claudecode.utils")
+
+local uv = vim.uv or vim.loop
+
+---Returns true if the given mode string has a visual selection (Visual or Select mode).
+---@param mode string|nil
+---@return boolean
+local function is_visual_mode(mode)
+  return utils.selection_type(mode) ~= nil
+end
+
+---Returns true if the cursor is still at the position captured by the most recent flush
+---for this buffer (i.e. the held visual selection has not been navigated away from yet).
+---@param bufnr number
+---@return boolean
+local function cursor_unmoved_since_flush(bufnr)
+  local caf = M.state.cursor_at_flush
+  if not caf or caf.bufnr ~= bufnr then
+    return false
+  end
+  local pos = vim.api.nvim_win_get_cursor(0)
+  return pos[1] == caf.pos[1] and pos[2] == caf.pos[2]
+end
 
 M.state = {
   latest_selection = nil,
@@ -14,6 +37,16 @@ M.state = {
   last_active_visual_selection = nil,
   demotion_timer = nil,
   visual_demotion_delay_ms = 50,
+
+  -- Cursor position captured when a visual selection is flushed on visual-mode exit.
+  -- Demotion only fires once the cursor actually moves away from this position, so a
+  -- held selection persists (see issue #246 and M.flush_visual_selection).
+  cursor_at_flush = nil,
+
+  -- { bufnr, tick } captured when visual mode is entered. Used to detect that an operator
+  -- consumed/mutated the selection (d/c/>/x...) so the flush does not broadcast stale,
+  -- post-edit marks as a phantom selection (see M.flush_visual_selection).
+  visual_entry = nil,
 }
 
 ---Enables selection tracking.
@@ -32,7 +65,8 @@ function M.enable(server, visual_demotion_delay_ms)
 end
 
 ---Disables selection tracking.
----Clears autocommands, resets internal state, and stops any active debounce timers.
+---Clears autocommands, resets internal state, and stops any active debounce or
+---demotion timers.
 function M.disable()
   if not M.state.tracking_enabled then
     return
@@ -43,12 +77,43 @@ function M.disable()
   M._clear_autocommands()
 
   M.state.latest_selection = nil
+  M.state.last_active_visual_selection = nil
+  M.state.cursor_at_flush = nil
+  M.state.visual_entry = nil
   M.server = nil
 
-  if M.state.debounce_timer then
-    vim.loop.timer_stop(M.state.debounce_timer)
-    M.state.debounce_timer = nil
+  M._cancel_debounce_timer()
+  M._cancel_demotion_timer()
+end
+
+---Cancels and closes the current debounce timer, if any.
+---@local
+function M._cancel_debounce_timer()
+  local timer = M.state.debounce_timer
+  if not timer then
+    return
   end
+
+  -- Clear state before stopping/closing so any already-scheduled callback is a no-op.
+  M.state.debounce_timer = nil
+
+  timer:stop()
+  timer:close()
+end
+
+---Cancels and closes the current demotion timer, if any.
+---@local
+function M._cancel_demotion_timer()
+  local timer = M.state.demotion_timer
+  if not timer then
+    return
+  end
+
+  -- Clear state before stopping/closing so any already-scheduled callback is a no-op.
+  M.state.demotion_timer = nil
+
+  timer:stop()
+  timer:close()
 end
 
 ---Creates autocommands for tracking selections.
@@ -92,8 +157,26 @@ function M.on_cursor_moved()
 end
 
 ---Handles mode change events.
----Triggers an immediate update of the selection.
+---When leaving visual mode, the selection is flushed synchronously: at that instant
+---`nvim_get_mode()` already reports the new (non-visual) mode, so the debounced
+---`update_selection()` path can no longer capture the visual selection. Flushing here
+---(from the still-valid `'<`/`'>` marks) ensures fast selections that are made and
+---released in under `debounce_ms` are not lost (issue #246).
+---Entering visual mode records the buffer's changedtick so the flush can tell an
+---abandoned selection apart from one consumed by a mutating operator (d/c/>/x...).
 function M.on_mode_changed()
+  local event = vim.v.event
+  if event then
+    local leaving_visual = is_visual_mode(event.old_mode) and not is_visual_mode(event.new_mode)
+    local entering_visual = is_visual_mode(event.new_mode) and not is_visual_mode(event.old_mode)
+    if entering_visual then
+      local buf = vim.api.nvim_get_current_buf()
+      M.state.visual_entry = { bufnr = buf, tick = vim.api.nvim_buf_get_changedtick(buf) }
+    elseif leaving_visual then
+      M.flush_visual_selection()
+    end
+  end
+
   M.debounce_update()
 end
 
@@ -107,14 +190,36 @@ end
 ---Ensures that `update_selection` is not called too frequently by deferring
 ---its execution.
 function M.debounce_update()
-  if M.state.debounce_timer then
-    vim.loop.timer_stop(M.state.debounce_timer)
-  end
+  M._cancel_debounce_timer()
 
-  M.state.debounce_timer = vim.defer_fn(function()
-    M.update_selection()
-    M.state.debounce_timer = nil
-  end, M.state.debounce_ms)
+  assert(type(M.state.debounce_ms) == "number", "Expected debounce_ms to be a number")
+
+  local timer = uv.new_timer()
+  assert(timer, "Expected uv.new_timer() to return a timer handle")
+  assert(timer.start, "Expected debounce timer to have :start()")
+  assert(timer.stop, "Expected debounce timer to have :stop()")
+  assert(timer.close, "Expected debounce timer to have :close()")
+
+  M.state.debounce_timer = timer
+
+  timer:start(
+    M.state.debounce_ms,
+    0, -- 0 repeat = one-shot
+    vim.schedule_wrap(function()
+      -- Ignore stale timers (e.g., cancelled and replaced before callback runs)
+      if M.state.debounce_timer ~= timer then
+        return
+      end
+
+      -- Clear state so _cancel_debounce_timer() is a no-op if called after firing.
+      M.state.debounce_timer = nil
+
+      timer:stop()
+      timer:close()
+
+      M.update_selection()
+    end)
+  )
 end
 
 ---Updates the current selection state.
@@ -131,11 +236,7 @@ function M.update_selection()
   -- If the buffer name starts with "term://" and contains "claude", do not update selection
   if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
     -- Optionally, cancel demotion timer like for the terminal
-    if M.state.demotion_timer then
-      M.state.demotion_timer:stop()
-      M.state.demotion_timer:close()
-      M.state.demotion_timer = nil
-    end
+    M._cancel_demotion_timer()
     return
   end
 
@@ -144,11 +245,7 @@ function M.update_selection()
     local claude_term_bufnr = terminal.get_active_terminal_bufnr()
     if claude_term_bufnr and current_buf == claude_term_bufnr then
       -- Cancel any pending demotion if we switch to the Claude terminal
-      if M.state.demotion_timer then
-        M.state.demotion_timer:stop()
-        M.state.demotion_timer:close()
-        M.state.demotion_timer = nil
-      end
+      M._cancel_demotion_timer()
       return
     end
   end
@@ -157,13 +254,9 @@ function M.update_selection()
   local current_mode = current_mode_info.mode
   local current_selection
 
-  if current_mode == "v" or current_mode == "V" or current_mode == "\022" then
+  if is_visual_mode(current_mode) then
     -- If a new visual selection is made, cancel any pending demotion
-    if M.state.demotion_timer then
-      M.state.demotion_timer:stop()
-      M.state.demotion_timer:close()
-      M.state.demotion_timer = nil
-    end
+    M._cancel_demotion_timer()
 
     current_selection = M.get_visual_selection()
 
@@ -184,10 +277,16 @@ function M.update_selection()
     local last_visual = M.state.last_active_visual_selection
 
     if M.state.demotion_timer then
-      -- A demotion is already pending. For this specific update_selection call (e.g. cursor moved),
-      -- current_selection reflects the immediate cursor position.
-      -- M.state.latest_selection (the one that might be sent) is still the visual one until timer resolves.
-      current_selection = M.get_cursor_position()
+      -- A demotion is already pending. While the cursor is still on the flushed position the
+      -- held visual selection must be preserved (an idle re-entry here must not wipe it before
+      -- the cursor actually moves -- matters when visual_demotion_delay_ms >= debounce_ms).
+      -- Once the cursor has moved, reflect the immediate cursor position; M.state.latest_selection
+      -- stays the visual one until the timer resolves.
+      if cursor_unmoved_since_flush(current_buf) then
+        current_selection = M.state.latest_selection
+      else
+        current_selection = M.get_cursor_position()
+      end
     elseif
       last_visual
       and last_visual.bufnr == current_buf
@@ -199,30 +298,37 @@ function M.update_selection()
       -- The 'current_selection' for comparison should also be this visual one.
       current_selection = M.state.latest_selection
 
-      if M.state.demotion_timer then -- Should not happen due to elseif, but as safeguard
-        M.state.demotion_timer:stop()
-        M.state.demotion_timer:close()
-      end
+      local timer = uv.new_timer()
+      assert(timer, "Expected uv.new_timer() to return a timer handle")
 
-      M.state.demotion_timer = vim.loop.new_timer()
-      M.state.demotion_timer:start(
+      M.state.demotion_timer = timer
+      timer:start(
         M.state.visual_demotion_delay_ms,
         0, -- 0 repeat = one-shot
         vim.schedule_wrap(function()
-          if M.state.demotion_timer then -- Check if it wasn't cancelled right before firing
-            M.state.demotion_timer:stop()
-            M.state.demotion_timer:close()
-            M.state.demotion_timer = nil
+          -- Ignore stale timers (e.g., cancelled and replaced before callback runs)
+          if M.state.demotion_timer ~= timer then
+            return
           end
+
+          -- Clear state so _cancel_demotion_timer() is a no-op if called after firing.
+          M.state.demotion_timer = nil
+
+          timer:stop()
+          timer:close()
+
           M.handle_selection_demotion(current_buf) -- Pass buffer at time of scheduling
         end)
       )
     else
-      -- Genuinely in normal mode, no recent visual exit, no pending demotion.
+      -- Genuinely in normal mode, no recent visual exit, no pending demotion. The
+      -- selection_changed protocol reflects the active editor, so report this buffer's
+      -- cursor. Any held visual selection (for this buffer, or one navigated away from
+      -- without moving the cursor) is no longer current -- clear its tracked state so it
+      -- does not leak across buffer switches.
       current_selection = M.get_cursor_position()
-      if last_visual and last_visual.bufnr == current_buf then
-        M.state.last_active_visual_selection = nil -- Clear it as it's no longer relevant for demotion
-      end
+      M.state.last_active_visual_selection = nil
+      M.state.cursor_at_flush = nil
     end
   end
 
@@ -249,6 +355,10 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
   -- Timer object is already stopped and cleared by its own callback wrapper or cancellation points.
   -- M.state.demotion_timer should be nil here if it fired normally or was cancelled.
 
+  if not M.state.tracking_enabled then
+    return
+  end
+
   local current_buf = vim.api.nvim_get_current_buf()
   local claude_term_bufnr = terminal.get_active_terminal_bufnr()
 
@@ -268,10 +378,7 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
   local current_mode_info = vim.api.nvim_get_mode()
 
   -- Condition 2: Back in Visual Mode in the Original Buffer
-  if
-    current_buf == original_bufnr_when_scheduled
-    and (current_mode_info.mode == "v" or current_mode_info.mode == "V" or current_mode_info.mode == "\022")
-  then
+  if current_buf == original_bufnr_when_scheduled and is_visual_mode(current_mode_info.mode) then
     -- A new visual selection will take precedence. M.state.latest_selection will be updated by main flow.
     if
       M.state.last_active_visual_selection
@@ -284,6 +391,16 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 
   -- Condition 3: Still in Original Buffer & Not Visual & Not Claude Term -> Demote
   if current_buf == original_bufnr_when_scheduled then
+    -- Only demote once the cursor has actually moved since the selection was flushed.
+    -- This lets a held selection persist (matching the official VS Code extension, and
+    -- fixing the external-Claude case where there is no in-Neovim Claude terminal to
+    -- switch to), while still clearing a stale selection as soon as the user navigates
+    -- away from it. last_active_visual_selection is intentionally left intact when the
+    -- cursor is unmoved so a later cursor move re-arms demotion. See issue #246.
+    if cursor_unmoved_since_flush(current_buf) then
+      return
+    end
+
     local new_sel_for_demotion = M.get_cursor_position()
     -- Check if this new cursor position is actually different from the (visual) latest_selection
     if M.has_selection_changed(new_sel_for_demotion) then
@@ -296,12 +413,15 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
   end
   -- User switched to different buffer
 
-  -- Always clear last_active_visual_selection for the original buffer as its pending demotion is resolved.
+  -- The pending demotion for the original buffer is resolved: clear its tracked state.
   if
     M.state.last_active_visual_selection
     and M.state.last_active_visual_selection.bufnr == original_bufnr_when_scheduled
   then
     M.state.last_active_visual_selection = nil
+  end
+  if M.state.cursor_at_flush and M.state.cursor_at_flush.bufnr == original_bufnr_when_scheduled then
+    M.state.cursor_at_flush = nil
   end
 end
 
@@ -311,7 +431,7 @@ local function validate_visual_mode()
   local current_nvim_mode = vim.api.nvim_get_mode().mode
   local fixed_anchor_pos_raw = vim.fn.getpos("v")
 
-  if not (current_nvim_mode == "v" or current_nvim_mode == "V" or current_nvim_mode == "\22") then
+  if not is_visual_mode(current_nvim_mode) then
     return false, "not in visual mode"
   end
 
@@ -322,23 +442,24 @@ local function validate_visual_mode()
   return true, nil
 end
 
----Determines the effective visual mode character
+---Determines the effective visual mode character.
+---Prefers the LIVE mode; `vim.fn.visualmode()` (the LAST COMPLETED visual mode) is only
+---used as a fallback when not currently in a visual mode. Trusting `visualmode()` while
+---live in a different visual mode misclassifies the selection -- e.g. a fresh linewise
+---`V` made right after a charwise selection would be extracted charwise, broadcasting a
+---single character (or an empty selection on an empty line) instead of the whole line.
+---See issue #246.
 ---@return string|nil - the visual mode character or nil if invalid
 local function get_effective_visual_mode()
-  local current_nvim_mode = vim.api.nvim_get_mode().mode
-  local visual_fn_mode_char = vim.fn.visualmode()
-
-  if visual_fn_mode_char and visual_fn_mode_char ~= "" then
-    return visual_fn_mode_char
+  local live_type = utils.selection_type(vim.api.nvim_get_mode().mode)
+  if live_type then
+    return live_type
   end
 
-  -- Fallback to current mode
-  if current_nvim_mode == "V" then
-    return "V"
-  elseif current_nvim_mode == "v" then
-    return "v"
-  elseif current_nvim_mode == "\22" then -- Ctrl-V, blockwise
-    return "\22"
+  -- Not currently in a visual mode: fall back to the last completed visual mode.
+  local visual_fn_mode_char = vim.fn.visualmode()
+  if visual_fn_mode_char and visual_fn_mode_char ~= "" then
+    return visual_fn_mode_char
   end
 
   return nil
@@ -362,13 +483,107 @@ local function get_selection_coordinates()
   end
 end
 
----Extracts text for linewise visual selection
+---Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
+---byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
+---A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
+---@param line string
+---@param col integer
+---@return integer
+local function code_point_start(line, col)
+  local byte = line:byte(col)
+  if not byte or byte < 0x80 or byte > 0xBF then
+    return col
+  end
+  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
+  for lead = col - 1, math.max(col - 3, 1), -1 do
+    byte = line:byte(lead)
+    if byte < 0x80 or byte > 0xBF then
+      local length = utils.utf8_sequence_length(line, lead)
+      return (length and lead + length > col) and lead or col
+    end
+  end
+  return col
+end
+
+---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.
+---Cutting inside a multibyte character would put invalid UTF-8 into selection_changed, so the selection takes
+---the whole end character. With 'selection' set to exclusive, a selection of more than one position ends after
+---the character before it instead.
+---@param line string the selection's last line
+---@param start_coords table
+---@param end_coords table
+---@return integer
+local function selection_end_byte(line, start_coords, end_coords)
+  local col = code_point_start(line, end_coords.col)
+  local one_position = start_coords.lnum == end_coords.lnum and start_coords.col == col
+  -- vim.fn passes a Lua string with a NUL byte as a Blob. Neovim keeps NUL as NL in a line, and both are one byte.
+  line = line:gsub("%z", "\n")
+  -- byteidx and charidx count characters the way `y` does: a code point with its composing characters, and on
+  -- Neovim 0.11+ a grapheme cluster, where a control such as a TAB, U+0085 or U+200B is a character of its own.
+  -- A regex such as `\_.` still joins a composing character to a control.
+  if vim.o.selection == "exclusive" and not one_position then
+    -- Neovim ends after the character that holds byte col - 1. On 0.11+ that can be a cluster that reaches past
+    -- col, such as स्ते when col is its त. Without a character before col, the selection ends at the line start.
+    if col <= 1 then
+      return 0
+    end
+    return vim.fn.byteidx(line, vim.fn.charidx(line, col - 2) + 1)
+  end
+  if col > #line then
+    return col
+  end
+  -- The character that starts at byte col, counted from col: the cursor can stand on the त of स्ते on 0.11+, and
+  -- `y` then takes ते.
+  return col - 1 + vim.fn.byteidx(line:sub(col), 1)
+end
+
+---Handles an end past the last character of its line, which `v$` and `l` past the last character make. A charwise
+---selection then includes the line break and ends at the start of the next line: Neovim yanks that line break, and
+---VS Code ends such a selection there. Neovim yanks no line break after the buffer's last line, a blockwise
+---selection never includes one, and with 'virtualedit' containing `all` the end is a virtual space instead, so
+---those end at the end of the line. On an empty line that is character 1, and so is the end of a block whose last
+---row is empty: Claude Code counts an end at character 0 as the line before, which would leave the line out.
+---@param bufnr integer
+---@param visual_mode string
+---@param lines_content string[] the selection's lines. The next line is appended when the end moves there.
+---@param end_coords table
+local function end_past_line(bufnr, visual_mode, lines_content, end_coords)
+  local last_line = lines_content[#lines_content]
+  local block_on_empty_row = visual_mode == "\22" and last_line == ""
+  if end_coords.col <= #last_line and not block_on_empty_row then
+    return
+  end
+  local line_break = visual_mode == "v" and not vim.o.virtualedit:find("all", 1, true)
+  if line_break and end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
+    end_coords.lnum = end_coords.lnum + 1
+    end_coords.col = 0
+    table.insert(lines_content, vim.api.nvim_buf_get_lines(bufnr, end_coords.lnum - 1, end_coords.lnum, false)[1])
+  else
+    end_coords.col = math.max(#last_line, 1)
+  end
+end
+
+---Extracts text for linewise visual selection and sets its end to the end of the last line. When the last line is
+---empty, the end moves to the start of the next line and the text gets that line break: Claude Code counts an end
+---at character 0 as the line before, which would leave the empty line out. The buffer's last line has no next
+---line, so an empty one ends at character 1.
+---@param bufnr integer
 ---@param lines_content table - array of line strings
 ---@param start_coords table - start coordinates
+---@param end_coords table - end coordinates
 ---@return string text - the extracted text
-local function extract_linewise_text(lines_content, start_coords)
+local function extract_linewise_text(bufnr, lines_content, start_coords, end_coords)
   start_coords.col = 1 -- Linewise selection effectively starts at column 1
-  return table.concat(lines_content, "\n")
+  local text = table.concat(lines_content, "\n")
+  end_coords.col = #lines_content[#lines_content]
+  if end_coords.col == 0 then
+    if end_coords.lnum < vim.api.nvim_buf_line_count(bufnr) then
+      end_coords.lnum = end_coords.lnum + 1
+      return text .. "\n"
+    end
+    end_coords.col = 1
+  end
+  return text
 end
 
 ---Extracts text for characterwise visual selection
@@ -401,25 +616,18 @@ end
 ---@param start_coords table - start coordinates
 ---@param end_coords table - end coordinates
 ---@param visual_mode string - the visual mode character
----@param lines_content table - array of line strings
 ---@return table position - LSP position object with start and end fields
-local function calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
+local function calculate_lsp_positions(start_coords, end_coords, visual_mode)
   local lsp_start_line = start_coords.lnum - 1
   local lsp_end_line = end_coords.lnum - 1
-  local lsp_start_char, lsp_end_char
+  local lsp_start_char
 
   if visual_mode == "V" then
     lsp_start_char = 0 -- Linewise selection always starts at character 0
-    -- For linewise, LSP end char is length of the last selected line
-    if #lines_content > 0 and lines_content[#lines_content] then
-      lsp_end_char = #lines_content[#lines_content]
-    else
-      lsp_end_char = 0
-    end
   else
     lsp_start_char = start_coords.col - 1
-    lsp_end_char = end_coords.col
   end
+  local lsp_end_char = end_coords.col
 
   return {
     start = { line = lsp_start_line, character = lsp_start_char },
@@ -459,8 +667,14 @@ function M.get_visual_selection()
 
   local final_text
   if visual_mode == "V" then
-    final_text = extract_linewise_text(lines_content, start_coords)
+    final_text = extract_linewise_text(current_buf, lines_content, start_coords, end_coords)
   elseif visual_mode == "v" or visual_mode == "\22" then
+    -- Blockwise ("\22") is approximated as the contiguous charwise span: selection_changed
+    -- carries a single start/end range and cannot represent a rectangular block. Proper
+    -- per-column block extraction is a follow-up.
+    start_coords.col = code_point_start(lines_content[1], start_coords.col)
+    end_coords.col = selection_end_byte(lines_content[#lines_content], start_coords, end_coords)
+    end_past_line(current_buf, visual_mode, lines_content, end_coords)
     final_text = extract_characterwise_text(lines_content, start_coords, end_coords)
     if not final_text then
       return nil
@@ -469,10 +683,10 @@ function M.get_visual_selection()
     return nil
   end
 
-  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode, lines_content)
+  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode)
 
   return {
-    text = final_text or "",
+    text = utils.valid_utf8(final_text),
     filePath = file_path,
     fileUrl = "file://" .. file_path,
     selection = {
@@ -481,6 +695,147 @@ function M.get_visual_selection()
       isEmpty = (not final_text or #final_text == 0),
     },
   }
+end
+
+---Gets the just-completed visual selection from the `'<` and `'>` marks.
+---Unlike `get_visual_selection()`, this does NOT require the editor to currently be in
+---visual mode, so it can be called from a `ModeChanged` (visual -> normal) handler where
+---`nvim_get_mode()` already reports normal mode but the marks are still valid. The marks
+---are always in chronological order (`'<` before `'>`).
+---Only valid immediately on visual exit: it pairs the buffer-local `'<`/`'>` marks with the
+---GLOBAL `vim.fn.visualmode()`, so both must describe the same just-completed selection
+---(do not call it after an unrelated visual selection in another buffer).
+---@return table|nil selection A selection table matching get_visual_selection()'s shape, or nil.
+function M.get_visual_selection_from_marks()
+  local visual_mode = vim.fn.visualmode()
+  if not visual_mode or visual_mode == "" then
+    return nil
+  end
+
+  local start_pos = vim.fn.getpos("'<")
+  local end_pos = vim.fn.getpos("'>")
+  if start_pos[2] == 0 or end_pos[2] == 0 then
+    return nil -- no recorded visual selection
+  end
+
+  local current_buf = vim.api.nvim_get_current_buf()
+  local file_path = vim.api.nvim_buf_get_name(current_buf)
+
+  local start_coords = { lnum = start_pos[2], col = start_pos[3] }
+  local end_coords = { lnum = end_pos[2], col = end_pos[3] }
+
+  local lines_content = vim.api.nvim_buf_get_lines(
+    current_buf,
+    start_coords.lnum - 1, -- Convert to 0-indexed
+    end_coords.lnum, -- nvim_buf_get_lines end is exclusive
+    false
+  )
+
+  if #lines_content == 0 then
+    return nil
+  end
+
+  -- For linewise selections (and `$`), the `'>` column can be MAXCOL (2147483647). Clamp it
+  -- to the last line's length + 1 so it never overflows string.sub / LSP character math.
+  local last_line = lines_content[#lines_content] or ""
+  if end_coords.col > #last_line + 1 then
+    end_coords.col = #last_line + 1
+  end
+
+  local final_text
+  if visual_mode == "V" then
+    final_text = extract_linewise_text(current_buf, lines_content, start_coords, end_coords)
+  elseif visual_mode == "v" or visual_mode == "\22" then
+    -- Blockwise ("\22") is approximated as the contiguous charwise span (matching
+    -- get_visual_selection), since selection_changed carries a single start/end range and
+    -- cannot represent a rectangular block. Proper per-column block extraction is a follow-up.
+    start_coords.col = code_point_start(lines_content[1], start_coords.col)
+    end_coords.col = selection_end_byte(last_line, start_coords, end_coords)
+    end_past_line(current_buf, visual_mode, lines_content, end_coords)
+    final_text = extract_characterwise_text(lines_content, start_coords, end_coords)
+    if not final_text then
+      return nil
+    end
+  else
+    return nil
+  end
+
+  local lsp_positions = calculate_lsp_positions(start_coords, end_coords, visual_mode)
+
+  return {
+    text = utils.valid_utf8(final_text),
+    filePath = file_path,
+    fileUrl = "file://" .. file_path,
+    selection = {
+      start = lsp_positions.start,
+      ["end"] = lsp_positions["end"],
+      isEmpty = (not final_text or #final_text == 0),
+    },
+  }
+end
+
+---Flushes the just-completed visual selection synchronously when leaving visual mode.
+---Captures the selection from the `'<`/`'>` marks, records it as the active visual
+---selection, cancels any pending demotion, and broadcasts it if it changed. This closes
+---the debounce race where a selection made and released faster than `debounce_ms` was
+---never broadcast at all (issue #246). The Claude terminal buffer is ignored, mirroring
+---`update_selection()`. Deduplicates against the last sent selection so a selection
+---already broadcast by the in-visual debounce is not sent twice on exit. If the buffer
+---was mutated while in visual mode (a consuming operator like d/c/>/x), the marks no
+---longer describe the user's selection, so the flush is skipped to avoid broadcasting
+---stale, post-edit text as a phantom selection.
+function M.flush_visual_selection()
+  if not M.state.tracking_enabled then
+    return
+  end
+
+  local current_buf = vim.api.nvim_get_current_buf()
+  local buf_name = vim.api.nvim_buf_get_name(current_buf)
+
+  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+    return
+  end
+  if terminal then
+    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
+    if claude_term_bufnr and current_buf == claude_term_bufnr then
+      return
+    end
+  end
+
+  -- Skip when the buffer was edited while in visual mode: the changedtick advancing since
+  -- visual entry means an operator (d/c/x...) consumed the selection, so the '<,'> marks
+  -- point at post-edit text the user never selected. This is intentionally conservative --
+  -- it also skips in-place transforms that leave a valid selection (gU/gu/~/J/=), because
+  -- they cannot be told apart from consuming operators by the marks alone (both leave a
+  -- non-empty, in-bounds region). Such fast transforms simply are not flushed; the prior
+  -- behavior never broadcast them either (they lost the debounce race), so this is a
+  -- residual non-broadcast, not a regression.
+  local entry = M.state.visual_entry
+  if entry and entry.bufnr == current_buf and vim.api.nvim_buf_get_changedtick(current_buf) ~= entry.tick then
+    return
+  end
+
+  local selection = M.get_visual_selection_from_marks()
+  if not selection or selection.selection.isEmpty then
+    return
+  end
+
+  -- Record the cursor position at flush time so demotion only fires after a real move.
+  M.state.cursor_at_flush = { bufnr = current_buf, pos = vim.api.nvim_win_get_cursor(0) }
+  M.state.last_active_visual_selection = {
+    bufnr = current_buf,
+    selection_data = vim.deepcopy(selection),
+    timestamp = vim.loop.now(),
+  }
+
+  M._cancel_demotion_timer()
+
+  if M.has_selection_changed(selection) then
+    M.state.latest_selection = selection
+    if M.server then
+      M.send_selection_update(selection)
+    end
+  end
 end
 
 ---Gets the current cursor position when no visual selection is active.
@@ -684,6 +1039,11 @@ function M.send_at_mention_for_visual_selection(line1, line2)
   local file_path = sel_to_send.filePath
   local start_line = sel_to_send.selection.start.line -- Already 0-indexed from selection module
   local end_line = sel_to_send.selection["end"].line -- Already 0-indexed
+  -- A tracked selection that ends at character 0 of a line, such as `v$`, ends after the line break of the line
+  -- before. A range ends on its last line, which can be empty.
+  if not (line1 and line2) and sel_to_send.selection["end"].character == 0 and end_line > start_line then
+    end_line = end_line - 1
+  end
 
   local success, error_msg = claudecode_main.send_at_mention(file_path, start_line, end_line, "ClaudeCodeSend")
 

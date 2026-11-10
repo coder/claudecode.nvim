@@ -105,7 +105,7 @@ local function handler(params)
     content = {
       {
         type = "text",
-        text = vim.json.encode({ tabs = tabs }, { indent = 2 }),
+        text = vim.json.encode({ tabs = tabs }),
       },
     },
   }

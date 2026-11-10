@@ -1,5 +1,5 @@
 --- Tree integration module for ClaudeCode.nvim
---- Handles detection and selection of files from nvim-tree, neo-tree, mini.files, and oil.nvim
+--- Handles detection and selection of files from nvim-tree, neo-tree, mini.files, oil.nvim, netrw, and snacks pickers
 ---@module 'claudecode.integrations'
 local M = {}
 local logger = require("claudecode.logger")
@@ -20,9 +20,86 @@ function M.get_selected_files_from_tree()
     return M._get_mini_files_selection()
   elseif current_ft == "netrw" then
     return M._get_netrw_selection()
+  elseif current_ft == "snacks_picker_list" then
+    return M._get_snacks_picker_selection()
   else
     return nil, "Not in a supported tree buffer (current filetype: " .. current_ft .. ")"
   end
+end
+
+---Get selected files from a snacks.nvim picker
+---Supports both Snacks.explorer() and modal files()/grep() pickers (they share
+---the snacks_picker_list filetype), including multi-selection (Tab) and the
+---item under the cursor.
+---@return table files List of file paths
+---@return string|nil error Error message if operation failed
+function M._get_snacks_picker_selection()
+  local success, snacks = pcall(require, "snacks")
+  if not success then
+    return {}, "snacks.nvim picker not available"
+  end
+
+  -- snacks.picker and snacks.picker.util are lazily required through a metatable,
+  -- so merely accessing them can raise on a partial install. Probe both under
+  -- pcall so the handler degrades gracefully instead of throwing.
+  -- probe_ok is true only if snacks.picker resolved AND snacks.picker.util.path
+  -- evaluated without raising, so a non-function util_path is the only remaining
+  -- "partial install" case to reject.
+  local probe_ok, picker_mod, util_path = pcall(function()
+    return snacks.picker, snacks.picker.util.path
+  end)
+  if not probe_ok or type(util_path) ~= "function" then
+    return {}, "snacks.nvim picker not available"
+  end
+
+  -- snacks_picker_list is shared by the explorer and modal files()/grep() pickers.
+  -- Prefer the picker whose list window is currently focused (the buffer the user
+  -- ran the command in); fall back to the most-recently-opened picker on this tab.
+  local pickers = picker_mod.get({ tab = true })
+  if not pickers or #pickers == 0 then
+    return {}, "No active snacks picker found"
+  end
+  local current_win = vim.api.nvim_get_current_win()
+  local picker = pickers[#pickers]
+  for _, p in ipairs(pickers) do
+    local lw = p.list and p.list.win and p.list.win.win
+    if lw == current_win then
+      picker = p
+      break
+    end
+  end
+
+  -- selected({fallback=true}) returns explicitly selected (Tab) items, or the
+  -- item under the cursor when nothing is selected.
+  local ok_sel, items = pcall(function()
+    return picker:selected({ fallback = true })
+  end)
+  if not ok_sel or type(items) ~= "table" then
+    return {}, "Failed to read snacks picker selection"
+  end
+
+  local files = {}
+  for _, item in ipairs(items) do
+    -- Skip items without a string file path (registers/commands/unsaved buffers).
+    if item and type(item.file) == "string" then
+      -- Snacks.picker.util.path is the canonical resolver but undocumented;
+      -- guard it and fall back to a manual cwd/file join. An absolute item.file
+      -- with no cwd (e.g. the explorer) falls through to item.file unchanged.
+      local path_ok, path = pcall(util_path, item)
+      if not path_ok or not path then
+        path = (type(item.cwd) == "string") and (item.cwd .. "/" .. item.file) or item.file
+      end
+      if path and path ~= "" and (vim.fn.filereadable(path) == 1 or vim.fn.isdirectory(path) == 1) then
+        table.insert(files, path)
+      end
+    end
+  end
+
+  if #files > 0 then
+    return files, nil
+  end
+
+  return {}, "No file found in snacks picker selection"
 end
 
 ---Get selected files from nvim-tree

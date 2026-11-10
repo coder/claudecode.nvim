@@ -1,0 +1,56 @@
+# treefmt configuration — replaces the former Nix flake `nix fmt` (treefmt-nix).
+#
+# Run via `mise run format` (treefmt) or `mise run format-check` (treefmt --ci).
+# Every formatter/linter referenced here is provisioned by mise (see mise.toml).
+# treefmt's git walker already skips git-ignored paths; these also guard `--walk filesystem`.
+excludes = [
+  ".luarocks/**",
+  ".direnv/**",
+]
+
+[formatter.stylua]
+command = "stylua"
+includes = ["*.lua"]
+
+[formatter.prettier]
+command = "prettier"
+options = ["--write"]
+includes = [
+  "*.css",
+  "*.html",
+  "*.js",
+  "*.json",
+  "*.json5",
+  "*.jsx",
+  "*.markdown",
+  "*.md",
+  "*.mdx",
+  "*.mjs",
+  "*.scss",
+  "*.ts",
+  "*.tsx",
+  "*.vue",
+  "*.yaml",
+  "*.yml",
+]
+# lazy.nvim lock files are auto-generated and reformatted by lazy on update.
+excludes = ["fixtures/*/lazy-lock.json"]
+
+[formatter.shfmt]
+command = "shfmt"
+options = ["-i", "2", "-w"]
+includes = ["*.sh"]
+
+[formatter.shellcheck]
+command = "shellcheck"
+options = ["--exclude=SC1091,SC2016"]
+includes = ["*.sh"]
+
+[formatter.actionlint]
+command = "actionlint"
+includes = [".github/workflows/*.yml", ".github/workflows/*.yaml"]
+
+[formatter.zizmor]
+command = "zizmor"
+options = ["--offline"]
+includes = [".github/workflows/*.yml", ".github/workflows/*.yaml"]

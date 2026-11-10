@@ -65,6 +65,7 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
   end
 
   before_each(function()
+    package.loaded["tests.mocks.vim"] = nil
     _G.vim = require("tests.mocks.vim")
 
     local spy_instance_methods = {}
@@ -409,6 +410,20 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
       )
     end)
 
+    it("should store a valid diff_split_width_percentage", function()
+      terminal_wrapper.setup({ diff_split_width_percentage = 0.2 })
+      assert.are.equal(0.2, terminal_wrapper.defaults.diff_split_width_percentage)
+    end)
+
+    it("should ignore an invalid diff_split_width_percentage and warn", function()
+      terminal_wrapper.setup({ diff_split_width_percentage = 2.0 })
+      assert.is_nil(terminal_wrapper.defaults.diff_split_width_percentage)
+      vim.notify:was_called_with(
+        spy.matching.string.match("Invalid value for diff_split_width_percentage"),
+        vim.log.levels.WARN
+      )
+    end)
+
     it("should ignore unknown keys", function()
       terminal_wrapper.setup({ unknown_key = "some_value", split_side = "left" })
       terminal_wrapper.open()
@@ -418,6 +433,28 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         spy.matching.string.match("Unknown configuration key: unknown_key"),
         vim.log.levels.WARN
       )
+    end)
+
+    it("should store valid auto_insert setting", function()
+      terminal_wrapper.setup({ auto_insert = false })
+      terminal_wrapper.open()
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal(false, config_arg.auto_insert)
+    end)
+
+    it("should default auto_insert to true", function()
+      terminal_wrapper.setup({})
+      terminal_wrapper.open()
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal(true, config_arg.auto_insert)
+    end)
+
+    it("should ignore invalid auto_insert and use default", function()
+      terminal_wrapper.setup({ auto_insert = "invalid" })
+      terminal_wrapper.open()
+      local config_arg = mock_snacks_provider.open:get_call(1).refs[3]
+      assert.are.equal(true, config_arg.auto_insert)
+      vim.notify:was_called_with(spy.matching.string.match("Invalid value for auto_insert"), vim.log.levels.WARN)
     end)
 
     it("should use defaults if user_term_config is not a table and notify", function()
@@ -461,6 +498,137 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         assert.are.equal(0.30, config_arg.split_width_percentage)
       end
     )
+
+    it("should add loopback hosts to no_proxy and NO_PROXY (issue #70)", function()
+      terminal_wrapper.open()
+
+      mock_snacks_provider.open:was_called(1)
+      local env_arg = mock_snacks_provider.open:get_call(1).refs[2]
+
+      assert.is_table(env_arg)
+      for _, host in ipairs({ "localhost", "127.0.0.1", "::1" }) do
+        assert.is_truthy(env_arg.no_proxy:find(host, 1, true))
+        assert.is_truthy(env_arg.NO_PROXY:find(host, 1, true))
+      end
+    end)
+
+    it("should preserve and dedupe a pre-existing no_proxy exclusion (issue #70)", function()
+      local ffi = require("ffi")
+      -- pcall: setenv/unsetenv may already be declared by a sibling test in this Lua state.
+      pcall(
+        ffi.cdef,
+        [[
+        int setenv(const char *name, const char *value, int overwrite);
+        int unsetenv(const char *name);
+      ]]
+      )
+      -- Control BOTH vars: production reads no_proxy AND NO_PROXY, so an inherited NO_PROXY on
+      -- the host (e.g. "127.0.0.10") must not bleed into the exact-count assertion below.
+      local prev_lower, prev_upper = os.getenv("no_proxy"), os.getenv("NO_PROXY")
+      ffi.C.setenv("no_proxy", "corp.internal,127.0.0.1", 1)
+      ffi.C.unsetenv("NO_PROXY")
+
+      local ok, err = pcall(function()
+        terminal_wrapper.open()
+
+        mock_snacks_provider.open:was_called(1)
+        local env_arg = mock_snacks_provider.open:get_call(1).refs[2]
+
+        assert.is_table(env_arg)
+        assert.is_truthy(env_arg.no_proxy:find("corp.internal", 1, true))
+        assert.is_truthy(env_arg.no_proxy:find("localhost", 1, true))
+
+        -- 127.0.0.1 must appear exactly once even though it was already present. Count exact
+        -- comma-delimited entries, not a substring match (which would also catch 127.0.0.10).
+        local count = 0
+        for entry in env_arg.no_proxy:gmatch("[^,]+") do
+          if entry == "127.0.0.1" then
+            count = count + 1
+          end
+        end
+        assert.are.equal(1, count)
+      end)
+
+      -- Restore both vars so this test cannot leak into others or delete a real no_proxy.
+      if prev_lower then
+        ffi.C.setenv("no_proxy", prev_lower, 1)
+      else
+        ffi.C.unsetenv("no_proxy")
+      end
+      if prev_upper then
+        ffi.C.setenv("NO_PROXY", prev_upper, 1)
+      else
+        ffi.C.unsetenv("NO_PROXY")
+      end
+
+      assert.is_true(ok, tostring(err))
+    end)
+
+    it("should merge exclusions from BOTH no_proxy and NO_PROXY when they differ (issue #70)", function()
+      local ffi = require("ffi")
+      pcall(
+        ffi.cdef,
+        [[
+        int setenv(const char *name, const char *value, int overwrite);
+        int unsetenv(const char *name);
+      ]]
+      )
+      local prev_lower, prev_upper = os.getenv("no_proxy"), os.getenv("NO_PROXY")
+      ffi.C.setenv("no_proxy", "lower.example", 1)
+      ffi.C.setenv("NO_PROXY", "upper.example", 1)
+
+      local ok, err = pcall(function()
+        terminal_wrapper.open()
+
+        mock_snacks_provider.open:was_called(1)
+        local env_arg = mock_snacks_provider.open:get_call(1).refs[2]
+
+        assert.is_table(env_arg)
+        -- An exclusion set in EITHER variable must survive (not just the one we happened to read).
+        assert.is_truthy(env_arg.no_proxy:find("lower.example", 1, true))
+        assert.is_truthy(env_arg.no_proxy:find("upper.example", 1, true))
+        assert.is_truthy(env_arg.no_proxy:find("localhost", 1, true))
+      end)
+
+      if prev_lower then
+        ffi.C.setenv("no_proxy", prev_lower, 1)
+      else
+        ffi.C.unsetenv("no_proxy")
+      end
+      if prev_upper then
+        ffi.C.setenv("NO_PROXY", prev_upper, 1)
+      else
+        ffi.C.unsetenv("NO_PROXY")
+      end
+
+      assert.is_true(ok, tostring(err))
+    end)
+
+    it("should keep loopback hosts even when no_proxy is set via the env config (issue #70)", function()
+      -- A user routing their own no_proxy through the plugin's `env` config must NOT lose the
+      -- loopback exclusion (that would silently re-break #70). The injection runs after the
+      -- config merge and folds the config-supplied value in rather than being overwritten by it.
+      terminal_wrapper.setup({}, nil, { no_proxy = "config.example" })
+
+      local ok, err = pcall(function()
+        terminal_wrapper.open()
+
+        mock_snacks_provider.open:was_called(1)
+        local env_arg = mock_snacks_provider.open:get_call(1).refs[2]
+
+        assert.is_table(env_arg)
+        assert.is_truthy(env_arg.no_proxy:find("config.example", 1, true))
+        for _, host in ipairs({ "localhost", "127.0.0.1", "::1" }) do
+          assert.is_truthy(env_arg.no_proxy:find(host, 1, true))
+          assert.is_truthy(env_arg.NO_PROXY:find(host, 1, true))
+        end
+      end)
+
+      -- Reset defaults.env so this config cannot leak into sibling tests.
+      terminal_wrapper.setup({})
+
+      assert.is_true(ok, tostring(err))
+    end)
 
     it("should call Snacks.terminal.open with terminal_cmd from main config", function()
       vim.g.claudecode_user_config = { terminal_cmd = "my_claude_cli" }

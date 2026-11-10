@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/ThomasK33/reviewfixer/v0.1.0-beta.0/reviewfixer.schema.json
+# Config for running reviewfixer against the Claude ACP adapter.
+# reviewfixer automatically addresses PR review findings using an AI agent.
+#
+# Prerequisites:
+# - `ANTHROPIC_API_KEY` exported in the shell that launches reviewfixer
+# - The `reviewfix` mise task provisions `reviewfixer` on demand (and `node`,
+#   already a top-level tool, supplies the npx-based ACP adapter below). It is
+#   intentionally NOT a global mise tool, so `mise install`/CI skip the beta
+#   binary. Run it via the task — see Usage. Alternatively, install the CLI
+#   yourself (`go install github.com/ThomasK33/reviewfixer@v0.1.0-beta.0`, or a
+#   binary from https://github.com/ThomasK33/reviewfixer/releases).
+#
+# Usage (preferred — the task scopes the reviewfixer binary):
+#   mise run reviewfix                 # reviewfixer --config ./reviewfixer.yaml
+#   mise run reviewfix -- validate     # pass subcommands/flags after `--`
+#   mise run reviewfix -- run
+#
+# Or, with reviewfixer already on PATH:
+#   reviewfixer --config ./reviewfixer.yaml
+#
+# If you install the adapter globally instead of using `npx`, you can replace:
+#   command: npx
+#   args: ["-y", "@agentclientprotocol/claude-agent-acp@0.31.1"]
+# with:
+#   command: claude-agent-acp
+
+runtime:
+  kind: acp
+  compact_on_resume: true
+  acp:
+    command: npx
+    args:
+      - -y
+      # Pinned to avoid pulling an unverified `latest` at invocation time;
+      # bump deliberately after reviewing release notes.
+      - "@agentclientprotocol/claude-agent-acp@0.31.1"
+
+review:
+  request:
+    # `/coder-agents-review` is consumed by the external coder-agents-review
+    # bot (not by any workflow in this repository).
+    - mode: comment
+      comment: "/coder-agents-review"

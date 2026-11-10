@@ -20,6 +20,7 @@
 ---@field keep_terminal_focus boolean Keep focus in terminal after opening diff
 ---@field hide_terminal_in_new_tab boolean Hide Claude terminal in newly created diff tab
 ---@field on_new_file_reject ClaudeCodeNewFileRejectBehavior Behavior when rejecting a new-file diff
+---@field auto_resize_terminal boolean Let the plugin resize the Claude terminal across the diff lifecycle (default true); set false to own width via the ClaudeCodeDiffOpened/Closed User autocmds
 
 -- Model selection option
 ---@class ClaudeCodeModelOption
@@ -30,7 +31,7 @@
 ---@alias ClaudeCodeLogLevel "trace"|"debug"|"info"|"warn"|"error"
 
 -- Diff layout type alias
----@alias ClaudeCodeDiffLayout "vertical"|"horizontal"
+---@alias ClaudeCodeDiffLayout "vertical"|"horizontal"|"unified"
 
 -- Behavior when rejecting new-file diffs
 ---@alias ClaudeCodeNewFileRejectBehavior "keep_empty"|"close_window"
@@ -60,6 +61,17 @@
 ---@field end_line number? Optional end line (0-indexed for Claude compatibility)
 ---@field timestamp number Creation timestamp from vim.loop.now() for expiry tracking
 
+-- Payload delivered as `data` to a `User ClaudeCodeSendComplete` autocmd. Fired
+-- once per file, synchronously, when a send is accepted while Claude is connected.
+-- Lines are 0-indexed (Claude convention, NOT 1-indexed editor lines) and may be
+-- nil for whole-file/directory sends. file_path is the formatted/relative path
+-- Claude received. See README "Events".
+---@class ClaudeCodeSendCompleteData
+---@field file_path string Formatted path Claude received (relative to cwd when applicable)
+---@field start_line number? Start line, 0-indexed for Claude, or nil
+---@field end_line number? End line, 0-indexed for Claude, or nil
+---@field context string? Internal logging tag (e.g. "ClaudeCodeSend"); best-effort, may change
+
 -- Terminal provider interface
 ---@class ClaudeCodeTerminalProvider
 ---@field setup fun(config: ClaudeCodeTerminalConfig)
@@ -77,16 +89,19 @@
 ---@class ClaudeCodeTerminalConfig
 ---@field split_side ClaudeCodeSplitSide
 ---@field split_width_percentage number
+---@field diff_split_width_percentage number? -- optional terminal width while a diff is active; defaults to split_width_percentage
 ---@field provider ClaudeCodeTerminalProviderName|ClaudeCodeTerminalProvider
 ---@field show_native_term_exit_tip boolean
 ---@field terminal_cmd string?
 ---@field provider_opts ClaudeCodeTerminalProviderOptions?
 ---@field auto_close boolean
+---@field auto_insert boolean -- auto-enter insert/terminal mode when the Claude terminal gains focus (#232); false keeps Normal mode + scroll position
 ---@field env table<string, string>
 ---@field snacks_win_opts snacks.win.Config
 ---@field cwd string|nil                 -- static working directory for Claude terminal
 ---@field git_repo_cwd boolean|nil      -- use git root of current file/cwd as working directory
 ---@field cwd_provider? ClaudeCodeCwdProvider -- custom function to compute working directory
+---@field fix_streamed_paste boolean|"auto"|nil -- work around Neovim <0.12.2 terminal paste fragmentation (#161); "auto" (default) enables only on affected versions
 
 -- Port range configuration
 ---@class ClaudeCodePortRange

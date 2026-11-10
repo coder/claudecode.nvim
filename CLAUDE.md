@@ -10,32 +10,36 @@ claudecode.nvim - A Neovim plugin that implements the same WebSocket-based MCP p
 
 ### Testing
 
-- `make test` - Run all tests using busted with coverage
+- `mise run test` - Run all tests using busted with coverage
 - `busted tests/unit/specific_spec.lua` - Run specific test file
 - `busted --coverage -v` - Run tests with coverage
 
 ### Code Quality
 
-- `make check` - Check Lua syntax and run luacheck
-- `make format` - Format code with stylua (or nix fmt if available)
+- `mise run check` - Check Lua syntax and run luacheck
+- `mise run format` - Format code with treefmt
 - `luacheck lua/ tests/ --no-unused-args --no-max-line-length` - Direct linting
 
 ### Build Commands
 
-- `make` - **RECOMMENDED**: Run formatting, linting, and testing (complete validation)
-- `make all` - Run check and format (default target)
-- `make test` - Run all tests using busted with coverage
-- `make check` - Check Lua syntax and run luacheck
-- `make format` - Format code with stylua (or nix fmt if available)
-- `make clean` - Remove generated test files
-- `make help` - Show available commands
+- `mise run all` - **RECOMMENDED**: Run formatting, linting, and testing (complete validation)
+- `mise run test` - Run all tests using busted with coverage
+- `mise run check` - Check Lua syntax and run luacheck
+- `mise run format` - Format code with treefmt
+- `mise run clean` - Remove generated test files
+- `mise tasks` - List available tasks
 
-**Best Practice**: Always use `make` at the end of editing sessions for complete validation.
+**Best Practice**: Always use `mise run all` at the end of editing sessions for complete validation.
 
-### Development with Nix
+### Development with mise
 
-- `nix develop` - Enter development shell with all dependencies
-- `nix fmt` - Format all files using nix formatter
+The dev toolchain is provisioned by [mise](https://mise.jdx.dev) (see `mise.toml`), which replaced the former Nix flake devShell.
+
+- `mise install` - Install all tools (Neovim, LuaJIT, formatters, etc.)
+- `mise run setup` - Build the Lua test rocks (busted/luacheck/luacov) into `./.luarocks`
+- `mise run all` - Format, lint, and test
+- `mise run format` - Format all files with treefmt
+- Activate mise in your shell so its tools (and `fixtures/bin`) are on PATH — add `eval "$(mise activate bash)"` (or `zsh`/`fish`) to your shell rc. (`mise run <task>` works without activation.)
 
 ### Integration Testing with Fixtures
 
@@ -78,7 +82,7 @@ The `fixtures/` directory contains test Neovim configurations for verifying plug
 
 The WebSocket server implements secure authentication using:
 
-- **UUID v4 Tokens**: Generated per session with enhanced entropy
+- **128-bit Tokens**: 32-char lowercase hex from the OS CSPRNG, generated per session
 - **Header-based Auth**: Uses `x-claude-code-ide-authorization` header
 - **Lock File Discovery**: Tokens stored in `~/.claude/ide/[port].lock` for Claude CLI
 - **MCP Compliance**: Follows official Claude Code IDE authentication protocol
@@ -97,7 +101,7 @@ The WebSocket server implements secure authentication using:
 - `checkDocumentDirty` - Checks if document has unsaved changes
 - `saveDocument` - Saves document with detailed success/failure reporting
 - `getWorkspaceFolders` - Gets workspace folder information
-- `closeAllDiffTabs` - Closes all diff-related tabs and windows
+- `closeAllDiffTabs` - Closes the diffs claudecode itself opened (its tracked diff registry only). It never touches diffs created by other tools such as diffview.nvim, fugitive, or native `:diffsplit`, and `openFile`/`openDiff` never reuse a window that is currently in diff mode (issue #277).
 - `getDiagnostics` - Gets language diagnostics (errors, warnings) from the editor
 
 **Internal Tools** (not exposed via MCP):
@@ -135,13 +139,19 @@ opts = {
 - `plugin/claudecode.lua` - Plugin loader with version checks
 - `tests/` - Comprehensive test suite with unit, component, and integration tests
 
+### Autocmd Events
+
+The plugin emits `User` autocmds (not config fields) that integrations can hook:
+
+- **`ClaudeCodeSendComplete`** - Fired in `M.send_at_mention` (init.lua) once per file, synchronously, when a send is accepted on the connected branch (acceptance-time, not delivery; not fired on the queued/disconnected path). `data = { file_path, start_line, end_line, context }` — `file_path` is the formatted path Claude received, lines are 0-indexed and may be nil. Primary use: focus an external Claude session (`provider = "none"`/`"external"`) where `focus_after_send` is inert. Emitted via the guarded, pcall-wrapped `fire_send_complete` helper (no-op when `vim.api.nvim_exec_autocmds` is absent, e.g. minimal test stubs). See `lua/claudecode/types.lua` `ClaudeCodeSendCompleteData` and README "Events".
+
 ## MCP Protocol Compliance
 
 ### Protocol Implementation Status
 
 - ✅ **WebSocket Server**: RFC 6455 compliant with MCP message format
 - ✅ **Tool Registration**: JSON Schema-based tool definitions
-- ✅ **Authentication**: UUID v4 token-based secure handshake
+- ✅ **Authentication**: 128-bit token-based secure handshake (32-char lowercase hex from the OS CSPRNG)
 - ✅ **Message Format**: JSON-RPC 2.0 with MCP content structure
 - ✅ **Error Handling**: Comprehensive JSON-RPC error responses
 
@@ -156,7 +166,7 @@ claudecode.nvim implements **100% feature parity** with Anthropic's official VS 
 
 ### Protocol Validation
 
-Run `make test` to verify MCP compliance:
+Run `mise run test` to verify MCP compliance:
 
 - **Tool Format Validation**: All tools return proper MCP structure
 - **Schema Compliance**: JSON schemas validated against VS Code specs
@@ -184,12 +194,11 @@ Test files follow the pattern `*_spec.lua` or `*_test.lua` and use the busted fr
 **Test Pattern**: Run specific test files during development:
 
 ```bash
-# Run specific tool tests with proper LUA_PATH
-export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
+# Run a specific test file (mise sets LUA_PATH automatically)
 busted tests/unit/tools/specific_tool_spec.lua --verbose
 
-# Or use make for full validation
-make test  # Recommended for complete validation
+# Or run the whole suite
+mise run test  # Recommended for complete validation
 ```
 
 **Coverage Metrics**:
@@ -209,7 +218,7 @@ make test  # Recommended for complete validation
 
 ## Authentication Testing
 
-The plugin implements authentication using UUID v4 tokens that are generated for each server session and stored in lock files. This ensures secure connections between Claude CLI and the Neovim WebSocket server.
+The plugin implements authentication using 128-bit tokens (32-char lowercase hex) from the OS CSPRNG that are generated for each server session and stored in lock files. This ensures secure connections between Claude CLI and the Neovim WebSocket server.
 
 ### Testing Authentication Features
 
@@ -288,22 +297,33 @@ require("claudecode").setup({
 
 The `diff_opts` configuration allows you to customize diff behavior:
 
+- `layout` ("vertical"|"horizontal", default: `"vertical"`) - Whether the diff panes open in a vertical or horizontal split.
 - `keep_terminal_focus` (boolean, default: `false`) - When enabled, keeps focus in the Claude Code terminal when a diff opens instead of moving focus to the diff buffer. This allows you to continue using terminal keybindings like `<CR>` for accepting/rejecting diffs without accidentally triggering other mappings.
 - `open_in_new_tab` (boolean, default: `false`) - Open diffs in a new tab instead of the current tab.
 - `hide_terminal_in_new_tab` (boolean, default: `false`) - When opening diffs in a new tab, do not show the Claude terminal split in that new tab. The terminal remains in the original tab, giving maximum screen estate for reviewing the diff.
+- `on_new_file_reject` ("keep_empty"|"close_window", default: `"keep_empty"`) - Behavior when rejecting a diff for a new file (where the old file did not exist).
+- `auto_resize_terminal` (boolean, default: `true`) - Whether the plugin resizes the Claude terminal across the diff lifecycle. Set to `false` to keep the plugin's hands off the terminal width and manage it yourself via the `ClaudeCodeDiffOpened`/`ClaudeCodeDiffClosed` User autocmds.
+- Legacy aliases (still supported): `vertical_split` (maps to `layout`) and `open_in_current_tab` (inverse of `open_in_new_tab`).
+
+Related terminal option: `terminal.diff_split_width_percentage` (number, default: `nil`) shrinks/widens the terminal split while a diff is open, falling back to `terminal.split_width_percentage` when unset. It only applies when `auto_resize_terminal` is `true`.
+
+The plugin also emits `User` autocmds `ClaudeCodeDiffOpened` (data: `tab_name`, `file_path`, `new_file_path`, `is_new_file`, `diff_window`, `target_window`, `terminal_window`, `tab_number`) and `ClaudeCodeDiffClosed` (data: `tab_name`, `file_path`, `reason`). These fire regardless of `auto_resize_terminal`, letting user configs react to the diff lifecycle. `reason` is a best-effort human-readable label, not a stable enum; `tab_number` is set only for new-tab diffs and `terminal_window` may be `nil` when no Claude terminal is visible.
 
 **Example use case**: If you frequently use `<CR>` or arrow keys in the Claude Code terminal to accept/reject diffs, enable this option to prevent focus from moving to the diff buffer where `<CR>` might trigger unintended actions.
 
 ```lua
 require("claudecode").setup({
   diff_opts = {
-    keep_terminal_focus = true,  -- If true, moves focus back to terminal after diff opens
-    open_in_new_tab = true,      -- Open diff in a separate tab
+    layout = "vertical", -- "vertical" or "horizontal"
+    keep_terminal_focus = true, -- If true, moves focus back to terminal after diff opens
+    open_in_new_tab = true, -- Open diff in a separate tab
     hide_terminal_in_new_tab = true, -- In the new tab, do not show Claude terminal
-    auto_close_on_accept = true,
-    show_diff_stats = true,
-    vertical_split = true,
-    open_in_current_tab = true,
+    on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
+    auto_resize_terminal = true, -- false = own terminal width via ClaudeCodeDiffOpened/Closed User autocmds
+
+    -- Legacy aliases (still supported):
+    -- vertical_split = true,
+    -- open_in_current_tab = true,
   },
 })
 ```
@@ -332,7 +352,7 @@ Log levels for authentication events:
 ### Security Considerations
 
 - WebSocket server only accepts local connections (127.0.0.1) for security
-- Authentication tokens are UUID v4 with enhanced entropy
+- Authentication tokens are 128-bit tokens (32-char lowercase hex) from the OS CSPRNG
 - Lock files created at `~/.claude/ide/[port].lock` for Claude CLI discovery
 - All authentication events are logged for security auditing
 
@@ -350,66 +370,25 @@ Log levels for authentication events:
 
 ## Release Process
 
-### Version Updates
+release-please runs releases (`.github/workflows/release-please.yaml`). Each push to `main` runs release-please over the commits since the last release. When any of them would appear in the release notes, for example a `feat` or `fix` commit, it opens or updates the release PR, titled `chore(release): x.y.z`. The release PR bumps `VERSION` and `.release-please-manifest.json`, and Communique regenerates `CHANGELOG.md` and the PR body. Merging that PR creates the `vX.Y.Z` tag and the GitHub Release.
 
-When updating the version number for a new release, you must update **ALL** of these files:
-
-1. **`lua/claudecode/init.lua`** - Main version table:
-
-   ```lua
-   M.version = {
-     major = 0,
-     minor = 2,  -- Update this
-     patch = 0,  -- Update this
-     prerelease = nil,  -- Remove for stable releases
-   }
-   ```
-
-2. **`scripts/claude_interactive.sh`** - Multiple client version references:
-
-   - Line ~52: `"version": "0.2.0"` (handshake)
-   - Line ~223: `"version": "0.2.0"` (initialize)
-   - Line ~309: `"version": "0.2.0"` (reconnect)
-
-3. **`scripts/lib_claude.sh`** - ClaudeCodeNvim version:
-
-   - Line ~120: `"version": "0.2.0"` (init message)
-
-4. **`CHANGELOG.md`** - Add new release section with:
-   - Release date
-   - Features with PR references
-   - Bug fixes with PR references
-   - Development improvements
-
-### Release Commands
-
-```bash
-# Get merged PRs since last version
-gh pr list --state merged --base main --json number,title,mergedAt,url --jq 'sort_by(.mergedAt) | reverse'
-
-# Get commit history
-git log --oneline v0.1.0..HEAD
-
-# Always run before committing
-make
-
-# Verify no old version references remain
-rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
-```
+- Do not edit the version by hand. `lua/claudecode/init.lua` reads `M.version` from `VERSION` when it loads, so a release changes no Lua file and `covered.lock` stays current. The numbers in `init.lua` are only the `0.0.0-unknown` fallback.
+- Give each PR a Conventional Commits title. The merge queue squashes with the title, and release-please picks the next version from those subjects.
+- The `"version"` strings in `scripts/claude_interactive.sh` and `scripts/lib_claude.sh` are the test client's own `clientInfo`, not the plugin version.
 
 ## Development Workflow
 
 ### Pre-commit Requirements
 
-**ALWAYS run `make` before committing any changes.** This runs code quality checks and formatting that must pass for CI to succeed. Never skip this step - many PRs fail CI because contributors don't run the build commands before committing.
+**ALWAYS run `mise run all` before committing any changes.** This runs code quality checks and formatting that must pass for CI to succeed. Never skip this step - many PRs fail CI because contributors don't run the build commands before committing.
 
 ### Recommended Development Flow
 
 1. **Start Development**: Use existing tests and documentation to understand the system
 2. **Make Changes**: Follow existing patterns and conventions in the codebase
-3. **Validate Work**: Run `make` to ensure formatting, linting, and tests pass
+3. **Validate Work**: Run `mise run all` to ensure formatting, linting, and tests pass
 4. **Document Changes**: Update relevant documentation (this file, PROTOCOL.md, etc.)
-5. **Commit**: Only commit after successful `make` execution
+5. **Commit**: Only commit after successful `mise run all` execution
 
 ### Integration Development Guidelines
 
@@ -419,7 +398,7 @@ rg "0\.1\.0" .  # Should only show CHANGELOG.md historical entries
 2. **Create Fixture Configuration**: **REQUIRED** - Add a complete Neovim config in `fixtures/[integration-name]/`
 3. **Test Integration**: Use fixture to verify functionality with `vv [integration-name]`
 4. **Update Documentation**: Add integration to fixtures list and relevant tool documentation
-5. **Run Full Test Suite**: Ensure `make` passes with new integration
+5. **Run Full Test Suite**: Ensure `mise run all` passes with new integration
 
 **Fixture Requirements**:
 
@@ -467,14 +446,14 @@ error({
 - **Zero Warnings**: All code must pass luacheck with 0 warnings/errors
 - **MCP Compliance**: All tools must return proper MCP format with JSON-stringified content
 - **VS Code Compatibility**: New tools must match VS Code extension behavior exactly
-- **Consistent Formatting**: Use `nix fmt` or `stylua` for consistent code style
+- **Consistent Formatting**: Use `mise run format` (treefmt) for consistent code style
 - **Documentation**: Update CLAUDE.md for architectural changes, PROTOCOL.md for protocol changes
 
 ### Development Quality Gates
 
-1. **`make check`** - Syntax and linting (0 warnings required)
-2. **`make test`** - All tests passing (320/320 success rate required)
-3. **`make format`** - Consistent code formatting
+1. **`mise run check`** - Syntax and linting (0 warnings required)
+2. **`mise run test`** - All tests passing (320/320 success rate required)
+3. **`mise run format`** - Consistent code formatting
 4. **MCP Validation** - Tools return proper format structure
 5. **Integration Test** - End-to-end protocol flow verification
 
@@ -484,11 +463,7 @@ error({
 
 **Test Failures with LUA_PATH**:
 
-```bash
-# Tests can't find modules - use proper LUA_PATH
-export LUA_PATH="./lua/?.lua;./lua/?/init.lua;./?.lua;./?/init.lua;$LUA_PATH"
-busted tests/unit/specific_test.lua
-```
+`mise` sets `LUA_PATH`/`LUA_CPATH` automatically (see `mise.toml` `[env]`), so prefer `mise run test` or run `busted` through the activated mise environment (`mise exec -- busted ...`). If a module still can't be found, you're likely running `busted` outside the mise environment.
 
 **JSON Format Issues**:
 

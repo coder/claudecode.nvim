@@ -27,6 +27,26 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
   "coder/claudecode.nvim",
   dependencies = { "folke/snacks.nvim" },
   config = true,
+  -- `cmd` lets lazy.nvim create command stubs that load the plugin on first use,
+  -- so `:ClaudeCode` and friends work on a fresh start. Without it, a keys-only
+  -- spec defers loading until a <leader>a* mapping is pressed and the commands
+  -- would not exist yet.
+  cmd = {
+    "ClaudeCode",
+    "ClaudeCodeFocus",
+    "ClaudeCodeSelectModel",
+    "ClaudeCodeAdd",
+    "ClaudeCodeSend",
+    "ClaudeCodeTreeAdd",
+    "ClaudeCodeStatus",
+    "ClaudeCodeStart",
+    "ClaudeCodeStop",
+    "ClaudeCodeOpen",
+    "ClaudeCodeClose",
+    "ClaudeCodeDiffAccept",
+    "ClaudeCodeDiffDeny",
+    "ClaudeCodeCloseAllDiffs",
+  },
   keys = {
     { "<leader>a", nil, desc = "AI/Claude Code" },
     { "<leader>ac", "<cmd>ClaudeCode<cr>", desc = "Toggle Claude" },
@@ -40,7 +60,7 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
       "<leader>as",
       "<cmd>ClaudeCodeTreeAdd<cr>",
       desc = "Add file",
-      ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw" },
+      ft = { "NvimTree", "neo-tree", "oil", "minifiles", "netrw", "snacks_picker_list" },
     },
     -- Diff management
     { "<leader>aa", "<cmd>ClaudeCodeDiffAccept<cr>", desc = "Accept diff" },
@@ -50,6 +70,12 @@ When Anthropic released Claude Code, they only supported VS Code and JetBrains. 
 ```
 
 That's it! The plugin will auto-configure everything else.
+
+> **Lazy-loading:** with this spec the plugin loads on first use — when a listed
+> `cmd` is run or a mapped key is pressed — not at startup. The `cmd` list is what
+> makes `:ClaudeCode` (and the other commands below) available before any keymap is
+> pressed. If you would rather load the plugin eagerly at startup, set `lazy = false`
+> (the `cmd`/`keys` triggers then become optional).
 
 ## Requirements
 
@@ -96,6 +122,8 @@ If you have a local installation, configure the plugin with the direct path:
     terminal_cmd = "~/.claude/local/claude", -- Point to local installation
   },
   config = true,
+  -- Also copy the `cmd = { ... }` list from the Installation section above so the
+  -- :ClaudeCode* commands load without having to press a key first.
   keys = {
     -- Your keymaps here
   },
@@ -153,6 +181,8 @@ Configure the plugin with the detected path:
     terminal_cmd = "/path/to/your/claude", -- Use output from 'which claude'
   },
   config = true,
+  -- Also copy the `cmd = { ... }` list from the Installation section above so the
+  -- :ClaudeCode* commands load without having to press a key first.
   keys = {
     -- Your keymaps here
   },
@@ -182,7 +212,8 @@ Configure the plugin with the detected path:
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
 2. **Send context**:
    - Select text in visual mode and use `<leader>as` to send it to Claude
-   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, press `<leader>as` on a file to add it to Claude's context
+   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, or a focused snacks picker list / the Snacks Explorer sidebar, press `<leader>as` on a file to add it to Claude's context
+   - For modal snacks pickers (`Snacks.picker.files()`/`grep()`), which keep focus in the input box, bind a picker action that calls `require("claudecode").send_at_mention(...)` for the selected item(s) — the [claude-fzf.nvim](#-claude-fzfnvim) community extension does the equivalent for `fzf-lua`
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
    - Open files in your editor
@@ -195,9 +226,23 @@ Configure the plugin with the detected path:
 - `:ClaudeCodeFocus` - Smart focus/toggle Claude terminal
 - `:ClaudeCodeSelectModel` - Select Claude model and open terminal with optional arguments
 - `:ClaudeCodeSend` - Send current visual selection to Claude
+- `:ClaudeCodeSendText {text}` - Send text to the open Claude terminal and submit it (`!` to insert without submitting; `native`/`snacks` providers only)
 - `:ClaudeCodeAdd <file-path> [start-line] [end-line]` - Add specific file to Claude context with optional line range
 - `:ClaudeCodeDiffAccept` - Accept diff changes
 - `:ClaudeCodeDiffDeny` - Reject diff changes
+- `:ClaudeCodeCloseAllDiffs` - Close Claude diffs: rejects pending ones, closes rejected ones, and closes accepted ones once the file or its buffer holds the accepted text
+
+## Sending text to the Claude terminal
+
+`:ClaudeCodeSendText {text}` types `{text}` into the open Claude terminal and submits it — useful for scripting and keymaps. Use `:ClaudeCodeSendText!` to insert the text without submitting. The same is available programmatically:
+
+```lua
+local terminal = require("claudecode.terminal")
+terminal.send_to_terminal("run the test suite") -- types + submits
+terminal.send_to_terminal("draft prompt", { submit = false }) -- insert only
+```
+
+This writes directly to the terminal's job channel, so it only works with the in-editor providers (`native`/`snacks`). The `external`/`none` providers run Claude outside Neovim, where there is no pane to write to (a warning is logged).
 
 ## Working with Diffs
 
@@ -207,6 +252,47 @@ When Claude proposes changes, the plugin opens a native Neovim diff view:
 - **Reject**: `:q` or `<leader>ad`
 
 You can edit Claude's suggestions before accepting them.
+
+If a diff is resolved outside this Neovim (for example via Claude remote control on another device) the diff windows would otherwise stay open. They are now closed automatically when the Claude session that opened them disconnects. If you resolve diffs remotely while the session is still connected, run `:ClaudeCodeCloseAllDiffs` to clear the leftover pending proposals.
+
+A diff you accepted with `:w` stays open until Claude writes the file and closes it. If that Claude session exits or stops before it writes the file, `:ClaudeCodeCloseAllDiffs` finishes the diff. When the file does not hold the accepted text yet, the command puts the text into the file's buffer as unsaved changes and closes the diff: `:w` in that buffer writes it (`:checktime`, then `:w!` for a read-only file, so Neovim still warns about a change on disk, `:w ++p` for a new file whose folder does not exist yet, or on Neovim 0.8 `:call mkdir(expand('%:p:h'), 'p') | w`), and `:e!` drops it. The plugin never writes the file. In a CRLF file, `:w` writes every line break as CRLF, with one CR each, whether Claude's text had CRLF, LF, or both. A file with a BOM keeps one BOM. In any other file, `:w` writes the text's own line endings and BOM. When the buffer's `'fileencoding'` cannot hold the text, the command says so: run `:set fileencoding=utf-8` before `:w`. The command does this for a Claude session that is still connected too, and until you write or drop the text, that session's next diff on the same file fails because the buffer has unsaved changes. A diff whose file buffer already has unsaved changes, cannot be written (a `'buftype'` such as `nofile`), or refuses the text (for example a swap file from another Neovim, or `'nomodifiable'`), stays open, and the command names the reason, so neither those changes nor your accepted edits are lost. For a swap file, open the file with `:split <file>` (answer the swap file prompt if Neovim shows one), then run the command again. The command also closes a diff you rejected whose Claude session exited before it closed the diff.
+
+## Events
+
+The plugin fires `User` autocmds you can hook with `nvim_create_autocmd`.
+
+### `ClaudeCodeSendComplete`
+
+Fired once per file, synchronously, when a send (`:ClaudeCodeSend`, `:ClaudeCodeAdd`, tree add, etc.) is **accepted while a Claude client is connected**. This is the recommended way to focus a Claude session that runs **outside** Neovim (`provider = "none"`/`"external"`), where `focus_after_send` cannot help.
+
+The autocmd `data` carries:
+
+| field        | type           | notes                                                                                |
+| ------------ | -------------- | ------------------------------------------------------------------------------------ |
+| `file_path`  | `string`       | The formatted/cwd-relative path Claude received                                      |
+| `start_line` | `integer\|nil` | **0-indexed** (Claude convention, not 1-indexed editor lines); `nil` for whole files |
+| `end_line`   | `integer\|nil` | 0-indexed; `nil` for whole-file/directory sends                                      |
+| `context`    | `string\|nil`  | Internal trigger tag (e.g. `"ClaudeCodeSend"`); best-effort, may change              |
+
+Notes and caveats:
+
+- Fires at **acceptance** time, not delivery — sending is debounced, so a later transport failure is logged, not reported here.
+- Fires **per file**: sending a multi-file selection from a file-explorer buffer (`:ClaudeCodeSend` / `:ClaudeCodeTreeAdd`) fires it once per file. `:ClaudeCodeAdd` sends a single path and fires once. Keep handlers idempotent.
+- Fires only when Claude is **already connected** at send time; a send that queues while Claude is launching is delivered later without firing this event.
+
+Example — focus a tmux pane after sending (supply your own pane target):
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeSendComplete",
+  callback = function(ev)
+    -- ev.data.file_path / ev.data.start_line / ev.data.end_line / ev.data.context
+    if vim.env.TMUX then
+      vim.fn.system({ "tmux", "select-pane", "-t", "{last}" }) -- replace target as needed
+    end
+  end,
+})
+```
 
 ## How It Works
 
@@ -250,7 +336,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
                         -- For native binary: use output from 'which claude'
 
     -- Send/Focus Behavior
-    -- When true, successful sends will focus the Claude terminal if already connected
+    -- When true, successful sends focus the in-editor Claude terminal if already
+    -- connected. NOTE: this only works for in-editor providers (snacks/native);
+    -- it has no effect with provider = "none"/"external" (Claude runs outside
+    -- Neovim). For those, hook the `User ClaudeCodeSendComplete` event (see Events).
     focus_after_send = false,
 
     -- Selection Tracking
@@ -261,9 +350,21 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     terminal = {
       split_side = "right", -- "left" or "right"
       split_width_percentage = 0.30,
+      -- Optional: shrink (or widen) the terminal while a diff is open. Defaults to
+      -- split_width_percentage when unset, preserving today's behavior.
+      diff_split_width_percentage = nil, -- e.g. 0.20 to give diffs more room
       provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
+      -- Auto-enter insert/terminal mode whenever the Claude terminal window gains
+      -- focus. Set to false to stay in Normal mode and preserve your scroll position
+      -- when switching back to the terminal (e.g. via <C-w>l); press `i` to type.
+      -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
+      auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
+      -- Work around a Neovim core bug (< 0.12.2) that fragments large pastes into
+      -- the terminal, making Cmd+V appear to truncate ([#161]). true | false | "auto"
+      -- ("auto", the default, enables it only on affected Neovim versions).
+      fix_streamed_paste = "auto",
 
       -- Provider-specific options
       provider_opts = {
@@ -277,10 +378,20 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
     -- Diff Integration
     diff_opts = {
-      auto_close_on_accept = true,
-      vertical_split = true,
-      open_in_current_tab = true,
-      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (including floating terminals)
+      layout = "vertical", -- "vertical" (default), "horizontal", or "unified"
+      -- "unified": VS Code-style unified diff in a single buffer with deleted
+      --   (red/strikethrough) and added (green) lines interleaved. Requires
+      --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
+      --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
+      open_in_new_tab = false,
+      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+      hide_terminal_in_new_tab = false,
+      auto_resize_terminal = true, -- Let the plugin manage the terminal width across the diff lifecycle; set false to own it via the User autocmds below
+      -- on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
+
+      -- Legacy aliases (still supported):
+      -- vertical_split = true,
+      -- open_in_current_tab = true,
     },
   },
   keys = {
@@ -288,6 +399,50 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
   },
 }
 ```
+
+### Diff Lifecycle Events
+
+The plugin fires `User` autocmds when a diff opens and closes, so you can react to
+the review lifecycle from your own config (resize windows, toggle a colorscheme,
+update a statusline, etc.). They are emitted regardless of `auto_resize_terminal`.
+
+| Event pattern          | When                                  | `event.data` fields                                                                                                      |
+| ---------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `ClaudeCodeDiffOpened` | A proposed-edit diff has opened       | `tab_name`, `file_path`, `new_file_path`, `is_new_file`, `diff_window`, `target_window`, `terminal_window`, `tab_number` |
+| `ClaudeCodeDiffClosed` | The diff was accepted/rejected/closed | `tab_name`, `file_path`, `reason`                                                                                        |
+
+`reason` is a best-effort, human-readable label (e.g. `"diff accepted"`, `"diff rejected"`, `"replaced by new diff"`); treat it as diagnostic text, not a stable enum to branch on. `tab_number` is only set when the diff opened in its own tab, and `terminal_window` may be `nil` if no Claude terminal is visible.
+
+To fully own the terminal width during diffs, set `diff_opts.auto_resize_terminal = false`
+(so the plugin applies no width policy of its own) and resize from the events yourself.
+Note this is "own the width via the events", not "freeze the width": the diff layout still
+runs `wincmd =`, which equalizes splits, so set your desired width in the `ClaudeCodeDiffOpened`
+handler — it fires after the layout is built, so it wins. When the diff closes, the windows of
+the tab it split get back the sizes they had before it (if that tab still has the same window
+layout and the same space for it), and then `ClaudeCodeDiffClosed` fires:
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeDiffOpened",
+  callback = function(ev)
+    local term = ev.data.terminal_window
+    if term and vim.api.nvim_win_is_valid(term) then
+      vim.api.nvim_win_set_width(term, math.floor(vim.o.columns * 0.20))
+    end
+  end,
+})
+
+vim.api.nvim_create_autocmd("User", {
+  pattern = "ClaudeCodeDiffClosed",
+  callback = function(ev)
+    -- restore your preferred idle layout here
+  end,
+})
+```
+
+> For the common "just make the terminal narrower during diffs" case you don't need
+> the events at all — set `terminal.diff_split_width_percentage` and leave
+> `auto_resize_terminal = true`.
 
 ### Working Directory Control
 
@@ -509,6 +664,7 @@ Notes:
 
 - No windows/buffers are created. `:ClaudeCode` and related commands will not open anything.
 - The WebSocket server still starts and broadcasts work as usual. Launch the Claude CLI externally when desired.
+- `focus_after_send` has no effect here (there is no in-editor terminal to focus); enabling it logs a one-time warning at startup. To focus your external session after a send, hook the [`User ClaudeCodeSendComplete`](#claudecodesendcomplete) event.
 
 ### External Terminal Provider
 
@@ -768,15 +924,102 @@ opts = {
 
 ## Troubleshooting
 
+- **First stop:** Run `:checkhealth claudecode` — it verifies the Claude CLI is installed, the WebSocket server is running, the lock file exists, and whether Claude is connected
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
 - **Local installation not working?** If you used `claude migrate-installer`, set `terminal_cmd = "~/.claude/local/claude"` in your config. Check `which claude` vs `ls ~/.claude/local/claude` to verify your installation type.
 - **Native binary installation not working?** If you used the alpha native binary installer, run `claude doctor` to verify installation health and use `which claude` to find the binary path. Set `terminal_cmd = "/path/to/claude"` with the detected path in your config.
 
+## Repository Blueprint
+
+This section is the contract map of the source tree. Each linked README lists the interface, invariants, and side effects
+of one package.
+
+### System Overview
+
+Neovim loads [`plugin/claudecode.lua`](./plugin/README.md), which guards the load and can schedule
+`require("claudecode").setup()`. `setup` in [`lua/claudecode`](./lua/claudecode/README.md) validates config, registers the
+`:ClaudeCode*` commands, and (when `auto_start` is true) calls `start`. `start` opens the
+[WebSocket server](./lua/claudecode/server/README.md) on `127.0.0.1`, writes a lock file with an auth token, and enables
+selection tracking when `track_selection` is true. The Claude CLI finds the lock file, connects, and calls the [MCP tools](./lua/claudecode/tools/README.md).
+The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/README.md). Files under
+[`scripts/`](./scripts/README.md) are dev and release tooling and are never loaded by the plugin.
+
+### Local Interface & Invariants
+
+- `dev-config.lua` returns a lazy.nvim plugin spec for local development: `"coder/claudecode.nvim"` with `dev = true`, a
+  `cmd` list of `:ClaudeCode*` command stubs (it omits `ClaudeCodeSendText`), `<leader>a*` `keys` mappings, and `opts` that set only
+  `focus_after_send = true` [dev-config.lua:return]. The plugin never `require`s it. It has no side effects until a user
+  symlinks it into a Neovim config (see the comment at the top of the file).
+
+### Subdirectories & System Boundaries
+
+- lua: [./lua/README.md](./lua/README.md) - Neovim Lua runtime path. It holds only the `claudecode` package.
+- lua/claudecode: [./lua/claudecode/README.md](./lua/claudecode/README.md) - Core package: setup, commands, config, lock
+  file, terminal dispatcher, blocking diffs, selection tracking, explorer integrations, logging, and `:checkhealth`.
+- lua/claudecode/server: [./lua/claudecode/server/README.md](./lua/claudecode/server/README.md) - Pure-Lua RFC 6455
+  WebSocket and JSON-RPC 2.0 MCP server on `vim.loop` TCP, with auth-token-checked upgrade and a keep-alive ping timer.
+- lua/claudecode/terminal: [./lua/claudecode/terminal/README.md](./lua/claudecode/terminal/README.md) - Terminal
+  providers (native, snacks, external, none) and `paste_fix` for Neovim < 0.12.2.
+- lua/claudecode/tools: [./lua/claudecode/tools/README.md](./lua/claudecode/tools/README.md) - MCP tool registry: 10 tools
+  in `tools/list` plus the hidden `close_tab`. `openDiff` runs in a coroutine and defers its response.
+- plugin: [./plugin/README.md](./plugin/README.md) - Runtime loader: Neovim >= 0.8.0 check, `vim.g.loaded_claudecode`
+  guard, and optional `vim.g.claudecode_auto_setup`.
+- scripts: [./scripts/README.md](./scripts/README.md) - Shell WebSocket/MCP clients, issue repro scripts, integration test
+  runner, and the release-please runner.
+
+`fixtures/` (Neovim configs for manual repros) holds repro notes (`README.md` in some folders) but no EGM contracts.
+`tests/` (Busted specs) holds no contracts.
+
+### Global Invariants
+
+- The server listens only on `127.0.0.1` [lua/claudecode/server/tcp.lua:M.\_bind_and_listen].
+- A WebSocket upgrade must carry `x-claude-code-ide-authorization` that matches the lock-file token, compared in constant
+  time [lua/claudecode/server/handshake.lua:M.validate_upgrade_request]. `start` returns `false` before it starts the server
+  if the token is shorter than 10 characters. It stops the server if the token does not match the token that
+  `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
+- The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
+- Lock files live in `$CLAUDE_CONFIG_DIR/ide` or else `~/.claude/ide`, named `<port>.lock`
+  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients that use `find_claude_lockfile` read the port from that basename
+  [scripts/lib_claude.sh:find_claude_lockfile]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
+- `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
+  none [plugin/claudecode.lua].
+- `openDiff` must run in a non-main coroutine. Its response is deferred until the user accepts or rejects the diff
+  [lua/claudecode/diff.lua:M.open_diff_blocking] [lua/claudecode/server/init.lua:M.\_setup_deferred_response]. A diff
+  that resolves before `openDiff` yields, for example from a `ClaudeCodeDiffOpened` handler, is answered at once
+  [lua/claudecode/diff.lua:M.open_diff_blocking].
+
+### Global Side Effects
+
+- Lock file: `start` writes `<port>.lock` (file `0600`, atomic rename). A new lock directory gets `0700`, and the chmod of an existing one is best-effort [lua/claudecode/lockfile.lua:M.create].
+- Network: one loopback TCP listener plus WebSocket frames and JSON-RPC broadcasts (`selection_changed`, `at_mentioned`)
+  [lua/claudecode/server/init.lua:M.start] [lua/claudecode/selection.lua:M.send_selection_update].
+- Processes: the terminal provider spawns the Claude CLI with `ENABLE_IDE_INTEGRATION`, `FORCE_CODE_TERMINAL`,
+  loopback `no_proxy`/`NO_PROXY`, and, while the server runs, `CLAUDE_CODE_SSE_PORT`
+  [lua/claudecode/terminal.lua:get_claude_command_and_env].
+- Disk: `open_diff` writes diff temp files under `stdpath("cache")/claudecode_diffs`, or
+  `stdpath("cache")/claudecode_diffs_fallback` when a directory cannot be created in the first. If both fail, it returns
+  an error that names both directories [lua/claudecode/diff.lua:create_temp_file]. The `openDiff` tool writes no temp
+  files [lua/claudecode/diff.lua:M.open_diff_blocking].
+- Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
+  `ClaudeCodeDiffCleanup`), `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
+  and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2
+  [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install].
+- Release tooling: `scripts/release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and PRs
+  [scripts/release-please-runner.js:main].
+
+### System Verification
+
+- Run: `mise run all` (format, lint, test)
+- Run: `mise run test` (Busted suite with coverage, in a random order whose seed it prints; `BUSTED_SEED=<seed> mise run test` repeats that order, and a test registered inside a `pairs()` loop fails the run) or one file with `busted -v tests/unit/<name>_spec.lua`
+- Run: `mise run check` (Lua syntax and `luacheck` on `lua/` and `tests/`)
+- Run: `npm --prefix scripts run test:release-please-runner` (release runner and the `communique.toml` output budget,
+  after `npm --prefix scripts ci`, with `communique` on `PATH`)
+
 ## Contributing
 
-See [DEVELOPMENT.md](./DEVELOPMENT.md) for build instructions and development guidelines. Tests can be run with `make test`.
+See [DEVELOPMENT.md](./DEVELOPMENT.md) for build instructions and development guidelines. Tests can be run with `mise run test`.
 
 ## License
 

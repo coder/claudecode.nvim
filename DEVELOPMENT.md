@@ -2,6 +2,17 @@
 
 Quick guide for contributors to the claudecode.nvim project.
 
+## Development Environment
+
+The toolchain (Neovim, LuaJIT, formatters, test runners) is provisioned by [mise](https://mise.jdx.dev) via `mise.toml`. After installing mise:
+
+```bash
+mise install      # install all tools (builds Lua/LuaJIT from source)
+mise run setup     # build the Lua test rocks (busted/luacheck/luacov) into ./.luarocks
+```
+
+Activate mise in your shell — add `eval "$(mise activate bash)"` (or `zsh`/`fish`) to your shell rc, per the [mise docs](https://mise.jdx.dev/getting-started.html) — so its tools are on PATH. Common tasks: `mise run all` (format + lint + test), `mise run test`, `mise run check`, `mise run format` — run `mise tasks` to list them all. (`mise run <task>` works even without shell activation.)
+
 ## Project Structure
 
 ```none
@@ -54,19 +65,16 @@ claudecode.nvim/
 ## Development Priorities
 
 1. **Advanced MCP Tools**
-
    - Add Neovim-specific tools (LSP integration, diagnostics, Telescope integration)
    - Implement diffview.nvim integration for the diff provider system
    - Add Git integration tools (branch info, status, etc.)
 
 2. **Performance Optimization**
-
    - Monitor WebSocket server performance under load
    - Optimize selection tracking for large files
    - Fine-tune debouncing and event handling
 
 3. **User Experience**
-
    - Add more user commands and keybindings
    - Improve error messages and user feedback
    - Create example configurations for popular setups
@@ -81,35 +89,63 @@ claudecode.nvim/
 Run tests using:
 
 ```bash
-# Run all tests
-make test
+# Run all tests, in a random order whose seed the run prints
+mise run test
+
+# Repeat the order of an earlier run
+BUSTED_SEED=<seed> mise run test
 
 # Run specific test file
 nvim --headless -u tests/minimal_init.lua -c "lua require('tests.unit.config_spec')"
 
 # Run linting
-make check
+mise run check
 
 # Format code
-make format
+mise run format
+```
+
+Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua` reports each `pairs()` loop that registers a test, in a spec file or another file under `tests/`, in a coroutine that the loop resumes, or in a function that the loop calls. The first test that each loop registers runs and then fails with the report, and busted counts it as a failure. A test that also fails for its own reason keeps that failure, after the report. The rest of the spec still registers and runs. A `describe` or `pending` in such a loop fails the run through a separate error instead. `.busted` in the repository root loads the helper when busted starts there, as `mise run test` does. From another directory, pass `--helper=<repo>/tests/helpers/test_order.lua`.
+
+A unit test that writes files writes them in a folder from `tests/helpers/temp_dir.lua` (`temp_dir.new()` in `setup`, `temp_dir.remove(dir)` in `teardown`), not at a fixed path under `/tmp`. Every test run on a host shares `/tmp`, so two suites that run at once would overwrite and delete each other's files.
+
+A PR that changes a `.lua` or `.vim` file under `lua/` or `plugin/` also changes what `.agents/skills/verify-diff-lifecycle/covered.lock` records, and the advisory `covered-lock` CI job turns red. Run `.agents/skills/verify-diff-lifecycle/check.sh --record` and commit `covered.lock`, or ask a maintainer to.
+
+Two PRs that edit the same Lua file, or that add or delete neighbouring Lua files, conflict in `covered.lock` once one of them merges. That conflict is expected, because the merged code needs a new record. To resolve it, merge `origin/main` into your branch, resolve any code conflicts, run `.agents/skills/verify-diff-lifecycle/check.sh --record`, `git add` `covered.lock`, and commit the merge.
+
+## Release Automation
+
+Releases are managed by Release Please. After feature and fix PRs land on `main`, the `Release Please` workflow opens or updates a single release PR that bumps `VERSION`, updates `.release-please-manifest.json`, and rewrites the next `CHANGELOG.md` entry with Communique-generated notes. Merging that release PR creates the `v<version>` tag and GitHub Release, then dispatches the `Release Notes` workflow to rewrite the GitHub Release body with Communique's GitHub-release format.
+
+Release notes require either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; when using OpenAI-compatible credentials, set `COMMUNIQUE_MODEL` so Communique knows which model to call. The pinned Communique Linux binary currently requires a glibc 2.39-compatible environment (for example Ubuntu 24.04 or the GitHub-hosted `ubuntu-latest` runner); on older Linux hosts, run the dry-run in a newer container or runner.
+
+`communique.toml` sets `max_tokens = 16384`. Communique 1.1.3 defaults to 4096 output tokens, and its one `submit_release_notes` call (changelog, title, and body) does not fit in that for a release with about 140 PRs. The model's call is then cut off, Communique makes three attempts in total, and the job passes only when the last attempt still holds a `changelog` or a `release_body`. `npm --prefix scripts run test:release-please-runner` checks that the pinned Communique and this config fit a submission larger than the default.
+
+To dogfood release automation without mutating GitHub, install the pinned tools from `mise.toml`, install the locked Release Please dependency graph under `scripts/`, and run the runner in dry-run mode against a branch that already contains the release config:
+
+```bash
+mise install
+NPM_CONFIG_IGNORE_SCRIPTS=true npm ci --prefix scripts
+GITHUB_TOKEN=... \
+GITHUB_REPOSITORY=coder/claudecode.nvim \
+RELEASE_PLEASE_TARGET_BRANCH=your-branch \
+ANTHROPIC_API_KEY=... \
+./scripts/run-release-please.sh --dry-run
 ```
 
 ## Implementation Guidelines
 
 1. **Error Handling**
-
    - All public functions should have error handling
    - Return `success, result_or_error` pattern
    - Log meaningful error messages
 
 2. **Performance**
-
    - Minimize impact on editor performance
    - Debounce event handlers
    - Use asynchronous operations where possible
 
 3. **Compatibility**
-
    - Support Neovim >= 0.8.0
    - Zero external dependencies (pure Lua implementation)
    - Follow Neovim plugin best practices
@@ -153,6 +189,9 @@ vv netrw      # Start Neovim with built-in netrw configuration
 
 # List available configurations
 list-configs
+
+# Minimal repro environment (copies fixtures/repro/example into /tmp)
+repro
 ```
 
 **Example fixture structure** (`fixtures/my-integration/`):

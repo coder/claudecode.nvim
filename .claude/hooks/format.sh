@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Claude Code Hook: Format Files
-# Triggers after Claude edits/writes files and runs nix fmt
+# Triggers after Claude edits/writes files and runs treefmt (via mise)
 #
 # Environment variables provided by Claude Code:
 # - CLAUDE_PROJECT_DIR: Path to the project directory
@@ -75,18 +75,18 @@ main() {
     exit 1
   fi
 
-  log "${YELLOW}Formatting file with nix fmt...${NC}"
+  log "${YELLOW}Formatting file with treefmt...${NC}"
 
   # Change to project directory
   cd "${CLAUDE_PROJECT_DIR}"
 
-  # Run nix fmt on the file
-  if nix fmt "$FILE_PATH" 2>/dev/null; then
+  # Run treefmt on the file
+  if mise exec -- treefmt "$FILE_PATH" 2>/dev/null; then
     log "${GREEN}✓ Successfully formatted: $FILE_PATH${NC}"
     exit 0
   else
     EXIT_CODE=$?
-    log "${RED}✗ nix fmt failed with exit code $EXIT_CODE${NC}"
+    log "${RED}✗ treefmt failed with exit code $EXIT_CODE${NC}"
     log "${RED}This indicates the file has formatting issues that need manual attention${NC}"
 
     # Don't fail the hook - just warn about formatting issues

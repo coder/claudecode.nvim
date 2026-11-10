@@ -1,0 +1,16 @@
+-- Fixture for issue #232:
+--   "[FEATURE] Terminal window should restore scroll position when switching
+--    back from editor window"
+--
+-- Repro of the underlying behavior: with the Snacks terminal provider (the
+-- default when snacks.nvim is installed), switching focus BACK into the Claude
+-- terminal window re-enters terminal/insert mode and the view jumps to the
+-- bottom (the prompt), discarding the Normal-mode scroll position the user was
+-- reading at.
+--
+-- Provider is selectable so you can A/B the two code paths with ONE fixture:
+--   CLAUDECODE_PROVIDER=snacks  vv issue-232   (default; reproduces the bug)
+--   CLAUDECODE_PROVIDER=native  vv issue-232   (does NOT reproduce -> baseline)
+--
+-- See README.md in this directory for the exact manual steps.
+require("config.lazy")

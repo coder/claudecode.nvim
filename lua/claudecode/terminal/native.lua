@@ -11,6 +11,10 @@ local winid = nil
 local jobid = nil
 local tip_shown = false
 
+-- Set on each terminal buffer this provider starts. Unlike the state above, a buffer variable survives a reload
+-- of this module, so the next module instance can adopt the terminal.
+local OWNED_MARK = "claudecode_native_terminal"
+
 ---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
 
@@ -18,6 +22,19 @@ local function cleanup_state()
   bufnr = nil
   winid = nil
   jobid = nil
+end
+
+-- nvim_win_close raises E444 for the only window of the only tab page. Floating windows do not count.
+local function is_last_window(win)
+  if #vim.api.nvim_list_tabpages() > 1 then
+    return false
+  end
+  for _, other in ipairs(vim.api.nvim_list_wins()) do
+    if other ~= win and vim.api.nvim_win_get_config(other).relative == "" then
+      return false
+    end
+  end
+  return true
 end
 
 local function is_valid()
@@ -47,6 +64,43 @@ local function is_valid()
   return true
 end
 
+---Forgets the tracked terminal when its job exits. With auto_close, also closes the tracked window.
+---@param job_id number
+---@param auto_close boolean|nil
+local function forget_exited_job(job_id, auto_close)
+  if job_id ~= jobid then
+    return
+  end
+  logger.debug("terminal", "Terminal process exited, cleaning up")
+
+  -- Ensure we are operating on the correct window and buffer before closing
+  local current_winid_for_job = winid
+  local current_bufnr_for_job = bufnr
+
+  cleanup_state() -- Clear our managed state first
+
+  if not auto_close then
+    return
+  end
+
+  if
+    current_winid_for_job
+    and vim.api.nvim_win_is_valid(current_winid_for_job)
+    and not is_last_window(current_winid_for_job)
+  then
+    if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
+      -- Optional: Check if the window still holds the same terminal buffer
+      if vim.api.nvim_win_get_buf(current_winid_for_job) == current_bufnr_for_job then
+        vim.api.nvim_win_close(current_winid_for_job, true)
+      end
+    else
+      -- Buffer is invalid, but window might still be there (e.g. if user changed buffer in term window)
+      -- Still try to close the window we tracked.
+      vim.api.nvim_win_close(current_winid_for_job, true)
+    end
+  end
+end
+
 local function open_terminal(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
 
@@ -54,10 +108,12 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     if focus then
       -- Focus existing terminal: switch to terminal window and enter insert mode
       vim.api.nvim_set_current_win(winid)
-      vim.cmd("startinsert")
+      if effective_config.auto_insert ~= false then
+        vim.cmd("startinsert")
+      end
     end
     -- If focus=false, preserve user context by staying in current window
-    return true
+    return
   end
 
   local original_win = vim.api.nvim_get_current_win()
@@ -75,62 +131,69 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
 
-  vim.api.nvim_win_call(new_winid, function()
-    vim.cmd("enew")
-  end)
+  -- Another plugin's autocmd can swap a different buffer into the split, so the code below uses this number.
+  local new_bufnr = vim.api.nvim_create_buf(true, false)
+  -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
+  vim.b[new_bufnr][OWNED_MARK] = true
+  vim.api.nvim_win_set_buf(new_winid, new_bufnr)
 
-  local term_cmd_arg
-  if cmd_string:find(" ", 1, true) then
-    term_cmd_arg = vim.split(cmd_string, " ", { plain = true, trimempty = false })
-  else
-    term_cmd_arg = { cmd_string }
-  end
+  -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
+  -- paths survive, while no shell touches bracketed model aliases like
+  -- "opus[1m]" (see utils.parse_command).
+  local term_cmd_arg = utils.parse_command(cmd_string)
 
-  jobid = vim.fn.termopen(term_cmd_arg, {
+  local termopen_opts = {
     env = env_table,
     cwd = effective_config.cwd,
     on_exit = function(job_id, _, _)
       vim.schedule(function()
-        if job_id == jobid then
-          logger.debug("terminal", "Terminal process exited, cleaning up")
-
-          -- Ensure we are operating on the correct window and buffer before closing
-          local current_winid_for_job = winid
-          local current_bufnr_for_job = bufnr
-
-          cleanup_state() -- Clear our managed state first
-
-          if not effective_config.auto_close then
-            return
-          end
-
-          if current_winid_for_job and vim.api.nvim_win_is_valid(current_winid_for_job) then
-            if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
-              -- Optional: Check if the window still holds the same terminal buffer
-              if vim.api.nvim_win_get_buf(current_winid_for_job) == current_bufnr_for_job then
-                vim.api.nvim_win_close(current_winid_for_job, true)
-              end
-            else
-              -- Buffer is invalid, but window might still be there (e.g. if user changed buffer in term window)
-              -- Still try to close the window we tracked.
-              vim.api.nvim_win_close(current_winid_for_job, true)
-            end
-          end
+        -- The session is over. With auto_close = false the buffer stays visible, and an open() must not adopt it.
+        if vim.api.nvim_buf_is_valid(new_bufnr) then
+          vim.b[new_bufnr][OWNED_MARK] = nil
         end
+        forget_exited_job(job_id, effective_config.auto_close)
       end)
     end,
-  })
-
-  if not jobid or jobid == 0 then
-    vim.notify("Failed to open native terminal.", vim.log.levels.ERROR)
-    vim.api.nvim_win_close(new_winid, true)
-    vim.api.nvim_set_current_win(original_win)
-    cleanup_state()
-    return false
+  }
+  -- pcall runs inside the callback because nvim_buf_call rewraps a raised error with a stack traceback.
+  local started, termopen_result = false, "Its buffer was deleted before termopen ran."
+  if vim.api.nvim_buf_is_valid(new_bufnr) then
+    vim.api.nvim_buf_call(new_bufnr, function()
+      started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts)
+    end)
   end
 
+  -- termopen raises for a command that is not executable, and returns 0 or -1 instead when errors are silenced.
+  local failure = nil
+  if not started then
+    failure = " " .. tostring(termopen_result)
+  elseif termopen_result <= 0 then
+    failure = ""
+  elseif not vim.api.nvim_buf_is_valid(new_bufnr) then
+    -- A TermOpen autocmd wiped the buffer. The wipe also stopped the job.
+    failure = " Its buffer was deleted after termopen started."
+  end
+
+  if failure then
+    vim.notify("Failed to open native terminal." .. failure, vim.log.levels.ERROR)
+    -- Wiping the buffer closes the split, unless an autocmd swapped another buffer into it first.
+    if vim.api.nvim_win_is_valid(new_winid) then
+      vim.api.nvim_win_close(new_winid, true)
+    end
+    vim.api.nvim_set_current_win(original_win)
+    if vim.api.nvim_buf_is_valid(new_bufnr) then
+      vim.api.nvim_buf_delete(new_bufnr, { force = true })
+    end
+    cleanup_state()
+    return
+  end
+
+  jobid = termopen_result
+  if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+    vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+  end
   winid = new_winid
-  bufnr = vim.api.nvim_get_current_buf()
+  bufnr = new_bufnr
   vim.bo[bufnr].bufhidden = "hide"
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen
@@ -138,7 +201,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if effective_config.auto_insert ~= false then
+      vim.cmd("startinsert")
+    end
   else
     -- Preserve user context: return to the window they were in before terminal creation
     vim.api.nvim_set_current_win(original_win)
@@ -148,24 +213,51 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     vim.notify("Native terminal opened. Press Ctrl-\\ Ctrl-N to return to Normal mode.", vim.log.levels.INFO)
     tip_shown = true
   end
-  return true
 end
 
 local function close_terminal()
-  if is_valid() then
-    -- Closing the window should trigger on_exit of the job if the process is still running,
-    -- which then calls cleanup_state.
-    -- If the job already exited, on_exit would have cleaned up.
-    -- This direct close is for user-initiated close.
-    vim.api.nvim_win_close(winid, true)
-    cleanup_state() -- Cleanup after explicit close
+  if not is_valid() then
+    return
+  end
+  local closing_bufnr, closing_jobid = bufnr, jobid
+  cleanup_state()
+  -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not adopt this one.
+  vim.b[closing_bufnr][OWNED_MARK] = nil
+
+  -- bufhidden=hide keeps the job running when only the window closes, so stop the job and delete the buffer.
+  -- That closes its windows except the last one. Deleting a terminal buffer while a write to its job is pending hangs
+  -- Neovim (neovim/neovim#42508), so the delete waits for TermClose. The wait runs the event loop. A job that reads
+  -- its input, like Claude, takes the pending writes there and exits. A job that stopped reading (for example `yes`,
+  -- or `cat` after a large multi-line send) keeps them pending, the wait times out, and Neovim can still hang. This
+  -- code does not prevent that. For a job that ignores SIGHUP, the buffer is deleted after the timeout and Neovim
+  -- kills the job later.
+  local exited = false
+  vim.api.nvim_create_autocmd("TermClose", {
+    buffer = closing_bufnr,
+    once = true,
+    callback = function()
+      exited = true
+    end,
+  })
+  -- jobstop returns 0 for a job that already exited, for example when close runs from a TermClose autocmd.
+  -- TermClose has fired then, so waiting for it would block for the full timeout.
+  if vim.fn.jobstop(closing_jobid) == 1 then
+    -- A user's TermClose autocmd can delete the buffer first, and that also removes this buffer-local autocmd.
+    vim.wait(1000, function()
+      return exited or not vim.api.nvim_buf_is_valid(closing_bufnr)
+    end, 10)
+  end
+  if vim.api.nvim_buf_is_valid(closing_bufnr) then
+    vim.api.nvim_buf_delete(closing_bufnr, { force = true })
   end
 end
 
 local function focus_terminal()
   if is_valid() then
     vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if config.auto_insert ~= false then
+      vim.cmd("startinsert")
+    end
   end
 end
 
@@ -238,7 +330,9 @@ local function show_hidden_terminal(effective_config, focus)
   if focus then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
-    vim.cmd("startinsert")
+    if effective_config.auto_insert ~= false then
+      vim.cmd("startinsert")
+    end
   else
     -- Preserve user context: return to the window they were in before showing terminal
     vim.api.nvim_set_current_win(original_win)
@@ -248,26 +342,44 @@ local function show_hidden_terminal(effective_config, focus)
   return true
 end
 
-local function find_existing_claude_terminal()
-  local buffers = vim.api.nvim_list_bufs()
-  for _, buf in ipairs(buffers) do
-    if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "terminal" then
-      -- Check if this is a Claude Code terminal by examining the buffer name or terminal job
-      local buf_name = vim.api.nvim_buf_get_name(buf)
-      -- Terminal buffers often have names like "term://..." that include the command
-      if buf_name:match("claude") then
-        -- Additional check: see if there's a window displaying this buffer
-        local windows = vim.api.nvim_list_wins()
-        for _, win in ipairs(windows) do
-          if vim.api.nvim_win_get_buf(win) == buf then
-            logger.debug("terminal", "Found existing Claude terminal in buffer", buf, "window", win)
-            return buf, win
-          end
+-- A marked buffer has no job until termopen runs, and keeps its mark after the job exits until the on_exit of the
+-- module copy that started it runs. jobpid raises for a job that exited or was stopped. jobwait({ id }, 0) would
+-- instead block until a stopped job exits.
+local function job_ended(buf)
+  local channel = vim.bo[buf].channel
+  return channel ~= 0 and not pcall(vim.fn.jobpid, channel)
+end
+
+---Tracks a visible terminal that this provider started but lost track of, for example after a module reload.
+---@return boolean adopted
+local function adopt_existing_terminal()
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_is_valid(buf) and vim.b[buf][OWNED_MARK] and not job_ended(buf) then
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == buf then
+          bufnr, winid, jobid = buf, win, vim.bo[buf].channel
+          local adopted_jobid = jobid
+          -- The job's on_exit runs in the module copy that started it, for example the one before a reload.
+          -- Clearing the group first keeps one handler per buffer, however many reloads adopt it.
+          local group = vim.api.nvim_create_augroup("ClaudeCodeNativeAdopted", { clear = false })
+          vim.api.nvim_clear_autocmds({ group = group, buffer = buf })
+          vim.api.nvim_create_autocmd("TermClose", {
+            group = group,
+            buffer = buf,
+            once = true,
+            callback = function()
+              vim.schedule(function()
+                forget_exited_job(adopted_jobid, config.auto_close)
+              end)
+            end,
+          })
+          logger.debug("terminal", "Recovered existing Claude terminal in buffer", buf, "window", win)
+          return true
         end
       end
     end
   end
-  return nil, nil
+  return false
 end
 
 ---Setup the terminal module
@@ -295,22 +407,13 @@ function M.open(cmd_string, env_table, effective_config, focus)
       end
     end
   else
-    -- Check if there's an existing Claude terminal we lost track of
-    local existing_buf, existing_win = find_existing_claude_terminal()
-    if existing_buf and existing_win then
-      -- Recover the existing terminal
-      bufnr = existing_buf
-      winid = existing_win
-      -- Note: We can't recover the job ID easily, but it's less critical
-      logger.debug("terminal", "Recovered existing Claude terminal")
+    if adopt_existing_terminal() then
       if focus then
         focus_terminal() -- Focus recovered terminal
       end
       -- If focus=false, preserve user context by staying in current window
     else
-      if not open_terminal(cmd_string, env_table, effective_config, focus) then
-        vim.notify("Failed to open Claude terminal using native fallback.", vim.log.levels.ERROR)
-      end
+      open_terminal(cmd_string, env_table, effective_config, focus)
     end
   end
 end
@@ -342,18 +445,11 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- No terminal process exists, check if there's an existing one we lost track of
-      local existing_buf, existing_win = find_existing_claude_terminal()
-      if existing_buf and existing_win then
-        -- Recover the existing terminal
-        bufnr = existing_buf
-        winid = existing_win
-        logger.debug("terminal", "Recovered existing Claude terminal")
+      if adopt_existing_terminal() then
         focus_terminal()
       else
         -- No existing terminal found, create a new one
-        if not open_terminal(cmd_string, env_table, effective_config) then
-          vim.notify("Failed to open Claude terminal using native fallback (simple_toggle).", vim.log.levels.ERROR)
-        end
+        open_terminal(cmd_string, env_table, effective_config)
       end
     end
   end
@@ -390,16 +486,10 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
     end
   else
     -- No terminal process exists, check if there's an existing one we lost track of
-    local existing_buf, existing_win = find_existing_claude_terminal()
-    if existing_buf and existing_win then
-      -- Recover the existing terminal
-      bufnr = existing_buf
-      winid = existing_win
-      logger.debug("terminal", "Recovered existing Claude terminal")
-
+    if adopt_existing_terminal() then
       -- Check if we're currently in this recovered terminal
       local current_win_id = vim.api.nvim_get_current_win()
-      if existing_win == current_win_id then
+      if winid == current_win_id then
         -- We're in the recovered terminal, hide it
         hide_terminal()
       else
@@ -408,9 +498,7 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- No existing terminal found, create a new one
-      if not open_terminal(cmd_string, env_table, effective_config) then
-        vim.notify("Failed to open Claude terminal using native fallback (focus_toggle).", vim.log.levels.ERROR)
-      end
+      open_terminal(cmd_string, env_table, effective_config)
     end
   end
 end

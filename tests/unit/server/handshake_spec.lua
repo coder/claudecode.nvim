@@ -276,4 +276,29 @@ describe("WebSocket handshake authentication", function()
       assert.equals("Authentication token too long (max 500 characters)", error_msg)
     end)
   end)
+
+  describe("constant_time_compare", function()
+    local utils = require("claudecode.server.utils")
+
+    it("returns true for identical strings", function()
+      assert.is_true(utils.constant_time_compare("abcdef0123456789", "abcdef0123456789"))
+    end)
+
+    it("returns false for strings that differ in content", function()
+      assert.is_false(utils.constant_time_compare("abcdef0123456789", "abcdef012345678X"))
+    end)
+
+    it("returns false for strings of different length", function()
+      assert.is_false(utils.constant_time_compare("abc", "abcd"))
+    end)
+
+    it("returns false for non-string inputs", function()
+      assert.is_false(utils.constant_time_compare(nil, "abc"))
+      assert.is_false(utils.constant_time_compare("abc", nil))
+    end)
+
+    it("returns true for two empty strings", function()
+      assert.is_true(utils.constant_time_compare("", ""))
+    end)
+  end)
 end)

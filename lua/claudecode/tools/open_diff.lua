@@ -32,8 +32,9 @@ local schema = {
 ---Opens a diff view and blocks until user interaction (save/close).
 ---Returns MCP-compliant response with content array format.
 ---@param params table The input parameters for the tool
+---@param client table|nil The MCP client that invoked the tool (used to clean up the diff if the client disconnects)
 ---@return table response MCP-compliant response with content array
-local function handler(params)
+local function handler(params, client)
   -- Validate required parameters
   local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
   for _, param_name in ipairs(required_params) do
@@ -67,7 +68,8 @@ local function handler(params)
     params.old_file_path,
     params.new_file_path,
     params.new_file_contents,
-    params.tab_name
+    params.tab_name,
+    client and client.id or nil
   )
 
   if not success then

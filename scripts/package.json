@@ -1,0 +1,11 @@
+{
+  "name": "claudecode.nvim-release-tools",
+  "private": true,
+  "devDependencies": {
+    "prettier": "3.8.4",
+    "release-please": "17.9.0"
+  },
+  "scripts": {
+    "test:release-please-runner": "node test-release-please-runner.js"
+  }
+}

@@ -6,6 +6,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 local jobid = nil
 ---@type ClaudeCodeTerminalConfig
@@ -62,8 +63,9 @@ function M.open(cmd_string, env_table)
 
     -- Result can be either a string or a table
     if type(result) == "string" then
-      -- Parse the string into command parts
-      cmd_parts = vim.split(result, " ")
+      -- Shell-aware parse (quotes/escapes + leading ~) so it stays consistent
+      -- with the native/snacks providers (see utils.parse_command).
+      cmd_parts = utils.parse_command(result)
       full_command = result
     elseif type(result) == "table" then
       -- Use the table directly as command parts
@@ -109,7 +111,7 @@ function M.open(cmd_string, env_table)
       return
     end
 
-    cmd_parts = vim.split(full_command, " ")
+    cmd_parts = utils.parse_command(full_command)
   else
     vim.notify("external_terminal_cmd must be a string or function, got: " .. type(external_cmd), vim.log.levels.ERROR)
     return
@@ -119,7 +121,7 @@ function M.open(cmd_string, env_table)
   -- Set cwd for jobstart when available to improve robustness even if the terminal ignores it
   cwd_for_jobstart = cwd_for_jobstart or (vim.fn.getcwd and vim.fn.getcwd() or nil)
 
-  jobid = vim.fn.jobstart(cmd_parts, {
+  local started, jobstart_result = pcall(vim.fn.jobstart, cmd_parts, {
     detach = true,
     env = env_table,
     cwd = cwd_for_jobstart,
@@ -131,9 +133,11 @@ function M.open(cmd_string, env_table)
       end)
     end,
   })
+  jobid = started and jobstart_result or nil
 
   if not jobid or jobid <= 0 then
-    vim.notify("Failed to start external terminal with command: " .. full_command, vim.log.levels.ERROR)
+    local reason = started and "" or (". " .. tostring(jobstart_result))
+    vim.notify("Failed to start external terminal with command: " .. full_command .. reason, vim.log.levels.ERROR)
     cleanup_state()
     return
   end

@@ -118,6 +118,21 @@ describe("WebSocket Server", function()
     expect(type(server.state.handlers["tools/list"])).to_be("function") -- Function, not table
   end)
 
+  it("should not advertise unsupported MCP resources", function()
+    server.register_handlers()
+
+    vim.empty_dict = vim.empty_dict or function()
+      return {}
+    end
+
+    local result = server.state.handlers["initialize"]({}, {})
+
+    expect(result).to_be_table()
+    expect(result.capabilities).to_be_table()
+    expect(result.capabilities.resources).to_be_nil()
+    expect(result.capabilities.tools).to_be_table()
+  end)
+
   it("should send message to client", function()
     -- Start server first
     local config = { port_range = { min = 10000, max = 65535 } }
@@ -170,6 +185,61 @@ describe("WebSocket Server", function()
 
     -- Clean up
     server.stop()
+  end)
+
+  describe("invalid JSON-RPC messages", function()
+    local tcp = require("claudecode.server.tcp")
+    local original = {}
+    local encoded
+
+    before_each(function()
+      original.server = server.state.server
+      original.send_to_client = tcp.send_to_client
+      original.decode = vim.json.decode
+      original.encode = vim.json.encode
+      original.null = vim.NIL
+      server.state.server = {}
+      tcp.send_to_client = function() end
+      vim.NIL = setmetatable({}, { __name = "vim.NIL" })
+      encoded = {}
+      vim.json.encode = function(value)
+        table.insert(encoded, value)
+        return ""
+      end
+    end)
+
+    after_each(function()
+      server.state.server = original.server
+      tcp.send_to_client = original.send_to_client
+      vim.json.decode = original.decode
+      vim.json.encode = original.encode
+      vim.NIL = original.null
+    end)
+
+    for _, payload in ipairs({ "5", "true", "false", '"text"' }) do
+      it("answers -32600 with a JSON null id for payload " .. payload, function()
+        vim.json.decode = _G.json_decode
+
+        local ok, err = pcall(server._handle_message, { id = "test_client" }, payload)
+
+        assert.is_true(ok, tostring(err))
+        expect(#encoded).to_be(1)
+        expect(encoded[1].id).to_be(vim.NIL)
+        expect(encoded[1].error.code).to_be(-32600)
+      end)
+    end
+
+    it("answers -32700 with a JSON null id when the message is not JSON", function()
+      vim.json.decode = function()
+        error("Expected value but found invalid token")
+      end
+
+      server._handle_message({ id = "test_client" }, "{not json")
+
+      expect(#encoded).to_be(1)
+      expect(encoded[1].id).to_be(vim.NIL)
+      expect(encoded[1].error.code).to_be(-32700)
+    end)
   end)
 
   describe("authentication integration", function()

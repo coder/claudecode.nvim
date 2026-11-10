@@ -4,6 +4,8 @@
 # Each test file is run separately with test_file
 
 set -e
+# pipefail: don't let `tee` mask a failing nvim in the pipe below
+set -o pipefail
 
 echo "=== Running Integration Tests Individually ==="
 
@@ -26,8 +28,8 @@ run_test_file() {
   local temp_output
   temp_output=$(mktemp)
 
-  # Run the test with timeout
-  if timeout 30s nix develop .#ci -c nvim --headless -u tests/minimal_init.lua \
+  # Run the test with timeout (nvim from PATH: action-setup-vim in CI, mise locally)
+  if timeout 30s nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
     2>&1 | tee "$temp_output"; then
     EXIT_CODE=0
@@ -92,7 +94,7 @@ if [[ ${#FAILED_FILES[@]} -gt 0 ]]; then
 fi
 
 # Exit with appropriate code
-if [[ $TOTAL_FAILED -eq 0 ]] && [[ $TOTAL_ERRORS -eq 0 ]]; then
+if [[ ${#FAILED_FILES[@]} -eq 0 ]]; then
   echo ""
   echo "✅ All integration tests passed!"
   exit 0

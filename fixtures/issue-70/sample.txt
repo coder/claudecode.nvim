@@ -1,0 +1,7 @@
+sample file for issue #70 reproduction
+
+These lines are what the fixture sends to Claude as an @ mention via
+:Issue70Send. When the launched Claude cannot connect back to the plugin's
+WebSocket server, this mention is queued and then cleared after ~10s with:
+
+  [ClaudeCode] [queue] [ERROR] Connection timeout - clearing 1 queued @ mentions

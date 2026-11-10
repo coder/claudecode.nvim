@@ -181,8 +181,8 @@ describe("Config module", function()
       log_level = "debug",
       track_selection = false,
       models = {
-        { name = "Claude Opus 4 (Latest)", value = "claude-opus-4-20250514" },
-        { name = "Claude Sonnet 4 (Latest)", value = "claude-sonnet-4-20250514" },
+        { name = "Claude Opus 4.8", value = "claude-opus-4-8" },
+        { name = "Claude Sonnet 4.6", value = "claude-sonnet-4-6" },
       },
     }
 

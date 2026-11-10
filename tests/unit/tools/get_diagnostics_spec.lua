@@ -31,8 +31,9 @@ describe("Tool: get_diagnostics", function()
       return "/path/to/file_for_buf_" .. tostring(bufnr) .. ".lua"
     end)
     _G.vim.json.encode = spy.new(function(obj)
-      return vim.inspect(obj) -- Use vim.inspect as a simple serialization
+      return require("tests.busted_setup").json_encode(obj)
     end)
+    _G.vim.uri_from_fname = nil
     _G.vim.fn.bufnr = spy.new(function(filepath)
       -- Mock buffer lookup
       if filepath == "/test/file.lua" then
@@ -61,23 +62,38 @@ describe("Tool: get_diagnostics", function()
     _G.vim.json.encode = nil
     _G.vim.fn.bufnr = nil
     _G.vim.uri_to_fname = nil
+    _G.vim.uri_from_fname = nil
     _G.vim.startswith = nil
     -- Note: We don't nullify _G.vim.lsp or _G.vim.diagnostic entirely
     -- as they are checked for existence.
   end)
 
-  it("should return an empty list if no diagnostics are found", function()
+  it("should return an empty diagnostic file list if no diagnostics are found", function()
     local success, result = pcall(get_diagnostics_handler, {})
     expect(success).to_be_true()
     expect(result).to_be_table()
     expect(result.content).to_be_table()
-    expect(#result.content).to_be(0)
+    expect(#result.content).to_be(1)
+    expect(result.content[1].type).to_be("text")
+
+    local diagnostic_files = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#diagnostic_files).to_be(0)
     assert.spy(_G.vim.diagnostic.get).was_called_with(nil)
   end)
 
-  it("should return formatted diagnostics if available", function()
+  it("should return diagnostics in Claude Code DiagnosticFile format", function()
     local mock_diagnostics = {
-      { bufnr = 1, lnum = 10, col = 5, severity = 1, message = "Error message 1", source = "linter1" },
+      {
+        bufnr = 1,
+        lnum = 10,
+        col = 5,
+        end_lnum = 10,
+        end_col = 12,
+        severity = 1,
+        message = "Error message 1",
+        source = "linter1",
+        code = 123,
+      },
       { bufnr = 2, lnum = 20, col = 15, severity = 2, message = "Warning message 2", source = "linter2" },
     }
     _G.vim.diagnostic.get = spy.new(function()
@@ -87,23 +103,26 @@ describe("Tool: get_diagnostics", function()
     local success, result = pcall(get_diagnostics_handler, {})
     expect(success).to_be_true()
     expect(result.content).to_be_table()
-    expect(#result.content).to_be(2)
-
-    -- Check that results are MCP content items
+    expect(#result.content).to_be(1)
     expect(result.content[1].type).to_be("text")
-    expect(result.content[2].type).to_be("text")
+    assert.spy(_G.vim.json.encode).was_called(1)
 
-    -- Verify JSON encoding was called with correct structure
-    assert.spy(_G.vim.json.encode).was_called(2)
+    local diagnostic_files = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#diagnostic_files).to_be(2)
 
-    -- Check the first diagnostic was encoded with 1-indexed values
-    local first_call_args = _G.vim.json.encode.calls[1].vals[1]
-    expect(first_call_args.filePath).to_be("/path/to/file_for_buf_1.lua")
-    expect(first_call_args.line).to_be(11) -- 10 + 1 for 1-indexing
-    expect(first_call_args.character).to_be(6) -- 5 + 1 for 1-indexing
-    expect(first_call_args.severity).to_be(1)
-    expect(first_call_args.message).to_be("Error message 1")
-    expect(first_call_args.source).to_be("linter1")
+    expect(diagnostic_files[1].uri).to_be("file:///path/to/file_for_buf_1.lua")
+    expect(#diagnostic_files[1].diagnostics).to_be(1)
+    expect(diagnostic_files[1].diagnostics[1].message).to_be("Error message 1")
+    expect(diagnostic_files[1].diagnostics[1].severity).to_be("Error")
+    expect(diagnostic_files[1].diagnostics[1].range.start.line).to_be(10)
+    expect(diagnostic_files[1].diagnostics[1].range.start.character).to_be(5)
+    expect(diagnostic_files[1].diagnostics[1].range["end"].line).to_be(10)
+    expect(diagnostic_files[1].diagnostics[1].range["end"].character).to_be(12)
+    expect(diagnostic_files[1].diagnostics[1].source).to_be("linter1")
+    expect(diagnostic_files[1].diagnostics[1].code).to_be("123")
+
+    expect(diagnostic_files[2].uri).to_be("file:///path/to/file_for_buf_2.lua")
+    expect(diagnostic_files[2].diagnostics[1].severity).to_be("Warning")
 
     assert.spy(_G.vim.api.nvim_buf_get_name).was_called_with(1)
     assert.spy(_G.vim.api.nvim_buf_get_name).was_called_with(2)
@@ -131,10 +150,10 @@ describe("Tool: get_diagnostics", function()
     expect(success).to_be_true()
     expect(#result.content).to_be(1)
 
-    -- Verify only the diagnostic with a file path was included
-    assert.spy(_G.vim.json.encode).was_called(1)
-    local encoded_args = _G.vim.json.encode.calls[1].vals[1]
-    expect(encoded_args.filePath).to_be("/path/to/file1.lua")
+    local diagnostic_files = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#diagnostic_files).to_be(1)
+    expect(diagnostic_files[1].uri).to_be("file:///path/to/file1.lua")
+    expect(#diagnostic_files[1].diagnostics).to_be(1)
   end)
 
   it("should error if vim.diagnostic.get is not available", function()
@@ -187,6 +206,11 @@ describe("Tool: get_diagnostics", function()
     local success, result = pcall(get_diagnostics_handler, { uri = "file:///test/file.lua" })
     expect(success).to_be_true()
     expect(#result.content).to_be(1)
+
+    local diagnostic_files = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(#diagnostic_files).to_be(1)
+    expect(diagnostic_files[1].uri).to_be("file:///test/file.lua")
+    expect(diagnostic_files[1].diagnostics[1].message).to_be("Error in file1")
 
     -- Should have used vim.uri_to_fname to convert URI to file path
     assert.spy(_G.vim.uri_to_fname).was_called_with("file:///test/file.lua")
