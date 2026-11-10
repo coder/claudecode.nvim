@@ -259,6 +259,15 @@ describe("WebSocket Server", function()
     add_client("c", "EPIPE")
     add_client("d", "EPIPE")
     results.sync = server.broadcast("m", {}, on_written)
+    local sync_failed_reports = vim.deepcopy(reports)
+    -- Writes that finish at once, one failed and two succeeded: the report must wait for the last of them, whatever
+    -- order pairs() visits the clients in.
+    server.state.server.clients = {}
+    reports = {}
+    add_client("e", "EPIPE")
+    add_client("f", false)
+    add_client("g", false)
+    results.sync_mixed = server.broadcast("m", {}, on_written)
 
     server.state.server.clients = {}
     server.stop()
@@ -270,7 +279,9 @@ describe("WebSocket Server", function()
     assert.equals(0, reports_after_first_write)
     assert.same({ 1 }, async_reports)
     assert.is_true(results.sync)
-    assert.same({ 0 }, reports)
+    assert.same({ 0 }, sync_failed_reports)
+    assert.is_true(results.sync_mixed)
+    assert.same({ 2 }, reports)
   end)
 
   describe("invalid JSON-RPC messages", function()

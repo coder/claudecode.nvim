@@ -423,6 +423,23 @@ describe("The @ mention queue", function()
     assert.matches("connection failed while the @ mention /project/a%.lua was sent", errors[1])
   end)
 
+  it("H: with disable_broadcast_debouncing, a send whose write fails shows an error with the absolute path", function()
+    claudecode.state.config.disable_broadcast_debouncing = true
+    local claude = claude_connects()
+    claude.handshake()
+    run(1000)
+    claude.write_error = "ECONNRESET"
+    send("src/a.lua")
+    -- The send went out at once: nothing waits in the queue, and no flush is due.
+    assert.same({}, claudecode.state.mention_queue)
+    assert.is_nil(claudecode.state.mention_timer)
+    run(100)
+
+    assert.same({}, claude.received())
+    assert.equals(1, #errors)
+    assert.matches("connection failed while the @ mention /project/src/a%.lua was sent", errors[1])
+  end)
+
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()
     send("/project/first.lua")
     local claude = claude_connects()
