@@ -1880,7 +1880,7 @@ describe("Range Selection Tests", function()
       -- x on the cursor: the text changes, the cursor stays, TextChanged and CursorMoved fire.
       local function delete_at_cursor(tick, line)
         _G.vim._changedtick = tick
-        _G.vim.test.add_buffer(1, "/path/to/test.lua", { line })
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { line })
         selection.on_cursor_moved()
         selection.on_text_changed()
       end

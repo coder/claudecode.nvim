@@ -28,6 +28,43 @@ local function cursor_unmoved_since_flush(bufnr)
   return pos[1] == caf.pos[1] and pos[2] == caf.pos[2]
 end
 
+---Returns true if the buffer is the Claude terminal, by the same two checks as `update_selection` and the flush.
+---@param bufnr number
+---@return boolean
+local function is_claude_terminal_buffer(bufnr)
+  local buf_name = vim.api.nvim_buf_get_name(bufnr)
+  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+    return true
+  end
+  local claude_term_bufnr = terminal.get_active_terminal_bufnr()
+  return claude_term_bufnr ~= nil and claude_term_bufnr == bufnr
+end
+
+---Forgets the held visual selection: Claude no longer keeps it while the cursor stands still.
+---`latest_selection` is not touched, the next update or the demotion replaces it.
+local function clear_held_state()
+  M.state.last_active_visual_selection = nil
+  M.state.cursor_at_flush = nil
+end
+
+---Ends the hold on a visual selection when its cursor or its text is gone, at the moment that happens. A timer
+---that compares the cursor when it fires does not see a move away and back inside one debounce, and does not see
+---an edit that leaves the cursor where it was. The Claude terminal is not a place the selection left: going there
+---keeps the held selection (issue #246).
+local function end_hold_if_selection_left()
+  local caf = M.state.cursor_at_flush
+  if not caf then
+    return
+  end
+  local current_buf = vim.api.nvim_get_current_buf()
+  if is_claude_terminal_buffer(current_buf) then
+    return
+  end
+  if not cursor_unmoved_since_flush(current_buf) or vim.api.nvim_buf_get_changedtick(current_buf) ~= caf.tick then
+    M.state.cursor_at_flush = nil
+  end
+end
+
 M.state = {
   latest_selection = nil,
   tracking_enabled = false,
@@ -38,9 +75,10 @@ M.state = {
   demotion_timer = nil,
   visual_demotion_delay_ms = 50,
 
-  -- Cursor position captured when a visual selection is flushed on visual-mode exit.
-  -- Demotion only fires once the cursor actually moves away from this position, so a
-  -- held selection persists (see issue #246 and M.flush_visual_selection).
+  -- { bufnr, pos, tick }: buffer, cursor position and changedtick captured when a visual selection
+  -- is flushed on visual-mode exit. Demotion only fires once the cursor actually moves away from
+  -- this position or the buffer's text changes, so a held selection persists (see issue #246 and
+  -- M.flush_visual_selection). on_cursor_moved and on_text_changed clear it when that happens.
   cursor_at_flush = nil,
 
   -- { bufnr, tick } captured when visual mode is entered. Used to detect that an operator
@@ -151,8 +189,9 @@ function M._clear_autocommands()
 end
 
 ---Handles cursor movement events.
----Triggers a debounced update of the selection.
+---Ends the hold on a visual selection the cursor left, then triggers a debounced update of the selection.
 function M.on_cursor_moved()
+  end_hold_if_selection_left()
   M.debounce_update()
 end
 
@@ -164,6 +203,7 @@ end
 ---released in under `debounce_ms` are not lost (issue #246).
 ---Entering visual mode records the buffer's changedtick so the flush can tell an
 ---abandoned selection apart from one consumed by a mutating operator (d/c/>/x...).
+---It also ends the hold on the previous selection: a new selection replaces it.
 function M.on_mode_changed()
   local event = vim.v.event
   if event then
@@ -172,6 +212,7 @@ function M.on_mode_changed()
     if entering_visual then
       local buf = vim.api.nvim_get_current_buf()
       M.state.visual_entry = { bufnr = buf, tick = vim.api.nvim_buf_get_changedtick(buf) }
+      clear_held_state()
     elseif leaving_visual then
       M.flush_visual_selection()
     end
@@ -181,8 +222,9 @@ function M.on_mode_changed()
 end
 
 ---Handles text change events.
----Triggers a debounced update of the selection.
+---Ends the hold on a visual selection whose text changed, then triggers a debounced update of the selection.
 function M.on_text_changed()
+  end_hold_if_selection_left()
   M.debounce_update()
 end
 
@@ -280,12 +322,14 @@ function M.update_selection()
       -- A demotion is already pending. While the cursor is still on the flushed position the
       -- held visual selection must be preserved (an idle re-entry here must not wipe it before
       -- the cursor actually moves -- matters when visual_demotion_delay_ms >= debounce_ms).
-      -- Once the cursor has moved, reflect the immediate cursor position; M.state.latest_selection
-      -- stays the visual one until the timer resolves.
+      -- Once the cursor has left (it moved, or this is another buffer), report the cursor and end the
+      -- hold: M.state.latest_selection is no longer the held selection, and a later return to the
+      -- flushed position must not read as "unmoved".
       if cursor_unmoved_since_flush(current_buf) then
         current_selection = M.state.latest_selection
       else
         current_selection = M.get_cursor_position()
+        clear_held_state()
       end
     elseif
       last_visual
@@ -812,6 +856,8 @@ function M.flush_visual_selection()
   -- residual non-broadcast, not a regression.
   local entry = M.state.visual_entry
   if entry and entry.bufnr == current_buf and vim.api.nvim_buf_get_changedtick(current_buf) ~= entry.tick then
+    -- The operator consumed the selection, and with it any selection held from before.
+    clear_held_state()
     return
   end
 
@@ -820,8 +866,13 @@ function M.flush_visual_selection()
     return
   end
 
-  -- Record the cursor position at flush time so demotion only fires after a real move.
-  M.state.cursor_at_flush = { bufnr = current_buf, pos = vim.api.nvim_win_get_cursor(0) }
+  -- Record the cursor position and changedtick at flush time so demotion only fires after a real
+  -- move or an edit.
+  M.state.cursor_at_flush = {
+    bufnr = current_buf,
+    pos = vim.api.nvim_win_get_cursor(0),
+    tick = vim.api.nvim_buf_get_changedtick(current_buf),
+  }
   M.state.last_active_visual_selection = {
     bufnr = current_buf,
     selection_data = vim.deepcopy(selection),
