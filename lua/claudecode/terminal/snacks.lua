@@ -378,25 +378,23 @@ local function patch_instance(term, config)
   end
 end
 
----The tracked terminal. When none is tracked, adopts the terminal that an earlier copy of this module started (before
----a reload): Snacks keeps its instances, and the Claude buffer keeps its mark. A window may or may not show it.
----@return table|nil terminal
-local function find_terminal()
+---When no terminal is tracked, tracks the one that an earlier copy of this module started (before a reload): Snacks
+---keeps its instances, and the Claude buffer keeps its mark. A window may or may not show it.
+local function adopt_existing_terminal()
   if terminal and terminal:buf_valid() then
-    return terminal
+    return
   end
   -- A terminal gets its mark only after its start succeeded, so the one that M.open is starting is not adopted here.
   if not is_available() or type(Snacks.terminal.list) ~= "function" then
-    return nil
+    return
   end
   for _, instance in ipairs(Snacks.terminal.list()) do
     if instance.buf and owned.is_live(instance.buf, OWNED_MARK) then
       terminal = instance
       require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", instance.buf)
-      return terminal
+      return
     end
   end
-  return nil
 end
 
 ---Stops a Claude that the native provider started before a reload. The provider choice changed since, so nothing
@@ -435,12 +433,13 @@ function M.open(cmd_string, env_table, config, focus)
 
   focus = utils.normalize_focus(focus)
 
-  local existing = find_terminal()
-  if existing then
+  adopt_existing_terminal()
+
+  if terminal and terminal:buf_valid() then
     -- Reuse the existing terminal. Route through cc_show so a hidden terminal is
     -- restored without Snacks destroying+recreating the window (which would climb
     -- Claude's cursor -- #240/#183). cc_show honors config.auto_insert (#232).
-    cc_show(existing, focus, config)
+    cc_show(terminal, focus, config)
     return
   end
 
@@ -450,14 +449,11 @@ function M.open(cmd_string, env_table, config, focus)
     return
   end
 
-  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and the
-  -- lookup below finds it.
-  if stop_native_terminal() then
-    existing = find_terminal()
-    if existing then
-      cc_show(existing, focus, config)
-      return
-    end
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and this
+  -- open shows it.
+  if stop_native_terminal() and terminal and terminal:buf_valid() then
+    cc_show(terminal, focus, config)
+    return
   end
 
   local opts = build_opts(config, env_table, focus)
@@ -532,12 +528,13 @@ function M.close()
   if not is_available() then
     return
   end
-  local closing = find_terminal()
-  if not closing then
+  adopt_existing_terminal()
+  if not (terminal and terminal:buf_valid()) then
     -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
     stop_native_terminal()
     return
   end
+  local closing = terminal
   local closing_bufnr = closing.buf
   local jobid = vim.bo[closing_bufnr].channel
   -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not reuse this one.
@@ -582,7 +579,8 @@ function M.simple_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
-  if find_terminal() then
+  adopt_existing_terminal()
+  if terminal and terminal:buf_valid() then
     if cc_is_visible(terminal) then
       logger.debug("terminal", "Simple toggle: hiding visible terminal")
       cc_hide(terminal)
@@ -608,7 +606,8 @@ function M.focus_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
-  if find_terminal() then
+  adopt_existing_terminal()
+  if terminal and terminal:buf_valid() then
     if not cc_is_visible(terminal) then
       -- Terminal exists but is hidden -> show and focus it.
       logger.debug("terminal", "Focus toggle: showing hidden terminal")
@@ -640,9 +639,11 @@ end
 ---Get the active terminal buffer number
 ---@return number?
 function M.get_active_bufnr()
-  local current = find_terminal()
-  if current and current.buf and vim.api.nvim_buf_is_valid(current.buf) then
-    return current.buf
+  adopt_existing_terminal()
+  if terminal and terminal:buf_valid() and terminal.buf then
+    if vim.api.nvim_buf_is_valid(terminal.buf) then
+      return terminal.buf
+    end
   end
   return nil
 end
