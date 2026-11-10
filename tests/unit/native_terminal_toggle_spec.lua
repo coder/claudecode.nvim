@@ -1669,11 +1669,12 @@ describe("claudecode.terminal.native toggle behavior", function()
 
     describe("a Claude that the snacks provider started", function()
       local snacks_bufnr, snacks_winid, snacks_jobid = 50, 500, 5000
-      local snacks_closed, notices
+      local snacks_closed, notices, snacks_available
 
       before_each(function()
         local mock_state = _G.get_mock_state()
         snacks_closed = 0
+        snacks_available = true
         notices = {}
         mock_vim.log = { levels = { WARN = 3, ERROR = 4 } }
         mock_vim.notify = function(message, level)
@@ -1690,7 +1691,7 @@ describe("claudecode.terminal.native toggle behavior", function()
         -- The snacks provider stops its own Claude and wipes the buffer.
         package.loaded["claudecode.terminal.snacks"] = {
           is_available = function()
-            return true
+            return snacks_available
           end,
           close = function()
             snacks_closed = snacks_closed + 1
@@ -1703,6 +1704,7 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       after_each(function()
         package.loaded["claudecode.terminal.snacks"] = nil
+        package.preload["claudecode.terminal.snacks"] = nil
       end)
 
       for _, entry in ipairs(entries) do
@@ -1720,6 +1722,101 @@ describe("claudecode.terminal.native toggle behavior", function()
           assert.is_not_nil(native_provider.get_active_bufnr())
         end)
       end
+
+      -- The snacks provider cannot stop a Claude that it cannot find or load. The native provider stops the marked
+      -- buffer itself.
+      local function assert_stopped_directly()
+        local mock_state = _G.get_mock_state()
+        assert.is_nil(mock_state.running_jobs[snacks_jobid])
+        assert.is_nil(mock_state.buffers[snacks_bufnr])
+        assert.are.equal(1, #notices)
+        assert.are.equal(mock_vim.log.levels.WARN, notices[1].level)
+        assert.are.equal(1, running_count())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+      end
+
+      it("should be stopped directly when the snacks provider is not available", function()
+        snacks_available = false
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(0, snacks_closed)
+        assert_stopped_directly()
+      end)
+
+      it("should be stopped directly when the snacks provider cannot load", function()
+        package.loaded["claudecode.terminal.snacks"] = nil
+        package.preload["claudecode.terminal.snacks"] = function()
+          error("module 'claudecode.terminal.snacks' cannot load")
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert_stopped_directly()
+      end)
+
+      it("should be stopped directly when the snacks provider finds no terminal to stop", function()
+        package.loaded["claudecode.terminal.snacks"].close = function()
+          snacks_closed = snacks_closed + 1
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(1, snacks_closed)
+        assert_stopped_directly()
+      end)
+
+      it("should not be reported as stopped when its buffer survives the stop", function()
+        local mock_state = _G.get_mock_state()
+        snacks_available = false
+        local delete = mock_vim.api.nvim_buf_delete
+        mock_vim.api.nvim_buf_delete = function(bufnr, opts)
+          if bufnr ~= snacks_bufnr then
+            delete(bufnr, opts)
+          end
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert.is_not_nil(mock_state.buffers[snacks_bufnr])
+        assert.are.same({}, notices)
+      end)
+
+      -- Stopping a Claude waits for its job to exit, which runs scheduled callbacks and TermClose autocmds. An open()
+      -- among them starts Claude, and the open that started the stop must not start another.
+      it("should not start a second terminal when an open runs while the snacks provider stops its Claude", function()
+        local mock_state = _G.get_mock_state()
+        local close = package.loaded["claudecode.terminal.snacks"].close
+        package.loaded["claudecode.terminal.snacks"].close = function()
+          close()
+          native_provider.open("claude", {}, config)
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(1, running_count())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+        assert.is_nil(mock_state.running_jobs[snacks_jobid])
+      end)
+
+      it("should not start a second terminal when a TermClose autocmd opens while the stop waits", function()
+        snacks_available = false
+        local opened = false
+        mock_vim.api.nvim_create_autocmd("TermClose", {
+          callback = function()
+            if not opened then
+              opened = true
+              native_provider.open("claude", {}, config)
+            end
+          end,
+        })
+
+        native_provider.open("claude", {}, config)
+
+        assert.is_true(opened)
+        assert.are.equal(1, running_count())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+      end)
 
       it("should be stopped when close runs and the native provider tracks no terminal", function()
         local mock_state = _G.get_mock_state()

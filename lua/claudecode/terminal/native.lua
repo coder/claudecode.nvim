@@ -155,16 +155,11 @@ end
 ---Stops a Claude that the snacks provider started before a reload. The provider choice changed since, so nothing
 ---controls that Claude, and it would run beside the one that this provider starts.
 local function stop_snacks_terminal()
-  if not owned.find(owned.SNACKS_MARK) then
-    return
-  end
-  local ok, snacks_provider = pcall(require, "claudecode.terminal.snacks")
-  if ok and snacks_provider.is_available() then
+  if owned.stop_other(owned.SNACKS_MARK, "snacks") then
     vim.notify(
       "Stopped the Claude that the snacks provider started, because the native provider is in use.",
       vim.log.levels.WARN
     )
-    snacks_provider.close()
   end
 end
 

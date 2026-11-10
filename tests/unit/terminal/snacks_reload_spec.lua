@@ -7,6 +7,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
   local original_vim
   local state
   local started -- every Snacks.terminal.open call
+  local notices -- every vim.notify call
   local config = { cwd = "/w", split_side = "right", split_width_percentage = 0.3, auto_close = true }
 
   local function windows_showing(bufnr)
@@ -77,6 +78,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
   before_each(function()
     original_vim = vim
     started = {}
+    notices = {}
     state = {
       buffers = {},
       windows = {},
@@ -84,6 +86,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
       running_jobs = {},
       exiting_jobs = {},
       scheduled = {},
+      term_close_autocmds = {},
       next_bufnr = 1,
       next_jobid = 7,
       next_win = 1000,
@@ -92,7 +95,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
     _G.vim = {
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
-      notify = function() end,
+      notify = function(message, level)
+        table.insert(notices, { message = message, level = level })
+      end,
       schedule = function(fn)
         table.insert(state.scheduled, fn)
       end,
@@ -168,6 +173,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
             if buf.jobid == id and buf.on_term_close then
               buf.on_term_close({ buf = bufnr })
             end
+            if buf.jobid == id then
+              for _, callback in ipairs(state.term_close_autocmds) do
+                callback({ buf = bufnr })
+              end
+            end
           end
         end
         while #state.scheduled > 0 do
@@ -204,6 +214,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
         nvim_create_autocmd = function(event, opts)
           if event == "TermClose" and opts.buffer and state.buffers[opts.buffer] then
             state.buffers[opts.buffer].on_term_close = opts.callback
+          elseif event == "TermClose" and not opts.buffer then
+            table.insert(state.term_close_autocmds, opts.callback)
           end
         end,
         nvim_win_is_valid = function(win)
@@ -266,6 +278,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     package.loaded["claudecode.terminal.snacks"] = nil
     package.loaded["claudecode.terminal.owned"] = nil
     package.loaded["claudecode.terminal.native"] = nil
+    package.preload["claudecode.terminal.native"] = nil
   end)
 
   local entries = {
@@ -371,6 +384,22 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end)
   end
 
+  it("keeps the tracked terminal when another marked terminal is listed first", function()
+    snacks_provider.open("claude", {}, config, true)
+    local claude = started[1]
+    reload_snacks()
+    snacks_provider.open("claude", {}, config, true)
+    assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+    -- Snacks lists a second marked terminal before the tracked one.
+    local other = snacks_open("claude", { win = {} })
+    state.buffers[other.buf].vars.claudecode_snacks_terminal = true
+    state.terminals[#state.terminals] = nil
+    table.insert(state.terminals, 1, other)
+
+    assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+    assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+  end)
+
   it("starts a new Claude when the earlier one exited", function()
     snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
     state.running_jobs[state.buffers[started[1].buf].jobid] = nil
@@ -383,15 +412,19 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
   describe("a Claude that the native provider started", function()
     local native_bufnr, native_jobid = 50, 5000
-    local native_closed
+    local native_closed, native_available
 
     before_each(function()
       native_closed = 0
+      native_available = true
       state.buffers[native_bufnr] = { jobid = native_jobid, vars = { claudecode_native_terminal = true } }
       state.windows[500] = { buf = native_bufnr }
       state.running_jobs[native_jobid] = true
       -- The native provider stops its own Claude and deletes the buffer.
       package.loaded["claudecode.terminal.native"] = {
+        is_available = function()
+          return native_available
+        end,
         close = function()
           native_closed = native_closed + 1
           state.running_jobs[native_jobid] = nil
@@ -407,6 +440,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
         start()
 
         assert.are.equal(1, native_closed)
+        assert.are.equal(1, #notices)
+        assert.are.equal(vim.log.levels.WARN, notices[1].level)
         assert.is_nil(state.running_jobs[native_jobid])
         assert.are.equal(1, #started)
         assert.are.equal(1, running_count())
@@ -417,7 +452,101 @@ describe("claudecode.terminal.snacks after a module reload", function()
       snacks_provider.close()
 
       assert.are.equal(1, native_closed)
+      assert.are.equal(1, #notices)
+      assert.are.equal(vim.log.levels.WARN, notices[1].level)
       assert.is_nil(state.running_jobs[native_jobid])
+    end)
+
+    -- The native provider cannot stop a Claude that it cannot find or load. The snacks provider stops the marked
+    -- buffer itself.
+    local function assert_stopped_directly()
+      assert.is_nil(state.running_jobs[native_jobid])
+      assert.is_nil(state.buffers[native_bufnr])
+      assert.are.equal(1, #notices)
+      assert.are.equal(vim.log.levels.WARN, notices[1].level)
+    end
+
+    it("is stopped directly when the native provider is not available", function()
+      native_available = false
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal(0, native_closed)
+      assert_stopped_directly()
+      assert.are.equal(1, #started)
+      assert.are.equal(1, running_count())
+    end)
+
+    it("is stopped directly when the native provider cannot load", function()
+      package.loaded["claudecode.terminal.native"] = nil
+      package.preload["claudecode.terminal.native"] = function()
+        error("module 'claudecode.terminal.native' cannot load")
+      end
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert_stopped_directly()
+      assert.are.equal(1, #started)
+      assert.are.equal(1, running_count())
+    end)
+
+    it("is stopped directly when the native provider finds no terminal to stop", function()
+      package.loaded["claudecode.terminal.native"].close = function()
+        native_closed = native_closed + 1
+      end
+
+      snacks_provider.close()
+
+      assert.are.equal(1, native_closed)
+      assert_stopped_directly()
+    end)
+
+    it("is not reported as stopped when its buffer survives the stop", function()
+      native_available = false
+      local delete = vim.api.nvim_buf_delete
+      vim.api.nvim_buf_delete = function(bufnr)
+        if bufnr ~= native_bufnr then
+          delete(bufnr)
+        end
+      end
+
+      snacks_provider.close()
+
+      assert.is_not_nil(state.buffers[native_bufnr])
+      assert.are.same({}, notices)
+    end)
+
+    -- Stopping a Claude waits for its job to exit, which runs scheduled callbacks and TermClose autocmds. An open()
+    -- among them starts Claude, and the open that started the stop must not start another.
+    it("does not start a second Claude when an open runs while the native provider stops its Claude", function()
+      local close = package.loaded["claudecode.terminal.native"].close
+      package.loaded["claudecode.terminal.native"].close = function()
+        close()
+        snacks_provider.open("claude", {}, config, true)
+      end
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal(1, #started)
+      assert.are.equal(1, running_count())
+      assert.are.equal(started[1], snacks_provider._get_terminal_for_test())
+    end)
+
+    it("does not start a second Claude when a TermClose autocmd opens while the stop waits", function()
+      native_available = false
+      local opened = false
+      table.insert(state.term_close_autocmds, function()
+        if not opened then
+          opened = true
+          snacks_provider.open("claude", {}, config, true)
+        end
+      end)
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.is_true(opened)
+      assert.are.equal(1, #started)
+      assert.are.equal(1, running_count())
     end)
 
     it("is left alone when the snacks provider finds its own terminal", function()

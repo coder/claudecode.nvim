@@ -39,4 +39,61 @@ function M.find(mark)
   return nil
 end
 
+-- Stops the job in a marked buffer and deletes the buffer, without the provider that started it. Deleting a terminal
+-- buffer while a write to its job is pending hangs Neovim (neovim/neovim#42508), so the delete waits for TermClose.
+---@param buf number
+---@param mark string
+---@return boolean stopped whether the buffer is gone
+local function stop_buffer(buf, mark)
+  -- The wait runs scheduled callbacks. A provider's open() among them must not adopt the buffer that is being stopped.
+  vim.b[buf][mark] = nil
+  local exited = false
+  vim.api.nvim_create_autocmd("TermClose", {
+    buffer = buf,
+    once = true,
+    callback = function()
+      exited = true
+    end,
+  })
+  if vim.fn.jobstop(vim.bo[buf].channel) == 1 then
+    -- A user's TermClose autocmd can delete the buffer first, and that also removes this buffer-local autocmd.
+    vim.wait(1000, function()
+      return exited or not vim.api.nvim_buf_is_valid(buf)
+    end, 10)
+  end
+  if vim.api.nvim_buf_is_valid(buf) then
+    vim.api.nvim_buf_delete(buf, { force = true })
+  end
+  return not vim.api.nvim_buf_is_valid(buf)
+end
+
+---Stops every live Claude that the other built-in provider marked. After a reload the provider choice can differ
+---from the one that started that Claude, and the provider in use cannot control it.
+---The other provider stops its own Claude quietly, when its module loads and still finds the terminal. Otherwise, and
+---for what it leaves running, the marked buffer is stopped and deleted here.
+---@param mark string The other provider's mark
+---@param provider_name string The other provider's module name under claudecode.terminal
+---@return boolean stopped true when a live Claude was found and every one is gone
+function M.stop_other(mark, provider_name)
+  if not M.find(mark) then
+    return false
+  end
+  local ok, provider = pcall(require, "claudecode.terminal." .. provider_name)
+  if ok and provider.is_available() then
+    provider.close()
+  end
+  local buf = M.find(mark)
+  while buf do
+    if not stop_buffer(buf, mark) then
+      require("claudecode.logger").error(
+        "terminal",
+        "Could not stop the Claude that the " .. provider_name .. " provider started."
+      )
+      return false
+    end
+    buf = M.find(mark)
+  end
+  return true
+end
+
 return M

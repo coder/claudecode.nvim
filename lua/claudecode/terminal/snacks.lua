@@ -401,18 +401,13 @@ end
 ---controls that Claude, and it would run beside the one that this provider starts.
 ---@return boolean stopped
 local function stop_native_terminal()
-  if not owned.find(owned.NATIVE_MARK) then
-    return false
-  end
-  local ok, native_provider = pcall(require, "claudecode.terminal.native")
-  if not ok then
+  if not owned.stop_other(owned.NATIVE_MARK, "native") then
     return false
   end
   vim.notify(
     "Stopped the Claude that the native provider started, because the snacks provider is in use.",
     vim.log.levels.WARN
   )
-  native_provider.close()
   return true
 end
 
