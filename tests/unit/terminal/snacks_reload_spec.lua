@@ -324,6 +324,22 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end)
   end
 
+  -- A toggle treats the adopted terminal as it treats a tracked one: it hides a visible terminal.
+  for _, entry in ipairs({ entries[2], entries[3] }) do
+    local entry_name, toggle = entry[1], entry[2]
+    it("hides the running Claude when " .. entry_name .. " runs and Claude is visible", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      reload_snacks()
+
+      toggle()
+
+      assert.are.equal(1, #started)
+      assert.are.equal(1, running_count())
+      assert.are.equal(0, windows_showing(claude.buf))
+    end)
+  end
+
   for _, hidden in ipairs({ false, true }) do
     it("stops the running Claude when close runs (hidden=" .. tostring(hidden) .. ")", function()
       snacks_provider.open("claude", {}, config, true)
