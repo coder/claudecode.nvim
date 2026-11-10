@@ -171,7 +171,7 @@ file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua 41d1edda4b4cb3fa
+file lua/claudecode/terminal/snacks.lua 5b9dbc870301d4fe
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 == lua/claudecode/tools/close_all_diff_tabs.lua
