@@ -1827,7 +1827,22 @@ describe("Range Selection Tests", function()
     end)
 
     describe("a held selection follows the buffer and the cursor", function()
-      local original_get_current_buf
+      local original_get_current_buf, original_get_changedtick
+
+      -- Runs the callback the plugin registered for an event, with the event name as Neovim passes it, so the
+      -- wiring in _create_autocommands is part of every test.
+      local function fire_autocmd(event)
+        local fired = 0
+        for _, autocmd in ipairs(_G.vim._autocmds["ClaudeCodeSelection"].events) do
+          for _, name in ipairs(type(autocmd.events) == "table" and autocmd.events or { autocmd.events }) do
+            if name == event then
+              autocmd.opts.callback({ event = event })
+              fired = fired + 1
+            end
+          end
+        end
+        assert.are.equal(1, fired, "expected one autocmd for " .. event)
+      end
 
       -- Fake timers: a timer runs only when a test fires it. Each helper below is one key or command with the
       -- autocmds it fires, so a test reads like the keys the user typed.
@@ -1874,19 +1889,19 @@ describe("Range Selection Tests", function()
       -- A motion in normal mode: CursorMoved.
       local function move_cursor(col)
         _G.vim.test.set_cursor(0, 1, col)
-        selection.on_cursor_moved()
+        fire_autocmd("CursorMoved")
       end
 
       -- The text changes and TextChanged fires; the cursor stays.
       local function change_text(tick, line)
         _G.vim._changedtick = tick
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { line })
-        selection.on_text_changed()
+        fire_autocmd("TextChanged")
       end
 
       -- x on the cursor: CursorMoved also fires, because the text of the cursor line changed.
       local function delete_at_cursor(tick, line)
-        selection.on_cursor_moved()
+        fire_autocmd("CursorMoved")
         change_text(tick, line)
       end
 
@@ -1896,14 +1911,14 @@ describe("Range Selection Tests", function()
           return bufnr
         end
         _G.vim.test.set_cursor(0, 1, 0)
-        selection.on_cursor_moved(true)
+        fire_autocmd("BufEnter")
       end
 
       -- :b <buffer>, then Neovim restores the buffer's last cursor position (col) and CursorMoved fires.
       local function go_to_buffer(bufnr, col)
         enter_buffer(bufnr)
         _G.vim.test.set_cursor(0, 1, col)
-        selection.on_cursor_moved()
+        fire_autocmd("CursorMoved")
       end
 
       local function assert_claude_holds_cursor(path, col)
@@ -1917,6 +1932,7 @@ describe("Range Selection Tests", function()
 
       before_each(function()
         original_get_current_buf = _G.vim.api.nvim_get_current_buf
+        original_get_changedtick = _G.vim.api.nvim_buf_get_changedtick
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma" })
         _G.vim.test.add_buffer(2, "/path/to/b.txt", { "one two" })
         _G.vim.test.set_cursor(0, 1, 0)
@@ -1924,6 +1940,7 @@ describe("Range Selection Tests", function()
 
       after_each(function()
         _G.vim.api.nvim_get_current_buf = original_get_current_buf
+        _G.vim.api.nvim_buf_get_changedtick = original_get_changedtick
         _G.vim._buffers[2] = nil
       end)
 
@@ -1935,8 +1952,8 @@ describe("Range Selection Tests", function()
         mock_server.last_broadcast = nil
 
         -- CursorMoved fires again at the same position, as it does after x, and the text is the same.
-        selection.on_cursor_moved()
-        selection.on_text_changed()
+        fire_autocmd("CursorMoved")
+        fire_autocmd("TextChanged")
         settle()
 
         assert.are.equal("alpha", selection.get_latest_selection().text)
@@ -1987,7 +2004,7 @@ describe("Range Selection Tests", function()
         _G.vim.test.set_mode("n")
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()
-        selection.on_text_changed()
+        fire_autocmd("TextChanged")
         settle()
 
         assert_claude_holds_cursor("/path/to/a.txt", 0)
@@ -2000,7 +2017,7 @@ describe("Range Selection Tests", function()
         -- The debounce ran in visual mode: Claude holds the live selection, read at changedtick 5.
         _G.vim._marks = { v = { 0, 1, 1, 0 } } -- the anchor of the selection
         _G.vim.test.set_cursor(0, 1, 4)
-        selection.on_cursor_moved()
+        fire_autocmd("CursorMoved")
         fire_debounce()
         assert.are.equal("alpha", selection.get_latest_selection().text)
 
@@ -2154,6 +2171,70 @@ describe("Range Selection Tests", function()
         assert.is_true(events["TextChanged"])
         assert.is_true(events["TextChangedI"])
         assert.is_true(events["TextChangedP"])
+      end)
+
+      -- Neovim fires BufEnter for a new Claude terminal before the buffer has a name and before the provider
+      -- registers it, so terminal.get_active_terminal_bufnr() is still nil then.
+      it("keeps the selection when a new Claude terminal is entered before it is registered", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        mock_server.last_broadcast = nil
+
+        _G.vim.test.add_buffer(2, "", { "" })
+        enter_buffer(2)
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2 -- registered right after BufEnter
+        end
+        settle()
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      it("keeps the selection through a terminal that only its name says is Claude's", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        mock_server.last_broadcast = nil
+
+        -- terminal.provider = "none" with a :terminal buffer: no provider registers it
+        _G.vim.test.add_buffer(2, "term://~/project//4242:claude", { "claude> hello" })
+        go_to_buffer(2, 0)
+        settle()
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      it("does not read the changedtick of the Claude terminal as an edit of the selection", function()
+        local ticks = { [1] = 5, [2] = 5 }
+        _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
+          return ticks[bufnr]
+        end
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        mock_server.last_broadcast = nil
+
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        ticks[2] = 500 -- the terminal's own text changes all the time
+        go_to_buffer(2, 0)
+        settle()
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
       end)
 
       -- Finding 3, SameFile: a long visual_demotion_delay_ms, so the demotion is still pending (it never fires
