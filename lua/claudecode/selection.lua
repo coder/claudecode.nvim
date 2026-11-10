@@ -142,13 +142,20 @@ local function watch_selection_buffer(bufnr)
     return
   end
   M.state.watched_buffers[bufnr] = true
+  local check_scheduled = false
   local function on_changed(_, buf)
     if not holds_selection_of(buf) then
       M.state.watched_buffers[buf] = nil
       return true
     end
-    -- Do not touch the buffer here: it is being changed.
-    vim.schedule(demote_if_selection_text_changed)
+    -- Do not touch the buffer here: it is being changed. One check after a burst of changes (a :%s) is enough.
+    if not check_scheduled then
+      check_scheduled = true
+      vim.schedule(function()
+        check_scheduled = false
+        demote_if_selection_text_changed()
+      end)
+    end
   end
   vim.api.nvim_buf_attach(bufnr, false, {
     on_lines = on_changed,

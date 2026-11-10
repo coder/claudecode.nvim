@@ -2573,7 +2573,7 @@ describe("Range Selection Tests", function()
           assert_claude_holds_cursor("/path/to/a.txt", 2)
         end)
 
-        it("sends the first line when the text has fewer lines than the release position", function()
+        it("keeps the release position inside the lines that are there", function()
           hold_alpha_and_enter_the_terminal()
           _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma", "second", "third" })
           selection.state.cursor_at_flush.pos = { 3, 2 }
@@ -2650,6 +2650,26 @@ describe("Range Selection Tests", function()
 
           assert.are.equal("alpha", selection.get_latest_selection().text)
           assert.is_nil(mock_server.last_broadcast)
+        end)
+
+        it("checks once after a burst of changes, such as a :%s", function()
+          hold_alpha_and_enter_the_terminal()
+          local original_schedule = _G.vim.schedule
+          local queue = {}
+          _G.vim.schedule = function(fn)
+            table.insert(queue, fn)
+          end
+
+          ticks[1] = 6
+          _G.vim.test.add_buffer(1, "/path/to/a.txt", { "beta gamma" })
+          for _ = 1, 5 do
+            fire_buffer_listeners(1, "on_lines")
+          end
+          _G.vim.schedule = original_schedule
+
+          assert.are.equal(1, #queue)
+          queue[1]()
+          assert_claude_holds_cursor("/path/to/a.txt", 4)
         end)
 
         it("stops listening when Claude no longer holds a selection", function()

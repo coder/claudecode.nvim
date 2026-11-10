@@ -133,7 +133,7 @@ file lua/claudecode/lockfile.lua 2746b4c6e0b2b630
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua 0fa651cc95e0af0d
+file lua/claudecode/selection.lua f333af40ed03eb2f
 == lua/claudecode/server/client.lua
 file lua/claudecode/server/client.lua 3454ff62e057b632
 block create_client          647b7523dea26af6
