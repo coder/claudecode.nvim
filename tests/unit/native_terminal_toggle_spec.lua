@@ -1431,6 +1431,31 @@ describe("claudecode.terminal.native toggle behavior", function()
       end
     end
 
+    -- The exit cleanup follows the auto_close of the config that started the job, as the scheduled on_exit does.
+    for _, started_with in ipairs({ true, false }) do
+      it(
+        "should use the auto_close the job started with when open runs in the exit gap with auto_close="
+          .. tostring(not started_with),
+        function()
+          local mock_state = _G.get_mock_state()
+          local start_config = { split_side = "right", split_width_percentage = 0.3, auto_close = started_with }
+          native_provider.open("claude", {}, start_config)
+          local exited_bufnr = native_provider.get_active_bufnr()
+          local run_scheduled = defer_scheduled()
+
+          mock_state.exit_job(exited_bufnr)
+          native_provider.open(
+            "claude",
+            {},
+            { split_side = "right", split_width_percentage = 0.3, auto_close = not started_with }
+          )
+          run_scheduled()
+
+          assert.are.equal(started_with and 0 or 1, windows_showing(exited_bufnr))
+        end
+      )
+    end
+
     for _, focus in ipairs({ true, false }) do
       it(
         "should show Claude when open (focus=" .. tostring(focus) .. ") runs after you showed a file in its window",

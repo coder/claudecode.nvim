@@ -9,6 +9,8 @@ local utils = require("claudecode.utils")
 local bufnr = nil
 local winid = nil
 local jobid = nil
+-- The auto_close of the config that started (or adopted) the tracked job. Its exit handling uses this one.
+local job_auto_close = nil
 local tip_shown = false
 
 -- Set on each terminal buffer this provider starts. Unlike the state above, a buffer variable survives a reload
@@ -22,6 +24,7 @@ local function cleanup_state()
   bufnr = nil
   winid = nil
   jobid = nil
+  job_auto_close = nil
 end
 
 -- nvim_win_close raises E444 for the only window of the only tab page. Floating windows do not count.
@@ -110,10 +113,9 @@ end
 
 ---Runs the exit cleanup of the tracked terminal when its job already ended but the cleanup that on_exit schedules has
 ---not run yet. An open or a toggle in that gap must not show or focus the dead terminal, so each one calls this first.
----@param auto_close boolean|nil
-local function forget_ended_terminal(auto_close)
+local function forget_ended_terminal()
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) and job_ended(bufnr) then
-    forget_exited_job(jobid, auto_close)
+    forget_exited_job(jobid, job_auto_close)
   end
 end
 
@@ -210,6 +212,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
   winid = new_winid
   bufnr = new_bufnr
+  job_auto_close = effective_config.auto_close
   vim.bo[bufnr].bufhidden = "hide"
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen
@@ -371,6 +374,7 @@ local function adopt_existing_terminal()
       for _, win in ipairs(vim.api.nvim_list_wins()) do
         if vim.api.nvim_win_get_buf(win) == buf then
           bufnr, winid, jobid = buf, win, vim.bo[buf].channel
+          job_auto_close = config.auto_close
           local adopted_jobid = jobid
           -- The job's on_exit runs in the module copy that started it, for example the one before a reload.
           -- Clearing the group first keeps one handler per buffer, however many reloads adopt it.
@@ -407,7 +411,7 @@ end
 --- @param focus boolean|nil
 function M.open(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
-  forget_ended_terminal(effective_config.auto_close)
+  forget_ended_terminal()
 
   if is_valid() then
     -- Check if terminal exists but is hidden (no window)
@@ -441,7 +445,7 @@ end
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
 function M.simple_toggle(cmd_string, env_table, effective_config)
-  forget_ended_terminal(effective_config.auto_close)
+  forget_ended_terminal()
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
   local is_visible = has_buffer and is_terminal_visible()
@@ -475,7 +479,7 @@ end
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
 function M.focus_toggle(cmd_string, env_table, effective_config)
-  forget_ended_terminal(effective_config.auto_close)
+  forget_ended_terminal()
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
   local is_visible = has_buffer and is_terminal_visible()
