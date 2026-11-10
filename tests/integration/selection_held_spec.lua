@@ -137,6 +137,101 @@ describe("a held selection with the real plugin", function()
     assert.are.equal(14, held.selection.start.character)
   end)
 
+  -- The Claude terminal keeps a held selection, and Neovim fires TextChanged only for the current buffer. When the
+  -- file changes while you are in the terminal (Claude rewrites it and Neovim reloads it, or a plugin edits it),
+  -- Claude must not keep the text that is gone until you come back.
+  describe("when the file of the held selection changes while you are in the Claude terminal", function()
+    local function path_of(buf)
+      return vim.api.nvim_buf_get_name(buf)
+    end
+
+    -- Neovim reloads a file whose modification time differs from the one it stored.
+    local function rewrite_on_disk_and_reload(buf, line)
+      local path = path_of(buf)
+      vim.fn.writefile({ line }, path)
+      local later = os.time() + 10
+      (vim.uv or vim.loop).fs_utime(path, later, later)
+      vim.cmd("checktime " .. buf)
+    end
+
+    it("reports the cursor when a plugin edits the text, and the file is not in a window", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("terminal sh -c 'sleep 60' claude")
+      local term_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("buffer " .. file_buf)
+      wait(200)
+      select_and_release()
+
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
+      local held = selection.get_latest_selection()
+      assert.is_true(held.selection.isEmpty)
+      assert.are.equal(path_of(file_buf), held.filePath)
+      assert.are.equal(4, held.selection.start.character) -- where you released the selection
+    end)
+
+    it("reports the cursor of the file's window when Neovim reloads the file", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      local file_win = vim.api.nvim_get_current_win()
+      vim.cmd("vsplit | terminal sh -c 'sleep 60' claude") -- the file stays in its own window
+      local term_win = vim.api.nvim_get_current_win()
+      vim.cmd("stopinsert")
+      vim.api.nvim_set_current_win(file_win)
+      wait(200)
+      select_and_release()
+
+      vim.api.nvim_set_current_win(term_win)
+      vim.cmd("stopinsert")
+      wait(300)
+      rewrite_on_disk_and_reload(file_buf, "beta gamma")
+      wait(300)
+
+      assert.are.same({ "beta gamma" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
+      assert.are.equal(term_win, vim.api.nvim_get_current_win())
+      local held = selection.get_latest_selection()
+      assert.is_true(held.selection.isEmpty)
+      assert.are.equal(path_of(file_buf), held.filePath)
+      assert.are.equal(4, held.selection.start.character)
+    end)
+
+    it("keeps the selection when a reload leaves its text in place", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      local file_win = vim.api.nvim_get_current_win()
+      vim.cmd("vsplit | terminal sh -c 'sleep 60' claude")
+      local term_win = vim.api.nvim_get_current_win()
+      vim.cmd("stopinsert")
+      vim.api.nvim_set_current_win(file_win)
+      wait(200)
+      select_and_release()
+
+      vim.api.nvim_set_current_win(term_win)
+      vim.cmd("stopinsert")
+      wait(300)
+      rewrite_on_disk_and_reload(file_buf, "alpha beta gamma, and more")
+      wait(300)
+
+      assert.are.same({ "alpha beta gamma, and more" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
+      assert.are.equal("alpha", selection.get_latest_selection().text)
+
+      -- The reload detached the listener: the next change is seen too.
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {})
+      wait(300)
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
+  end)
+
   -- A popup that wipes itself when you leave it: its buffer number is gone at the next event, and the plugin must
   -- neither raise nor keep the selection of a file you left.
   for _, kind in ipairs({ "bufhidden=wipe left with :buffer #", "nvim_buf_delete of the displayed buffer" }) do
