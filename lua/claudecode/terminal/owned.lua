@@ -42,8 +42,11 @@ end
 -- Stops the job in a marked buffer and deletes the buffer, without the provider that started it. Deleting a terminal
 -- buffer while a write to its job is pending hangs Neovim (neovim/neovim#42508), so the delete waits for TermClose.
 ---@param buf number
+---@param mark string
 ---@return boolean stopped whether the buffer is gone
-local function stop_buffer(buf)
+local function stop_buffer(buf, mark)
+  -- A provider reports a job that exits with an error, unless its mark is gone: this stop causes the exit.
+  vim.b[buf][mark] = nil
   local exited = false
   vim.api.nvim_create_autocmd("TermClose", {
     buffer = buf,
@@ -81,7 +84,7 @@ function M.stop_other(mark, provider_name)
   end
   local buf = M.find(mark)
   while buf do
-    if not stop_buffer(buf) then
+    if not stop_buffer(buf, mark) then
       require("claudecode.logger").error(
         "terminal",
         "Could not stop the Claude that the " .. provider_name .. " provider started."

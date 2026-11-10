@@ -35,7 +35,10 @@ local function setup_terminal_events(term_instance, config)
   -- Handle command completion/exit - only if auto_close is enabled
   if config.auto_close then
     term_instance:on("TermClose", function()
-      if vim.v.event.status ~= 0 and not term_instance._cc.closing then
+      -- The native provider's direct stop of this Claude (owned.stop_other) clears the mark first, so the exit that it
+      -- causes is no error.
+      local stopped_elsewhere = term_instance:buf_valid() and not vim.b[term_instance.buf][OWNED_MARK]
+      if vim.v.event.status ~= 0 and not term_instance._cc.closing and not stopped_elsewhere then
         logger.error("terminal", "Claude exited with code " .. vim.v.event.status .. ".\nCheck for any errors.")
       end
 

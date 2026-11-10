@@ -8,6 +8,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
   local state
   local started -- every Snacks.terminal.open call
   local notices -- every vim.notify call
+  local logged_errors
   local config = { cwd = "/w", split_side = "right", split_width_percentage = 0.3, auto_close = true }
 
   local function windows_showing(bufnr)
@@ -48,7 +49,12 @@ describe("claudecode.terminal.snacks after a module reload", function()
     function term:buf_valid()
       return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
     end
-    function term:on() end
+    -- The provider's TermClose handler, called when the job exits.
+    function term:on(event, callback)
+      if event == "TermClose" then
+        state.buffers[self.buf].snacks_term_close = callback
+      end
+    end
     function term:close()
       local win, buf = self.win, self.buf
       self.win, self.buf = nil, nil
@@ -79,6 +85,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     original_vim = vim
     started = {}
     notices = {}
+    logged_errors = {}
     state = {
       buffers = {},
       windows = {},
@@ -173,6 +180,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
             if buf.jobid == id and buf.on_term_close then
               buf.on_term_close({ buf = bufnr })
             end
+            if buf.jobid == id and buf.snacks_term_close then
+              buf.snacks_term_close()
+            end
             if buf.jobid == id then
               for _, callback in ipairs(state.term_close_autocmds) do
                 callback({ buf = bufnr })
@@ -264,7 +274,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
       debug = function() end,
       info = function() end,
       warn = function() end,
-      error = function() end,
+      error = function(_, message)
+        table.insert(logged_errors, message)
+      end,
     }
     package.loaded["claudecode.utils"] = nil
     reload_snacks()
@@ -279,6 +291,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     package.loaded["claudecode.terminal.owned"] = nil
     package.loaded["claudecode.terminal.native"] = nil
     package.preload["claudecode.terminal.native"] = nil
+    package.preload["claudecode.terminal.snacks"] = nil
   end)
 
   local entries = {
@@ -398,6 +411,42 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
     assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
     assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+  end)
+
+  -- A job that a stop kills exits with an error status. The provider reports such an exit, except when another
+  -- provider stopped the Claude on purpose.
+  describe("the exit status of a Claude that stops", function()
+    before_each(function()
+      vim.v.event.status = 129
+    end)
+
+    it("is reported as an error when Claude exits on its own", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude_bufnr = started[1].buf
+      state.running_jobs[state.buffers[claude_bufnr].jobid] = nil
+
+      state.buffers[claude_bufnr].snacks_term_close()
+
+      assert.are.equal(1, #logged_errors)
+      assert.truthy(logged_errors[1]:find("exited with code 129", 1, true))
+    end)
+
+    it("is not reported when the native provider stops the Claude directly", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude_bufnr = started[1].buf
+      local claude_jobid = state.buffers[claude_bufnr].jobid
+      package.loaded["claudecode.terminal.snacks"] = nil
+      package.preload["claudecode.terminal.snacks"] = function()
+        error("module 'claudecode.terminal.snacks' cannot load")
+      end
+      local owned = require("claudecode.terminal.owned")
+
+      assert.is_true(owned.stop_other(owned.SNACKS_MARK, "snacks"))
+
+      assert.is_nil(state.running_jobs[claude_jobid])
+      assert.is_false(vim.api.nvim_buf_is_valid(claude_bufnr))
+      assert.are.same({}, logged_errors)
+    end)
   end)
 
   it("starts a new Claude when the earlier one exited", function()
