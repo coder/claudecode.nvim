@@ -56,7 +56,10 @@ const labels: Record<string, string> = {
   ScheduledRuns: "the main loop runs a scheduled step",
   TimerTicks: "the ping timer ticks",
   TimerTicksAfterGap: "the ping timer ticks after Neovim was blocked",
-  TimerTicksLate: "the ping timer ticks late, before the plugin reads Claude's pong",
+  TimerTicksLate:
+    "the ping timer ticks late, before the plugin reads Claude's pong",
+  TimerTicksExact:
+    "the ping timer ticks with the last pong exactly two intervals old",
   ServerStops: "you stop the server",
   PluginSendsLarge: "the plugin sends Claude a large message",
   ClaudeSends: "Claude sends a frame",
@@ -102,7 +105,8 @@ export const step = (name: string, from: any, to: any) => {
   if (
     action === "TimerTicks" ||
     action === "TimerTicksAfterGap" ||
-    action === "TimerTicksLate"
+    action === "TimerTicksLate" ||
+    action === "TimerTicksExact"
   ) {
     if (from.listed[c] && !to.listed[c])
       return "the ping timer drops Claude for no reply";

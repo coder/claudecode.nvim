@@ -35,6 +35,9 @@ CONSTANTS
   StopBeforeOnClose,         \* the server can stop between a Close frame from Claude and its scheduled on_close
   LateTickAfterPing,         \* a tick can run late, 1.0 to 1.5 intervals after the one before: Neovim blocked right after a ping,
                              \* below the wake threshold, with Claude's pong still unread
+  ExactBoundaryTick,         \* a tick can find the last pong exactly two intervals old: is_client_alive needs less than two, and
+                             \* the loop time has a resolution of 1 ms, so a pong read in the same millisecond as the tick that
+                             \* pinged is exactly one interval old at the next tick, and two at the one after it
 
   \* Code facts, see check.sh for the source lines each one reads.
   UpgradeInWriteCallback, \* client.lua process_data: `connected` and handshake_complete are set in the 101 write callback
@@ -220,7 +223,9 @@ Callback(w, c, e) ==
 RECURSIVE RunAll(_, _, _)
 RunAll(w, c, es) == IF es = <<>> THEN w ELSE RunAll(Callback(w, c, Head(es)), c, Tail(es))
 
-(* One client of the ping timer's loop. mode: "normal" (on time), "late" (a block of 1.0 to 1.5 intervals     *)
+(* One client of the ping timer's loop. mode: "normal" (on time), "exact" (on time, and the last pong is      *)
+(* exactly two intervals old, which is not alive: the second tick after a pong, with the pong read in the     *)
+(* same millisecond as the tick before), "late" (a block of 1.0 to 1.5 intervals                             *)
 (* delayed the tick: below the wake threshold, so no reset, and Claude's pong may still be unread, which      *)
 (* leaves the last pong more than two intervals old) or "wake" (the tick gap was above interval * 1.5, so      *)
 (* the clock jumped by more than two intervals). A block does not count as awake time.                        *)
@@ -230,8 +235,11 @@ TickOne(w, c, mode) ==
            w1 == [w EXCEPT !.age[c] = IF reset THEN 0
                                       ELSE IF mode = "wake" THEN 3
                                       ELSE IF mode = "late" THEN Min(@ + 2, 3)
+                                      ELSE IF mode = "exact" /\ @ = 1 THEN 3
                                       ELSE Min(@ + 1, 3),
-                           !.awake[c] = IF mode = "wake" THEN @ ELSE Min(@ + 1, 3)]
+                           !.awake[c] = IF mode = "wake" THEN @
+                                        ELSE IF mode = "exact" /\ @ = 1 THEN 3
+                                        ELSE Min(@ + 1, 3)]
        IN IF w1.st[c] # "connected" THEN w1
           ELSE IF ~KeepaliveReaps \/ w1.age[c] < 3
                THEN Write([w1 EXCEPT !.overdue[c] = IF AliveTickClearsOverdue THEN FALSE ELSE @], c, "ping")
@@ -374,6 +382,13 @@ TimerTicksAfterGap ==
   /\ sleeps' = sleeps + 1
   /\ UNCHANGED <<peer, inq, sent, serverUp>>
 
+(* tcp.lua start_ping_timer callback on time, with the last pong exactly two intervals old. *)
+TimerTicksExact ==
+  /\ ExactBoundaryTick
+  /\ serverUp
+  /\ SetW(TickAll(W, Conns, "exact"))
+  /\ UNCHANGED env
+
 (* tcp.lua start_ping_timer callback after a block of 1.0 to 1.5 intervals. libuv runs the timer before it *)
 (* reads the socket when the block ran in a callback after the poll phase (a check callback, or any block  *)
 (* on Neovim 0.8), so the pong of the last ping is still unread. The gap is below interval * 1.5: no wake. *)
@@ -457,6 +472,7 @@ Next ==
   \/ TimerTicks
   \/ TimerTicksAfterGap
   \/ TimerTicksLate
+  \/ TimerTicksExact
   \/ ServerStops
   \/ \E c \in Conns : PluginSendsLarge(c)
   \/ \E c \in Conns, f \in Frames : ClaudeSends(c, f)

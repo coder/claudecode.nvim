@@ -178,6 +178,7 @@ tla_constants() {
   echo "  WindowFullOnProtocolClose = TRUE"
   echo "  StopBeforeOnClose = TRUE"
   echo "  LateTickAfterPing = TRUE"
+  echo "  ExactBoundaryTick = TRUE"
 }
 
 tla_main "$@"
