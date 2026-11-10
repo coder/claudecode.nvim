@@ -556,7 +556,8 @@ function M.start(show_startup_notification)
     -- create already wrote the file. Its token is not the server's, so remove it as stop does, before the server goes.
     local remove_success, remove_error = lockfile.remove(M.state.port)
     if not remove_success then
-      logger.warn("init", "Failed to remove lock file: " .. tostring(remove_error))
+      -- remove_error is a whole message, for example "Failed to remove lock file: <path>: <reason>". Do not prefix it.
+      logger.warn("init", tostring(remove_error))
     end
     server.stop()
     M.state.server = nil
@@ -593,7 +594,8 @@ function M.stop()
   local lock_success, lock_error = lockfile.remove(M.state.port)
 
   if not lock_success then
-    logger.warn("init", "Failed to remove lock file: " .. lock_error)
+    -- lock_error is a whole message, for example "Failed to remove lock file: <path>: <reason>". Do not prefix it.
+    logger.warn("init", tostring(lock_error))
     -- Continue with shutdown even if lock file removal fails
   end
 
