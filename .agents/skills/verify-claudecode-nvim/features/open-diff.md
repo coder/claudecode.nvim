@@ -55,3 +55,4 @@ Steps:
   - The buffer is not modifiable. The edit step fails with `E21: Cannot make changes, 'modifiable' is off`, so `:w` answers `FILE_SAVED` with the proposal text and no user edits.
   - The `-` and `+` marks are drawn on screen only. `$V expr "join(getline(1, '\$'), '|')"` prints both versions, `alpha|beta|BETA|gamma`.
   - A second unified diff opens in the same tab page as a third window, not in a new tab page.
+  - `:q` rejects as in the split layout: `$V keys ':q' Enter`, then `$V await d3` answers `DIFF_REJECTED` and `$V expr "winnr('\$')"` prints `1`. When the window stays and the screen shows `E37: No write since last change`, the proposal buffer is being wiped instead of hidden when its window closes.
