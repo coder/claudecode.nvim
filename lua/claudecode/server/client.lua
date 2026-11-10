@@ -27,7 +27,9 @@ local CLOSE_REASONS = {
 ---@field pending table|nil The reads of an incomplete frame, with their total length in `size` and the frame's in `needed`
 ---@field fragments table|nil Joined pieces of the text message whose last fragment has not arrived, and their total `size`
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
----@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
+---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket, or its deadline does
+---@field close_timer table|nil The deadline of the Close frame: a repeating timer that runs while `close_pending` is set
+---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress, from the server's ping interval
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
 ---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
@@ -36,8 +38,9 @@ local CLOSE_REASONS = {
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
+---@param keepalive_timeout number|nil The window in milliseconds that the server's ping timer allows for a pong and for write progress. Without it the client has no deadline for its Close frame
 ---@return WebSocketClient client The client object
-function M.create_client(tcp_handle)
+function M.create_client(tcp_handle, keepalive_timeout)
   _G.claudecode_clients_created = (_G.claudecode_clients_created or 0) + 1
   local client_id = "client_" .. _G.claudecode_clients_created
 
@@ -52,6 +55,7 @@ function M.create_client(tcp_handle)
     queued_bytes = 0,
     drained_bytes = 0,
     last_drain = vim.loop.now(),
+    keepalive_timeout = keepalive_timeout,
   }
 
   return client
@@ -65,6 +69,54 @@ end
 local function write(client, data, callback)
   client.queued_bytes = client.queued_bytes + #data
   client.tcp_handle:write(data, callback)
+end
+
+---Stop the deadline of the Close frame. Safe to call when none runs.
+---@param client WebSocketClient
+local function stop_close_timer(client)
+  local timer = client.close_timer
+  if timer then
+    client.close_timer = nil
+    timer:stop()
+    timer:close()
+  end
+end
+
+---Start the deadline of a Close frame that was just queued. The ping timer sees only the clients in the server's list,
+---and a client that broke the protocol, or that the server stopped, has left it with its frame still queued. The same
+---rule applies to it: a socket that wrote no byte for a keepalive window is closed, and the queue with it. The window
+---starts with the frame, and a Claude that reads keeps the socket open, as it does for the ping timer.
+---@param client WebSocketClient
+local function start_close_timer(client)
+  local timeout = client.keepalive_timeout
+  -- Not when the write callback already ran: the frame is written and the socket is closed.
+  if not timeout or not client.close_pending then
+    return
+  end
+  local timer = vim.loop.new_timer()
+  if not timer then
+    return
+  end
+  stop_close_timer(client)
+  client.close_timer = timer
+  client.drained_bytes = client.queued_bytes - client.tcp_handle:get_write_queue_size()
+  client.last_drain = vim.loop.now()
+  timer:start(timeout, timeout, function()
+    -- The write callback, a drop by the ping timer, or a close of the handle ended the wait: stop, and touch nothing.
+    -- Whichever of this callback and the write callback runs first closes the socket, and the other finds it closed.
+    if client.close_timer ~= timer then
+      return
+    end
+    local handle = client.tcp_handle
+    if not client.close_pending or handle:is_closing() then
+      stop_close_timer(client)
+    elseif not M.is_client_reading(client, timeout) then
+      stop_close_timer(client)
+      client.close_pending = nil
+      client.state = "closed"
+      handle:close()
+    end
+  end)
 end
 
 ---Adds a data frame to the message the client is sending. A text message arrives as one TEXT frame with FIN set, or
@@ -365,16 +417,19 @@ function M.close_client(client, code, reason)
   -- An upgrading client gets the Close frame too: libuv writes it after the 101 reply that is still queued.
   if client.handshake_complete or client.state == "upgrading" then
     local close_frame = frame.create_close_frame(code, reason)
-    -- The write callback closes the socket, so nothing may close it first: that would cancel the frame. libuv always
-    -- invokes the callback (on success or error), so the socket is never left open.
+    -- The write callback closes the socket, so nothing may close it first: that would cancel the frame. libuv invokes
+    -- the callback on success, on error and when the socket closes, so the socket is never left open. A Claude that
+    -- does not read can keep the frame in the queue for good: the deadline closes the socket then.
     client.close_pending = true
     write(client, close_frame, function()
       client.close_pending = nil
+      stop_close_timer(client)
       client.state = "closed"
       if not client.tcp_handle:is_closing() then
         client.tcp_handle:close()
       end
     end)
+    start_close_timer(client)
     -- Mark as "closing" while the Close frame write/teardown is in flight. The
     -- write callback transitions to "closed". Do not clobber the "closed" state
     -- set synchronously on the not-handshake-complete branch below.
@@ -383,6 +438,13 @@ function M.close_client(client, code, reason)
     client.state = "closed"
     client.tcp_handle:close()
   end
+end
+
+---Stop waiting for the write of a Close frame, because the caller closes the socket at once.
+---@param client WebSocketClient The client object
+function M.abandon_close_frame(client)
+  client.close_pending = nil
+  stop_close_timer(client)
 end
 
 ---Check if a client connection is alive

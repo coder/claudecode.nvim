@@ -12,6 +12,7 @@ local M = {}
 ---@field on_connect function Callback for new connections
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
+---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress: twice the ping interval, set by `start_ping_timer`
 
 -- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
@@ -195,7 +196,7 @@ function M._handle_new_connection(server)
   end
 
   -- Create WebSocket client wrapper
-  local client = client_manager.create_client(client_tcp)
+  local client = client_manager.create_client(client_tcp, server.keepalive_timeout)
   server.clients[client.id] = client
 
   -- Set up data handler
@@ -295,7 +296,7 @@ end
 ---@param disconnect_reason string The reason that `on_disconnect` gets, with the code 1006
 local function drop_client(server, client, close_reason, disconnect_reason)
   client_manager.close_client(client, 1011, close_reason)
-  client.close_pending = nil
+  client_manager.abandon_close_frame(client)
   M._disconnect_client(server, client, 1006, disconnect_reason)
 end
 
@@ -378,6 +379,11 @@ function M.start_ping_timer(server, interval)
     return nil
   end
 
+  -- A client has this long to answer a ping, and to let libuv write some of its queue. A Close frame gets the same
+  -- window (see `client.close_client`), and the clients accepted from now on carry it.
+  local timeout = interval * 2
+  server.keepalive_timeout = timeout
+
   timer:start(interval, interval, function()
     local now = vim.loop.now()
     local elapsed = now - last_run
@@ -407,8 +413,8 @@ function M.start_ping_timer(server, interval)
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
         -- Check if client is alive (local connections, so use standard timeout)
-        if client_manager.is_client_alive(client, interval * 2) then
-          if client_manager.is_client_reading(client, interval * 2) then
+        if client_manager.is_client_alive(client, timeout) then
+          if client_manager.is_client_reading(client, timeout) then
             client_manager.send_ping(client, "ping")
           else
             -- A Claude whose reader is stuck can still answer each ping, so only its write queue shows it. The queue

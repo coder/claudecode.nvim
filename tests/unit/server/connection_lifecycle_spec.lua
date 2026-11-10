@@ -6,7 +6,7 @@ require("tests.busted_setup")
 
 describe("The lifecycle of a WebSocket connection", function()
   local tcp, frame, server, callbacks, scheduled
-  local clock, saved
+  local clock, saved, timers
   local token = "test-token-0123456789"
   local interval = 30000
 
@@ -22,8 +22,23 @@ describe("The lifecycle of a WebSocket connection", function()
     end
     tcp = require("claudecode.server.tcp")
     frame = require("claudecode.server.frame")
-    scheduled, clock = nil, 1000000
+    scheduled, clock, timers = nil, 1000000, {}
     saved = { schedule = vim.schedule, now = vim.loop.now, new_timer = vim.loop.new_timer }
+    -- Each timer waits for the test to run it, and records how it ended. The ping timer is one of them.
+    vim.loop.new_timer = function()
+      local timer = { stopped = false, closed = false }
+      function timer:start(delay, repeat_ms, callback)
+        self.delay, self.repeat_ms, self.callback = delay, repeat_ms, callback
+      end
+      function timer:stop()
+        self.stopped = true
+      end
+      function timer:close()
+        self.closed = true
+      end
+      table.insert(timers, timer)
+      return timer
+    end
     -- While `scheduled` is a list, scheduled callbacks wait in it, as they wait for the main loop in Neovim.
     vim.schedule = function(fn)
       if scheduled then
@@ -116,19 +131,30 @@ describe("The lifecycle of a WebSocket connection", function()
 
   ---Start the ping timer on the server, and return the function that runs on each tick.
   local function start_ping_timer()
-    local tick
-    vim.loop.new_timer = function()
-      return {
-        start = function(_, _, _, callback)
-          tick = callback
-        end,
-        stop = function() end,
-        close = function() end,
-      }
-    end
+    local before = #timers
     tcp.start_ping_timer(server, interval)
-    vim.loop.new_timer = saved.new_timer
-    return tick
+    assert.equals(before + 1, #timers)
+    local ping_timer = timers[#timers]
+    return ping_timer.callback
+  end
+
+  ---The timer that waits for the Close frame of a client. It repeats every keepalive window, two ping intervals, and
+  ---the ping timer every interval.
+  local function close_deadline()
+    local deadlines = {}
+    for _, timer in ipairs(timers) do
+      if timer.repeat_ms == 2 * interval then
+        table.insert(deadlines, timer)
+      end
+    end
+    assert.equals(1, #deadlines, "no deadline waits for the Close frame")
+    return deadlines[1]
+  end
+
+  ---One keepalive window passes and the timer runs.
+  local function run_after_window(timer)
+    clock = clock + timer.repeat_ms
+    timer.callback()
   end
 
   local function parse(write)
@@ -333,7 +359,16 @@ describe("The lifecycle of a WebSocket connection", function()
       end
       logger.one_line = saved_one_line
 
-      assert.same({ { level = "info", component = "server", text = "Closed " .. client.id .. ": not reading for 60s, 256 KB queued" } }, lines)
+      assert.same(
+        {
+          {
+            level = "info",
+            component = "server",
+            text = "Closed " .. client.id .. ": not reading for 60s, 256 KB queued",
+          },
+        },
+        lines
+      )
     end)
 
     it("keeps a client that reads slowly, although its queue keeps growing", function()
@@ -416,6 +451,131 @@ describe("The lifecycle of a WebSocket connection", function()
       pong_and_tick(tick, handle)
 
       assert.is_nil(server.clients[client.id])
+    end)
+  end)
+
+  -- The ping timer sees only the clients in `server.clients`. A client that left it with its Close frame still queued
+  -- is covered by the deadline of that frame: the same window, and the same rule, no write progress for two intervals.
+  describe("when a Close frame waits in the queue of a Claude that does not read", function()
+    local reply = string.rep("x", 262144)
+    local function binary()
+      return frame.create_frame(frame.OPCODE.BINARY, "x", true, true)
+    end
+
+    it(
+      "closes the socket of a client that broke the protocol once the queue made no progress for the window",
+      function()
+        start_ping_timer()
+        local client, _, handle = connect_and_upgrade()
+        tcp.send_to_client(server, client.id, reply)
+
+        handle._read_cb(nil, binary())
+        assert.is_nil(server.clients[client.id], "the ping timer would still see the client")
+        assert.is_false(handle:is_closing(), "the socket was closed before the Close frame was written")
+        local deadline = close_deadline()
+
+        run_after_window(deadline)
+
+        assert.is_true(handle:is_closing(), "the socket still holds the queue")
+        assert.equals("closed", client.state)
+        assert.is_true(deadline.stopped and deadline.closed, "the deadline keeps running")
+        assert.spy(callbacks.on_disconnect).was_called(1)
+      end
+    )
+
+    it(
+      "closes the socket of a client that the server stopped, once the queue made no progress for the window",
+      function()
+        start_ping_timer()
+        local client, _, handle = connect_and_upgrade()
+        tcp.send_to_client(server, client.id, reply)
+
+        tcp.stop_server(server)
+        assert.is_false(handle:is_closing(), "the socket was closed before the Close frame was written")
+        local deadline = close_deadline()
+
+        run_after_window(deadline)
+
+        assert.is_true(handle:is_closing(), "the socket still holds the queue")
+        assert.equals("closed", client.state)
+        assert.is_true(deadline.stopped and deadline.closed, "the deadline keeps running")
+      end
+    )
+
+    it("waits while Claude reads, and the write callback then closes the socket and ends the deadline", function()
+      start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      handle._read_cb(nil, binary())
+      local deadline = close_deadline()
+
+      handle.drain(1024) -- Claude reads a little: that is progress
+      run_after_window(deadline)
+      assert.is_false(handle:is_closing(), "a Claude that reads was cut off")
+      assert.is_false(deadline.stopped)
+
+      handle.drain(math.huge) -- Claude reads the rest, so the Close frame is written
+      assert.is_true(handle:is_closing())
+      assert.is_true(deadline.stopped and deadline.closed, "the deadline outlives the write")
+      assert.equals(1003, close_status(writes[#writes]))
+
+      -- A deadline that runs after the socket closed does nothing: closing a handle twice is an error in libuv.
+      deadline.callback()
+      assert.equals("closed", client.state)
+    end)
+
+    it("does not wait for a client that the ping timer dropped, whose socket closes at once", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+
+      for _ = 1, 3 do
+        handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+        clock = clock + interval
+        tick()
+      end
+
+      assert.is_nil(server.clients[client.id])
+      assert.is_true(handle:is_closing())
+      local deadline = close_deadline()
+      assert.is_true(deadline.stopped and deadline.closed, "the deadline outlives the drop")
+      deadline.callback()
+    end)
+
+    it("arms nothing when the Close frame was written at once", function()
+      local handle = { closed = false }
+      function handle:write(_, callback)
+        if callback then
+          callback()
+        end
+      end
+      function handle:get_write_queue_size()
+        return 0
+      end
+      function handle:close()
+        assert(not self.closed, "handle is already closing")
+        self.closed = true
+      end
+      function handle:is_closing()
+        return self.closed
+      end
+      local client = require("claudecode.server.client").create_client(handle, 2 * interval)
+      client.state, client.handshake_complete = "connected", true
+
+      require("claudecode.server.client").close_client(client, 1000, "")
+
+      assert.equals(0, #timers)
+      assert.is_true(handle.closed)
+    end)
+
+    it("arms nothing for a client that has no keepalive window", function()
+      local client, _, handle = connect_and_upgrade() -- no ping timer was started, so the server has no window
+      tcp.send_to_client(server, client.id, reply)
+
+      tcp.stop_server(server)
+
+      assert.equals(0, #timers)
+      assert.is_false(handle:is_closing())
     end)
   end)
 end)
