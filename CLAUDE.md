@@ -358,7 +358,7 @@ Log levels for authentication events:
 
 ### Performance Optimizations
 
-- Selection tracking is debounced to reduce overhead
+- Selection tracking is debounced (100 ms) to reduce overhead. Leaving visual mode, editing or consuming the held text, and moving the cursor away from a held selection report at once
 - WebSocket frame processing optimized for JSON-RPC payload sizes
 - Connection pooling and cleanup to prevent resource leaks
 
