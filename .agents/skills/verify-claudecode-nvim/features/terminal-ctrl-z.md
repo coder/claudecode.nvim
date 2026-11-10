@@ -28,7 +28,7 @@ Steps:
 
 ## Gotchas
 
-- vcn.sh runs nvim as the leader of its own session. Its process group is orphaned, and the kernel drops the SIGTSTP that `:suspend` sends, so nvim never stops in this harness, not even for Ctrl-Z in a normal window. Count `VimSuspend` events instead of watching the nvim process state.
+- vcn.sh runs nvim as the leader of its own session. Its process group is orphaned, and the kernel drops the SIGTSTP that `:suspend` sends, so nvim never stops in this harness, not even for Ctrl-Z in a normal window. The nvim screen also stops updating after the first `:suspend`, so capture the terminal before the first Ctrl-Z. Count `VimSuspend` events instead of watching the nvim process state or the screen.
 - The job must stop itself with SIGSTOP. The Claude job leads its own session too, so the kernel drops a default-action SIGTSTP for it. `ctrl-z-probe-job.mjs` sends SIGSTOP, and the job's process state shows `T` after a Ctrl-Z that reached it.
 - The `terminal_cmd` must use absolute paths. nvim runs with `PATH=/usr/bin:/bin`, so a bare `node` is not found.
 - `VCN_SETUP` and `VERIFY_OUT` must name the same evidence dir, because the job log path is part of `terminal_cmd`. `VERIFY_OUT` must be missing or empty.

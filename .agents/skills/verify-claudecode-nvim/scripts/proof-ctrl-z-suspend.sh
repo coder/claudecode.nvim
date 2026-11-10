@@ -4,8 +4,9 @@
 # Usage: proof-ctrl-z-suspend.sh native|snacks
 #   snacks needs SNACKS_DIR=<a snacks.nvim checkout>. VERIFY_OUT=<new dir> picks the evidence dir.
 # vcn.sh runs nvim as the leader of its own session, so its process group is orphaned and the kernel drops the
-# SIGTSTP that `:suspend` sends. Neovim therefore never stops here. The proof counts VimSuspend events instead, and
-# compares the terminal's Ctrl-Z with the one in a normal window.
+# SIGTSTP that `:suspend` sends. Neovim therefore never stops here, and its screen stops updating after the first
+# `:suspend`. The proof counts VimSuspend events instead, and compares the terminal's Ctrl-Z with the one in a normal
+# window.
 # Prints `ok <check>` or `FAIL <check>` per check and ends with `CHECKS <n> FAILED <k>`. Exits 1 when any check
 # fails.
 # Evidence lands in the run's $OUT as ctrl-z-<provider>-*.
@@ -75,9 +76,6 @@ map_in() {
 }
 
 "$V" keys ':let g:suspends = 0 | autocmd VimSuspend * let g:suspends += 1' Enter
-"$V" keys Ctrl+Z
-"$V" until 'g:suspends' 1 5
-"$V" until 'mode()' n 5
 "$V" keys ':ClaudeCode' Enter
 "$V" until 'mode()' t
 "$V" until "&filetype" claudecode
@@ -97,24 +95,30 @@ check "the Claude terminal buffer's mapping is buffer-local" \
   test "$(lua "vim.fn.maparg(\"<C-z>\", \"t\", false, true).buffer")" = 1
 
 "$V" keys Ctrl+Z
-"$V" until 'g:suspends' 2 5 || true
+"$V" until 'g:suspends' 1 5 || true
 sleep 1
 {
-  echo "after Ctrl-Z in the terminal: VimSuspend fired $("$V" expr 'g:suspends') time(s) in all, job pid $job_pid state $(state "$job_pid")"
+  echo "after Ctrl-Z in the terminal: VimSuspend fired $("$V" expr 'g:suspends') time(s), job pid $job_pid state $(state "$job_pid")"
   ps -o pid,pgid,stat,args -p "$job_pid" | cut -c1-120
 } >"$out/ctrl-z-$provider-states.txt"
-"$V" capture "ctrl-z-$provider-2-after-ctrl-z" >/dev/null
 
-check "Ctrl-Z in the Claude terminal ran :suspend, as it did in the normal window (VimSuspend 1 -> 2)" \
-  test "$("$V" expr 'g:suspends')" = 2
+check "Ctrl-Z in the Claude terminal ran :suspend once (VimSuspend 0 -> 1)" test "$("$V" expr 'g:suspends')" = 1
 check "the job never read the Ctrl-Z byte (0x1a)" job_log_lacks '1a'
 check "the job is not stopped" test "$(state "$job_pid")" != T
 
 "$V" until 'mode()' t 5 || true
 "$V" keys x
 check "after Ctrl-Z, a typed key (0x78) still reaches the job" job_log_gets '78'
-"$V" capture "ctrl-z-$provider-3-after-typing" >/dev/null
-"$V" screenshot "ctrl-z-$provider-3-after-typing" >/dev/null
+
+# Control: Ctrl-Z in the normal window of hello.txt runs :suspend too.
+"$V" keys "Ctrl+\\" Ctrl+N
+"$V" until 'mode()' n 5
+"$V" keys Ctrl+W h
+"$V" until 'bufname()' hello.txt 5
+"$V" until 'mode()' n 5
+"$V" keys Ctrl+Z
+"$V" until 'g:suspends' 2 5 || true
+check "Ctrl-Z in a normal window ran :suspend too (VimSuspend 1 -> 2)" test "$("$V" expr 'g:suspends')" = 2
 
 echo "terminal buffer: $terminal_buf; job log: $log"
 echo "CHECKS $total FAILED $failed"
