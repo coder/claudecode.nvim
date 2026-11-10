@@ -26,13 +26,15 @@ EXTENDS Naturals, Sequences, FiniteSets
 CONSTANTS
   Conns,       \* TCP connections the listener accepts (model values)
   PeerBudget,  \* frames Claude sends on one connection, its upgrade request included (pongs and the hang-up not counted)
-  MaxSleeps,   \* how often the ping timer finds a tick gap above interval * 1.5 (Neovim suspended or blocked)
+  MaxSleeps,   \* how many ping-timer ticks run delayed: after a gap above interval * 1.5 (Neovim suspended or blocked), or late
   PeerEventuallyReads, \* assumption, not a code fact: Claude never stops reading for good
   \* Environment switches, not code facts. Each one allows the step of one bug this model found (see SKILL.md, "Bugs
   \* this model found"). They are TRUE in every run, so that a removed guard breaks the rule that its bug broke.
   GapDuringHandshake,        \* a tick gap above interval * 1.5 can come while a client is still in its handshake
   WindowFullOnProtocolClose, \* the plugin can read a frame that breaks the protocol while Claude's window is full
   StopBeforeOnClose,         \* the server can stop between a Close frame from Claude and its scheduled on_close
+  LateTickAfterPing,         \* a tick can run late, 1.0 to 1.5 intervals after the one before: Neovim blocked right after a ping,
+                             \* below the wake threshold, with Claude's pong still unread
 
   \* Code facts, see check.sh for the source lines each one reads.
   UpgradeInWriteCallback, \* client.lua process_data: `connected` and handshake_complete are set in the 101 write callback
@@ -48,6 +50,8 @@ CONSTANTS
   ProtocolReportsAtOnce,  \* client.lua fail_connection: a protocol error runs close_client, then on_error, without waiting for the write
   StopWaitsForCloseWrite, \* tcp.lua stop_server only calls close_client; the Close write callback closes the handle
   KeepaliveReaps,         \* tcp.lua ping timer closes and disconnects a connected client that is not alive
+  DropsOnSecondOverdueTick, \* tcp.lua ping timer: the first tick that finds no pong pings again and sets pong_overdue; the second drops
+  AliveTickClearsOverdue, \* tcp.lua ping timer: a tick that finds the client alive clears pong_overdue
   PongResetsAge,          \* client.lua process_data: a PONG sets client.last_pong
   WakeResetsPong          \* tcp.lua ping timer: after a tick gap above interval * 1.5, last_pong of each connected client is reset
 
@@ -70,12 +74,13 @@ VARIABLES
   buf,       \* frames read while the 101 reply is written (client.buffer)
   sched,     \* the vim.schedule queue (FIFO), records [c, k]
   age,       \* ping-timer ticks since the client's last pong (create_client sets last_pong): 3 means > interval * 2
+  overdue,   \* client.pong_overdue: a tick found no pong for two intervals, and pinged again
   peer,      \* Claude's side: "idle", "live", "silent" (stopped reading and answering), "stuck" (silent, window full), "gone"
   inq,       \* frames Claude sent that the plugin has not read yet
   sent,      \* frames Claude has sent (PeerBudget bounds it)
   pingOut,   \* a ping reached Claude and Claude has not answered it yet
   serverUp,  \* the server and its ping timer run
-  sleeps,    \* tick gaps above interval * 1.5 so far
+  sleeps,    \* delayed ticks so far (after a gap above interval * 1.5, or late)
   \* ghosts: what the rules read
   awake,     \* ping-timer ticks of awake time since the last pong (or accept); a long gap counts as none
   upgraded,  \* the 101 reply was written without error
@@ -85,20 +90,22 @@ VARIABLES
   dropped,   \* a Close frame for a protocol error or a server stop was cancelled by closing the handle
   falseTimeout \* the ping timer dropped a client that had less than 2 intervals of awake time without a pong
 
-vars == <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, peer, inq, sent, pingOut, serverUp,
+vars == <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, overdue, peer, inq, sent, pingOut, serverUp,
           sleeps, awake, upgraded, ended, reports, badDispatch, dropped, falseTimeout>>
 env == <<peer, inq, sent, serverUp, sleeps>>
 
 (* The plugin-side state as a record, so that a step that runs several      *)
 (* functions in a row can chain the operators below.                        *)
 W == [st |-> st, hs |-> hs, listed |-> listed, handle |-> handle, kern |-> kern, queued |-> queued,
-      closeWhy |-> closeWhy, buf |-> buf, sched |-> sched, age |-> age, pingOut |-> pingOut, awake |-> awake,
+      closeWhy |-> closeWhy, buf |-> buf, sched |-> sched, age |-> age, overdue |-> overdue, pingOut |-> pingOut,
+      awake |-> awake,
       upgraded |-> upgraded, ended |-> ended, reports |-> reports, badDispatch |-> badDispatch,
       dropped |-> dropped, falseTimeout |-> falseTimeout]
 
 SetW(w) ==
   /\ st' = w.st /\ hs' = w.hs /\ listed' = w.listed /\ handle' = w.handle /\ kern' = w.kern
   /\ queued' = w.queued /\ closeWhy' = w.closeWhy /\ buf' = w.buf /\ sched' = w.sched /\ age' = w.age
+  /\ overdue' = w.overdue
   /\ pingOut' = w.pingOut /\ awake' = w.awake /\ upgraded' = w.upgraded /\ ended' = w.ended
   /\ reports' = w.reports /\ badDispatch' = w.badDispatch /\ dropped' = w.dropped /\ falseTimeout' = w.falseTimeout
 
@@ -213,20 +220,27 @@ Callback(w, c, e) ==
 RECURSIVE RunAll(_, _, _)
 RunAll(w, c, es) == IF es = <<>> THEN w ELSE RunAll(Callback(w, c, Head(es)), c, Tail(es))
 
-(* One client of the ping timer's loop. slept: the tick gap was above       *)
-(* interval * 1.5, so the clock jumped by more than two intervals.          *)
-TickOne(w, c, slept) ==
+(* One client of the ping timer's loop. mode: "normal" (on time), "late" (a block of 1.0 to 1.5 intervals     *)
+(* delayed the tick: below the wake threshold, so no reset, and Claude's pong may still be unread, which      *)
+(* leaves the last pong more than two intervals old) or "wake" (the tick gap was above interval * 1.5, so      *)
+(* the clock jumped by more than two intervals). A block does not count as awake time.                        *)
+TickOne(w, c, mode) ==
   IF ~w.listed[c] THEN w
-  ELSE LET reset == slept /\ WakeResetsPong /\ w.st[c] = "connected"
-           w1 == [w EXCEPT !.age[c] = IF reset THEN 0 ELSE IF slept THEN 3 ELSE Min(@ + 1, 3),
-                           !.awake[c] = IF slept THEN @ ELSE Min(@ + 1, 3)]
+  ELSE LET reset == mode = "wake" /\ WakeResetsPong /\ w.st[c] = "connected"
+           w1 == [w EXCEPT !.age[c] = IF reset THEN 0
+                                      ELSE IF mode = "wake" THEN 3
+                                      ELSE IF mode = "late" THEN Min(@ + 2, 3)
+                                      ELSE Min(@ + 1, 3),
+                           !.awake[c] = IF mode = "wake" THEN @ ELSE Min(@ + 1, 3)]
        IN IF w1.st[c] # "connected" THEN w1
-          ELSE IF ~KeepaliveReaps \/ w1.age[c] < 3 THEN Write(w1, c, "ping")
+          ELSE IF ~KeepaliveReaps \/ w1.age[c] < 3
+               THEN Write([w1 EXCEPT !.overdue[c] = IF AliveTickClearsOverdue THEN FALSE ELSE @], c, "ping")
+          ELSE IF DropsOnSecondOverdueTick /\ ~w1.overdue[c] THEN Write([w1 EXCEPT !.overdue[c] = TRUE], c, "ping")
           ELSE Disconnect(CloseClient([w1 EXCEPT !.falseTimeout = @ \/ w1.awake[c] < 3], c, "keepalive", FALSE), c)
 
 RECURSIVE TickAll(_, _, _)
-TickAll(w, S, slept) ==
-  IF S = {} THEN w ELSE LET c == CHOOSE x \in S : TRUE IN TickAll(TickOne(w, c, slept), S \ {c}, slept)
+TickAll(w, S, mode) ==
+  IF S = {} THEN w ELSE LET c == CHOOSE x \in S : TRUE IN TickAll(TickOne(w, c, mode), S \ {c}, mode)
 
 (* tcp.lua stop_server, one client. *)
 StopOne(w, c) ==
@@ -249,6 +263,7 @@ TypeOK ==
   /\ \A c \in Conns : buf[c] \in Seq(Frames) /\ inq[c] \in Seq(Frames)
   /\ sched \in Seq([c : Conns, k : {"message", "close", "done"}])
   /\ age \in [Conns -> 0..3]
+  /\ overdue \in [Conns -> BOOLEAN]
   /\ awake \in [Conns -> 0..3]
   /\ peer \in [Conns -> {"idle", "live", "silent", "stuck", "gone"}]
   /\ sent \in [Conns -> 0..PeerBudget]
@@ -273,6 +288,7 @@ Init ==
   /\ buf = [c \in Conns |-> <<>>]
   /\ sched = <<>>
   /\ age = [c \in Conns |-> 0]
+  /\ overdue = [c \in Conns |-> FALSE]
   /\ peer = [c \in Conns |-> "idle"]
   /\ inq = [c \in Conns |-> <<>>]
   /\ sent = [c \in Conns |-> 0]
@@ -346,7 +362,7 @@ ScheduledRuns ==
 (* tcp.lua start_ping_timer callback, a tick on time. *)
 TimerTicks ==
   /\ serverUp
-  /\ SetW(TickAll(W, Conns, FALSE))
+  /\ SetW(TickAll(W, Conns, "normal"))
   /\ UNCHANGED env
 
 (* tcp.lua start_ping_timer callback after a gap above interval * 1.5: Neovim was suspended or *)
@@ -354,7 +370,17 @@ TimerTicks ==
 TimerTicksAfterGap ==
   /\ serverUp /\ sleeps < MaxSleeps
   /\ GapDuringHandshake \/ \A c \in Conns : ~(listed[c] /\ ~hs[c])
-  /\ SetW(TickAll(W, Conns, TRUE))
+  /\ SetW(TickAll(W, Conns, "wake"))
+  /\ sleeps' = sleeps + 1
+  /\ UNCHANGED <<peer, inq, sent, serverUp>>
+
+(* tcp.lua start_ping_timer callback after a block of 1.0 to 1.5 intervals. libuv runs the timer before it *)
+(* reads the socket when the block ran in a callback after the poll phase (a check callback, or any block  *)
+(* on Neovim 0.8), so the pong of the last ping is still unread. The gap is below interval * 1.5: no wake. *)
+TimerTicksLate ==
+  /\ LateTickAfterPing
+  /\ serverUp /\ sleeps < MaxSleeps
+  /\ SetW(TickAll(W, Conns, "late"))
   /\ sleeps' = sleeps + 1
   /\ UNCHANGED <<peer, inq, sent, serverUp>>
 
@@ -384,7 +410,7 @@ ClaudeSends(c, f) ==
   /\ f \in IF sent[c] = 0 THEN {"hello", "badhello"} ELSE {"req", "close", "bad"}
   /\ inq' = [inq EXCEPT ![c] = Append(@, f)]
   /\ sent' = [sent EXCEPT ![c] = @ + 1]
-  /\ UNCHANGED <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, pingOut, awake, upgraded, ended,
+  /\ UNCHANGED <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, overdue, pingOut, awake, upgraded, ended,
                  reports, badDispatch, dropped, falseTimeout, peer, serverUp, sleeps>>
 
 (* One unread pong answers as well as two, so Claude sends one only when none is unread. *)
@@ -392,14 +418,14 @@ ClaudeAnswersPing(c) ==
   /\ peer[c] = "live" /\ pingOut[c] /\ "pong" \notin Range(inq[c])
   /\ inq' = [inq EXCEPT ![c] = Append(@, "pong")]
   /\ pingOut' = [pingOut EXCEPT ![c] = FALSE]
-  /\ UNCHANGED <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, awake, upgraded, ended, reports,
+  /\ UNCHANGED <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, overdue, awake, upgraded, ended, reports,
                  badDispatch, dropped, falseTimeout, peer, sent, serverUp, sleeps>>
 
 (* Claude stops reading and answering (for example its process is suspended). *)
 ClaudeStopsReading(c) ==
   /\ peer[c] = "live" /\ hs[c]
   /\ peer' = [peer EXCEPT ![c] = "silent"]
-  /\ UNCHANGED <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, pingOut, awake, upgraded, ended,
+  /\ UNCHANGED <<st, hs, listed, handle, kern, queued, closeWhy, buf, sched, age, overdue, pingOut, awake, upgraded, ended,
                  reports, badDispatch, dropped, falseTimeout, inq, sent, serverUp, sleeps>>
 
 (* Claude reads again; libuv's POLLOUT handler writes what waited in its queue. *)
@@ -430,6 +456,7 @@ Next ==
   \/ ScheduledRuns
   \/ TimerTicks
   \/ TimerTicksAfterGap
+  \/ TimerTicksLate
   \/ ServerStops
   \/ \E c \in Conns : PluginSendsLarge(c)
   \/ \E c \in Conns, f \in Frames : ClaudeSends(c, f)

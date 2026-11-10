@@ -45,7 +45,8 @@ covered_block main_stop "$MAIN" '^function M\.stop\(\)'
 
 FACTS=(UpgradeInWriteCallback UpgradeRechecksState UpgradeStartsKeepalive DispatchGuard PeerCloseMarksClosing
   DisconnectOnce DisconnectClosesSocket UnlistedDisconnectReleases CloseWriteOwnsSocket RejectClosesSocket
-  ProtocolReportsAtOnce StopWaitsForCloseWrite KeepaliveReaps PongResetsAge WakeResetsPong)
+  ProtocolReportsAtOnce StopWaitsForCloseWrite KeepaliveReaps DropsOnSecondOverdueTick AliveTickClearsOverdue
+  PongResetsAge WakeResetsPong)
 
 # The handshake completes in the 101 write callback, after its error check, and nowhere before.
 upgrade_in_write_callback() {
@@ -122,6 +123,15 @@ fact[KeepaliveReaps]=$(as_bool in_order '^    for _, client in pairs\(server\.cl
   '^          client_manager\.send_ping\(client, "ping"\)$' '^        else$' \
   '^          client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' \
   '^          M\._disconnect_client\(server, client, 1006, "Connection timeout"\)$' <<<"$ping_timer")
+# The first tick that finds no pong for two intervals pings again and sets pong_overdue. Only the second one drops the
+# client, after a pong that was unread at a late tick had its chance to be read.
+fact[DropsOnSecondOverdueTick]=$(as_bool in_order '^        if client_manager\.is_client_alive\(client, interval \* 2\) then$' \
+  '^        elseif not client\.pong_overdue then$' '^          client\.pong_overdue = true$' \
+  '^          client_manager\.send_ping\(client, "ping"\)$' '^        else$' \
+  '^          client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' <<<"$ping_timer")
+fact[AliveTickClearsOverdue]=$(as_bool in_order '^        if client_manager\.is_client_alive\(client, interval \* 2\) then$' \
+  '^          client\.pong_overdue = nil$' '^          client_manager\.send_ping\(client, "ping"\)$' '^        elseif not client\.pong_overdue then$' \
+  <<<"$ping_timer")
 fact[PongResetsAge]=$(as_bool in_order 'elseif opcode == frame\.OPCODE\.PONG then$' \
   '^ *client\.last_pong = vim\.loop\.now\(\)$' <<<"$process_data")
 fact[WakeResetsPong]=$(as_bool in_order '^    local is_wake_from_sleep = elapsed > \(interval \* 1\.5\)$' \
@@ -140,13 +150,14 @@ EXPECT=(
   [CloseWriteOwnsSocket]=StatusCloseDelivered [StopWaitsForCloseWrite]=StatusCloseDelivered
   [UpgradeStartsKeepalive]=NoFalseTimeout [PongResetsAge]=NoFalseTimeout [WakeResetsPong]=NoFalseTimeout
   [KeepaliveReaps]=DeadClientDropped [ProtocolReportsAtOnce]=DeadClientDropped
+  [DropsOnSecondOverdueTick]=NoFalseTimeout [AliveTickClearsOverdue]=NoFalseTimeout
   [DisconnectClosesSocket]=DroppedSocketCloses [UnlistedDisconnectReleases]=DroppedSocketCloses
   ["RejectClosesSocket+UnlistedDisconnectReleases"]=DroppedSocketCloses
 )
 MUTANT_NOTES=("  RejectClosesSocket alone is caught by no rule: _disconnect_client also closes the socket of a client that left the server.")
 
-# Safety rules: one connection, Claude sends 3 frames (its upgrade request included), one tick gap. Liveness rules:
-# 2 frames and no tick gap, which keeps each run under 10 s. DroppedSocketCloses alone assumes that Claude reads again.
+# Safety rules: one connection, Claude sends 3 frames (its upgrade request included), two delayed ticks (a gap above
+# 1.5 intervals, or a late tick). Liveness rules: 2 frames and no delayed tick, which keeps each run under 10 s. DroppedSocketCloses alone assumes that Claude reads again.
 tla_constants() {
   local reads=FALSE
   [[ $1 != *DroppedSocketCloses ]] || reads=TRUE
@@ -158,7 +169,7 @@ tla_constants() {
     ;;
   *)
     echo "  PeerBudget = 3"
-    echo "  MaxSleeps = 1"
+    echo "  MaxSleeps = 2"
     ;;
   esac
   echo "  PeerEventuallyReads = $reads"
@@ -166,6 +177,7 @@ tla_constants() {
   echo "  GapDuringHandshake = TRUE"
   echo "  WindowFullOnProtocolClose = TRUE"
   echo "  StopBeforeOnClose = TRUE"
+  echo "  LateTickAfterPing = TRUE"
 }
 
 tla_main "$@"
