@@ -4,12 +4,12 @@
 
 `scripts/` holds developer and release tooling for claudecode.nvim. Nothing here is loaded by the plugin at runtime. The directory has four groups:
 
-1. Test harnesses (`run_integration_tests_individually.sh`, `manual_test_helper.lua`).
+1. Test harnesses (`run_integration_tests_individually.sh`, `manual_test_helper.lua`) and `coverage-summary.sh`, which turns the luacov report into the CI coverage summary.
 2. Standalone reproductions of GitHub issues (`repro_issue_*.lua`, `repro_issue_*.sh`). `repro_issue_70_probe.lua` matches that pattern, but it is a helper that `repro_issue_70.sh` runs.
 3. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`, `package-lock.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`. It also runs the pinned `communique` binary with the repo's `communique.toml` against a fake Anthropic API, to check that one release-notes submission fits the configured output budget.
 4. TLA+ model-check tooling in `tla/`: `check-lib.sh`, the harness that every `.agents/skills/verify-*/check.sh` sources, and `test-check-lib.sh`, its tests.
 
-CI runs six of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh`, `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"`, and `scripts/manual_test_helper.lua` (by absolute path, from a directory outside the repo) on Neovim stable and v0.8.0, `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`), and `./scripts/tla/test-check-lib.sh`. The same job also runs every `.agents/skills/verify-*/check.sh`, and each of those sources `scripts/tla/check-lib.sh`.
+CI runs seven of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `scripts/coverage-summary.sh luacov.report.out "$PWD"` after the unit tests, `./scripts/run_integration_tests_individually.sh`, `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"`, and `scripts/manual_test_helper.lua` (by absolute path, from a directory outside the repo) on Neovim stable and v0.8.0, `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`), and `./scripts/tla/test-check-lib.sh`. The same job also runs every `.agents/skills/verify-*/check.sh`, and each of those sources `scripts/tla/check-lib.sh`.
 
 `mise.toml` provisions `websocat` for `repro_issue_238.sh`, `repro_issue_248.sh`, and `repro_issue_277.sh`, `jq` for the repro scripts that parse JSON, and `communique` for the release tooling. It does not provide `agent-tty`, which `repro_issue_70.sh`, `repro_issue_218.sh`, and `repro_issue_277.sh` need. `repro_issue_277.sh` also needs `git` and `perl`, and `repro_issue_70.sh` needs the `claude` CLI [repro_issue_70.sh:MISSING dependency] [repro_issue_218.sh:agent-tty] [repro_issue_277.sh:MISSING dependency].
 
@@ -21,6 +21,7 @@ For a manual WebSocket check, create an empty out file, then run `mise exec -- n
 
 - `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout -k 5s 30s`, and prints totals [run_integration_tests_individually.sh:run_test_file].
 - `manual_test_helper.lua` is run with `:luafile` in a Neovim that has the plugin on its `runtimepath`. It calls the `claudecode.tools.open_diff` handler in a coroutine and reports whether it yields [manual_test_helper.lua:test_opendiff_directly]. CI fails unless it opens the repo's `README.md` and the handler yields [.github/workflows/test.yml:Manual openDiff helper works outside the repo].
+- `coverage-summary.sh <luacov.report.out> <checkout folder>` prints a Markdown summary of the report's Summary table: the Total row as the overall figure, then one row per file with the checkout folder stripped and a mark per threshold (90% and above, 70% and above, below 70%). It exits 0 when it prints the summary, 1 when the report has no file row, no Total row or a repeated path, 2 when the report cannot be read, and 64 for the wrong number of arguments. `tests/unit/coverage_summary_spec.lua` runs it on small reports [coverage-summary.sh:emoji].
 
 ### TLA+ model checks
 
