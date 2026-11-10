@@ -130,6 +130,20 @@ describe("Tool: get_current_selection", function()
       expect(parsed_result.selection.start.line).to_be(6)
     end)
 
+    it("answers no active editor when the previous window also shows the Claude terminal", function()
+      _G.vim.fn.winnr = function(arg)
+        return arg == "#" and 2 or 1
+      end
+      _G.vim.api.nvim_win_get_buf = function()
+        return 1
+      end
+
+      local result = get_current_selection_handler({})
+      local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+      expect(parsed_result.success).to_be_false()
+      expect(parsed_result.message).to_be("No active editor found")
+    end)
+
     it("answers no active editor when there is no previous window", function()
       _G.vim.fn.winnr = function(arg)
         return arg == "#" and 0 or 1

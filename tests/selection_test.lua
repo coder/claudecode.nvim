@@ -687,6 +687,29 @@ describe("Selection module", function()
     end)
   end)
 
+  it("should read the cursor and buffer of the given window", function()
+    _G.vim.test.add_buffer(42, "/other/window.lua", { "one", "two", "three" })
+    local old_get_cursor, old_get_buf = _G.vim.api.nvim_win_get_cursor, _G.vim.api.nvim_win_get_buf
+    finally(function()
+      _G.vim.api.nvim_win_get_cursor, _G.vim.api.nvim_win_get_buf = old_get_cursor, old_get_buf
+    end)
+    _G.vim.api.nvim_win_get_cursor = function(winid)
+      assert(winid == 1042, "read the cursor of window " .. tostring(winid))
+      return { 3, 2 }
+    end
+    _G.vim.api.nvim_win_get_buf = function(winid)
+      assert(winid == 1042, "read the buffer of window " .. tostring(winid))
+      return 42
+    end
+
+    local cursor_pos = selection.get_cursor_position(1042)
+
+    assert(cursor_pos.filePath == "/other/window.lua", "got " .. tostring(cursor_pos.filePath))
+    assert(cursor_pos.selection.start.line == 2)
+    assert(cursor_pos.selection.start.character == 2)
+    assert(cursor_pos.selection.isEmpty == true)
+  end)
+
   it("should get cursor position in normal mode", function()
     local old_win_get_cursor = _G.vim.api.nvim_win_get_cursor
     _G.vim.api.nvim_win_get_cursor = function()
@@ -1733,6 +1756,14 @@ describe("Range Selection Tests", function()
           return 8
         end
         assert(selection.is_claude_terminal_buffer(8) == true)
+      end)
+
+      it("is false for a terminal whose cwd, not its command, contains claude", function()
+        _G.vim.test.add_buffer(11, "term://~/src/claudecode.nvim//321:/bin/bash", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(11) == false)
       end)
 
       it("is false for a file buffer and for another terminal", function()
