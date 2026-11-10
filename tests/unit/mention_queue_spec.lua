@@ -909,6 +909,28 @@ describe("The @ mention queue", function()
     end
   )
 
+  it("C: a flush that the deadline cancelled does not send a mention sent right after the deadline", function()
+    send("/project/a.lua")
+    run(9000)
+    local claude = claude_connects()
+    claude.upgrade()
+    -- The handshake completes at 10 s, so the flush for this Claude is due at the deadline of a.lua, 10.6 s. On the
+    -- main loop, after the deadline's callback cancelled that flush and before the flush's callback runs, you send b.lua.
+    at(1000, claude.handshake_written)
+    at(1600, function()
+      vim.schedule(function()
+        send("/project/b.lua")
+      end)
+    end)
+    run(1600)
+    assert.same({}, claude.received(), "b.lua waits the 50 ms after its send")
+
+    run(100)
+    assert.same({ "b.lua" }, names(claude.received()))
+    assert.same({ 10600 }, error_times)
+    assert_no_lua_error()
+  end)
+
   it("E: a send while a flush is due does not postpone that flush", function()
     local claude = claude_connects()
     claude.handshake()
