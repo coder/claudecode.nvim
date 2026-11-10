@@ -97,7 +97,10 @@ jobs:
                 if (index(file, root) == 1) file = substr(file, length(root) + 1)
                 if (file == "Total") {
                   overall = $NF
+                } else if (file in seen) {
+                  if (repeated++ == 0) first_repeated = file
                 } else {
+                  seen[file] = 1
                   rows = rows "| `" file "` | " emoji($NF) " " $NF " |\n"
                   count++
                 }
@@ -106,6 +109,10 @@ jobs:
                 print "## 📊 Test Coverage Report\n"
                 if (count == 0 || overall == "") {
                   print "❌ luacov.report.out has no per-file row or no Total row"
+                  exit 1
+                }
+                if (repeated > 0) {
+                  print "❌ luacov.report.out repeats a path (" repeated " extra rows, first `" first_repeated "`). Check `modules` in .luacov."
                   exit 1
                 }
                 print "**Overall Coverage: " overall "**\n"

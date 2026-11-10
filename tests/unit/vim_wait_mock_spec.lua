@@ -51,6 +51,17 @@ describe("tests.mocks.vim wait", function()
     assert.are.equal(101, polls)
   end)
 
+  it("rounds the poll count down when the interval does not divide the timeout", function()
+    local polls = 0
+
+    mock_vim.wait(105, function()
+      polls = polls + 1
+      return false
+    end, 10)
+
+    assert.are.equal(11, polls)
+  end)
+
   it("defaults to a 1000 ms timeout and a 10 ms interval", function()
     local polls = 0
 
