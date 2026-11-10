@@ -40,14 +40,18 @@
 # session's home is a fresh temp directory, so none of them belongs to another run).
 # SIGTERM, SIGINT and SIGHUP run the same cleanup, and the cleanup ignores further signals,
 # so every step in it has a deadline. It stops the Neovim that is restoring plugins and
-# that Neovim's child processes (SIGTERM, then SIGKILL after about 5 s: Neovim ignores
-# SIGTERM while a vim.fn.system() child runs, as in lazy.nvim's bootstrap clone, and then
-# does not exit), and removes the plugin directories that the interrupted restore added, so
-# that no half-installed plugin stays for the next run. It lets an `agent-tty create` that
-# is already running finish (about 5 s), and destroys every session in the run's own
-# agent-tty home. Each agent-tty call in the cleanup runs in its own session and has a
-# deadline, because Node resets a signal that the cleanup ignores, and a second signal to
-# the process group would kill the call.
+# that Neovim's child processes (SIGTERM, then SIGKILL after about 5 s). A Neovim that gets
+# a deadly signal while a vim.fn.system() child runs, as in lazy.nvim's bootstrap clone,
+# stops that child within a few seconds and then does not exit. The cleanup removes the
+# plugin directories that the interrupted restore added, so that no half-installed plugin
+# stays for the next run. It lets an `agent-tty create` that is already running finish
+# (about 5 s), and destroys every session in the run's own agent-tty home. Each agent-tty
+# call in the cleanup runs in its own process group (bash job control) and has a deadline
+# (30 s, and 60 s for `destroy`), because Node resets a signal that the cleanup ignores, and
+# a second signal to the script's process group would kill the call. A call that a deadline
+# stops prints a warning on the stderr that the script started with. A session of this run
+# can then still be running, so the agent-tty home, its registry entry and the temp
+# directory stay, and the warning prints the commands that list and remove them.
 # Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
@@ -132,9 +136,10 @@ tree_alive() {
     }'
 }
 # Stop the process $1 and its descendants. SIGTERM first: git removes a partial clone on SIGTERM.
-# Neovim ignores a deadly signal while a vim.fn.system() child runs, so SIGKILL whatever is alive
-# after about 5 s. Descendants that appear while it waits get the SIGTERM too. The deadline is in
-# seconds, not in loop counts, because one `ps` call can take 0.3 s on a loaded host.
+# A Neovim that got a deadly signal while a vim.fn.system() child ran stops the child and then
+# does not exit, so SIGKILL whatever is alive after about 5 s. Descendants that appear while it
+# waits get the SIGTERM too. The deadline is in seconds, not in loop counts, because one `ps`
+# call can take 0.3 s on a loaded host.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 stop_tree() {
   local known=" " live new p end=$((SECONDS + 6))
