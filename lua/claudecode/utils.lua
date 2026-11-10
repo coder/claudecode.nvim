@@ -14,6 +14,20 @@ function M.normalize_focus(focus)
   end
 end
 
+---Maps Ctrl-Z in terminal mode on a buffer to `:suspend`. Otherwise the terminal passes Ctrl-Z to Claude Code, which
+---suspends itself and cannot be resumed from the Neovim terminal (#194). A buffer-local mapping that already exists
+---stays, so a user's `FileType` handler can replace it.
+---@param bufnr number The Claude terminal buffer
+function M.map_terminal_suspend(bufnr)
+  local existing = vim.api.nvim_buf_call(bufnr, function()
+    return vim.fn.maparg("<C-z>", "t", false, true)
+  end)
+  if existing.buffer == 1 then
+    return
+  end
+  vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
+end
+
 ---Split a command string into an argument vector using POSIX shell word rules.
 ---
 ---Honors single quotes, double quotes, and backslash escapes so terminal
