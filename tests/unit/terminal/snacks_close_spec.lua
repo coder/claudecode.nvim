@@ -119,6 +119,13 @@ describe("claudecode.terminal.snacks close", function()
           state.pending_writes[id] = true
           return #data
         end,
+        -- Neovim raises for a job that exited or was stopped.
+        jobpid = function(id)
+          if not state.running_jobs[id] then
+            error("Vim:E900: Invalid channel id")
+          end
+          return 40000 + id
+        end,
         jobwait = function(ids)
           local results = {}
           for i, id in ipairs(ids) do

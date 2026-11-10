@@ -181,10 +181,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
         state.exiting_jobs = {}
         for _, id in ipairs(exiting) do
           for bufnr, buf in pairs(state.buffers) do
-            if buf.jobid == id then
-              for _, autocmd in ipairs(buf.term_close_autocmds or {}) do
-                autocmd.callback({ buf = bufnr })
-              end
+            if buf.jobid == id and buf.on_term_close then
+              buf.on_term_close({ buf = bufnr })
             end
             if buf.jobid == id and buf.snacks_term_close then
               buf.snacks_term_close()
@@ -229,28 +227,10 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end,
         nvim_create_autocmd = function(event, opts)
           if event == "TermClose" and opts.buffer and state.buffers[opts.buffer] then
-            local buf = state.buffers[opts.buffer]
-            buf.term_close_autocmds = buf.term_close_autocmds or {}
-            table.insert(buf.term_close_autocmds, opts)
+            state.buffers[opts.buffer].on_term_close = opts.callback
           elseif event == "TermClose" and not opts.buffer then
             table.insert(state.term_close_autocmds, opts.callback)
           end
-        end,
-        nvim_create_augroup = function(name)
-          return name
-        end,
-        nvim_clear_autocmds = function(opts)
-          local buf = state.buffers[opts.buffer]
-          if not buf then
-            return
-          end
-          local kept = {}
-          for _, autocmd in ipairs(buf.term_close_autocmds or {}) do
-            if autocmd.group ~= opts.group then
-              table.insert(kept, autocmd)
-            end
-          end
-          buf.term_close_autocmds = kept
         end,
         nvim_win_is_valid = function(win)
           return state.windows[win] ~= nil
@@ -489,75 +469,67 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end)
   end)
 
-  -- The job exits: Snacks' TermClose handler of the copy that started the Claude runs first, then the handlers that
-  -- later copies added. The scheduled close that the first handler queues has not run.
-  local function exit_job(bufnr)
+  -- The job's exit. `handlers` = false is an exit whose TermClose handlers have not run yet: an autocmd that the user
+  -- defined earlier runs before them. Otherwise Snacks' handler of the copy that started the Claude runs, and the
+  -- scheduled close that it queues has not run.
+  local function exit_job(bufnr, handlers)
     local buf = state.buffers[bufnr]
     state.running_jobs[buf.jobid] = nil
-    if buf.snacks_term_close then
+    if handlers ~= false and buf.snacks_term_close then
       buf.snacks_term_close()
-    end
-    for _, autocmd in ipairs(buf.term_close_autocmds or {}) do
-      autocmd.callback({ buf = bufnr })
     end
   end
 
-  describe("a Claude that exits between its TermClose and the scheduled close", function()
+  describe("a Claude that exited before the scheduled close runs", function()
     for _, entry in ipairs(entries) do
-      for _, hidden in ipairs({ false, true }) do
-        it(string.format("is not shown again by %s after a reload (hidden=%s)", entry[1], tostring(hidden)), function()
-          snacks_provider.open("claude", {}, config, true)
-          local claude = started[1]
-          if hidden then
-            snacks_provider.simple_toggle("claude", {}, config)
-          end
-          reload_snacks()
-          assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      for _, reload in ipairs({ false, true }) do
+        for _, handlers in ipairs({ false, true }) do
+          -- Without a reload and with the handler run, the tracked terminal is forgotten at the exit already.
+          it(
+            string.format(
+              "is not shown again by %s (reload=%s, handlers run=%s)",
+              entry[1],
+              tostring(reload),
+              tostring(handlers)
+            ),
+            function()
+              snacks_provider.open("claude", {}, config, true)
+              local claude = started[1]
+              if reload then
+                reload_snacks()
+                assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+              end
 
-          exit_job(claude.buf)
-          entry[2]()
+              exit_job(claude.buf, handlers)
+              entry[2]()
 
-          assert.are.equal(2, #started)
-          assert.are.equal(1, running_count())
-          assert.are.equal(1, windows_showing(started[2].buf))
-          assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
-        end)
+              assert.are.equal(2, #started)
+              assert.are.equal(1, running_count())
+              assert.are.equal(1, windows_showing(started[2].buf))
+              assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
+            end
+          )
+        end
       end
     end
 
-    -- :ClaudeCodeClose clears `terminal` before it waits. A scheduled open can start another Claude in that wait,
-    -- before the stopped job's TermClose runs.
-    it("does not forget a newer terminal that an open started while the adopted one closed", function()
-      snacks_provider.open("claude", {}, config, true)
-      reload_snacks()
-      assert.are.equal(started[1].buf, snacks_provider.get_active_bufnr())
-      local wait = vim.wait
-      vim.wait = function(...)
-        while #state.scheduled > 0 do
-          table.remove(state.scheduled, 1)()
-        end
-        return wait(...)
-      end
-      vim.schedule(function()
+    for _, hidden in ipairs({ false, true }) do
+      it("is forgotten when it was hidden (hidden=" .. tostring(hidden) .. ")", function()
         snacks_provider.open("claude", {}, config, true)
-      end)
-
-      snacks_provider.close()
-
-      assert.are.equal(2, #started)
-      assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
-    end)
-
-    it("keeps one handler per buffer, however many reloads adopt it", function()
-      snacks_provider.open("claude", {}, config, true)
-      local claude = started[1]
-      for _ = 1, 3 do
+        local claude = started[1]
+        if hidden then
+          snacks_provider.simple_toggle("claude", {}, config)
+        end
         reload_snacks()
         assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
-      end
 
-      assert.are.equal(1, #state.buffers[claude.buf].term_close_autocmds)
-    end)
+        exit_job(claude.buf, false)
+        snacks_provider.open("claude", {}, config, true)
+
+        assert.are.equal(2, #started)
+        assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
+      end)
+    end
 
     it("stays tracked without auto_close, which keeps an exited Claude by design", function()
       snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
@@ -565,10 +537,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
       reload_snacks()
       assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
 
-      exit_job(claude.buf)
+      exit_job(claude.buf, false)
+      snacks_provider.open("claude", {}, config, true)
 
+      assert.are.equal(1, #started)
       assert.are.equal(claude, snacks_provider._get_terminal_for_test())
-      assert.are.equal(0, #(state.buffers[claude.buf].term_close_autocmds or {}))
     end)
   end)
 

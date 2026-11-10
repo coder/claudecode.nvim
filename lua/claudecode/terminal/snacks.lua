@@ -403,34 +403,25 @@ local function patch_instance(term, config)
   end
 end
 
----The TermClose handler of an instance that an earlier copy of this module started clears that copy's `terminal`, not
----this copy's. So with auto_close, this copy forgets an adopted instance when its job exits, as setup_terminal_events
----does for its own. Otherwise an open between the exit and the scheduled close would show the dead terminal, which
----that close then wipes.
----@param instance table The adopted Snacks terminal instance
-local function forget_adopted_on_exit(instance)
-  local started_with = instance._cc and instance._cc.config
-  if not (started_with and started_with.auto_close) then
+---Forgets the tracked terminal when its Claude has exited and `auto_close` applies. Its close is pending then, so an
+---open must start a new Claude instead of showing it. The TermClose handler of setup_terminal_events forgets it too,
+---but a TermClose autocmd that calls the plugin can run first (autocmds run in definition order), and an instance that
+---an earlier copy of this module started has only that copy's handler, which clears only that copy's `terminal`.
+local function forget_ended_terminal()
+  if not (terminal and terminal:buf_valid()) then
     return
   end
-  -- Clearing the group first keeps one handler per buffer, however many reloads adopt it.
-  local group = vim.api.nvim_create_augroup("ClaudeCodeSnacksAdopted", { clear = false })
-  vim.api.nvim_clear_autocmds({ group = group, buffer = instance.buf })
-  vim.api.nvim_create_autocmd("TermClose", {
-    group = group,
-    buffer = instance.buf,
-    once = true,
-    callback = function()
-      if terminal == instance then
-        terminal = nil
-      end
-    end,
-  })
+  local started_with = terminal._cc and terminal._cc.config
+  if started_with and started_with.auto_close and owned.job_ended(terminal.buf) then
+    terminal = nil
+  end
 end
 
----When no terminal is tracked, tracks the one that an earlier copy of this module started (before a reload): Snacks
----keeps its instances, and the Claude buffer keeps its mark. A window may or may not show it.
+---Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the one that an earlier
+---copy of this module started (before a reload): Snacks keeps its instances, and the Claude buffer keeps its mark. A
+---window may or may not show it.
 local function adopt_existing_terminal()
+  forget_ended_terminal()
   if terminal and terminal:buf_valid() then
     return
   end
@@ -441,7 +432,6 @@ local function adopt_existing_terminal()
   for _, instance in ipairs(Snacks.terminal.list()) do
     if instance.buf and owned.is_live(instance.buf, OWNED_MARK) then
       terminal = instance
-      forget_adopted_on_exit(instance)
       require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", instance.buf)
       return
     end
