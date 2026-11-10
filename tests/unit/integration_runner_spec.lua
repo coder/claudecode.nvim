@@ -1,12 +1,8 @@
---- scripts/run_integration_tests_individually.sh runs each tests/integration spec in its own Neovim, and CI's integration
---- jobs trust its exit status. The spec below runs the real script in a scratch tree, with stub `timeout` and `nvim`
---- programs that print what plenary prints and exit with a chosen status, so it needs no Neovim and waits for no timeout.
 require("tests.busted_setup")
 
 local temp_dir = require("tests.helpers.temp_dir")
 local quote = temp_dir.quote
 
-local STUB_TIMEOUT = { "#!/bin/sh", "shift", 'exec "$@"' }
 local STUB_NVIM = {
   "#!/bin/sh",
   'for arg in "$@"; do',
@@ -16,6 +12,10 @@ local STUB_NVIM = {
   "done",
   "name=${spec##*/}",
   'echo "$name" >> "$STUB_DIR/ran"',
+  'if [ -f "$STUB_DIR/$name.orphan" ]; then',
+  "  sh -c 'trap \"\" TERM; exec sleep 60' > /dev/null 2>&1 &",
+  '  echo $! > "$STUB_DIR/$name.orphan.pid"',
+  "fi",
   'cat "$STUB_DIR/$name.out"',
   'exit "$(cat "$STUB_DIR/$name.exit")"',
 }
@@ -43,10 +43,19 @@ local function shell(command)
   assert(status == 0 or status == true, "failed: " .. command)
 end
 
+local has_timeout = os.execute("command -v timeout > /dev/null 2>&1")
+if not (has_timeout == 0 or has_timeout == true) then
+  describe("scripts/run_integration_tests_individually.sh", function()
+    pending("needs GNU timeout")
+  end)
+  return
+end
+
 describe("scripts/run_integration_tests_individually.sh", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
   local script = root .. "/scripts/run_integration_tests_individually.sh"
   local dir
+  local orphan_pid
 
   ---@param path string
   ---@param lines string[]
@@ -60,18 +69,38 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
   end
 
+  ---@param pid string
+  ---@return boolean running A zombie that init has not reaped yet does not count
+  local function is_running(pid)
+    local pipe = assert(io.popen("ps -o stat= -p " .. pid .. " 2> /dev/null"))
+    local stat = pipe:read("*a")
+    pipe:close()
+    return stat:match("%S") ~= nil and stat:match("^%s*Z") == nil
+  end
+
+  ---@param pid string
+  local function wait_until_stopped(pid)
+    local deadline = os.time() + 3
+    while is_running(pid) and os.time() < deadline do
+      os.execute("sleep 0.1")
+    end
+  end
+
   before_each(function()
     dir = temp_dir.new()
+    orphan_pid = nil
     shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
-    write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
     write(dir .. "/bin/nvim", STUB_NVIM, true)
   end)
 
   after_each(function()
+    if orphan_pid and is_running(orphan_pid) then
+      shell("kill -KILL " .. orphan_pid)
+    end
     temp_dir.remove(dir)
   end)
 
-  ---@param specs { name: string, exit: integer, output: string[] }[]
+  ---@param specs { name: string, exit: integer, output: string[], orphan: boolean|nil }[]
   ---@return string status
   ---@return string output
   ---@return string[] ran
@@ -80,6 +109,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
       write(dir .. "/tests/integration/" .. spec.name, {})
       write(dir .. "/" .. spec.name .. ".out", spec.output)
       write(dir .. "/" .. spec.name .. ".exit", { tostring(spec.exit) })
+      if spec.orphan then
+        write(dir .. "/" .. spec.name .. ".orphan", {})
+      end
     end
     local command = "cd " .. quote(dir) .. " && PATH=" .. quote(dir .. "/bin") .. ':"$PATH" STUB_DIR=' .. quote(dir)
     local pipe = assert(io.popen(command .. " " .. quote(script) .. " 2>&1; echo status=$?"))
@@ -104,6 +136,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
     assert.are.equal("0", status, output)
     assert.is_truthy(output:find("All integration tests passed!", 1, true), output)
+    assert.is_nil(output:find("TIMEOUT", 1, true), output)
   end)
 
   it("runs command_args_spec.lua like every other file", function()
@@ -116,21 +149,23 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_nil(output:find("Skipping", 1, true), output)
   end)
 
-  it("fails a file that hit the timeout before busted printed its summary", function()
+  it("fails a file that hit the timeout while its specs ran", function()
     local status, output = run_script({
       { name = "hang_spec.lua", exit = 124, output = hung_output("hang_spec.lua") },
     })
 
     assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("TIMEOUT: hang_spec.lua was stopped (exit 124)", 1, true), output)
     assert.is_truthy(output:find("Failed test files:\n  - hang_spec.lua", 1, true), output)
   end)
 
-  it("fails a file that was killed by SIGTERM before busted printed its summary", function()
+  it("fails a file that was killed by SIGTERM while its specs ran", function()
     local status, output = run_script({
       { name = "killed_spec.lua", exit = 143, output = hung_output("killed_spec.lua") },
     })
 
     assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("TIMEOUT: killed_spec.lua was stopped (exit 143)", 1, true), output)
     assert.is_truthy(output:find("Failed test files:\n  - killed_spec.lua", 1, true), output)
   end)
 
@@ -140,24 +175,51 @@ describe("scripts/run_integration_tests_individually.sh", function()
     })
 
     assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("TIMEOUT: silent_spec.lua was stopped (exit 124)", 1, true), output)
     assert.is_truthy(output:find("Failed test files:\n  - silent_spec.lua", 1, true), output)
   end)
 
-  it("still fails a file whose summary counts a failure, whatever the exit status", function()
-    local status, output = run_script({
-      { name = "failing_spec.lua", exit = 124, output = summary(2, 1, 0) },
-    })
-
-    assert.are.equal("1", status, output)
-    assert.is_truthy(output:find("Failed test files:\n  - failing_spec.lua", 1, true), output)
-  end)
-
-  it("lets a file pass whose specs all finished and only nvim's exit hung", function()
+  it("fails a file whose specs all passed but whose nvim did not exit", function()
     local status, output = run_script({
       { name = "slow_exit_spec.lua", exit = 124, output = summary(4, 0, 0) },
     })
 
-    assert.are.equal("0", status, output)
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("TIMEOUT: slow_exit_spec.lua was stopped (exit 124)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - slow_exit_spec.lua", 1, true), output)
+  end)
+
+  it("fails a file whose summary counts a failure, without a TIMEOUT line", function()
+    local status, output = run_script({
+      { name = "failing_spec.lua", exit = 1, output = summary(2, 1, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("Failed test files:\n  - failing_spec.lua", 1, true), output)
+    assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("fails a file whose nvim crashed before any summary, without a TIMEOUT line", function()
+    local status, output = run_script({
+      { name = "crash_spec.lua", exit = 1, output = hung_output("crash_spec.lua") },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("Failed test files:\n  - crash_spec.lua", 1, true), output)
+    assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("kills what a timed-out file leaves running", function()
+    local status, output = run_script({
+      { name = "spin_spec.lua", exit = 124, output = hung_output("spin_spec.lua"), orphan = true },
+    })
+    local pid_file = assert(io.open(dir .. "/spin_spec.lua.orphan.pid"))
+    orphan_pid = pid_file:read("*l")
+    pid_file:close()
+
+    assert.are.equal("1", status, output)
+    wait_until_stopped(orphan_pid)
+    assert.is_false(is_running(orphan_pid), "the process the file left running was killed")
   end)
 
   it("runs the files after a hung one and lists only the hung one", function()

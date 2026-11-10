@@ -24,12 +24,13 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  # Create a temporary file for output
-  local temp_output
+  local temp_output group_file
   temp_output=$(mktemp)
+  group_file=$(mktemp)
 
-  # Run the test with timeout (nvim from PATH: action-setup-vim in CI, mise locally)
-  if timeout 30s nvim --headless -u tests/minimal_init.lua \
+  # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
+  if bash -c 'echo $$ > "$1"; shift; exec timeout 30s "$@"' _ "$group_file" \
+    nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
     2>&1 | tee "$temp_output"; then
     EXIT_CODE=0
@@ -56,23 +57,20 @@ run_test_file() {
   TOTAL_FAILED=$((TOTAL_FAILED + failed_count))
   TOTAL_ERRORS=$((TOTAL_ERRORS + error_count))
 
-  # Exit 124 is timeout's and 143 is SIGTERM. Plenary prints "Errors :" last, after every spec in the file has run, so a
-  # timeout after it only means nvim's exit hung. Without it, a spec hung or was killed mid-run.
-  local summary_count
-  summary_count=$(echo "$clean_output" | grep -c "^Errors :" || true)
-  local hung=false
-  if { [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 143 ]]; } && [[ $summary_count -eq 0 ]]; then
-    hung=true
-    echo "TIMEOUT: $basename stopped (exit $EXIT_CODE) before busted printed its summary"
+  # Exit 124 is timeout's and 143 is SIGTERM.
+  if [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 143 ]]; then
+    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within 30s"
+    # nvim busy in a Lua loop ignores SIGTERM and outlives timeout.
+    kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
   fi
 
   # Check if test failed
-  if [[ $hung == true ]] || [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || { [[ $EXIT_CODE -ne 0 ]] && [[ $EXIT_CODE -ne 124 ]] && [[ $EXIT_CODE -ne 143 ]]; }; then
+  if [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || [[ $EXIT_CODE -ne 0 ]]; then
     FAILED_FILES+=("$basename")
   fi
 
   # Cleanup
-  rm -f "$temp_output"
+  rm -f "$temp_output" "$group_file"
 }
 
 for test_file in tests/integration/*_spec.lua; do
