@@ -3,6 +3,10 @@ local repo = assert(os.getenv("VCN_REPO"), "VCN_REPO is not set")
 vim.opt.rtp:prepend(repo)
 vim.o.swapfile = false
 
+for _, dir in ipairs(vim.split(os.getenv("VCN_RTP") or "", ":", { plain = true, trimempty = true })) do
+  vim.opt.rtp:append(dir)
+end
+
 -- provider "none": the scripted WebSocket client plays Claude, so no `claude` CLI may start.
 local opts = { terminal = { provider = "none" } }
 local extra = os.getenv("VCN_SETUP")
