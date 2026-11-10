@@ -361,6 +361,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
       auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
+                            -- (defaults to `bo = { filetype = "claudecode" }`, see Terminal Buffer Filetype)
       -- Work around a Neovim core bug (< 0.12.2) that fragments large pastes into
       -- the terminal, making Cmd+V appear to truncate ([#161]). true | false | "auto"
       -- ("auto", the default, enables it only on affected Neovim versions).
@@ -476,6 +477,36 @@ require("claudecode").setup({
   },
 })
 ```
+
+### Terminal Buffer Filetype
+
+The `native` and `snacks` providers set the filetype of the Claude terminal buffer to `claudecode`, so autocmds and
+ftplugins can target it. For example, to keep the Claude buffer out of the buffer list (#201):
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode",
+  callback = function(args)
+    vim.bo[args.buf].buflisted = false
+  end,
+})
+```
+
+- `native` sets the filetype once per terminal, after the job starts, so `buftype` is already `terminal` in the handler.
+- `snacks` sets it through the Snacks window options (`bo.filetype`). That replaces the `snacks_terminal` filetype that
+  snacks.nvim gives its terminals, so a `FileType snacks_terminal` autocmd no longer matches the Claude buffer. Your
+  `snacks_win_opts` take precedence over this default. To get the Snacks filetype back, or to pick another name:
+
+  ```lua
+  terminal = {
+    snacks_win_opts = { bo = { filetype = "snacks_terminal" } }, -- or any filetype you like
+  }
+  ```
+
+  Snacks applies `bo` when it creates the buffer, before the job starts (`buftype` is still `nofile`), and again when it
+  re-creates a window that was closed, so `FileType` can fire more than once for one buffer. Keep the handler idempotent.
+
+- `external` and `none` create no Neovim buffer, so they set no filetype.
 
 ## Floating Window Configuration
 
