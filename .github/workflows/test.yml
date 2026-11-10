@@ -187,6 +187,20 @@ jobs:
       - name: Reject-on-quit regression gate (#238)
         run: nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 
+      # Regression gate for scripts/manual_test_helper.lua. It once hardcoded one developer's
+      # checkout path, so it printed "README.md not found" in every other checkout. Run it by
+      # absolute path from a directory outside the repo. It must open this checkout's README.md,
+      # and the openDiff handler's coroutine must suspend.
+      - name: Manual openDiff helper works outside the repo
+        env:
+          REPO: ${{ github.workspace }}
+        run: |
+          cd "$(mktemp -d)"
+          output="$(timeout 60 nvim --headless -u NONE --cmd "set rtp+=$REPO" -c "luafile $REPO/scripts/manual_test_helper.lua" -c "sleep 300m" -c "qa!" 2>&1)"
+          printf '%s\n' "$output"
+          grep -qF "Old file: $REPO/README.md" <<<"$output" || { echo "FAIL: the helper did not open $REPO/README.md"; exit 1; }
+          grep -qF "openDiff is properly blocking!" <<<"$output" || { echo "FAIL: the openDiff coroutine did not suspend"; exit 1; }
+
   # covered.lock records the lua/ and plugin/ code that the openDiff lifecycle model was last
   # confirmed against. check.sh model-checks that lifecycle with TLC on the runner's Java, then
   # compares the lock. Advisory: Required does not need this job, so a broken rule or a stale
