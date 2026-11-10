@@ -95,7 +95,7 @@
 ---@field terminal_cmd string?
 ---@field provider_opts ClaudeCodeTerminalProviderOptions?
 ---@field auto_close boolean
----@field auto_insert boolean -- auto-enter insert/terminal mode when the Claude terminal gains focus (#232); false keeps Normal mode + scroll position
+---@field auto_insert boolean -- auto-enter terminal mode when the plugin opens/focuses the Claude terminal; snacks also on any window focus, native not on <C-w>l (#232); false keeps Normal mode + scroll position
 ---@field env table<string, string>
 ---@field snacks_win_opts snacks.win.Config
 ---@field cwd string|nil                 -- static working directory for Claude terminal

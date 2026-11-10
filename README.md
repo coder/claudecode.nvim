@@ -355,9 +355,11 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       diff_split_width_percentage = nil, -- e.g. 0.20 to give diffs more room
       provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
-      -- Auto-enter insert/terminal mode whenever the Claude terminal window gains
-      -- focus. Set to false to stay in Normal mode and preserve your scroll position
-      -- when switching back to the terminal (e.g. via <C-w>l); press `i` to type.
+      -- Auto-enter terminal mode when the plugin opens or focuses the Claude terminal
+      -- (e.g. :ClaudeCodeFocus). With the snacks provider it also enters terminal mode
+      -- whenever the window gains focus, e.g. via <C-w>l. With native, <C-w>l back into
+      -- the terminal stays in Normal mode. Set to false to stay in Normal mode with
+      -- either provider and preserve your scroll position; press `i` to type.
       -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
       auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
@@ -515,19 +517,23 @@ vim.api.nvim_create_autocmd("FileType", {
 
 ### Leaving Terminal Mode in the Claude Terminal
 
-The Claude terminal runs in terminal mode, where Neovim sends every key to Claude Code. So `<C-w>h` and your own window
-mappings do nothing there. `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on it itself
-(#53, #77).
+The Claude terminal runs in terminal mode. There Neovim sends your keys to Claude Code, so `<C-w>h` and your Normal-mode
+window mappings do nothing. A single `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on
+it itself (#53, #77). With the `snacks` provider, two `<Esc>` presses less than about 200 ms apart do leave terminal
+mode, but the first one still reaches Claude Code.
 
-The plugin does not remap terminal keys, so you choose them:
+The plugin maps no key that leaves terminal mode or moves between windows, so you choose them:
 
 - `<C-\><C-n>` works with no setup. Neovim handles it, so Claude Code never sees it. You stay in the Claude window in
   Normal mode, and `<C-w>h` and the other window commands work. To type to Claude Code again, press `i` in the Claude
-  window. (When you come back to it from another window, the `snacks` provider re-enters terminal mode by itself.)
+  window. When you come back to it from another window with the default `terminal.auto_insert = true`, `:ClaudeCodeFocus`
+  enters terminal mode with either provider, and `<C-w>l` and the other window commands do so only with `snacks`. With
+  `auto_insert = false`, none of them do.
 - A shorter key is a mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer Filetype above). It exists on the
   Claude buffer only, so other terminals keep their keys, and a single `<Esc>` still goes to Claude Code.
 
-To switch windows with `<C-h>`, `<C-j>`, `<C-k>` and `<C-l>` (each key leaves terminal mode and moves):
+To switch windows with `<C-h>`, `<C-j>`, `<C-k>` and `<C-l>` (each key leaves terminal mode and moves to the window in
+that direction, or stays in the Claude window when there is none):
 
 ```lua
 vim.api.nvim_create_autocmd("FileType", {
@@ -554,13 +560,19 @@ vim.api.nvim_create_autocmd("FileType", {
 })
 ```
 
-A key you map no longer reaches Claude Code, and Claude Code binds some Ctrl keys itself, so pick keys you do not use
-there. Do not map `<Esc>`: the `snacks` provider sets its own `<Esc>` key on the Claude buffer, and it replaces a mapping
-from your autocmd.
+A key you map no longer reaches Claude Code, so pick keys you do not need there. The first example takes `<C-j>` (new
+line), `<C-k>` (delete to the end of the line) and `<C-l>` (redraw the screen) away from the Claude Code prompt. Its
+[interactive mode reference](https://code.claude.com/docs/en/interactive-mode) lists them and lists no binding for
+`<C-h>` or `<C-q>`. Do not map `<Esc>`: the `snacks` provider sets its own `<Esc>` key on the Claude buffer, and it
+replaces a mapping from your autocmd.
 
 If `<C-h>` and the others clash with tmux or a navigation plugin, use `<A-h>` and the others instead (write `"<A-"` for
-`"<C-"` in the first block). In a floating Claude window (`snacks_win_opts.position = "float"`), the four keys all go back
-to the window you came from.
+`"<C-"` in the first block). They move between Neovim windows only. To move between tmux panes as well, use
+vim-tmux-navigator: map the key to `<C-\><C-n><Cmd>TmuxNavigateLeft<CR>` (and `TmuxNavigateDown`, `TmuxNavigateUp`,
+`TmuxNavigateRight`) in place of `<C-\><C-n><C-w>h`.
+
+In a floating Claude window (`snacks_win_opts.position = "float"`), the four keys all go back to the window you came
+from.
 
 ## Floating Window Configuration
 
