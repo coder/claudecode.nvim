@@ -46,9 +46,22 @@ local function clear_held_state()
   M.state.cursor_at_flush = nil
 end
 
----Reports the cursor at once if the text of the visual selection in `latest_selection` changed since it was read.
----Claude must not keep text that is gone, not even until the debounce fires: the debounce does nothing in the
----Claude terminal.
+---Returns true if the buffer still has the text of a selection at the selection's range. The range is in bytes, as
+---the selection was read. A change elsewhere in the buffer leaves it as it was, unless it shifts the range.
+---@param held table A selection that is not empty.
+---@param bufnr number
+---@return boolean
+local function selection_text_is_there(held, bufnr)
+  local start_pos, end_pos = held.selection.start, held.selection["end"]
+  local ok, lines =
+    pcall(vim.api.nvim_buf_get_text, bufnr, start_pos.line, start_pos.character, end_pos.line, end_pos.character, {})
+  return ok and utils.valid_utf8(table.concat(lines, "\n")) == held.text
+end
+
+---Reports the cursor at once if the buffer's text changed since the visual selection in `latest_selection` was read,
+---and the selection's text is no longer at its range. Claude must not keep text that is gone, not even until the
+---debounce fires: the debounce does nothing in the Claude terminal. The changedtick says that the buffer changed,
+---not where, so the range is read again.
 ---@return boolean demoted
 local function demote_if_selection_text_changed()
   local read = M.state.selection_tick
@@ -60,6 +73,9 @@ local function demote_if_selection_text_changed()
   if read.bufnr ~= current_buf or vim.api.nvim_buf_get_changedtick(current_buf) == read.tick then
     return false
   end
+  if selection_text_is_there(held, current_buf) then
+    return false
+  end
   clear_held_state()
   M.update_selection()
   return true
@@ -68,13 +84,14 @@ end
 ---Reacts, at the moment it happens, to something that ends the hold on a visual selection. A timer that compares
 ---the cursor when it fires does not see a move away and back inside one debounce, and does not see an edit that
 ---leaves the cursor where it was.
----1. The text changed: report the cursor now.
----2. The cursor left the flushed position: note it in `cursor_at_flush.left`. The next update and the demotion then
----   report the cursor, even if the cursor comes back.
+---1. The text of the selection changed: report the cursor now.
+---2. The cursor left the flushed position: report the cursor now. It is final at CursorMoved. The Claude terminal
+---   does not update the selection, so a move that waited for the debounce would leave the old selection there.
 ---3. Another buffer was entered: note it in `cursor_at_flush.away`, and decide at the next event whether it was
 ---   the Claude terminal. A new Claude terminal has no name and is not registered yet when BufEnter fires, so
 ---   the decision cannot be made then. The Claude terminal is not a place the selection left: going there keeps
----   the held selection (issue #246). Any other buffer sets `left`.
+---   the held selection (issue #246). Any other buffer sets `cursor_at_flush.left`: the next update and the
+---   demotion then report the cursor, even if the cursor comes back. The cursor is not final at BufEnter.
 ---@param compare_cursor boolean false at BufEnter: Neovim restores the window cursor after that event, so only the
 ---buffer and the text say whether the selection is gone.
 local function reconcile_held_selection(compare_cursor)
@@ -101,7 +118,8 @@ local function reconcile_held_selection(compare_cursor)
   elseif caf.bufnr ~= current_buf then
     caf.away = current_buf
   elseif compare_cursor and not cursor_unmoved_since_flush(current_buf) then
-    caf.left = true
+    clear_held_state()
+    M.update_selection()
   end
 end
 
@@ -118,8 +136,8 @@ M.state = {
   -- { bufnr, pos, left, away }: buffer and cursor position captured when a visual selection is
   -- flushed on visual-mode exit. Demotion only fires once the cursor actually moves away from this
   -- position, so a held selection persists (see issue #246 and M.flush_visual_selection).
-  -- on_cursor_moved sets `left` when the cursor leaves, so coming back does not undo it. `away` is
-  -- the buffer entered since, until the plugin knows whether it is the Claude terminal.
+  -- `left` is set when another buffer was entered, so coming back does not undo it. `away` is the
+  -- buffer entered since, until the plugin knows whether it is the Claude terminal.
   cursor_at_flush = nil,
 
   -- { bufnr, tick }: the buffer and its changedtick when the visual selection in latest_selection

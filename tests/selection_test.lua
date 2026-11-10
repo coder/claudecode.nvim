@@ -1827,7 +1827,20 @@ describe("Range Selection Tests", function()
     end)
 
     describe("a held selection follows the buffer and the cursor", function()
-      local original_get_current_buf, original_get_changedtick
+      local original_get_current_buf, original_get_changedtick, original_get_text
+
+      -- nvim_buf_get_text over the mock buffer's lines: byte columns, clamped as Neovim does, an error for a row
+      -- that is not there.
+      local function mock_get_text(bufnr, start_row, start_col, end_row, end_col)
+        local lines = _G.vim._buffers[bufnr].lines
+        assert(lines[start_row + 1] ~= nil and lines[end_row + 1] ~= nil, "Index out of bounds")
+        local text = {}
+        for row = start_row, end_row do
+          local line = lines[row + 1]
+          table.insert(text, line:sub((row == start_row and start_col or 0) + 1, row == end_row and end_col or #line))
+        end
+        return text
+      end
 
       -- Runs the callback the plugin registered for an event, with the event name as Neovim passes it, so the
       -- wiring in _create_autocommands is part of every test.
@@ -1893,10 +1906,14 @@ describe("Range Selection Tests", function()
       end
 
       -- The text changes and TextChanged fires; the cursor stays.
-      local function change_text(tick, line)
+      local function change_lines(tick, lines)
         _G.vim._changedtick = tick
-        _G.vim.test.add_buffer(1, "/path/to/a.txt", { line })
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", lines)
         fire_autocmd("TextChanged")
+      end
+
+      local function change_text(tick, line)
+        change_lines(tick, { line })
       end
 
       -- x on the cursor: CursorMoved also fires, because the text of the cursor line changed.
@@ -1933,6 +1950,8 @@ describe("Range Selection Tests", function()
       before_each(function()
         original_get_current_buf = _G.vim.api.nvim_get_current_buf
         original_get_changedtick = _G.vim.api.nvim_buf_get_changedtick
+        original_get_text = _G.vim.api.nvim_buf_get_text
+        _G.vim.api.nvim_buf_get_text = mock_get_text
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma" })
         _G.vim.test.add_buffer(2, "/path/to/b.txt", { "one two" })
         _G.vim.test.set_cursor(0, 1, 0)
@@ -1941,6 +1960,7 @@ describe("Range Selection Tests", function()
       after_each(function()
         _G.vim.api.nvim_get_current_buf = original_get_current_buf
         _G.vim.api.nvim_buf_get_changedtick = original_get_changedtick
+        _G.vim.api.nvim_buf_get_text = original_get_text
         _G.vim._buffers[2] = nil
       end)
 
@@ -2098,14 +2118,14 @@ describe("Range Selection Tests", function()
         assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
 
-      it("holds no deleted text when you move, edit and go to the Claude terminal inside one debounce", function()
+      it("reports the cursor at once when you move away, so the Claude terminal does not keep the selection", function()
         selection.enable(mock_server)
         start_selecting(5)
         release_selection(1, 5, 4)
         settle()
 
-        move_cursor(5) -- l: the cursor left the selection
-        change_text(6, "alpha eta gamma") -- an edit elsewhere in the line
+        move_cursor(5) -- l: no timer has fired
+        assert_claude_holds_cursor("/path/to/a.txt", 5)
         terminal_module.get_active_terminal_bufnr = function()
           return 2
         end
@@ -2113,6 +2133,51 @@ describe("Range Selection Tests", function()
         settle()
 
         assert_claude_holds_cursor("/path/to/a.txt", 5)
+      end)
+
+      it("keeps the selection when the buffer changes after its range", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        mock_server.last_broadcast = nil
+
+        change_lines(6, { "alpha beta gamma", "a second line" }) -- a plugin appends a line: the changedtick moves
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      it("ends the selection when the buffer loses the line it ended on", function()
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta", "gamma delta" })
+        selection.enable(mock_server)
+        start_selecting(5)
+        _G.vim.test.set_mode("n")
+        _G.vim._visualmode = "v"
+        _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 2, 5, 0 } }
+        _G.vim.test.set_cursor(0, 2, 4)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+        settle()
+        assert.are.equal("alpha beta\ngamma", selection.get_latest_selection().text)
+
+        change_lines(6, { "alpha beta" }) -- there is no row 1 to read any more
+        settle()
+
+        assert.are.equal(true, selection.get_latest_selection().selection.isEmpty)
+      end)
+
+      it("ends the selection when a change before its range shifts it", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+
+        change_lines(6, { "see: alpha beta gamma" }) -- the range 0-5 now holds "see: "
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
 
       it("holds no deleted text after you leave, come back, edit and go to the terminal quickly", function()
