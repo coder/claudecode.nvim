@@ -1,13 +1,13 @@
 -- A pending `startinsert` starts only when Neovim's main loop is back in control, so the mode is read from a child
--- Neovim over RPC after the call that opened the diff has returned.
+-- Neovim over RPC after the call that opened or closed the diff has returned.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
-  describe("openDiff in a new tab: mode", function()
+  describe("a diff in a new tab: mode", function()
     pending("needs a real Neovim")
   end)
   return
 end
 
-describe("openDiff in a new tab: mode", function()
+describe("a diff in a new tab: mode", function()
   local chan
 
   local function call(code, ...)
@@ -125,6 +125,30 @@ describe("openDiff in a new tab: mode", function()
     ]])
   end
 
+  local function close_diff(tab_name)
+    call(
+      [[
+      local tab_name = ...
+      local response = require("claudecode.tools.init").handle_invoke({ id = "mode_spec_client" }, {
+        name = "close_tab",
+        arguments = { tab_name = tab_name },
+      })
+      assert(response.result, vim.inspect(response.error))
+    ]],
+      tab_name
+    )
+  end
+
+  local function leave_terminal_mode()
+    vim.rpcrequest(chan, "nvim_input", "<C-\\><C-N>")
+    return child_state()
+  end
+
+  local function go_to_first_tab()
+    call([[vim.api.nvim_set_current_tabpage(vim.api.nvim_list_tabpages()[1])]])
+    return child_state()
+  end
+
   local function shows_proposal(state)
     return state.name:find("(proposed)", 1, true) ~= nil or state.name:find("(unified diff)", 1, true) ~= nil
   end
@@ -199,6 +223,59 @@ describe("openDiff in a new tab: mode", function()
 
         assert.equal("terminal", state.buftype)
         assert.equal("nt", state.mode)
+      end)
+
+      describe("when Claude closes it", function()
+        for _, snacks_auto_insert in ipairs({ false, true }) do
+          local provider = snacks_auto_insert and " (the terminal buffer also auto-inserts on BufEnter, as with Snacks)"
+            or ""
+
+          it("leaves Normal mode in the file after the user left the diff tab's terminal" .. provider, function()
+            start_child({ layout = layout, snacks_auto_insert = snacks_auto_insert })
+            open_diff("a.txt", "first diff")
+            focus_terminal_in_tab()
+            assert.equal("t", child_state().mode)
+            assert.equal("nt", leave_terminal_mode().mode)
+
+            close_diff("first diff")
+            local state = child_state()
+
+            assert.equal(1, state.tabs)
+            assert.is_true(state.name:find("a.txt", 1, true) ~= nil, state.name)
+            assert.equal("n", state.mode)
+          end)
+
+          it("leaves Normal mode in the file when the user is in the first tab" .. provider, function()
+            start_child({ layout = layout, snacks_auto_insert = snacks_auto_insert })
+            open_diff("a.txt", "first diff")
+            focus_terminal_in_tab()
+            leave_terminal_mode()
+            local before = go_to_first_tab()
+            assert.equal("n", before.mode)
+            assert.is_true(before.name:find("a.txt", 1, true) ~= nil, before.name)
+
+            close_diff("first diff")
+            local state = child_state()
+
+            assert.equal(1, state.tabs)
+            assert.is_true(state.name:find("a.txt", 1, true) ~= nil, state.name)
+            assert.equal("n", state.mode)
+          end)
+        end
+
+        it("leaves Normal mode in the file when the user was still in terminal mode", function()
+          start_child({ layout = layout })
+          open_diff("a.txt", "first diff")
+          focus_terminal_in_tab()
+          assert.equal("t", child_state().mode)
+
+          close_diff("first diff")
+          local state = child_state()
+
+          assert.equal(1, state.tabs)
+          assert.is_true(state.name:find("a.txt", 1, true) ~= nil, state.name)
+          assert.equal("n", state.mode)
+        end)
       end)
 
       it("leaves the cursor in the terminal, in terminal mode, with keep_terminal_focus", function()

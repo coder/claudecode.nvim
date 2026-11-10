@@ -834,16 +834,16 @@ local vim = {
       end
       vim.api.nvim_win_set_buf(vim._current_window, bufnr)
     elseif command:match("^tabclose") then
-      -- Close current tab: remove all its windows and switch to the lowest-numbered remaining tab
-      local curtab = vim._current_tabpage
-      local wins = vim._tab_windows[curtab] or {}
+      local closing_tab = tonumber(command:match("^tabclose%s+(%d+)")) or vim._current_tabpage
+      local closes_current = closing_tab == vim._current_tabpage
+      local wins = vim._tab_windows[closing_tab] or {}
       for _, w in ipairs(wins) do
         if vim._windows[w] then
           vim.api.nvim_win_close(w, true)
         end
       end
-      vim._tab_windows[curtab] = nil
-      vim._tabs[curtab] = nil
+      vim._tab_windows[closing_tab] = nil
+      vim._tabs[closing_tab] = nil
       -- switch to lowest-numbered existing tab
       local new_cur = nil
       for t, _ in pairs(vim._tabs) do
@@ -851,7 +851,7 @@ local vim = {
           new_cur = t
         end
       end
-      if not new_cur then
+      if closes_current and not new_cur then
         -- recreate a default tab and window
         vim._tabs[1] = true
         local bufnr = vim.api.nvim_create_buf(true, false)
@@ -863,7 +863,7 @@ local vim = {
         vim._tab_windows[1] = { winid }
         vim._current_window = winid
         vim._current_tabpage = 1
-      else
+      elseif closes_current then
         vim._current_tabpage = new_cur
         local list = vim._tab_windows[new_cur]
         if list and #list > 0 then

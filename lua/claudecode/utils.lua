@@ -51,6 +51,15 @@ function M.win_set_buf_without_bufenter(win, buf)
   end
 end
 
+---Close the tab page `tab` without making it the current tab page. Entering it first runs the BufEnter handlers of
+---the buffer in its current window. A Claude terminal there can queue an insert with `startinsert` (the diff's own
+---handler, Snacks' auto_insert, #423), and the close then moves the cursor to the user's file, where the insert starts.
+---When `tab` is the current tab page, the close moves the cursor as `:tabclose` does.
+---@param tab number A valid tab page handle
+function M.close_tabpage_without_entering(tab)
+  pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
+end
+
 ---Split a command string into an argument vector using POSIX shell word rules.
 ---
 ---Honors single quotes, double quotes, and backslash escapes so terminal

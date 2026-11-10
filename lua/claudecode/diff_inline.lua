@@ -4,6 +4,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 local ns = vim.api.nvim_create_namespace("claudecode_inline_diff")
 
@@ -591,8 +592,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
     end
 
     if diff_data.new_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
-      pcall(vim.api.nvim_set_current_tabpage, diff_data.new_tab_number)
-      pcall(vim.cmd, "tabclose")
+      utils.close_tabpage_without_entering(diff_data.new_tab_number)
       if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
         pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
       end

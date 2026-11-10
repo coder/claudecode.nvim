@@ -1349,9 +1349,7 @@ function M._cleanup_diff_state(tab_name, reason)
 
     -- Prefer closing the specific new tab we created, if we tracked its handle/number
     if diff_data.new_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
-      -- Prefer closing by switching to the new tab then executing :tabclose
-      pcall(vim.api.nvim_set_current_tabpage, diff_data.new_tab_number)
-      pcall(vim.cmd, "tabclose")
+      utils.close_tabpage_without_entering(diff_data.new_tab_number)
       -- Restore original tab focus if still valid
       if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
         pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
