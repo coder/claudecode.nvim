@@ -1,40 +1,40 @@
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua 2a23b89a8274ad0b
+file lua/claudecode/init.lua f7c7fff32489cedd
 block main_start             7bf331d94d09a034
-block main_stop              a9958aa6dee75143
+block main_stop              d754def6d5865650
 site lua/claudecode/init.lua: local success, error = M.state.server.stop() @ function M.stop()
 site lua/claudecode/init.lua: server.stop() @ function M.start(show_startup_notification)
 site lua/claudecode/init.lua: server.stop() @ function M.start(show_startup_notification)
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua 17a9b0569e89a532
+file lua/claudecode/server/client.lua 3454ff62e057b632
 block create_client          647b7523dea26af6
 block add_data_frame         69425d49d1ca87c9
-block process_data           b1acf9ec227bdd05
+block process_data           95250da577d1962f
 block send_message           d382a5c2d1bd263a
 block send_ping              c723eca106d04816
 block fail_connection        70123c02ed0a9b33
 block close_client           c7e88adcbc971e97
 block is_alive               d9f6aabe97653b5f
 site lua/claudecode/server/client.lua: M.close_client(client, status, CLOSE_REASONS[status]) @ local function fail_connection(client, status, problem, on_error)
-site lua/claudecode/server/client.lua: client.handshake_complete = true @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.last_pong = vim.loop.now() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.last_pong = vim.loop.now() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+site lua/claudecode/server/client.lua: client.handshake_complete = true @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.last_pong = vim.loop.now() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.last_pong = vim.loop.now() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 site lua/claudecode/server/client.lua: client.state = "closed" @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.state = "closed" @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.state = "closed" @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.state = "closing" @ function M.close_client(client, code, reason)
-site lua/claudecode/server/client.lua: client.state = "closing" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.state = "closing" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.state = "connected" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.state = "upgrading" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+site lua/claudecode/server/client.lua: client.state = "closing" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.state = "closing" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.state = "connected" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.state = "upgrading" @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.close_client(client, code, reason)
-site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.tcp_handle:write(close_frame) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.tcp_handle:write(close_frame) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 site lua/claudecode/server/client.lua: client.tcp_handle:write(close_frame, function() @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.tcp_handle:write(ping_frame) @ function M.send_ping(client, data)
-site lua/claudecode/server/client.lua: client.tcp_handle:write(pong_frame) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
-site lua/claudecode/server/client.lua: client.tcp_handle:write(response_from_handshake, function(err) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+site lua/claudecode/server/client.lua: client.tcp_handle:write(pong_frame) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.tcp_handle:write(response_from_handshake, function(err) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 site lua/claudecode/server/client.lua: client.tcp_handle:write(text_frame, callback) @ function M.send_message(client, message, callback)
 site lua/claudecode/server/client.lua: function M.close_client(client, code, reason) @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: function M.is_client_alive(client, timeout) @ function M.is_client_alive(client, timeout)
@@ -48,16 +48,16 @@ file lua/claudecode/server/handshake.lua 3eca35d572094a55
 block process_handshake      46341209ae5ab06a
 block extract_request        936e9a8b79d36106
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua f1dca3428031fc70
-block server_start           0fe9e5dfe2a780d2
+file lua/claudecode/server/init.lua d6e881211c59f191
+block server_start           4850c1f04593774e
 block server_stop            4dae0bf675cf2cc1
 site lua/claudecode/server/init.lua: M.state.ping_timer = tcp_server.start_ping_timer(server, 30000) -- Start ping timer to keep connections alive @ function M.start(config, auth_token)
 site lua/claudecode/server/init.lua: M.state.ping_timer:close() @ function M.stop()
 site lua/claudecode/server/init.lua: M.state.ping_timer:stop() @ function M.stop()
 site lua/claudecode/server/init.lua: tcp_server.stop_server(M.state.server) @ function M.stop()
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua a3df52a32c9b4414
-block new_connection         01318c346a6680f8
+file lua/claudecode/server/tcp.lua a291c2d0f65ef167
+block new_connection         c34a2e437ade680a
 block release_socket         de7e50701ce4c83d
 block disconnect             122662fc03352d6b
 block remove_client          b69196261758008d
