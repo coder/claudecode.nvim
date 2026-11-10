@@ -479,6 +479,23 @@ describe("Tool: open_file", function()
     expect(result.content[1].text).to_be("Opened file and selected lines 1 to 1")
   end)
 
+  it("opens into the first suitable window when several qualify", function()
+    _G.vim.api.nvim_list_wins = spy.new(function()
+      return { 1000, 2000, 3000 }
+    end)
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      return option == "diff" and win == 1000
+    end)
+    local called_win
+    _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+      called_win = win
+      return callback()
+    end)
+
+    expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
+    expect(called_win).to_be(2000)
+  end)
+
   describe("with no suitable editor window", function()
     -- Like Neovim, wincmd t and l move to the top-left window and to its right, wincmd j to the window below, and
     -- vsplit and {N}split make a new current window next to or above the current one, showing the same buffer.
@@ -1094,6 +1111,27 @@ describe("Tool: open_file", function()
       )
     end)
 
+    it("shows the file in the preview window of the tab page of the editor window it picked", function()
+      -- Windows 2000 and 3000 are in tab page 2, which is not the current one, and 3000 is its preview window.
+      win_buf[2000], win_buf[3000], preview_flag[3000] = 10, 10, true
+      _G.vim.api.nvim_list_wins = spy.new(function()
+        return { 2000 }
+      end)
+      _G.vim.api.nvim_win_get_tabpage = spy.new(function(win)
+        return win == 1000 and 1 or 2
+      end)
+      _G.vim.api.nvim_tabpage_list_wins = spy.new(function(tab)
+        return tab == 2 and { 2000, 3000 } or { 1000 }
+      end)
+
+      open({})
+
+      assert.are.same({ 30, 10 }, { win_buf[3000], win_buf[2000] })
+      for _, command in ipairs(_G.vim.cmd_history) do
+        assert.are_not.equal("12split", command)
+      end
+    end)
+
     describe("when the file changed on disk", function()
       -- Claude can write the file before it asks to open it.
       before_each(function()
@@ -1263,46 +1301,56 @@ describe("Tool: open_file", function()
       end)
     end)
 
-    describe(
-      "when an autocommand fails as the preview window gets a loaded buffer that Neovim does not check",
-      function()
-        before_each(function()
-          buffers[30].loaded = true
-          -- Neovim skips its file check, so openFile turns the check off itself by setting 'buftype' for a moment.
-          _G.vim.o.eventignore = "FileChangedShell"
-        end)
+    describe("when the preview window gets a loaded buffer that Neovim does not check", function()
+      before_each(function()
+        buffers[30].loaded = true
+        -- Neovim skips its file check, so openFile turns the check off itself by setting 'buftype' for a moment.
+        _G.vim.o.eventignore = "FileChangedShell"
+      end)
 
-        it("fails with the error of the autocommand and gives the buffer its 'buftype' back", function()
-          _G.vim.api.nvim_create_autocmd("BufEnter", {
-            buffer = 30,
-            callback = function()
-              error("user boom")
-            end,
-          })
+      it("keeps a 'buftype' that an autocommand sets while the buffer is shown", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            buffers[30].buftype = "nofile"
+          end,
+        })
 
-          local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+        expect(pcall(open_file_handler, { filePath = "test.txt", preview = true })).to_be_true()
 
-          expect(success).to_be_false()
-          assert_contains(err, "user boom")
-          expect(buffers[30].buftype or "").to_be("")
-        end)
+        expect(buffers[30].buftype).to_be("nofile")
+      end)
 
-        it("fails with the error of the autocommand when the autocommand wipes the buffer first", function()
-          _G.vim.api.nvim_create_autocmd("BufEnter", {
-            buffer = 30,
-            callback = function()
-              buffers[30] = nil
-              error("user boom")
-            end,
-          })
+      it("fails with the error of the autocommand and gives the buffer its 'buftype' back", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            error("user boom")
+          end,
+        })
 
-          local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
 
-          expect(success).to_be_false()
-          assert_contains(err, "user boom")
-        end)
-      end
-    )
+        expect(success).to_be_false()
+        assert_contains(err, "user boom")
+        expect(buffers[30].buftype or "").to_be("")
+      end)
+
+      it("fails with the error of the autocommand when the autocommand wipes the buffer first", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            buffers[30] = nil
+            error("user boom")
+          end,
+        })
+
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(success).to_be_false()
+        assert_contains(err, "user boom")
+      end)
+    end)
 
     describe("when the buffer was opened before its file existed", function()
       -- Neovim fires BufNewFile for it. Claude then creates the file.
