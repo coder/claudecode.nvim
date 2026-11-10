@@ -147,4 +147,26 @@ describe("Tool: save_document", function()
     assert_contains(parsed_result.message, "Failed to save file")
     expect(parsed_result.filePath).to_be("/path/to/saveable_file.lua")
   end)
+
+  it("should report only the Vim error when :write fails", function()
+    _G.vim.cmd = spy.new(function()
+      error(
+        "vim/_core/editor:355: nvim_exec2(), line 1: Vim(write):E45: 'readonly' option is set (add ! to override)"
+          .. "\nstack traceback:\n\t[C]: in function 'nvim_exec2'\n\t/home/user/plugin/save_document.lua:50: in function"
+      )
+    end)
+    local result = save_document_handler({ filePath = "/path/to/saveable_file.lua" })
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_false()
+    expect(parsed_result.message).to_be("Failed to save file: E45: 'readonly' option is set (add ! to override)")
+  end)
+
+  it("should keep only the first line of an error without a Vim error code", function()
+    _G.vim.cmd = spy.new(function()
+      error("disk full\nstack traceback:\n\t/home/user/plugin/save_document.lua:50: in function", 0)
+    end)
+    local result = save_document_handler({ filePath = "/path/to/saveable_file.lua" })
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.message).to_be("Failed to save file: disk full")
+  end)
 end)
