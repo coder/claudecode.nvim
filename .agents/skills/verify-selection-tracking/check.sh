@@ -68,9 +68,10 @@ flush_skips_operator() {
       '^    return$' 'M\.get_visual_selection_from_marks\(\)' <<<"$flush"
 }
 fact[FlushSkipsOperator]=$(as_bool flush_skips_operator)
-# Each terminal guard compares the current buffer with the active Claude terminal buffer and returns.
+# Each terminal guard compares the current buffer with the active Claude terminal buffer and returns. The flush's next
+# statement after its guard is `local entry`: a later `return` (the operator skip) must not stand in for the guard's.
 fact[FlushSkipsTerminal]=$(as_bool in_order 'if M\.is_claude_terminal_buffer\(current_buf\) then' '^ *return$' \
-  'M\.get_visual_selection_from_marks\(\)' <<<"$flush")
+  '^  local entry = M\.state\.visual_entry$' <<<"$flush")
 fact[UpdateSkipsTerminal]=$(as_bool in_order 'if M\.is_claude_terminal_buffer\(current_buf\) then' 'M\._cancel_demotion_timer\(\)' '^ *return$' \
   '^  local current_mode_info = vim\.api\.nvim_get_mode\(\)$' <<<"$update_selection")
 fact[FlushRecordsCursor]=$(as_bool in_order 'M\.get_visual_selection_from_marks\(\)' \
@@ -200,27 +201,28 @@ fact[ReadRecordsTick]=$(as_bool read_records_tick)
 RULES=(ReleaseSent NoPhantomSelection NoTerminalSelection HeldUntilMoved HeldEndsWhenMoved SameFile ClaudeSeesCursor
   NoDeletedText TimerClosedOnce)
 LIVE=()
-# Six guards break no rule alone, because another guard in the code covers for them. EXPECT lists each with a guard that
-# covers for it (a "+" key sets both FALSE) and the rule that breaks when both go.
+# Four guards break no rule alone, because another guard in the code covers for them. EXPECT lists each with a guard
+# that covers for it (a "+" key sets both FALSE) and the rule that breaks when both go.
 EXPECT=(
   [FlushOnVisualExit]=ReleaseSent [FlushSkipsOperator]=NoPhantomSelection
   [FlushSkipsTerminal]=NoTerminalSelection [UpdateSkipsTerminal]=NoTerminalSelection
   [FlushRecordsCursor]=HeldUntilMoved [PendingKeepsHeld]=HeldUntilMoved [DemotionWaitsForMove]=HeldUntilMoved
   [DebounceIgnoresStale]=TimerClosedOnce [DemotionIgnoresStale]=TimerClosedOnce [ClearsBeforeClose]=TimerClosedOnce
   [FlushSkipReports]=NoDeletedText [ReadRecordsTick]=NoDeletedText [TextChangeReports]=NoDeletedText
-  [ReconcileOnCursorMoved]=HeldEndsWhenMoved [MoveReports]=HeldEndsWhenMoved
+  [ReconcileOnTextChanged]=NoDeletedText [ReconcileOnCursorMoved]=HeldEndsWhenMoved [MoveReports]=HeldEndsWhenMoved
+  [LeaveNoted]=HeldEndsWhenMoved
   ["DemotionClearsHeldState+MoveReports"]=ClaudeSeesCursor
   ["PendingClearsHeld+ReconcileOnCursorMoved"]=ClaudeSeesCursor
   ["ElseClearsHeldState+LeaveNoted"]=SameFile
   ["EntryClearsHeld+FlushSkipReports"]=HeldEndsWhenMoved
-  ["ReconcileOnTextChanged+ReconcileOnCursorMoved"]=NoDeletedText
 )
 
-# The main run explores any visual_demotion_delay_ms with two files. SameFile needs a second file in its mutant runs.
+# The main run explores any visual_demotion_delay_ms with two files. Two rules need a second file in their mutant runs:
+# SameFile, and HeldEndsWhenMoved (LeaveNoted breaks it only when the user can visit another file).
 # DelayBelowDebounce stays FALSE: TRUE would drop every order in which a demotion timer fires after a later debounce.
 tla_constants() {
   local rule=${1##*-} files="f1"
-  [[ $1 != main && $rule != SameFile ]] || files="f1, f2"
+  [[ $1 != main && $rule != SameFile && $rule != HeldEndsWhenMoved ]] || files="f1, f2"
   echo "  Files = {$files}"
   echo "  Term = term"
   echo "  Pos = {p1, p2}"

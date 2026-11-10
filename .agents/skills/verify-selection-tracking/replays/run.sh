@@ -2,7 +2,12 @@
 # Run one replay probe on headless Neovim with this checkout first on 'runtimepath'.
 # Usage: .agents/skills/verify-selection-tracking/replays/run.sh <probe>.lua   (NVIM=/path/to/nvim to pick a binary)
 # Each run gets a fresh XDG and CLAUDE_CONFIG_DIR under $XUM_SCRATCH_DIR (or /tmp), removed afterwards.
+# Exit 0 when the probe prints OK, 1 when it prints BUG.
 set -euo pipefail
+[[ $# -eq 1 ]] || {
+  echo "usage: run.sh <probe>.lua   (NVIM=/path/to/nvim picks the binary, DELAY_MS=<ms> sets the demotion delay of the two long-delay probes)" >&2
+  exit 2
+}
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$here" rev-parse --show-toplevel)
 probe=$here/$(basename "$1")

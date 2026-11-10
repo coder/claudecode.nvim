@@ -272,8 +272,8 @@ Flush(s, e) ==
 
 (* selection.lua on_mode_changed, then the debounce. *)
 OnModeChanged(s, e, entering, leaving) ==
-  LET entered == [s EXCEPT !.entryBuf = e.buf, !.entryVer = e.ver[e.buf]]
-      s1 == CASE entering /\ FlushSkipsOperator -> IF e.buf = Term \/ ~EntryClearsHeld THEN entered ELSE ClearHeld(entered)
+  LET entered == IF FlushSkipsOperator THEN [s EXCEPT !.entryBuf = e.buf, !.entryVer = e.ver[e.buf]] ELSE s
+      s1 == CASE entering -> IF e.buf = Term \/ ~EntryClearsHeld THEN entered ELSE ClearHeld(entered)
               [] leaving /\ FlushOnVisualExit -> Flush(s, e)
               [] OTHER -> s
   IN DebounceUpdate(s1)
@@ -334,7 +334,10 @@ YouReleaseSelection ==
      ELSE NoSpecChange
 
 (* d, c, x, > or another operator on the selection: the text changes, visual mode ends *)
-(* (ModeChanged sees the new changedtick), the cursor lands on p, then TextChanged.    *)
+(* (ModeChanged sees the new changedtick) and the cursor lands on p. CursorMoved and    *)
+(* TextChanged fire when Neovim waits for the next key, so a mapping, a macro or         *)
+(* typeahead runs the next key first. The step leaves them out: it is the case in which  *)
+(* they have not fired yet.                                                              *)
 YouEditSelection(p) ==
   /\ buf \in Files /\ mode = "v" /\ ver[buf] < MaxEdits
   /\ LET vr == [ver EXCEPT ![buf] = @ + 1]
@@ -358,6 +361,15 @@ YouEditAtCursor ==
   /\ buf \in Files /\ mode = "n" /\ ver[buf] < MaxEdits
   /\ ver' = [ver EXCEPT ![buf] = @ + 1]
   /\ SetS(DebounceUpdate(OnText(OnCursor(S, E2(buf, "n", cur, None, None, ver'), TRUE, TRUE), E2(buf, "n", cur, None, None, ver'))))
+  /\ UNCHANGED <<buf, mode, cur, vsel>>
+  /\ NoSpecChange
+
+(* A plugin, a reload or a command changes text away from the cursor, and the held text *)
+(* with it: TextChanged fires, CursorMoved does not.                                    *)
+YouEditByPlugin ==
+  /\ buf \in Files /\ mode = "n" /\ ver[buf] < MaxEdits
+  /\ ver' = [ver EXCEPT ![buf] = @ + 1]
+  /\ SetS(DebounceUpdate(OnText(S, E2(buf, "n", cur, None, None, ver'))))
   /\ UNCHANGED <<buf, mode, cur, vsel>>
   /\ NoSpecChange
 
@@ -475,6 +487,7 @@ Next ==
   \/ \E p \in Pos : YouEditSelection(p)
   \/ \E p \in Pos : YouMoveCursor(p)
   \/ YouEditAtCursor
+  \/ YouEditByPlugin
   \/ YouEditElsewhere
   \/ \E b \in Bufs, p \in Pos : YouSwitchBuffer(b, p)
   \/ DebounceTimerFires

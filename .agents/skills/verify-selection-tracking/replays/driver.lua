@@ -2,7 +2,7 @@
 -- selection.lua with real uv timers), records every selection_changed the server would broadcast, and types keys
 -- through the main loop one step at a time. Only server.broadcast is replaced, and only in this process.
 -- A probe calls run(opts, steps, verdict): each step is { wait_ms, keys or function, label }; verdict(log, sel)
--- returns ok (boolean) and a one-line description.
+-- returns ok (boolean) and a one-line description. Neovim exits 0 for OK and 1 for BUG.
 local M = {}
 
 local function show(sel)
@@ -90,7 +90,7 @@ function M.run(opts, steps, verdict)
     say((good and "OK " or "BUG ") .. why)
     say(string.format("%d selection_changed sent, result: %s", #sent, good and "rule holds" or "rule broken"))
     io.stdout:write(table.concat(out, "\n") .. "\n")
-    vim.cmd("qa!")
+    vim.cmd(good and "qa!" or "cquit 1")
   end
   local function step()
     i = i + 1

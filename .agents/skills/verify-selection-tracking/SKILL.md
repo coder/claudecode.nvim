@@ -42,7 +42,7 @@ The shared harness is `scripts/tla/check-lib.sh` (read its header). It pins TLC 
 Exit codes:
 
 - `0` is PASS.
-- `1` means a rule broke.
+- `1` means a rule broke. A rule that breaks on a stale tree exits `1`, not `3`. With `--mutants`, `1` also means a guard no rule caught, or a rule that never broke.
 - `2` is a tool or script error, or a model whose `TypeOK` breaks.
 - `3` is STALE. The covered code changed since the model was last confirmed, so the change is unverified.
 
@@ -89,15 +89,14 @@ Not covered, so a change there shows nothing: `lua/claudecode/utils.lua` `select
 | `LeaveNoted`              | `reconcile_held_selection` notes another buffer in `cursor_at_flush.away`, and sets `cursor_at_flush.left` for one that is not the Claude terminal, once the next event arrives                                                                  |
 | `ReadRecordsTick`         | the flush and the in-visual `update_selection` record `selection_tick` (the buffer and its changedtick) next to the selection they read                                                                                                          |
 
-Six guards break no rule alone, because another guard covers for them. `--mutants` removes each with the guard that covers for it, and the rule that breaks is the one `EXPECT` in `check.sh` names:
+Four guards break no rule alone, because another guard covers for them. `--mutants` removes each with the guard that covers for it, and the rule that breaks is the one `EXPECT` in `check.sh` names. `LeaveNoted` breaks `HeldEndsWhenMoved` alone, but only with 2 files, so `--mutants` runs that rule with 2 files. `ReconcileOnTextChanged` breaks `NoDeletedText` alone because of `YouEditByPlugin`.
 
-| Removed together                                      | Rule that breaks    | The two guards                                                                                                                                |
-| ----------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DemotionClearsHeldState` and `MoveReports`           | `ClaudeSeesCursor`  | The demotion forgets the held selection after it reports the cursor. A cursor move reports the cursor and forgets the held selection at once. |
-| `PendingClearsHeld` and `ReconcileOnCursorMoved`      | `ClaudeSeesCursor`  | A pending-demotion update forgets the held selection when it reports the cursor. `CursorMoved` and `BufEnter` reconcile the hold at once.     |
-| `ElseClearsHeldState` and `LeaveNoted`                | `SameFile`          | The last branch of `update_selection` forgets the held selection. A buffer entered other than the Claude terminal ends the hold.              |
-| `EntryClearsHeld` and `FlushSkipReports`              | `HeldEndsWhenMoved` | A new visual selection forgets the held one. A flush skipped for an operator forgets it.                                                      |
-| `ReconcileOnTextChanged` and `ReconcileOnCursorMoved` | `NoDeletedText`     | `TextChanged` and `CursorMoved` both run the text check, and a key that edits at the cursor fires both.                                       |
+| Removed together                                 | Rule that breaks    | The two guards                                                                                                                                |
+| ------------------------------------------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DemotionClearsHeldState` and `MoveReports`      | `ClaudeSeesCursor`  | The demotion forgets the held selection after it reports the cursor. A cursor move reports the cursor and forgets the held selection at once. |
+| `PendingClearsHeld` and `ReconcileOnCursorMoved` | `ClaudeSeesCursor`  | A pending-demotion update forgets the held selection when it reports the cursor. `CursorMoved` and `BufEnter` reconcile the hold at once.     |
+| `ElseClearsHeldState` and `LeaveNoted`           | `SameFile`          | The last branch of `update_selection` forgets the held selection. A buffer entered other than the Claude terminal ends the hold.              |
+| `EntryClearsHeld` and `FlushSkipReports`         | `HeldEndsWhenMoved` | A new visual selection forgets the held one. A flush skipped for an operator forgets it.                                                      |
 
 The model also has three environment switches that are not facts. `check.sh` sets them in `tla_constants`:
 
@@ -105,7 +104,7 @@ The model also has three environment switches that are not facts. `check.sh` set
 - `WithTerminal`: `TRUE` lets the user go to a Claude terminal buffer. `FALSE` models `terminal.provider = "none"` or `"external"`. `check.sh` always uses `TRUE`.
 - `MaxEdits`: edits per file, 1.
 
-On `BROKEN`, the script prints the TLC trace as action names. Each action names the step it models: `YouStartSelecting`, `YouExtendSelection`, `YouReleaseSelection` (Esc), `YouEditSelection` (`d`, `c`), `YouMoveCursor`, `YouEditAtCursor` (`x`), `YouEditElsewhere`, `YouSwitchBuffer`, and for each timer `...TimerFires` (the uv timer fires and queues its callback) and `...CallbackRuns`. Read the trace with the pstack `/statechart` skill:
+On `BROKEN`, the script prints the TLC trace as action names. Each action names the step it models: `YouStartSelecting`, `YouExtendSelection`, `YouReleaseSelection` (Esc), `YouEditSelection` (`d`, `c`), `YouMoveCursor`, `YouEditAtCursor` (`x`), `YouEditByPlugin` (a plugin or reload changes the text: `TextChanged` without `CursorMoved`), `YouEditElsewhere`, `YouSwitchBuffer`, and for each timer `...TimerFires` (the uv timer fires and queues its callback) and `...CallbackRuns`. Read the trace with the pstack `/statechart` skill:
 
 1. Rerun with `--keep`.
 2. Copy the broken run's `.cfg` from the kept dir. Shrink it: `Files = {f1}` unless the rule is `SameFile`, `Ranges = {r1}`, `Pos = {p1}` unless the path moves the cursor, `MaxEdits = 0` unless it edits, `WithTerminal = FALSE` unless it visits the Claude terminal. Stop at the smallest config that still breaks the rule.
@@ -120,7 +119,7 @@ Then decide which kind of failure it is:
 
 ## Replays
 
-Each probe in `replays/` starts the plugin through the real `require("claudecode").start()` with `terminal.provider = "none"`, then types keys through Neovim's main loop with real timers. It replaces only `server.broadcast`, in its own process, to record each `selection_changed`. It prints one line per step, the settled state, `OK` or `BUG`, and a count line. Each probe replays a path that once broke a rule (see "Bugs this model found"), so `OK` shows the promise kept.
+Each probe in `replays/` starts the plugin through the real `require("claudecode").start()` with `terminal.provider = "none"`, then types keys through Neovim's main loop with real timers. It replaces only `server.broadcast`, in its own process, to record each `selection_changed`. It prints one line per step, the settled state, `OK` or `BUG`, and a count line, and Neovim exits 0 for `OK` and 1 for `BUG`. Each probe replays a path that once broke a rule (see "Bugs this model found") or that one guard alone keeps, so `OK` shows the promise kept.
 
 ```bash
 NVIM=~/.local/share/mise/installs/neovim/0.12.3/bin/nvim \
@@ -134,6 +133,7 @@ NVIM=~/.local/share/mise/installs/neovim/0.12.3/bin/nvim \
 | `held_after_operator.lua`     | `vb`, Esc, `gv`, `d`                            | `HeldEndsWhenMoved`, `NoDeletedText` |
 | `held_after_quick_move.lua`   | `ve`, Esc, `l`, then `h` 30 ms later            | `HeldEndsWhenMoved`                  |
 | `held_after_edit.lua`         | `viw`, Esc, `x`, `x`                            | `NoDeletedText`                      |
+| `held_after_plugin_edit.lua`  | `Vj`, Esc, a plugin deletes text of line 1      | `NoDeletedText`                      |
 | `other_file_after_return.lua` | `ve`, Esc, `:b b.txt`, `:b a.txt`, a long delay | `SameFile`                           |
 | `cursor_after_return.lua`     | `ve`, Esc, `l`, `h` 250 ms later, a long delay  | `ClaudeSeesCursor`                   |
 
@@ -148,7 +148,7 @@ The first version of the model found four broken rules on the code before #452. 
 
 #452 ends the hold when the cursor leaves, when a new selection starts, when an operator consumes the selection, and when its text changes. The model has each as a guard (`MoveReports`, `EntryClearsHeld`, `FlushSkipReports`, `TextChangeReports`).
 
-A review of #452 found one more path, and #471 fixed it: Claude holds selection A, you start selection B, an operator consumes B before the 100 ms in-visual debounce, and you enter the Claude terminal inside that 100 ms. Claude kept A for the whole visit. The model's flush-skip step (`FlushSkipReports`) describes the fixed code. `tests/integration/selection_held_spec.lua` replays that path with a real terminal buffer.
+A review of #452 found one more path, and #471 fixed it: Claude holds selection A, you start selection B, an operator consumes B before the 100 ms in-visual debounce, and you enter the Claude terminal inside that 100 ms. Claude kept A for the whole visit. The model has the fixed flush-skip step (`FlushSkipReports`). `tests/integration/selection_held_spec.lua` replays that exact path with a real terminal buffer. See "Scope and bounds" for what the model can and cannot say about it.
 
 ## Update after an intended change
 
@@ -161,13 +161,13 @@ A review of #452 found one more path, and #471 fixed it: Claude holds selection 
 
 ## Scope and bounds
 
-- The main run uses 2 files, the Claude terminal, 2 cursor positions, 2 selection ranges and 1 edit per file, any `visual_demotion_delay_ms` (89,313 distinct states). The `--mutants` runs use 1 file, except `SameFile` with 2.
-- One model step is one key or command together with the autocmds it fires (`ModeChanged`, `TextChanged`, `CursorMoved`, `BufEnter`). They run in the same main-loop iteration as the key, before Neovim polls libuv again, so no timer callback runs between them. A window command such as `<C-w>w` in visual mode fires `ModeChanged` in the old buffer first (checked on Neovim 0.12.3), so the model splits it into Esc and a buffer switch. Each uv timer firing and each scheduled callback is its own step. The model can fire a timer between any two keys, which also covers typeahead.
+- The main run uses 2 files, the Claude terminal, 2 cursor positions, 2 selection ranges and 1 edit per file, any `visual_demotion_delay_ms` (89,313 distinct states). The `--mutants` runs use 1 file, except `SameFile` and `HeldEndsWhenMoved` with 2.
+- One model step is one key or command together with the autocmds it fires (`ModeChanged`, `TextChanged`, `CursorMoved`, `BufEnter`). They run in the same main-loop iteration as the key, before Neovim polls libuv again, so no timer callback runs between them. A window command such as `<C-w>w` in visual mode fires `ModeChanged` in the old buffer first (checked on Neovim 0.12.3), so the model splits it into Esc and a buffer switch. Each uv timer firing and each scheduled callback is its own step. The model can fire a timer between any two keys, which also covers typeahead. Typed one key at a time, each key fires its autocmds before the next. Keys that run with no main-loop turn between them (a mapping, a macro, `:normal!`, typeahead) fire `CursorMoved` and `TextChanged` later or not at all: #471 was such a path. `YouEditSelection` leaves both out, so it is the case in which they have not fired yet.
 - An operator in visual mode (`d`, `c`, `>`) ends visual mode after the changedtick moved (checked on Neovim 0.12.3 for `d`) and lands the cursor on any position.
 - At `BufEnter` the window cursor is not restored yet, so the model compares it only at `CursorMoved` and `TextChanged`. A new Claude terminal is not registered when `BufEnter` fires, so the model lets the plugin not know it yet (`termKnown`) and decide at the next event.
-- An edit changes the held text (`YouEditSelection`, `YouEditAtCursor`) or leaves it alone (`YouEditElsewhere`). An edit that moves the held range's lines, such as a line added above, is not modeled. The code reads the range again with `nvim_buf_get_text`, and reports the cursor when the held text is not there. This was read from the code, not replayed.
+- An edit changes the held text (`YouEditSelection`, `YouEditAtCursor`, `YouEditByPlugin`) or leaves it alone (`YouEditElsewhere`). Each buffer has one text version, so the model cannot tell the text of the held selection from the text of another selection in the same buffer: the #471 path (an operator consumes a different selection) is checked by `tests/integration/selection_held_spec.lua`, and `FlushSkipReports` is caught here through an operator that consumes the held selection itself, with no `TextChanged` after it (the typeahead case). An edit that moves the held range's lines, such as a line added above, is not modeled. The code reads the range again with `nvim_buf_get_text`, and reports the cursor when the held text is not there. This was read from the code, not replayed.
 - `latest_selection` is what Claude holds: every send sets it first, `M.server` is always set while tracking runs, and both tools return it when it is set.
-- `is_claude_terminal_buffer` finds the Claude terminal by a `term://` buffer name whose command contains `claude`, or by `terminal.get_active_terminal_bufnr()`. The model has one terminal buffer, `Term`, and treats both checks as one.
+- `is_claude_terminal_buffer` finds the Claude terminal by a `term://` buffer name whose command contains `claude`, or by `terminal.get_active_terminal_bufnr()`. The model has one terminal buffer, `Term`, and treats both checks as one. `handle_selection_demotion` checks only `terminal.get_active_terminal_bufnr()`, so for a terminal that only the name check knows the code takes Condition 3 there. The model does not tell the two apart. No rule broke on that difference.
 - "After `:ClaudeCodeStop` nothing is sent" is not a rule, because no `selection.lua` guard can break it alone. `init.lua` `M.stop` calls `selection.disable()`, which clears the autocmds, both timers and `M.server`, and then stops the server, and `server.broadcast` returns `false` without a server. Start, stop and restart are not modeled.
 - Not modeled: Select mode as distinct from Visual mode, empty selections (the flush skips them), a second Claude terminal, `send_current_selection` (no caller in `lua/`), `:ClaudeCodeSend` at-mentions, and insert mode as distinct from normal mode.
 - Coming back from the Claude terminal to the file of a held selection with the cursor where it was, the model allows Claude to hold either the selection or the cursor (`holdLoose`), and `HeldUntilMoved` and `HeldEndsWhenMoved` make no claim there.
