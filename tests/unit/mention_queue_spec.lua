@@ -368,6 +368,38 @@ describe("The @ mention queue", function()
     assert.same({}, claudecode.state.mention_queue)
   end)
 
+  it("H: after a drop in the wait, the mention gets a whole connection_timeout for Claude to come back", function()
+    send("/project/a.lua")
+    run(9900)
+    local first = claude_connects()
+    first.handshake()
+    run(50)
+    first.drop()
+    run(2000)
+    assert.same({}, errors, "the timeout that ran before the handshake must not fire after it")
+
+    local second = claude_connects()
+    second.handshake()
+    run(1500)
+
+    assert.same({ "a.lua" }, names(second.received()))
+    assert.same({}, errors)
+  end)
+
+  it("control: a send in the tick after the handshake waits connection_wait_delay with the queued mentions", function()
+    send("/project/first.lua")
+    local claude = claude_connects()
+    claude.handshake()
+    -- The handshake's on_open callback still waits for the main loop: Claude counts as connected already.
+    send("/project/second.lua")
+    run(500)
+    assert.same({}, claude.received(), "nothing goes out before connection_wait_delay ends")
+    run(1000)
+
+    assert.same({ "first.lua", "second.lua" }, names(claude.received()))
+    assert.same({}, errors)
+  end)
+
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()
     send("/project/first.lua")
     local claude = claude_connects()

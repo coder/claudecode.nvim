@@ -161,16 +161,18 @@ end
 ---Send the oldest queued mention to Claude, then schedule the next one.
 local function flush_mention_queue()
   local queue = mention_queue()
-  if #queue == 0 or not M.is_claude_connected() then
-    -- Claude went away since this flush was scheduled: the mentions wait for its next handshake.
+  if #queue == 0 then
     schedule_mention_flush(debounce_delay)
     return
   end
+  -- M.stop clears the queue when it drops the server, and the stop cancels this flush too.
+  local server = assert(M.state.server, "the @ mention queue holds mentions while the integration is stopped")
 
   local mention = queue[1]
   local params = { filePath = mention.file_path, lineStart = mention.start_line, lineEnd = mention.end_line }
-  if not M.state.server.broadcast("at_mentioned", params) then
-    -- No connected client took the frame: the mention waits for the next handshake, or times out with an error.
+  if not server.broadcast("at_mentioned", params) then
+    -- No connected client took the frame, as Claude went away since this flush was scheduled. The mention waits for
+    -- Claude's next handshake, or times out with an error.
     logger.debug("queue", "No connected client took queued @ mention: " .. mention.file_path)
     start_connection_timeout_if_needed()
     return
