@@ -280,6 +280,163 @@ async function testFenceTracking() {
     5,
     "a no-break space cannot follow a closing fence",
   );
+  // A closer's length counts only its marker run: not its indent, not trailing blanks.
+  assert.equal(
+    outside(["````md", "  ```", "## Real", "````", "## Real"]),
+    4,
+    "an indented shorter closer does not close a longer fence",
+  );
+  assert.equal(
+    outside(["````md", "``` ", "## Real", "````", "## Real"]),
+    4,
+    "blanks after a shorter closer do not make it long enough",
+  );
+  // Any printable character can be in an info string, but no backtick after backticks.
+  const printable = Array.from({ length: 0x7e - 0x20 }, (_, k) =>
+    String.fromCharCode(0x21 + k),
+  ).join("");
+  assert.equal(
+    outside([
+      `\`\`\` ${printable.replace("`", "")} \v\u00a0x`,
+      "## Real",
+      "```",
+      "## Real",
+    ]),
+    3,
+    "a backtick fence can carry any character but a backtick in its info string",
+  );
+  assert.equal(
+    outside([`~~~ ${printable} \f\u00a0x`, "## Real", "~~~", "## Real"]),
+    3,
+    "a tilde fence can carry any character in its info string",
+  );
+  assert.equal(
+    outside(["```", "``~", "## Real", "```", "## Real"]),
+    4,
+    "a line of mixed markers does not close a fence",
+  );
+  assert.equal(
+    outside(["\u00a0```", "## Real"]),
+    1,
+    "a no-break space is not indent for an opener",
+  );
+  assert.equal(
+    outside(["```", "## Real", "\u00a0```", "## Real", "```", "## Real"]),
+    5,
+    "a no-break space is not indent for a closer",
+  );
+  assert.equal(
+    outside(["```", "## Real", "```\v", "## Real", "```", "## Real"]),
+    5,
+    "a vertical tab cannot follow a closing fence",
+  );
+  assert.equal(
+    outside(["`````md", "## Real", "`````", "## Real"]),
+    3,
+    "a five-backtick line opens a fence, and a five-backtick line closes it",
+  );
+  assert.equal(
+    outside(["~~~~~", "~~~~", "## Real", "~~~~~", "## Real"]),
+    4,
+    "four tildes do not close a five-tilde fence",
+  );
+
+  // CommonMark's rule for every marker length that matters: a closer closes the fence if and only if it uses the
+  // opener's character, has at least as many markers, and has at most 3 spaces of indent. Blanks around it change
+  // nothing, so each row has as many trailing blanks as indent. The lengths run from 3 to 10, then 100 and 101, to
+  // catch a cap on a marker run, for example at 4 or at 100.
+  const lengths = [3, 4, 5, 6, 7, 8, 9, 10, 100, 101];
+  for (const marker of ["`", "~"]) {
+    const otherMarker = marker === "`" ? "~" : "`";
+    for (const openerLength of lengths) {
+      for (const closerLength of lengths) {
+        for (const indent of [0, 1, 2, 3, 4]) {
+          const blanks = " ".repeat(indent);
+          assert.equal(
+            outside([
+              marker.repeat(openerLength),
+              "## Real",
+              `${blanks}${marker.repeat(closerLength)}${blanks}`,
+              "## Real",
+            ]),
+            closerLength >= openerLength && indent <= 3 ? 3 : -1,
+            `a closer of ${closerLength} with ${indent} spaces of indent against an opener of ${openerLength} ${marker}`,
+          );
+        }
+      }
+      assert.equal(
+        outside([
+          marker.repeat(openerLength),
+          "## Real",
+          otherMarker.repeat(openerLength + 1),
+          "## Real",
+        ]),
+        -1,
+        `${otherMarker} must not close a fence of ${openerLength} ${marker}`,
+      );
+    }
+    // An opener has at most 3 spaces of indent. With 4 it is a code line.
+    for (const indent of [0, 1, 2, 3, 4]) {
+      assert.equal(
+        outside([
+          `${" ".repeat(indent)}${marker.repeat(3)}`,
+          "## Real",
+          marker.repeat(3),
+          "## Real",
+        ]),
+        indent <= 3 ? 3 : 1,
+        `an opener of ${marker} with ${indent} spaces of indent`,
+      );
+    }
+  }
+
+  // One character at a time, so a rule that rejects a single character fails with its name. The marker itself is
+  // left out: more markers make a longer run. After the markers, an opener takes any other character as info string,
+  // and a closer takes only blanks, so any other character keeps the fence open.
+  const characters = [];
+  for (let code = 0x20; code <= 0x7e; code += 1) {
+    characters.push(String.fromCharCode(code));
+  }
+  characters.push(
+    "\v",
+    "\f",
+    "\u00a0",
+    "\u2003",
+    "\u3000",
+    "\u00e9",
+    "\u2028",
+    "\u0085",
+  );
+  for (const marker of ["`", "~"]) {
+    const fence = marker.repeat(3);
+    for (const character of characters.filter((other) => other !== marker)) {
+      const name = JSON.stringify(character);
+      assert.equal(
+        outside([fence + character, "## Real", fence, "## Real"]),
+        3,
+        `a fence of ${marker} can carry ${name} in its info string`,
+      );
+      if (character !== " ") {
+        assert.equal(
+          outside([
+            fence,
+            "## Real",
+            fence + character,
+            "## Real",
+            fence,
+            "## Real",
+          ]),
+          5,
+          `${name} after a closing fence of ${marker} keeps the fence open`,
+        );
+      }
+    }
+  }
+  assert.equal(
+    outside(["```", "## Real", "``` `", "## Real", "```", "## Real"]),
+    5,
+    "a backtick after a blank keeps the fence open",
+  );
 
   // `findLineOutsideFences` never returns a fence line, a line inside a fence, or a closer, even
   // when the predicate matches every line.
