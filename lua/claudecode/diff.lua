@@ -257,21 +257,16 @@ local function find_claudecode_terminal_window()
   return floating_fallback
 end
 
--- The Claude terminal's float, while a diff has it hidden: the terminal buffer, the tab it floats in, and the
--- tab_name of each open diff that needs it hidden. Nil when no diff has hidden it.
 local hidden_terminal_float = nil
 
 ---Hide the Claude terminal when it floats over the tab of the diff window `diff_win`, until the diff `tab_name`
----closes. A float is not a tiled window, so the diff cannot make room for it as it does for a split: it would
----cover the diff. A float stays when the user keeps terminal focus, when the diff is in another tab, and when the
----user already hid it.
+---closes.
 ---@param tab_name string The diff identifier
 ---@param diff_win number? The diff's proposed window
 local function hide_terminal_float_for_diff(tab_name, diff_win)
   if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
     return
   end
-  -- A failure here must not fail the diff setup: the diff is already registered.
   pcall(function()
     if not (diff_win and vim.api.nvim_win_is_valid(diff_win)) then
       return
@@ -301,9 +296,7 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
   end)
 end
 
----Show the float that hide_terminal_float_for_diff hid, once the last diff that needed it hidden has closed. The
----float comes back without focus, as a terminal does in the original tab after a diff in its own tab. A terminal
----that was closed or replaced in the meantime stays gone.
+---Show the float that hide_terminal_float_for_diff hid, once the last diff that needed it hidden has closed.
 ---@param tab_name string The diff identifier
 local function show_terminal_float_after_diff(tab_name)
   if not (hidden_terminal_float and hidden_terminal_float.diffs[tab_name]) then

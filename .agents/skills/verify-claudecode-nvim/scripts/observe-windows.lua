@@ -1,5 +1,3 @@
--- Run through `$V expr "luaeval('dofile(\"<this file>\")')"`. Returns one JSON object that tells where focus is and
--- how much of each diff window a floating window covers, for the current tab.
 local function rect(win)
   local pos = vim.api.nvim_win_get_position(win)
   local cfg = vim.api.nvim_win_get_config(win)

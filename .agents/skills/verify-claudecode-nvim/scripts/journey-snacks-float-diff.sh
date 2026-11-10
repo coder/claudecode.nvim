@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# openDiff while the Claude terminal is a Snacks float (issue #180), from a fresh `vcn.sh launch` with the float
-# config in features/terminal-float-diff.md. Needs VCN_STATE. Reads layout and keep_terminal_focus from the
-# running plugin, and expects the matching result. Evidence lands in $OUT as snacks-float-<layout>-<focus>-*.
 set -euo pipefail
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 V="$SCRIPTS/vcn.sh"
@@ -16,7 +13,6 @@ fail() {
 }
 step() { echo "== $*"; }
 observe() { "$V" expr "luaeval('dofile(\"$OBSERVE\")')"; }
-# wait_observed <jq filter> <secs>: poll the window state until the filter is true.
 wait_observed() {
   local deadline=$((SECONDS + $2))
   while :; do

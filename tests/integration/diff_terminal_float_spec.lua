@@ -1,7 +1,3 @@
--- Real-Neovim checks of openDiff while the Claude terminal is a floating window (issue #180). A float is not a
--- tiled window, so the diff cannot make room for it the way it does for a split: the diff hides the float and
--- shows it again when the diff closes. Window geometry needs a real Neovim, so under busted's mock vim this is
--- pending; scripts/run_integration_tests_individually.sh runs it in Neovim.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("openDiff with a floating Claude terminal", function()
     pending("needs a real Neovim")
@@ -14,7 +10,7 @@ describe("openDiff with a floating Claude terminal", function()
   local tools = require("claudecode.tools.init")
   local config_defaults = require("claudecode.config").defaults
   local dir
-  local float -- the fake terminal: { buf, win, hide_calls, show_calls }
+  local float
 
   local function visible_floats(tab)
     local wins = {}
@@ -27,7 +23,6 @@ describe("openDiff with a floating Claude terminal", function()
     return wins
   end
 
-  -- A terminal provider whose terminal lives in a real floating window, with the hooks a float needs.
   local function install_float_terminal(opts)
     local fake = { hide_calls = 0, show_calls = 0 }
     fake.buf = vim.api.nvim_create_buf(false, true)
@@ -65,7 +60,6 @@ describe("openDiff with a floating Claude terminal", function()
       end
     end
 
-    -- Hides the window the way a user's own hide key does, without a diff being involved.
     function fake.user_hide()
       hide_window()
     end
@@ -187,7 +181,6 @@ describe("openDiff with a floating Claude terminal", function()
     end)
   end
 
-  -- Before Neovim 0.10 a float is closed, not parked, so its window is a new one when it comes back.
   local it_parks_floats = vim.fn.has("nvim-0.10") == 1 and it
     or function(name)
       pending(name .. " (needs Neovim 0.10)")
