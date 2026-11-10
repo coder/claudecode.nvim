@@ -19,6 +19,10 @@
 #   CONSTRAINT   optional state constraint name
 #   MUTANT_NOTES optional array of lines that --mutants prints after its last row, before its closing line
 #
+# tla_init exits 2 when here, SKILL or MODEL is empty or the model file is missing. tla_main exits 2 when SITE_RE,
+# COVERED, RULES or FACTS is empty, when tla_constants is not defined, and when a covered_block file is not in COVERED.
+# --mutants exits 2 when an EXPECT key names something that is not a fact.
+#
 # Exit codes: 0 pass, 1 rule broken, 2 tool or script error (or TypeOK broken), 3 stale.
 set -euo pipefail
 export LC_ALL=C
@@ -37,13 +41,22 @@ blocks=()
 declare -A block_file
 declare -A fact
 FACTS=()
+RULES=()
 LIVE=()
+COVERED=()
 CONSTRAINT=""
+: "${SKILL:=}" "${MODEL:=}" "${SITE_RE:=}"
 MUTANT_NOTES=()
 declare -A EXPECT
 
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi
+}
+
+# Print an error and exit 2 ("tool or script error"; exit 1 is reserved for "a rule broke").
+tla_die() {
+  echo "ERROR: $*" >&2
+  exit 2
 }
 
 # Print the block that starts at the first line matching $2 in file $1, up to the `end` at the same indentation.
@@ -103,9 +116,16 @@ tla_fetch_jar() {
   if [[ ! -f $TLC_JAR ]]; then
     mkdir -p "$(dirname "$TLC_JAR")" || exit 2
     curl -fsSL -o "$TLC_JAR.tmp" "https://github.com/tlaplus/tlaplus/releases/download/v$TLC_VERSION/tla2tools.jar" || {
+      rm -f "$TLC_JAR.tmp"
       echo "ERROR: could not download TLC $TLC_VERSION to $TLC_JAR" >&2
       exit 2
     }
+    # Check the download before it enters the cache: a jar that fails the sha256 must not stay there.
+    if [[ $(sha256 <"$TLC_JAR.tmp" | cut -d' ' -f1) != "$TLC_SHA256" ]]; then
+      rm -f "$TLC_JAR.tmp"
+      echo "ERROR: the TLC $TLC_VERSION download does not match sha256 $TLC_SHA256" >&2
+      exit 2
+    fi
     mv "$TLC_JAR.tmp" "$TLC_JAR"
   fi
   if [[ $(sha256 <"$TLC_JAR" | cut -d' ' -f1) != "$TLC_SHA256" ]]; then
@@ -118,10 +138,19 @@ tla_fetch_jar() {
 # changes, the file's hash, the hashes of the covered blocks in it, and its call sites with their enclosing
 # top-level statement, which point the reader at what changed.
 tla_coverage() {
-  local name file
-  for name in "${blocks[@]}"; do
+  local name file listed
+  for name in "${blocks[@]+"${blocks[@]}"}"; do
     [[ -n ${!name} ]] || {
       echo "ERROR: covered block $name not found; update its start regex in check.sh" >&2
+      exit 2
+    }
+    # The record groups blocks by file: a block in a file that COVERED omits would be left out of covered.lock.
+    listed=0
+    for file in "${COVERED[@]}"; do
+      [[ $file != "${block_file[$name]}" ]] || listed=1
+    done
+    [[ $listed == 1 ]] || {
+      echo "ERROR: covered block $name is in ${block_file[$name]}, which COVERED does not list; add the file" >&2
       exit 2
     }
   done
@@ -138,7 +167,7 @@ tla_coverage() {
   while IFS= read -r file; do
     printf '== %s\n' "$file"
     printf 'file %s %s\n' "$file" "$(sha256 <"$file" | cut -c1-16)"
-    for name in "${blocks[@]}"; do
+    for name in "${blocks[@]+"${blocks[@]}"}"; do
       [[ ${block_file[$name]} == "$file" ]] || continue
       printf 'block %-22s %s\n' "$name" "$(printf '%s\n' "${!name}" | sha256 | cut -c1-16)"
     done
@@ -228,7 +257,8 @@ broken_rule() {
 
 show_trace() {
   echo "  -- trace (actions in order; read it with /statechart for plain words):"
-  grep -E '^State [0-9]+: |^[0-9]+: <|Back to state' "$work/$1.out" | sed 's/^/     /'
+  # A break in the initial state prints no State lines: grep finds nothing, and set -e must not stop the run.
+  grep -E '^State [0-9]+: |^[0-9]+: <|Back to state' "$work/$1.out" | sed 's/^/     /' || true
 }
 
 # One run per liveness property: TLC stops at the first broken property, so a joint run hides the others.
@@ -236,7 +266,7 @@ tla_check() {
   local result=0 run rc
   echo "== model: code as written"
   local runs=(main)
-  for run in "${LIVE[@]}"; do runs+=("live-$run"); done
+  for run in "${LIVE[@]+"${LIVE[@]}"}"; do runs+=("live-$run"); done
   for run in "${runs[@]}"; do
     rc=0
     if [[ $run == main ]]; then
@@ -280,7 +310,7 @@ tla_check() {
 # rule EXPECT names, and every rule must break at least once, or the rule is vacuous.
 tla_mutants() {
   local status=0 f p rule name rc want
-  local -A rule_hit
+  local -A rule_hit in_expect
   local hits assigns parts note
   echo "== mutants: each guard removed alone, each rule checked alone"
   for f in "${!EXPECT[@]}"; do
@@ -288,9 +318,17 @@ tla_mutants() {
       echo "ERROR: EXPECT key \"$f\" has a space; quote an A+B key, [\"A+B\"]=Rule (shfmt -w rewrites an unquoted one)" >&2
       exit 2
     }
+    IFS=+ read -ra parts <<<"$f"
+    for p in "${parts[@]}"; do
+      [[ " ${FACTS[*]} " == *" $p "* ]] || {
+        echo "ERROR: EXPECT key \"$f\" names \"$p\", which is not in FACTS" >&2
+        exit 2
+      }
+      in_expect[$p]=1
+    done
   done
   for f in "${FACTS[@]}"; do
-    [[ -n ${EXPECT[$f]:-} || " ${!EXPECT[*]} " == *"+$f "* || " ${!EXPECT[*]} " == *" $f+"* ]] || {
+    [[ -n ${in_expect[$f]:-} ]] || {
       echo "  $f has no EXPECT entry: every fact must be caught by a rule, alone or in a listed combination"
       status=2
     }
@@ -302,10 +340,10 @@ tla_mutants() {
     assigns=()
     IFS=+ read -ra parts <<<"$f"
     for p in "${parts[@]}"; do assigns+=("$p=FALSE"); done
-    for rule in "${RULES[@]}" "${LIVE[@]}"; do
+    for rule in "${RULES[@]}" "${LIVE[@]+"${LIVE[@]}"}"; do
       name="mut-${f//+/-}-$rule"
       rc=0
-      if [[ " ${LIVE[*]} " == *" $rule "* ]]; then
+      if [[ " ${LIVE[*]:-} " == *" $rule "* ]]; then
         run_tlc "$name" "TypeOK" "$rule" "${assigns[@]}" || rc=$?
       else
         run_tlc "$name" "TypeOK $rule" "" "${assigns[@]}" || rc=$?
@@ -330,14 +368,14 @@ tla_mutants() {
       esac
     done
     want=${EXPECT[$f]}
-    if [[ " ${hits[*]} " == *" $want "* ]]; then
+    if [[ " ${hits[*]:-} " == *" $want "* ]]; then
       printf '  %-34s caught by: %s\n' "$f=FALSE" "${hits[*]}"
     else
       printf '  %-34s NOT CAUGHT as expected (%s); broke: %s\n' "$f=FALSE" "$want" "${hits[*]:-nothing}"
       [[ $status == 2 ]] || status=1
     fi
   done
-  for rule in "${RULES[@]}" "${LIVE[@]}"; do
+  for rule in "${RULES[@]}" "${LIVE[@]+"${LIVE[@]}"}"; do
     if [[ -z ${rule_hit[$rule]:-} ]]; then
       echo "  rule $rule never broke: it is vacuous"
       [[ $status == 2 ]] || status=1
@@ -355,6 +393,13 @@ tla_mutants() {
 # Call after the facts are set. Runs the lock comparison, then the model or the mutants.
 tla_main() {
   local f
+  # An unset or empty variable must stop the run with exit 2: set -u would exit 1 ("a rule broke"), and an empty
+  # RULES or COVERED would pass or write a lock that never goes stale.
+  [[ -n ${SITE_RE:-} ]] || tla_die "check.sh must set SITE_RE"
+  ((${#COVERED[@]} > 0)) || tla_die "COVERED is empty; list the files the model describes"
+  ((${#RULES[@]} > 0)) || tla_die "RULES is empty; name at least one invariant"
+  ((${#FACTS[@]} > 0)) || tla_die "FACTS is empty; the model reads nothing from the code"
+  declare -F tla_constants >/dev/null || tla_die "check.sh must define tla_constants"
   for f in "${FACTS[@]}"; do
     [[ ${fact[$f]:-} == TRUE || ${fact[$f]:-} == FALSE ]] || {
       echo "ERROR: fact $f is not set to TRUE or FALSE" >&2
@@ -376,6 +421,11 @@ tla_main() {
 
 # Call first, before covered_block: parses the options, moves to the repo root, makes the work dir.
 tla_init() {
+  local v
+  for v in here SKILL MODEL; do
+    [[ -n ${!v:-} ]] || tla_die "check.sh must set $v before tla_init"
+  done
+  [[ -f $here/model/$MODEL.tla ]] || tla_die "no model at $here/model/$MODEL.tla; set MODEL to the TLA+ module name"
   tla_parse_args "$@"
   repo=$(git -C "$here" rev-parse --show-toplevel)
   cd "$repo"

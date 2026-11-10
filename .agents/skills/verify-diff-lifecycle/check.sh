@@ -26,14 +26,6 @@ CLOSE_TAB_TOOL=lua/claudecode/tools/close_tab.lua
 CLOSE_ALL_TOOL=lua/claudecode/tools/close_all_diff_tabs.lua
 CLIENT=lua/claudecode/server/client.lua
 
-blocks=()
-declare -A block_file
-# covered_block NAME FILE REGEX: set $NAME to the block of FILE that starts at REGEX, and note it for the record.
-covered_block() {
-  blocks+=("$1")
-  block_file[$1]=$2
-  printf -v "$1" '%s' "$(block "$2" "$3")"
-}
 covered_block resolve_saved "$DIFF" '^function M\._resolve_diff_as_saved\('
 covered_block resolve_rejected "$DIFF" '^function M\._resolve_diff_as_rejected\('
 covered_block open_blocking "$DIFF" '^function M\.open_diff_blocking\('
