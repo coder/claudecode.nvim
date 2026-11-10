@@ -29,9 +29,14 @@ local function cursor_unmoved_since_flush(bufnr)
 end
 
 ---Returns true if the buffer is the Claude terminal, by the same two checks as `update_selection` and the flush.
+---A buffer that was wiped is not: a stored buffer number can name one (a popup that wipes itself when you leave
+---it), and nvim_buf_get_name() raises an error for it.
 ---@param bufnr number
 ---@return boolean
 local function is_claude_terminal_buffer(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
   local buf_name = vim.api.nvim_buf_get_name(bufnr)
   if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
     return true
@@ -105,6 +110,7 @@ local function reconcile_held_selection(compare_cursor)
   local current_buf = vim.api.nvim_get_current_buf()
   if caf.away and caf.away ~= current_buf then
     if not is_claude_terminal_buffer(caf.away) then
+      caf.away = nil
       caf.left = true
       return
     end

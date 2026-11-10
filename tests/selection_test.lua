@@ -119,6 +119,10 @@ if not _G.vim then
         return _G.vim._buffers[bufnr] and _G.vim._buffers[bufnr].name or ""
       end,
 
+      nvim_buf_is_valid = function(bufnr)
+        return _G.vim._buffers[bufnr] ~= nil
+      end,
+
       nvim_get_current_win = function()
         return 1
       end,
@@ -1827,7 +1831,7 @@ describe("Range Selection Tests", function()
     end)
 
     describe("a held selection follows the buffer and the cursor", function()
-      local original_get_current_buf, original_get_changedtick, original_get_text
+      local original_get_current_buf, original_get_changedtick, original_get_text, original_get_name
 
       -- nvim_buf_get_text over the mock buffer's lines: byte columns, clamped as Neovim does, an error for a row
       -- that is not there.
@@ -1952,6 +1956,11 @@ describe("Range Selection Tests", function()
         original_get_changedtick = _G.vim.api.nvim_buf_get_changedtick
         original_get_text = _G.vim.api.nvim_buf_get_text
         _G.vim.api.nvim_buf_get_text = mock_get_text
+        original_get_name = _G.vim.api.nvim_buf_get_name
+        _G.vim.api.nvim_buf_get_name = function(bufnr)
+          assert(_G.vim._buffers[bufnr] ~= nil, "Invalid buffer id: " .. tostring(bufnr)) -- as Neovim raises
+          return original_get_name(bufnr)
+        end
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma" })
         _G.vim.test.add_buffer(2, "/path/to/b.txt", { "one two" })
         _G.vim.test.set_cursor(0, 1, 0)
@@ -1961,6 +1970,7 @@ describe("Range Selection Tests", function()
         _G.vim.api.nvim_get_current_buf = original_get_current_buf
         _G.vim.api.nvim_buf_get_changedtick = original_get_changedtick
         _G.vim.api.nvim_buf_get_text = original_get_text
+        _G.vim.api.nvim_buf_get_name = original_get_name
         _G.vim._buffers[2] = nil
       end)
 
@@ -2258,6 +2268,25 @@ describe("Range Selection Tests", function()
 
         assert.are.equal("alpha", selection.get_latest_selection().text)
         assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      -- A popup that wipes itself when you leave it (bufhidden=wipe): its buffer number is gone at the next event.
+      it("ends the selection without an error when the buffer you visited is wiped", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+
+        enter_buffer(2)
+        _G.vim._buffers[2] = nil -- wiped as you leave it
+        go_to_buffer(1, 4) -- BufEnter and CursorMoved in a.txt must not raise
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+        move_cursor(5) -- and every later event still works
+        assert.is_not_nil(selection.state.debounce_timer)
+        settle()
+        assert_claude_holds_cursor("/path/to/a.txt", 5)
       end)
 
       it("keeps the selection through a terminal that only its name says is Claude's", function()
