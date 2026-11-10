@@ -56,6 +56,11 @@ end
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
   local should_insert = focus and config.auto_insert ~= false
+  -- Snacks enters the window it opens. Without focus, the caller keeps its window (#423).
+  local enter = nil
+  if not focus then
+    enter = false
+  end
   return {
     env = env_table,
     cwd = config.cwd,
@@ -67,6 +72,7 @@ local function build_opts(config, env_table, focus)
       width = config.split_width_percentage,
       height = 0,
       relative = "editor",
+      enter = enter,
       -- Default, not a lock. Snacks' terminal style would set "snacks_terminal", and Snacks re-applies `bo` each time
       -- it re-creates a floating window, so the filetype goes through the options, not a write after open.
       -- `snacks_win_opts.bo.filetype` wins.
@@ -143,6 +149,18 @@ local function resolve_split_size(val, total, default_frac)
     return math.floor(val)
   end
   return math.max(1, math.floor(total * default_frac))
+end
+
+-- Snacks' auto_insert runs `startinsert` on every BufEnter of the terminal buffer. Without focus, that insert would
+-- survive the return to the caller's window (#423), so the buffer is set with BufEnter ignored.
+local function win_set_buf_without_bufenter(win, buf)
+  local saved = vim.o.eventignore
+  vim.o.eventignore = saved == "" and "BufEnter" or (saved .. ",BufEnter")
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  vim.o.eventignore = saved
+  if not ok then
+    error(err, 0)
+  end
 end
 
 local function start_insert_if_terminal(term)
@@ -294,7 +312,19 @@ local function cc_show(term, focus, config)
   if (not is_native_split or (term._cc and term._cc.kind == "float")) and term._cc and term._cc.orig_show then
     logger.debug("terminal", "Snacks show: re-creating via Snacks (position=" .. tostring(position) .. ")")
     term._cc.kind = nil
-    term._cc.orig_show(term)
+    if focus then
+      term._cc.orig_show(term)
+    else
+      -- opts.enter is Snacks' own switch: it neither enters the window nor queues the insert for an unentered one.
+      local snacks_opts = term.opts or {}
+      local entered = snacks_opts.enter
+      snacks_opts.enter = false
+      local ok, err = pcall(term._cc.orig_show, term)
+      snacks_opts.enter = entered
+      if not ok then
+        error(err, 0)
+      end
+    end
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
       maybe_start_insert(term, config)
@@ -320,7 +350,11 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
-  vim.api.nvim_win_set_buf(new_win, term.buf)
+  if focus then
+    vim.api.nvim_win_set_buf(new_win, term.buf)
+  else
+    win_set_buf_without_bufenter(new_win, term.buf)
+  end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native
   end
