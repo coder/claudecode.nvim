@@ -9,7 +9,7 @@ local utils = require("claudecode.server.utils")
 
 local M = {}
 local start_ns = uv.hrtime()
-local kept, total = 0, 0
+local kept, total, skipped = 0, 0, 0
 
 function M.ms()
   return math.floor((uv.hrtime() - start_ns) / 1e6)
@@ -28,8 +28,16 @@ function M.check(name, ok, detail)
   io.stdout:write(string.format("%s %s: %s\n", ok and "KEPT" or "BROKEN", name, detail))
 end
 
+-- A check that this host cannot run. It counts as neither kept nor broken.
+function M.skip(name, detail)
+  skipped = skipped + 1
+  io.stdout:write(string.format("SKIPPED %s: %s\n", name, detail))
+end
+
 function M.finish()
-  io.stdout:write(string.format("%d of %d kept\n", kept, total))
+  io.stdout:write(
+    string.format("%d of %d kept%s\n", kept, total, skipped > 0 and string.format(", %d skipped", skipped) or "")
+  )
   io.stdout:flush()
   vim.cmd(kept == total and "qa!" or "cq!")
 end
@@ -179,17 +187,24 @@ function M.peer(port)
   return p
 end
 
--- The kernel's TCP state of the plugin's end of the connection to Claude's local port (from /proc/net/tcp).
+-- The kernel's TCP state of the plugin's end of the connection to Claude's local port (from /proc/net/tcp), "gone"
+-- when no such connection is listed, and nil on a host without /proc/net/tcp (macOS, BSD).
 function M.tcp_state(server_port, peer_port)
+  local file = io.open("/proc/net/tcp", "r")
+  if not file then
+    return nil
+  end
   local names =
     { ["01"] = "ESTABLISHED", ["06"] = "TIME_WAIT", ["07"] = "CLOSE", ["08"] = "CLOSE_WAIT", ["09"] = "LAST_ACK" }
   local want_local, want_remote = string.format(":%04X", server_port), string.format(":%04X", peer_port)
-  for line in io.lines("/proc/net/tcp") do
+  for line in file:lines() do
     local loc, rem, st = line:match("^%s*%d+: (%x+:%x+) (%x+:%x+) (%x%x)")
     if loc and loc:sub(-5) == want_local and rem:sub(-5) == want_remote then
+      file:close()
       return names[st] or st
     end
   end
+  file:close()
   return "gone"
 end
 

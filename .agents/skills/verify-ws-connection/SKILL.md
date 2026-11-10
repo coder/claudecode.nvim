@@ -110,7 +110,7 @@ A replay runs one of these scenarios on the real code, in a headless Neovim with
 .agents/skills/verify-ws-connection/replays/run.sh <replay>.lua   # NVIM=/path/to/nvim overrides; about 1 to 3 s
 ```
 
-It prints one `KEPT` or `BROKEN` line per check and a count line, and exits 0 only when every check is kept.
+It prints one `KEPT` or `BROKEN` line per check and a count line, and exits 0 only when every check is kept. A check that the host cannot run prints `SKIPPED` and counts as neither kept nor broken: the kernel-state check of `stop-before-on-close.lua` reads `/proc/net/tcp`, so it prints `SKIPPED` on macOS and BSD, and the `is_closing()` check above it still decides. The replays run on Neovim 0.8 and newer, because `run.sh` starts them with `-c`, not `-l`.
 
 | Replay                           | Scenario                                                                                                                                 | Promise                                                                                                                                                                                                                                                        |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

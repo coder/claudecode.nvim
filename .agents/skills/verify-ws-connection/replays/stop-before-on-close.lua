@@ -67,9 +67,16 @@ H.check(
   )
 )
 local state = H.tcp_state(plugin.port, claude_port)
-H.check(
-  "the kernel does not hold it in CLOSE_WAIT",
-  state ~= "CLOSE_WAIT",
-  string.format("/proc/net/tcp: 127.0.0.1:%d <- :%d is %s", plugin.port, claude_port, state)
-)
+if state == nil then
+  H.skip(
+    "the kernel does not hold it in CLOSE_WAIT",
+    "this host has no /proc/net/tcp; the is_closing() check above decides"
+  )
+else
+  H.check(
+    "the kernel does not hold it in CLOSE_WAIT",
+    state ~= "CLOSE_WAIT",
+    string.format("/proc/net/tcp: 127.0.0.1:%d <- :%d is %s", plugin.port, claude_port, state)
+  )
+end
 H.finish()
