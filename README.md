@@ -672,7 +672,7 @@ snacks_win_opts = {
 
 </details>
 
-While a diff is open in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. It shows the float again when the diff closes, and your cursor returns to the window it was in when the diff opened. A diff in its own tab (`open_in_new_tab`) leaves the float alone. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
+While a diff is open in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. It shows the float again when the diff closes, and your cursor returns to the window it was in when the diff opened. If you bring the float back during the diff (for example with `:ClaudeCodeFocus`) and then close or hide it, it stays that way when the diff closes. A diff in its own tab (`open_in_new_tab`) leaves the float alone. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
 
 For complete configuration options, see:
 
@@ -858,7 +858,7 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
-Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff, and calls `ensure_visible()` once the diff closes.
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` and `restore_float()` work as a pair, and the plugin uses them only for a provider that has both. When a diff opens in the tab of a floating terminal, the plugin calls `hide_float()` so the float does not cover the diff. It hides the float when it is visible and returns `true` when it did. When the diff closes, the plugin calls `restore_float()`, which shows the float again without focus. A provider's `restore_float()` does nothing once the user has shown or hidden the terminal in between.
 
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 

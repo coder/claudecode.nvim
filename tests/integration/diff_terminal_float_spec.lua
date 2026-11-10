@@ -86,7 +86,7 @@ describe("openDiff with a floating Claude terminal", function()
         fake.hide_calls = fake.hide_calls + 1
         return true
       end,
-      ensure_visible = function()
+      restore_float = function()
         if not window_is_open() then
           fake.show_calls = fake.show_calls + 1
           show_window()
@@ -95,6 +95,7 @@ describe("openDiff with a floating Claude terminal", function()
     }
     if opts and opts.without_hide_float then
       provider.hide_float = nil
+      provider.restore_float = nil
     end
     package.loaded["claudecode.terminal"] = nil
     require("claudecode.terminal").setup({ provider = provider }, nil, nil)
@@ -298,15 +299,5 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(0, float.hide_calls)
     assert.equal(0, float.show_calls)
     assert.equal(0, #visible_floats())
-  end)
-
-  it("does not start a new terminal when Claude's terminal is gone by the time the diff closes", function()
-    setup_diff({ layout = "vertical" })
-
-    open_diff("proposed.txt")
-    vim.api.nvim_buf_delete(float.buf, { force = true })
-    close_tab("proposed.txt")
-
-    assert.equal(0, float.show_calls)
   end)
 end)

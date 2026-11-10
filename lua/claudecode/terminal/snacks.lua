@@ -209,6 +209,10 @@ local function reapply_snacks_window_state(term, win)
   end)
 end
 
+---The terminal whose float hide_float hid, until anything else shows or hides the terminal.
+---@type table?
+local float_hidden_for_diff = nil
+
 ---Hide the terminal window without disturbing the cursor anchor.
 ---@param term table Snacks terminal instance
 local function cc_hide(term)
@@ -256,6 +260,7 @@ end
 ---@param config table Effective terminal config (split_side, split_width_percentage)
 ---@return boolean shown
 local function cc_show(term, focus, config)
+  float_hidden_for_diff = nil
   if not (term and term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
     return false
   end
@@ -294,10 +299,13 @@ local function cc_show(term, focus, config)
   if (not is_native_split or (term._cc and term._cc.kind == "float")) and term._cc and term._cc.orig_show then
     logger.debug("terminal", "Snacks show: re-creating via Snacks (position=" .. tostring(position) .. ")")
     term._cc.kind = nil
+    local previous_win = vim.api.nvim_get_current_win()
     term._cc.orig_show(term)
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
       maybe_start_insert(term, config)
+    elseif not focus and vim.api.nvim_win_is_valid(previous_win) and vim.api.nvim_get_current_win() ~= previous_win then
+      vim.api.nvim_set_current_win(previous_win)
     end
     return true
   end
@@ -580,14 +588,28 @@ function M.get_active_bufnr()
 end
 
 ---Hide the terminal when it is a visible float, so that it does not cover a diff. A split stays as it is: a
----diff makes room for it.
+---diff makes room for it. `restore_float` shows the float again.
 ---@return boolean hidden Whether a float was hidden
 function M.hide_float()
   if not (terminal and terminal:buf_valid() and cc_is_visible(terminal) and win_is_floating(terminal.win)) then
     return false
   end
   cc_hide(terminal)
-  return not cc_is_visible(terminal)
+  if cc_is_visible(terminal) then
+    return false
+  end
+  float_hidden_for_diff = terminal
+  return true
+end
+
+---Show the float that `hide_float` hid, without focus. Does nothing once anything else has shown or hidden the
+---terminal since, so a float that the user brought back and closed again, or hid again, stays as they left it.
+function M.restore_float()
+  local hidden = float_hidden_for_diff
+  float_hidden_for_diff = nil
+  if hidden and hidden == terminal and terminal:buf_valid() and not cc_is_visible(terminal) then
+    cc_show(terminal, false, terminal._cc and terminal._cc.config)
+  end
 end
 
 ---Is the terminal provider available?

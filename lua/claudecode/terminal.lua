@@ -636,15 +636,24 @@ function M.ensure_visible(opts_override, cmd_args)
   ensure_terminal_visible_no_focus(opts_override, cmd_args)
 end
 
----Hides the Claude terminal when it is a floating window, so that it does not cover a diff. Only a provider that
----implements `hide_float` has a float to hide. `ensure_visible` shows it again.
+---Hides the Claude terminal when it is a floating window, so that it does not cover a diff. A provider has a float
+---to hide only when it implements both `hide_float` and `restore_float`.
 ---@return boolean hidden True when a visible float was hidden
 function M.hide_float()
   local provider = get_provider()
-  if not provider.hide_float then
+  if not (provider.hide_float and provider.restore_float) then
     return false
   end
   return provider.hide_float() == true
+end
+
+---Shows the float that `hide_float` hid, without focus. Does nothing when the user has shown or hidden the terminal
+---since.
+function M.restore_float()
+  local provider = get_provider()
+  if provider.restore_float then
+    provider.restore_float()
+  end
 end
 
 ---Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).
