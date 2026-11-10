@@ -209,8 +209,8 @@ local function reapply_snacks_window_state(term, win)
   end)
 end
 
----The terminal whose float hide_float hid, until anything else shows or hides the terminal.
----@type table?
+---The terminal whose float hide_float hid, and the tab it floated in, until anything else shows the terminal.
+---@type { term: table, tab: integer }?
 local float_hidden_for_diff = nil
 
 ---Hide the terminal window without disturbing the cursor anchor.
@@ -299,13 +299,10 @@ local function cc_show(term, focus, config)
   if (not is_native_split or (term._cc and term._cc.kind == "float")) and term._cc and term._cc.orig_show then
     logger.debug("terminal", "Snacks show: re-creating via Snacks (position=" .. tostring(position) .. ")")
     term._cc.kind = nil
-    local previous_win = vim.api.nvim_get_current_win()
     term._cc.orig_show(term)
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
       maybe_start_insert(term, config)
-    elseif not focus and vim.api.nvim_win_is_valid(previous_win) and vim.api.nvim_get_current_win() ~= previous_win then
-      vim.api.nvim_set_current_win(previous_win)
     end
     return true
   end
@@ -594,11 +591,9 @@ function M.hide_float()
   if not (terminal and terminal:buf_valid() and cc_is_visible(terminal) and win_is_floating(terminal.win)) then
     return false
   end
+  local tab = vim.api.nvim_win_get_tabpage(terminal.win)
   cc_hide(terminal)
-  if cc_is_visible(terminal) then
-    return false
-  end
-  float_hidden_for_diff = terminal
+  float_hidden_for_diff = { term = terminal, tab = tab }
   return true
 end
 
@@ -607,9 +602,14 @@ end
 function M.restore_float()
   local hidden = float_hidden_for_diff
   float_hidden_for_diff = nil
-  if hidden and hidden == terminal and terminal:buf_valid() and not cc_is_visible(terminal) then
-    cc_show(terminal, false, terminal._cc and terminal._cc.config)
+  if not (hidden and hidden.term == terminal) then
+    return
   end
+  -- Before Neovim 0.10 hide_float closed the float, and Snacks re-creates it in the current tab.
+  if not supports_config_hide() and vim.api.nvim_get_current_tabpage() ~= hidden.tab then
+    return
+  end
+  cc_show(terminal, false, terminal._cc and terminal._cc.config)
 end
 
 ---Is the terminal provider available?

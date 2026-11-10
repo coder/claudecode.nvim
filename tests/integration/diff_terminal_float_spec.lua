@@ -24,7 +24,7 @@ describe("openDiff with a floating Claude terminal", function()
   end
 
   local function install_float_terminal(opts)
-    local fake = { hide_calls = 0, show_calls = 0 }
+    local fake = { hide_calls = 0, show_calls = 0, ensure_calls = 0 }
     fake.buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(fake.buf, 0, -1, false, { "Claude terminal" })
 
@@ -52,6 +52,8 @@ describe("openDiff with a floating Claude terminal", function()
         fake.win = nil
       end
     end
+    -- True from hide_float until anyone else shows or hides the float, as in the Snacks provider.
+    fake.marked = false
     local function show_window()
       if fake.win and vim.api.nvim_win_is_valid(fake.win) then
         vim.api.nvim_win_set_config(fake.win, { hide = false })
@@ -61,7 +63,15 @@ describe("openDiff with a floating Claude terminal", function()
     end
 
     function fake.user_hide()
-      hide_window()
+      fake.marked = false
+      if window_is_open() then
+        hide_window()
+      end
+    end
+
+    function fake.user_show()
+      fake.marked = false
+      show_window()
     end
 
     open_window()
@@ -83,12 +93,21 @@ describe("openDiff with a floating Claude terminal", function()
           return false
         end
         hide_window()
+        fake.marked = true
         fake.hide_calls = fake.hide_calls + 1
         return true
       end,
       restore_float = function()
-        if not window_is_open() then
+        local marked = fake.marked
+        fake.marked = false
+        if marked and not window_is_open() then
           fake.show_calls = fake.show_calls + 1
+          show_window()
+        end
+      end,
+      ensure_visible = function()
+        if not window_is_open() then
+          fake.ensure_calls = fake.ensure_calls + 1
           show_window()
         end
       end,
@@ -299,5 +318,88 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(0, float.hide_calls)
     assert.equal(0, float.show_calls)
     assert.equal(0, #visible_floats())
+  end)
+
+  it_parks_floats("keeps focus in the diff when keep_terminal_focus is set and the user hid the float", function()
+    setup_diff({ layout = "vertical", keep_terminal_focus = true })
+    float.user_hide()
+
+    local diff_data = open_diff("proposed.txt")
+    vim.wait(100, function()
+      return vim.api.nvim_get_current_win() ~= diff_data.new_window
+    end)
+
+    assert.equal(diff_data.new_window, vim.api.nvim_get_current_win(), "focus does not go into a hidden window")
+  end)
+
+  it_parks_floats("keeps a float the user hid hidden when the diff opens in its own tab", function()
+    setup_diff({ layout = "vertical", open_in_new_tab = true })
+    local original_tab = vim.api.nvim_get_current_tabpage()
+    float.user_hide()
+
+    open_diff("proposed.txt")
+    close_tab("proposed.txt")
+
+    assert.equal(0, float.ensure_calls, "a hidden float is not a terminal in the original tab")
+    assert.equal(0, #visible_floats(original_tab))
+  end)
+
+  it("hides the float again when the user brought it back and a second diff opens in the tab", function()
+    setup_diff({ layout = "unified" })
+
+    open_diff("proposed.txt")
+    float.user_show()
+    assert.equal(1, #visible_floats())
+
+    open_diff("second.txt")
+    assert.equal(0, #visible_floats(), "the float does not cover the second diff")
+
+    close_tab("proposed.txt")
+    assert.equal(0, #visible_floats(), "the second diff is still open")
+    close_tab("second.txt")
+    assert.equal(1, #visible_floats())
+  end)
+
+  it_parks_floats("does not put the cursor in a float the user hid during the diff", function()
+    setup_diff({ layout = "vertical" })
+    vim.api.nvim_set_current_win(float.win)
+
+    open_diff("proposed.txt")
+    float.user_show()
+    float.user_hide()
+    close_tab("proposed.txt")
+
+    local current = vim.api.nvim_get_current_win()
+    assert.is_not.equal(float.win, current, "the cursor is not in the hidden float")
+    assert.is_not.equal(true, vim.api.nvim_win_get_config(current).hide)
+    assert.equal(0, #visible_floats(), "the float stays hidden")
+  end)
+
+  it("keeps the float hidden after the user rejects with :q, until close_tab", function()
+    setup_diff({ layout = "vertical" })
+
+    local diff_data = open_diff("proposed.txt")
+    vim.api.nvim_set_current_win(diff_data.new_window)
+    vim.cmd("quit")
+    assert.equal("rejected", diff._get_active_diffs()[tab_name_of("proposed.txt")].status)
+    assert.equal(0, #visible_floats(), "the diff is still open until close_tab")
+
+    close_tab("proposed.txt")
+    assert.equal(1, #visible_floats())
+  end)
+
+  it_parks_floats("does not hold the float for a diff in another tab", function()
+    setup_diff({ layout = "vertical" })
+    local first_tab = vim.api.nvim_get_current_tabpage()
+
+    open_diff("proposed.txt")
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    local second = open_diff("second.txt")
+    assert.is_false(second.created_new_tab)
+    assert.is_not.equal(first_tab, vim.api.nvim_get_current_tabpage())
+
+    close_tab("proposed.txt")
+
+    assert.equal(1, #visible_floats(first_tab), "the first tab's diff is done, so its float is back")
   end)
 end)

@@ -277,23 +277,28 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
       return
     end
     local diff_tab = vim.api.nvim_win_get_tabpage(diff_win)
-    if hidden_terminal_float then
-      if hidden_terminal_float.tab == diff_tab then
-        hidden_terminal_float.diffs[tab_name] = true
+    local record = hidden_terminal_float
+    if record then
+      if record.tab ~= diff_tab then
+        return
       end
-      return
+    else
+      local terminal_win = find_claudecode_terminal_window()
+      if
+        not (
+          terminal_win
+          and (vim.api.nvim_win_get_config(terminal_win).relative or "") ~= ""
+          and vim.api.nvim_win_get_tabpage(terminal_win) == diff_tab
+        )
+      then
+        return
+      end
     end
-    local terminal_win = find_claudecode_terminal_window()
-    if
-      not (
-        terminal_win
-        and (vim.api.nvim_win_get_config(terminal_win).relative or "") ~= ""
-        and vim.api.nvim_win_get_tabpage(terminal_win) == diff_tab
-      )
-    then
-      return
-    end
-    if require("claudecode.terminal").hide_float() then
+    -- With a record, the user may have brought the float back since the last diff opened: hide it again.
+    local hid = require("claudecode.terminal").hide_float()
+    if record then
+      record.diffs[tab_name] = true
+    elseif hid then
       hidden_terminal_float = { tab = diff_tab, diffs = { [tab_name] = true } }
     end
   end)
@@ -994,6 +999,17 @@ local function restore_window_sizes(saved)
   return true
 end
 
+---A window that is open and not hidden with the `hide` config (Neovim 0.10+): a cursor in a hidden window is lost.
+---@param win NvimWin|nil
+---@return boolean
+local function is_shown_window(win)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return false
+  end
+  local ok, win_config = pcall(vim.api.nvim_win_get_config, win)
+  return not (ok and win_config and win_config.hide == true)
+end
+
 ---Put the cursor back in `origin`, the window it was in when the diff opened, or in `saved.cursor_window` when
 ---`origin` is gone (it was another diff's window). Only when the window the cursor was in before the diff's windows
 ---closed (`cursor_window`) closed with them: Neovim gives the cursor to the window that takes the space, such as the
@@ -1006,8 +1022,8 @@ local function restore_cursor(saved, origin, cursor_window)
   if not saved or (cursor_window and vim.api.nvim_win_is_valid(cursor_window)) then
     return
   end
-  local target = (origin and vim.api.nvim_win_is_valid(origin)) and origin or saved.cursor_window
-  if vim.api.nvim_win_is_valid(target) then
+  local target = is_shown_window(origin) and origin or saved.cursor_window
+  if is_shown_window(target) then
     pcall(vim.api.nvim_set_current_win, target)
   end
 end
@@ -1364,12 +1380,14 @@ function M._cleanup_diff_state(tab_name, reason)
     return
   end
 
+  -- Before the windows close, so the cursor can go back to the float.
+  show_terminal_float_after_diff(tab_name)
+
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
     local inline = require("claudecode.diff_inline")
     inline.cleanup_inline_diff(tab_name, diff_data)
     active_diffs[tab_name] = nil
-    show_terminal_float_after_diff(tab_name)
     fire_diff_event("ClaudeCodeDiffClosed", {
       tab_name = tab_name,
       file_path = diff_data.old_file_path,
@@ -1470,7 +1488,6 @@ function M._cleanup_diff_state(tab_name, reason)
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil
-  show_terminal_float_after_diff(tab_name)
 
   -- Notify listeners that the diff has closed. Always emitted; pairs with
   -- ClaudeCodeDiffOpened. `reason` describes why (accepted/rejected/replaced/etc.).

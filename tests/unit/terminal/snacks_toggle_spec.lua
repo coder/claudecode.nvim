@@ -20,6 +20,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
   local mock_snacks
   local open_show_spy
   local last_split_cmd
+  local current_tab
 
   local function make_window(buf, opts)
     local id = next_win_id
@@ -76,6 +77,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     next_win_id = 1000
     next_buf_id = 1
     last_split_cmd = nil
+    current_tab = 1
 
     open_show_spy = spy.new(function(self)
       -- Snacks re-creates the window from the original opts (e.g. a float).
@@ -188,6 +190,12 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end,
         nvim_win_call = function(_, fn)
           fn()
+        end,
+        nvim_win_get_tabpage = function()
+          return 1
+        end,
+        nvim_get_current_tabpage = function()
+          return current_tab
         end,
       },
     }
@@ -356,6 +364,35 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       assert.is_true(windows[win].config.hide)
     end)
 
+    describe("before Neovim 0.10, where hide_float closes the float", function()
+      before_each(function()
+        vim.fn.has = function()
+          return 0
+        end
+      end)
+
+      it("restore_float re-creates the float when the user is still in its tab", function()
+        local term = open_float()
+        local win = term.win
+
+        assert.is_true(snacks_provider.hide_float())
+        assert.is_false(windows[win].valid)
+
+        snacks_provider.restore_float()
+        assert.spy(open_show_spy).was_called(1)
+        assert.are.equal("editor", windows[term.win].config.relative)
+      end)
+
+      it("restore_float leaves the float closed when the user is in another tab", function()
+        open_float()
+        assert.is_true(snacks_provider.hide_float())
+
+        current_tab = 2
+        snacks_provider.restore_float()
+        assert.spy(open_show_spy).was_not_called()
+      end)
+    end)
+
     it("restore_float does not bring back a terminal that was closed during the diff", function()
       local term = open_float()
       snacks_provider.hide_float()
@@ -380,18 +417,6 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
 
       snacks_provider.restore_float()
       assert.is_true(windows[replacement.win].config.hide)
-    end)
-
-    it("open without focus does not move focus into a float that Snacks had to re-create", function()
-      local term, other_win = open_float()
-      windows[term.win].valid = false
-      term.win = nil
-      current_win = other_win
-
-      snacks_provider.open("claude", {}, float_config(), false)
-
-      assert.spy(open_show_spy).was_called()
-      assert.are.equal(other_win, current_win, "Snacks enters the window it re-creates, so focus is put back")
     end)
   end)
 
