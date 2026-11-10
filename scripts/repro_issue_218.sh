@@ -93,6 +93,10 @@ command -v jq >/dev/null 2>&1 || {
   exit 1
 }
 
+# The warnings of the cleanup go to the stderr that the script started with, kept on fd 8. The
+# cleanup can run inside a call whose stderr is redirected, such as `run_killable ... >/dev/null
+# 2>&1`, and a warning would vanish there. Children that outlive a call get `8>&-`.
+exec 8>&2 || exec 8>/dev/null
 # State that the cleanup reads. A signal before the first assignment finds it empty.
 WORK=""
 AGENT_HOME=""
@@ -106,7 +110,7 @@ LAZY_BEFORE="" # the entries of LAZY_DIR before the restore
 # long commands run in the background and the script waits for them. A signal then runs the
 # cleanup at once, and the cleanup stops every job that is still running.
 run_killable() {
-  "$@" &
+  "$@" 8>&- &
   wait $!
 }
 # The live processes among the PIDs in $2... and all the current descendants of PID $1, one `ps`
@@ -163,31 +167,39 @@ in_new_session() {
     "$@"
   fi
 }
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+warn() {
+  printf '%s\n' "$*" >&8
+}
 # An agent-tty call from the cleanup: its own session, and SIGKILL after about $1 seconds. Node
 # resets a signal that `trap ''` ignores, so without the session a second signal to the process
 # group kills `list`, `inspect` or `destroy`, and the session survives. Output goes to the caller,
 # and the error output is dropped. A call that takes 3 s on a quiet host can take 10 s on a busy
-# one, and a call that the deadline stops leaves its session running, so the deadlines are long
-# and a stopped call prints a warning.
+# one, so the deadlines are long. A call that the deadline stops prints a warning and returns 124.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 atty_cleanup() {
-  local secs=$1 end=$((SECONDS + $1)) pid live
+  local secs=$1 end=$((SECONDS + $1)) pid live what
   shift
-  in_new_session "${ATTY[@]}" "$@" 2>/dev/null &
+  what=$1
+  [[ "$1" != home ]] || what="$1 $2"
+  in_new_session "${ATTY[@]}" "$@" 2>/dev/null 8>&- &
   pid=$!
   while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
   if kill -0 "$pid" 2>/dev/null; then
-    echo "WARNING: the cleanup stopped 'agent-tty $1' after $secs s. A session of this run can still be running." >&2
     live="$(tree_alive "$pid" "$pid")"
     # shellcheck disable=SC2086
     kill -KILL $live 2>/dev/null || true
+    wait "$pid" 2>/dev/null
+    warn "WARNING: the cleanup stopped 'agent-tty $what' after $secs s."
+    return 124
   fi
   wait "$pid" 2>/dev/null
+  return 0
 }
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() {
   trap '' INT TERM HUP # a second signal must not cut the cleanup short
-  local pid sid sock end entry
+  local pid sid sock end entry stopped='' forget_stopped='' q_home q_work
   # A create that is still running makes a session whose ID this script has not read yet.
   # Give it about 5 s to finish, then stop it.
   if [[ -n "$CREATE_PID" ]]; then
@@ -217,14 +229,31 @@ cleanup() {
     # includes a session whose Neovim has exited. `destroy` leaves the session's empty socket
     # directory in /tmp/agent-tty, and rmdir never removes a directory that still holds a
     # socket. It also leaves this run's home in agent-tty's per-user registry.
-    for sid in $(atty_cleanup 30 list --all --json | jq -r '.result.sessions[]?.sessionId // empty' 2>/dev/null); do
-      sock="$(atty_cleanup 30 inspect "$sid" --json | jq -r '.result.host.rpcSocketPath // empty' 2>/dev/null)"
-      atty_cleanup 60 destroy "$sid" --json >/dev/null || true
+    atty_cleanup 30 list --all --json >"$WORK/cleanup-list.json" || stopped=1
+    for sid in $(jq -r '.result.sessions[]?.sessionId // empty' "$WORK/cleanup-list.json" 2>/dev/null); do
+      atty_cleanup 30 inspect "$sid" --json >"$WORK/cleanup-inspect.json" || stopped=1
+      sock="$(jq -r '.result.host.rpcSocketPath // empty' "$WORK/cleanup-inspect.json" 2>/dev/null)"
+      atty_cleanup 60 destroy "$sid" --json >/dev/null || stopped=1
       if [[ "$sock" == /* ]]; then rmdir "$(dirname "$sock")" 2>/dev/null || true; fi
     done
-    atty_cleanup 30 home forget "$AGENT_HOME" --json >/dev/null || true
+    [[ -n "$stopped" ]] || atty_cleanup 30 home forget "$AGENT_HOME" --json >/dev/null || forget_stopped=1
   fi
-  [[ -z "$WORK" ]] || rm -rf "$WORK"
+  if [[ -n "$stopped" ]]; then
+    # A session of this run can still be running, and only the run's own home lists it. So the
+    # home and its registry entry stay, and the warning says how to find the session and how to
+    # remove everything.
+    q_home="$(printf '%q' "$AGENT_HOME")"
+    q_work="$(printf '%q' "$WORK")"
+    warn "         A session of this run can still be running. Its agent-tty home stays: $q_home"
+    warn "         List its sessions:  agent-tty --home $q_home list --all"
+    warn "         Remove a session:   agent-tty --home $q_home destroy <session-id>"
+    warn "         When no session is left: agent-tty home forget $q_home; rm -rf $q_work"
+  elif [[ -n "$WORK" ]]; then
+    rm -rf "$WORK"
+  fi
+  if [[ -n "$forget_stopped" ]]; then
+    warn "         agent-tty's registry still lists the home $(printf '%q' "$AGENT_HOME"). Remove the entry with: agent-tty home forget $(printf '%q' "$AGENT_HOME")"
+  fi
 }
 trap cleanup EXIT
 trap 'exit 143' TERM
