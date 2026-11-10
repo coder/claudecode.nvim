@@ -3,10 +3,11 @@
 # own run with scripts/ctrl-z-probe-job.mjs as terminal_cmd, opens the terminal with :ClaudeCode and presses Ctrl-Z.
 # Usage: proof-ctrl-z-suspend.sh native|snacks
 #   snacks needs SNACKS_DIR=<a snacks.nvim checkout>. VERIFY_OUT=<new dir> picks the evidence dir.
-# vcn.sh runs nvim as the leader of its own session, so its process group is orphaned and the kernel drops the
-# SIGTSTP that `:suspend` sends. Neovim therefore never stops here, and its screen stops updating after the first
-# `:suspend`. The proof counts VimSuspend events instead, and compares the terminal's Ctrl-Z with the one in a normal
-# window.
+# Phase 1 uses vcn.sh. agent-tty sends no reply to the Primary Device Attributes query that Neovim's TUI waits for
+# before it sends itself SIGSTOP on `:suspend`, so nvim never stops there, and its screen stops updating after the
+# first `:suspend`. Phase 1 counts VimSuspend events and compares the terminal's Ctrl-Z with a normal window's.
+# Phase 2, proof-ctrl-z-stop.py, runs nvim as a foreground job of `bash -i` in a pty that answers the query, and
+# checks that Ctrl-Z stops nvim, that `fg` resumes it, and that the job never reads 0x1a. It needs python3.
 # Prints `ok <check>` or `FAIL <check>` per check and ends with `CHECKS <n> FAILED <k>`. Exits 1 when any check
 # fails.
 # Evidence lands in the run's $OUT as ctrl-z-<provider>-*.
@@ -119,6 +120,20 @@ check "after Ctrl-Z, a typed key (0x78) still reaches the job" job_log_gets '78'
 "$V" keys Ctrl+Z
 "$V" until 'g:suspends' 2 5 || true
 check "Ctrl-Z in a normal window ran :suspend too (VimSuspend 1 -> 2)" test "$("$V" expr 'g:suspends')" = 2
+
+# Phase 2: the real stop, in a pty that answers the terminal queries.
+nvim_exe=$(mise which nvim 2>/dev/null || command -v nvim)
+pty_args=(--provider "$provider" --repo "$(cd "$here/../../../.." && pwd)" --nvim "$nvim_exe" --node "$node_exe" --out "$out/pty")
+[[ $provider == snacks ]] && pty_args+=(--snacks "$SNACKS_DIR")
+pty_report=$(python3 "$here/proof-ctrl-z-stop.py" "${pty_args[@]}" 2>"$out/ctrl-z-$provider-pty-stderr.txt") || true
+grep -E '^(ok|FAIL) ' <<<"$pty_report" | sed -E 's/^(ok   |FAIL )/\1[bash -i pty] /' || true
+if pty_counts=$(grep -E '^CHECKS [0-9]+ FAILED [0-9]+$' <<<"$pty_report"); then
+  read -r _ pty_total _ pty_failed <<<"$pty_counts"
+  total=$((total + pty_total))
+  failed=$((failed + pty_failed))
+else
+  check "proof-ctrl-z-stop.py printed its result (see $out/ctrl-z-$provider-pty-stderr.txt)" false
+fi
 
 echo "terminal buffer: $terminal_buf; job log: $log"
 echo "CHECKS $total FAILED $failed"

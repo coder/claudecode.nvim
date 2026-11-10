@@ -520,17 +520,35 @@ it (#194). So the `native` and `snacks` providers map `<C-z>` in terminal mode o
 `:suspend`. Ctrl-Z there suspends Neovim, as it does in any other window. The mapping is buffer-local, so other
 terminals keep their own Ctrl-Z behavior. `external` and `none` create no Neovim buffer, so they map nothing.
 
-To change it, set your own buffer-local mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer
-Filetype above). Your mapping wins on both providers. For example, to send Ctrl-Z to Claude Code again:
+The buffer-local mapping shadows a global terminal-mode `<C-z>` mapping of yours in the Claude buffer. To keep your
+own mapping there, set it buffer-local for the Claude buffer. The plugin keeps a buffer-local `<C-z>` terminal mapping
+that already exists. For example, to send Ctrl-Z to Claude Code again:
 
 ```lua
 vim.api.nvim_create_autocmd("FileType", {
-  pattern = "claudecode",
+  pattern = "claudecode", -- the filetype of the Claude buffer (see Terminal Buffer Filetype above)
   callback = function(args)
     vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = args.buf })
   end,
 })
 ```
+
+- Replace the mapping with `vim.keymap.set`, as the example does. Do not remove it with `vim.keymap.del` on `snacks`:
+  Snacks fires `FileType` before the plugin maps `<C-z>`, so the handler finds nothing to delete, and the plugin then
+  maps its default. On `native`, the plugin maps first, so `vim.keymap.del` works there.
+- The `pattern` must match the filetype of the Claude buffer. With `snacks`, if you changed it in
+  `snacks_win_opts.bo.filetype`, use that filetype. To avoid the filetype, set the mapping from `snacks_win_opts.on_buf`,
+  which the plugin calls before it maps `<C-z>`:
+
+  ```lua
+  terminal = {
+    snacks_win_opts = {
+      on_buf = function(win)
+        vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = win.buf })
+      end,
+    },
+  }
+  ```
 
 ## Floating Window Configuration
 
