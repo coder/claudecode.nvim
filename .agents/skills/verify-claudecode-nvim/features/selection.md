@@ -37,7 +37,7 @@ Steps:
 ## Gotchas
 
 - Leaving visual mode keeps the last visual selection until the user moves the cursor, starts another selection, lets an operator consume it, edits its text, or goes to another file. A visit to the Claude terminal keeps it. `getCurrentSelection` still returns it with `isEmpty: false`. Move the cursor before you test the empty state.
-- While tracking is on, `getCurrentSelection` and `getLatestSelection` both return the selection Neovim last pushed. `getCurrentSelection` only adds `"success":true`. Neither reads the editor again, so during the debounce both return the older selection. Four events do not wait for the debounce, and each pushes at once: leaving visual mode, editing the held text or consuming it with an operator, moving the cursor away from a held selection, and entering another file.
-- Most notifications are debounced; the four events above are not. Wait for the mode or cursor state with `$V until`, then allow about one second before you read `ws-in.jsonl`.
+- While tracking is on, `getCurrentSelection` and `getLatestSelection` both return the selection Neovim last pushed. `getCurrentSelection` only adds `"success":true`. Neither reads the editor again, so during the debounce both return the older selection. Three events do not wait for the debounce, and each pushes at once: leaving visual mode, editing the held text or consuming it with an operator, and moving the cursor away from a held selection. Entering another file (`:b`, a window switch) waits for the debounce: measured about 100 ms.
+- Most notifications are debounced; the three events above are not. Wait for the mode or cursor state with `$V until`, then allow about one second before you read `ws-in.jsonl`.
 - Lines and characters are 0-based in every payload. `:3` in Neovim is `line: 2`.
 - Notifications reach only a connected client. If `$V doctor` fails the handshake line, nothing arrives.
