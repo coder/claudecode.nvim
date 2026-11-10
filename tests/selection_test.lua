@@ -1977,9 +1977,9 @@ describe("Range Selection Tests", function()
         settle()
         assert.are.equal("alpha", selection.get_latest_selection().text)
 
-        start_selecting(5) -- gv
-        assert.is_nil(selection.state.cursor_at_flush)
-        assert.is_nil(selection.state.last_active_visual_selection)
+        start_selecting(5) -- gv: the old selection is not held any more, and Claude still has it until an update
+        assert.is_true(selection.state.cursor_at_flush.left)
+        assert.are.equal("alpha", selection.get_latest_selection().text)
 
         -- d: the changedtick moves, visual mode ends, the cursor lands on column 0 again.
         _G.vim._changedtick = 6
