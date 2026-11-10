@@ -45,6 +45,14 @@ local function handler(params)
     if selection_module.is_claude_terminal_buffer(editor_buf) then
       local previous = vim.fn.winnr("#")
       local previous_win = previous > 0 and vim.fn.win_getid(previous) or 0
+      if previous_win == 0 then
+        -- winnr("#") is tab-local: a Claude terminal in its own tab has no previous window
+        -- there, so use the current window of the tab the user came from.
+        local previous_tab = vim.fn.tabpagenr("#")
+        if previous_tab > 0 then
+          previous_win = vim.fn.win_getid(vim.fn.tabpagewinnr(previous_tab), previous_tab)
+        end
+      end
       editor_buf = nil
       if previous_win ~= 0 then
         local previous_buf = vim.api.nvim_win_get_buf(previous_win)

@@ -101,8 +101,17 @@ describe("Tool: get_current_selection", function()
         }
       end)
       _G.vim.fn = _G.vim.fn or {}
-      _G.vim.fn.win_getid = function(nr)
+      _G.vim.fn.win_getid = function(nr, tab)
+        if tab == 1 then
+          return nr == 3 and 1001 or 0
+        end
         return nr == 2 and 1001 or 0
+      end
+      _G.vim.fn.tabpagenr = function()
+        return 0
+      end
+      _G.vim.fn.tabpagewinnr = function(tab)
+        return tab == 1 and 3 or 0
       end
       _G.vim.api.nvim_win_get_buf = function(winid)
         return winid == 1001 and 2 or 1
@@ -115,6 +124,8 @@ describe("Tool: get_current_selection", function()
     after_each(function()
       _G.vim.fn.winnr = nil
       _G.vim.fn.win_getid = nil
+      _G.vim.fn.tabpagenr = nil
+      _G.vim.fn.tabpagewinnr = nil
       _G.vim.api.nvim_win_get_buf = nil
     end)
 
@@ -142,6 +153,20 @@ describe("Tool: get_current_selection", function()
       local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
       expect(parsed_result.success).to_be_false()
       expect(parsed_result.message).to_be("No active editor found")
+    end)
+
+    it("answers from the tab the user came from when the Claude terminal has its own tab", function()
+      _G.vim.fn.winnr = function(arg)
+        return arg == "#" and 0 or 1
+      end
+      _G.vim.fn.tabpagenr = function(arg)
+        return arg == "#" and 1 or 2
+      end
+
+      local result = get_current_selection_handler({})
+      local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+      expect(parsed_result.success).to_be_true()
+      expect(parsed_result.filePath).to_be("/prev/file.lua")
     end)
 
     it("answers no active editor when there is no previous window", function()
