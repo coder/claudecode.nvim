@@ -503,25 +503,50 @@ describe("claudecode.terminal.snacks after a module reload", function()
   end
 
   describe("a Claude that exits between its TermClose and the scheduled close", function()
-    for _, hidden in ipairs({ false, true }) do
-      it("is not shown again by an open after a reload (hidden=" .. tostring(hidden) .. ")", function()
-        snacks_provider.open("claude", {}, config, true)
-        local claude = started[1]
-        if hidden then
-          snacks_provider.simple_toggle("claude", {}, config)
-        end
-        reload_snacks()
-        assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+    for _, entry in ipairs(entries) do
+      for _, hidden in ipairs({ false, true }) do
+        it(string.format("is not shown again by %s after a reload (hidden=%s)", entry[1], tostring(hidden)), function()
+          snacks_provider.open("claude", {}, config, true)
+          local claude = started[1]
+          if hidden then
+            snacks_provider.simple_toggle("claude", {}, config)
+          end
+          reload_snacks()
+          assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
 
-        exit_job(claude.buf)
-        snacks_provider.open("claude", {}, config, true)
+          exit_job(claude.buf)
+          entry[2]()
 
-        assert.are.equal(2, #started)
-        assert.are.equal(1, running_count())
-        assert.are.equal(1, windows_showing(started[2].buf))
-        assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
-      end)
+          assert.are.equal(2, #started)
+          assert.are.equal(1, running_count())
+          assert.are.equal(1, windows_showing(started[2].buf))
+          assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
+        end)
+      end
     end
+
+    -- :ClaudeCodeClose clears `terminal` before it waits. A scheduled open can start another Claude in that wait,
+    -- before the stopped job's TermClose runs.
+    it("does not forget a newer terminal that an open started while the adopted one closed", function()
+      snacks_provider.open("claude", {}, config, true)
+      reload_snacks()
+      assert.are.equal(started[1].buf, snacks_provider.get_active_bufnr())
+      local wait = vim.wait
+      vim.wait = function(...)
+        while #state.scheduled > 0 do
+          table.remove(state.scheduled, 1)()
+        end
+        return wait(...)
+      end
+      vim.schedule(function()
+        snacks_provider.open("claude", {}, config, true)
+      end)
+
+      snacks_provider.close()
+
+      assert.are.equal(2, #started)
+      assert.are.equal(started[2], snacks_provider._get_terminal_for_test())
+    end)
 
     it("keeps one handler per buffer, however many reloads adopt it", function()
       snacks_provider.open("claude", {}, config, true)
