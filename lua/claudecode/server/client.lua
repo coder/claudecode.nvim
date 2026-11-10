@@ -100,7 +100,8 @@ end
 ---@param on_close function Callback for client close: function(client, code, reason)
 ---@param on_error function Callback for errors: function(client, error_msg)
 ---@param auth_token string|nil Expected authentication token for validation
-function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+---@param on_open function|nil Callback once the WebSocket handshake completed: function(client)
+function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
   -- Nothing more is parsed from a client that is closing, so none of its bytes are kept either.
   if client.state == "closing" or client.state == "closed" then
     client.buffer, client.pending = "", nil
@@ -178,9 +179,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         client.handshake_complete = true
         client.state = "connected"
         logger.debug("client", "WebSocket connection established for client:", client.id)
+        if on_open then
+          on_open(client)
+        end
 
         if #client.buffer > 0 then
-          M.process_data(client, "", on_message, on_close, on_error, auth_token)
+          M.process_data(client, "", on_message, on_close, on_error, auth_token, on_open)
         end
       end)
     end

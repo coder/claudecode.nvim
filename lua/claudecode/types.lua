@@ -56,10 +56,9 @@
 
 -- @ mention queued for Claude Code
 ---@class ClaudeCodeMention
----@field file_path string The absolute file path to mention
+---@field file_path string The path Claude receives: cwd-relative when the file is under the cwd
 ---@field start_line number? Optional start line (0-indexed for Claude compatibility)
 ---@field end_line number? Optional end line (0-indexed for Claude compatibility)
----@field timestamp number Creation timestamp from vim.loop.now() for expiry tracking
 
 -- Payload delivered as `data` to a `User ClaudeCodeSendComplete` autocmd. Fired
 -- once per file, synchronously, when a send is accepted while Claude is connected.
@@ -127,7 +126,7 @@
 ---@field visual_demotion_delay_ms number
 ---@field connection_wait_delay number
 ---@field connection_timeout number
----@field queue_timeout number
+---@field queue_timeout number Unused: accepted so that configs that set it stay valid
 ---@field diff_opts ClaudeCodeDiffOptions
 ---@field models ClaudeCodeModelOption[]
 ---@field disable_broadcast_debouncing? boolean
@@ -151,8 +150,8 @@
 ---@field auth_token string|nil
 ---@field initialized boolean
 ---@field mention_queue ClaudeCodeMention[]
----@field mention_timer uv.uv_timer_t?  -- (compatible with vim.loop timer)
----@field connection_timer uv.uv_timer_t?  -- (compatible with vim.loop timer)
+---@field mention_timer uv.uv_timer_t?  -- the next flush of the mention queue (compatible with vim.loop timer)
+---@field connection_timer uv.uv_timer_t?  -- the timeout of the mentions that wait for Claude to connect
 
 -- This module only defines types, no runtime functionality
 return {}

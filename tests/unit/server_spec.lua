@@ -171,7 +171,7 @@ describe("WebSocket Server", function()
     server.stop()
   end)
 
-  it("should broadcast to all clients", function()
+  it("should broadcast to all clients, and report whether a connected client took it", function()
     -- Start server first
     local config = { port_range = { min = 10000, max = 65535 } }
     server.start(config)
@@ -179,12 +179,38 @@ describe("WebSocket Server", function()
     local method = "test_method"
     local params = { foo = "bar" }
 
-    local success = server.broadcast(method, params)
+    -- The @ mention queue keeps a mention that no client took, so a broadcast to nobody must not report success.
+    local ok, success_without_client = pcall(server.broadcast, method, params)
+    local written = {}
+    local function add_client(id, state)
+      server.state.server.clients[id] = {
+        id = id,
+        state = state,
+        tcp_handle = {
+          write = function(_, data)
+            table.insert(written, id)
+          end,
+          is_closing = function()
+            return false
+          end,
+          close = function() end,
+        },
+      }
+    end
+    add_client("closing_client", "closing")
+    local ok_closing, success_with_closing_client = pcall(server.broadcast, method, params)
+    add_client("connected_client", "connected")
+    local ok_connected, success_with_connected_client = pcall(server.broadcast, method, params)
 
-    expect(success).to_be_true()
-
-    -- Clean up
+    -- Clean up first, so that a failed assertion does not leave the server running for the next test.
+    server.state.server.clients = {}
     server.stop()
+
+    assert.is_true(ok and ok_closing and ok_connected)
+    expect(success_without_client).to_be_false()
+    expect(success_with_closing_client).to_be_false()
+    expect(success_with_connected_client).to_be_true()
+    assert.same({ "connected_client" }, written)
   end)
 
   describe("invalid JSON-RPC messages", function()
