@@ -333,18 +333,6 @@ function M.get_clients_info(server)
   return clients
 end
 
----Close a specific client connection
----@param server TCPServer The server object
----@param client_id string The client ID
----@param code number|nil Close code
----@param reason string|nil Close reason
-function M.close_client(server, client_id, code, reason)
-  local client = server.clients[client_id]
-  if client then
-    client_manager.close_client(client, code, reason)
-  end
-end
-
 ---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)

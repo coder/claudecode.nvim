@@ -161,6 +161,7 @@ describe("The lifecycle of a WebSocket connection", function()
       {
         name = "a binary message",
         status = 1003,
+        reason = "Client error: Binary messages not supported",
         bytes = function()
           return frame.create_frame(frame.OPCODE.BINARY, "x", true, true)
         end,
@@ -168,6 +169,7 @@ describe("The lifecycle of a WebSocket connection", function()
       {
         name = "a reserved opcode",
         status = 1002,
+        reason = "Client error: Reserved opcode 0x3", -- frame.parse_frame is the only check of an opcode
         bytes = function()
           return string.char(0x83, 0x00)
         end,
@@ -175,6 +177,7 @@ describe("The lifecycle of a WebSocket connection", function()
       {
         name = "a text message that is not UTF-8",
         status = 1007,
+        reason = "Client error: Invalid UTF-8 in text message",
         bytes = function()
           return string.char(0x81, 0x02, 0xFF, 0xFE)
         end,
@@ -191,6 +194,7 @@ describe("The lifecycle of a WebSocket connection", function()
 
         -- The client is reported and gone from the server while the Close frame still waits behind the big message.
         assert.spy(callbacks.on_disconnect).was_called(1)
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, case.reason)
         assert.is_nil(server.clients[client.id])
         assert.equals(3, #writes, "the 101 reply, the big message and a Close frame")
         assert.equals(case.status, close_status(writes[3]))

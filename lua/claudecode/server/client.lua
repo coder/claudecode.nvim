@@ -233,6 +233,7 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
 
     offset = offset + bytes_consumed
 
+    -- parse_frame rejects every opcode but the six handled here with 1002, so no other opcode gets this far.
     local opcode = parsed_frame.opcode
     if opcode == frame.OPCODE.TEXT or opcode == frame.OPCODE.BINARY or opcode == frame.OPCODE.CONTINUATION then
       local message, status, problem = add_data_frame(client, parsed_frame)
@@ -280,9 +281,6 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       client.tcp_handle:write(pong_frame)
     elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
-    else
-      fail_connection(client, 1002, "Unknown WebSocket opcode: " .. opcode, on_error)
-      break
     end
   end
   client.buffer = client.buffer:sub(offset)
