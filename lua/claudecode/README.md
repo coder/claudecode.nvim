@@ -43,9 +43,9 @@ Module map (direct files):
 - `M.setup(opts) -> M`: applies config, sets up the logger, terminal, and diff modules, and creates commands and the shutdown autocmd. It starts the server when `auto_start` is set [init.lua:M.setup]
 - `M.start(show_startup_notification?) -> ok, port|err` and `M.stop() -> ok, err?` [init.lua:M.start]
 - `M.state`: `config`, `server`, `port`, `auth_token`, `initialized`, `mention_queue`, `mention_timer`, and `connection_timer` [init.lua:M.state]
-- `M.is_claude_connected()`: false when the server is not running. When `get_status().clients` is non-empty, true only when a client has `handshake_complete`. When it is empty, true when `client_count > 0`, with no handshake check [init.lua:M.is_claude_connected]
+- `M.is_claude_connected()`: false when the server is not running. When `get_status().clients` is non-empty, true only when a client is in state `connected` with `handshake_complete`, so a `closing` client does not count. When it is empty, true when `client_count > 0`, with no handshake check [init.lua:M.is_claude_connected]
 - `M.send_at_mention(file_path, start_line?, end_line?, context?) -> ok, err?`: line numbers are 0-indexed [init.lua:M.send_at_mention]
-- `M.process_mention_queue(from_new_connection?)`: the server's `on_connect` callback calls it [init.lua:M.process_mention_queue]
+- `M.process_mention_queue(from_new_connection?)`: the server's `on_open` callback calls it with `true` once a client completed its WebSocket handshake. Without the argument it sends the oldest queued mention now [init.lua:M.process_mention_queue]
 - `M.open_with_model(args)`, `M.get_version()`, and `M.version`, read from the repository's `VERSION` file at load [init.lua:M.version]
 - Internal API: `M._create_commands`, `M._broadcast_at_mention`, `M._add_paths_to_claude` (default `max_files` 100, `batch_size` 10), `M._format_path_for_at_mention`, `M._ensure_terminal_visible_if_connected`, and `M._maybe_warn_unfocusable_provider` [init.lua:M._add_paths_to_claude]
 
@@ -110,7 +110,9 @@ Module map (direct files):
 ### @-mentions and selection
 
 - Line numbers sent to Claude are 0-indexed. `:ClaudeCodeAdd` converts the 1-indexed input [init.lua:M._create_commands]
-- A mention sent while disconnected goes to the queue, and the terminal opens. The queue drops mentions older than `queue_timeout` and is cleared after `connection_timeout` [init.lua:M.process_mention_queue]
+- A mention sent while disconnected goes to the queue with the same cwd-relative path as a connected send, and the terminal opens. A connected send goes to the queue too, unless broadcast debouncing is off and the queue is empty [init.lua:M._broadcast_at_mention]
+- The queue sends each mention once, oldest first: 50 ms after a send, `connection_wait_delay` ms after a client completed its handshake, and 25 ms apart. A mention leaves the queue only when a connected client took it. When Claude is not connected, the mentions wait up to `connection_timeout` ms for a handshake, then the queue is cleared with the error "Connection timeout - clearing N queued @ mentions". A handshake stops that timeout, and a flush that finds no connected client starts it again. `queue_timeout` is accepted but unused [init.lua:schedule_mention_flush]
+- `M.stop` clears the queue and stops its timers. A queue timer's callback does nothing once its timer was stopped or replaced, so nothing queued before a stop reaches Claude [init.lua:start_timer]
 - Selection tracking is a no-op unless it is enabled. Updates are debounced by 100 ms. Claude terminal buffers are skipped [selection.lua:M.update_selection]
 - The automatic paths send `selection_changed` only when the selection differs from the last one sent [selection.lua:M.update_selection] [selection.lua:M.flush_visual_selection]. `send_current_selection` sends with no change check [selection.lua:M.send_current_selection]
 - Select mode (`gh`, or `v`, `V` and CTRL-V when `'selectmode'` contains `cmd`) is tracked like Visual mode [selection.lua:is_visual_mode], and a command such as a `<cmd>ClaudeCodeSend<CR>` mapping takes the visual path there [visual_commands.lua:M.create_visual_command_wrapper]. The visual path ends Select mode. For a mapping made with `mode = "v"` (`:vmap`), Neovim queues a key that restores Select mode after the mapping, and the visual path cancels it with `gV` [visual_commands.lua:M.exit_visual_and_schedule]
