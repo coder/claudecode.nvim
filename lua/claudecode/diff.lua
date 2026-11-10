@@ -961,6 +961,16 @@ function M._register_diff_state(tab_name, diff_data)
   active_diffs[tab_name] = diff_data
 end
 
+---While the proposal buffer stays modified, `:wq`, `:x` and `ZZ` leave its window open, and `:qa` stops with E37 or
+---E162.
+---@param diff_data table A diff that was just resolved
+local function mark_proposal_unmodified(diff_data)
+  local buffer = diff_data.new_buffer
+  if buffer and vim.api.nvim_buf_is_valid(buffer) then
+    pcall(vim.api.nvim_set_option_value, "modified", false, { buf = buffer })
+  end
+end
+
 ---Resolve diff as saved (user accepted changes)
 ---@param tab_name string The diff identifier
 ---@param buffer_id number The buffer that was saved
@@ -969,6 +979,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   if not diff_data or diff_data.status ~= "pending" then
     return
   end
+  mark_proposal_unmodified(diff_data)
 
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
@@ -1063,6 +1074,7 @@ function M._resolve_diff_as_rejected(tab_name)
   if not diff_data or diff_data.status ~= "pending" then
     return
   end
+  mark_proposal_unmodified(diff_data)
 
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
@@ -1144,6 +1156,26 @@ function M._register_reject_when_hidden(tab_name, new_buffer, autocmd_ids)
   })
 end
 
+---Handle a write of the proposal buffer (`:w`, `:wq`, `:x`, `ZZ`). The BufWriteCmd handler must not return true: that
+---deletes the autocmd, and the next `:w` of the acwrite buffer fails with E676.
+---@param tab_name string The diff identifier
+---@param buffer number The proposal buffer
+function M._write_proposal(tab_name, buffer)
+  local diff_data = active_diffs[tab_name]
+  if not diff_data then
+    return
+  end
+  if diff_data.status == "pending" then
+    M._resolve_diff_as_saved(tab_name, buffer)
+    return
+  end
+  if vim.api.nvim_get_option_value("modified", { buf = buffer }) then
+    local answered = diff_data.status == "saved" and "accepted" or diff_data.status
+    vim.notify(("This diff is already %s, so Claude does not get these edits"):format(answered), vim.log.levels.WARN)
+    mark_proposal_unmodified(diff_data)
+  end
+end
+
 ---Register autocmds for a specific diff
 ---@param tab_name string The diff identifier
 ---@param new_buffer number New file buffer ID
@@ -1156,14 +1188,12 @@ local function register_diff_autocmds(tab_name, new_buffer)
     group = get_autocmd_group(),
     buffer = new_buffer,
     callback = function()
-      M._resolve_diff_as_saved(tab_name, new_buffer)
+      M._write_proposal(tab_name, new_buffer)
       -- Explicitly turn off diff mode before Neovim does its post-write redraw.
       -- This prevents a crash (exit code 139) when render-markdown.nvim is installed
       -- and the diff involves a new file. Without this, the post-callback redraw
       -- triggers render-markdown on a buffer still in diff mode, causing a segfault.
       pcall(vim.cmd, "diffoff")
-      -- Prevent actual file write since we're handling it through MCP
-      return true
     end,
   })
 
@@ -1304,6 +1334,27 @@ function M._create_diff_view_from_window(
   }
 end
 
+---@param win number|nil
+---@param buffer number|nil
+---@return boolean shows True when `win` is a valid window that shows `buffer`
+local function window_shows(win, buffer)
+  return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buffer
+end
+
+---Close the proposal window unless the user switched it to another buffer. 'diff' is window-local and survives `:edit`,
+---so a kept split-layout window still needs `diffoff`.
+---@param diff_data table
+function M._close_proposal_window(diff_data)
+  local win = diff_data.new_window
+  if window_shows(win, diff_data.new_buffer) then
+    pcall(vim.api.nvim_win_close, win, true)
+  elseif win and diff_data.layout ~= "unified" then
+    pcall(vim.api.nvim_win_call, win, function()
+      vim.cmd("diffoff")
+    end)
+  end
+end
+
 ---Clean up diff state and resources
 ---@param tab_name string The diff identifier
 ---@param reason string Reason for cleanup
@@ -1366,9 +1417,7 @@ function M._cleanup_diff_state(tab_name, reason)
   else
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close new diff window if still open (only if not in a new tab)
-    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-      pcall(vim.api.nvim_win_close, diff_data.new_window, true)
-    end
+    M._close_proposal_window(diff_data)
 
     -- Close the fallback window we created when no editor window existed (issue #231); it's reused
     -- as the original pane, so target_window_created_by_plugin below doesn't cover it.
@@ -1378,7 +1427,9 @@ function M._cleanup_diff_state(tab_name, reason)
 
     -- If we created an extra window/split for the diff, close it. Otherwise just disable diff mode.
     if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
-      if diff_data.target_window_created_by_plugin then
+      if
+        diff_data.target_window_created_by_plugin and window_shows(diff_data.target_window, diff_data.original_buffer)
+      then
         -- Try a non-forced close first to avoid dropping any user edits in that window.
         pcall(vim.api.nvim_win_close, diff_data.target_window, false)
       end
