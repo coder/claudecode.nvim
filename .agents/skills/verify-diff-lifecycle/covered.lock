@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 35f1bc960cb293e4
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 4f532d536f04b2ee
+file lua/claudecode/diff.lua 5122f3b1001d039a
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -169,13 +169,15 @@ file lua/claudecode/terminal.lua a797eb121b1499bf
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua f75c1ff19c083f8e
+file lua/claudecode/terminal/native.lua 3c6a45dc04eb59ce
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
+== lua/claudecode/terminal/owned.lua
+file lua/claudecode/terminal/owned.lua f64571d98221176c
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua d2793af9e78b89f5
+file lua/claudecode/terminal/snacks.lua c0472fc732fdaa14
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 == lua/claudecode/tools/close_all_diff_tabs.lua

@@ -156,7 +156,21 @@ describe("claudecode.terminal.snacks close", function()
         state.waited_ms = state.waited_ms + timeout
         return false
       end,
+      -- Buffer variables, such as the mark that the provider sets on its Claude buffer.
+      b = setmetatable({}, {
+        __index = function(_, bufnr)
+          local buf = state.buffers[bufnr]
+          if not buf then
+            return {}
+          end
+          buf.vars = buf.vars or {}
+          return buf.vars
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_call = function(_, fn)
           return fn()
         end,
