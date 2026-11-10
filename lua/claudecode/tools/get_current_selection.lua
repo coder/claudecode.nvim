@@ -41,7 +41,8 @@ local function handler(params)
     local current_buf = vim.api.nvim_get_current_buf()
     local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-    if not buf_name or buf_name == "" then
+    -- The Claude terminal is not an editor; tracked mode skips it the same way.
+    if not buf_name or buf_name == "" or selection_module.is_claude_terminal_buffer(current_buf) then
       -- No active editor case - match VS Code format
       local no_editor_response = {
         success = false,

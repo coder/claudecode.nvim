@@ -11,6 +11,9 @@ describe("Tool: get_current_selection", function()
         -- Default behavior: no selection
         return nil
       end),
+      is_claude_terminal_buffer = function()
+        return false
+      end,
     }
     package.loaded["claudecode.selection"] = mock_selection_module
 
@@ -75,6 +78,26 @@ describe("Tool: get_current_selection", function()
     expect(parsed_result.selection.start.line).to_be(4)
     expect(parsed_result.selection.start.character).to_be(2)
     assert.spy(mock_selection_module.get_latest_selection).was_called()
+  end)
+
+  it("should answer no active editor when the Claude terminal is current and nothing is tracked", function()
+    mock_selection_module.get_latest_selection = spy.new(function()
+      return nil
+    end)
+    mock_selection_module.is_claude_terminal_buffer = spy.new(function(bufnr)
+      return bufnr == 1
+    end)
+    mock_selection_module.get_visual_selection = spy.new(function()
+      error("must not read the Claude terminal")
+    end)
+    mock_selection_module.get_cursor_position = spy.new(function()
+      error("must not read the Claude terminal")
+    end)
+
+    local result = get_current_selection_handler({})
+    local parsed_result = require("tests.busted_setup").json_decode(result.content[1].text)
+    expect(parsed_result.success).to_be_false()
+    expect(parsed_result.message).to_be("No active editor found")
   end)
 
   it("should return the live visual selection if no selection is tracked", function()
