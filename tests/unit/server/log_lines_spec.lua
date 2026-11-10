@@ -235,6 +235,8 @@ describe("Server lines on the command line", function()
     lines = {}
     client.last_pong = vim.loop.now() - 61000
 
+    tick() -- the first tick that finds no pong pings again and logs nothing
+    assert.same({}, lines)
     tick()
 
     local line = only_line()
