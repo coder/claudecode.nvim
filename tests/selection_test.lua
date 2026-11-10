@@ -2110,6 +2110,35 @@ describe("Range Selection Tests", function()
         assert.is_nil(selection.state.demotion_timer)
       end)
 
+      -- Starting another selection ends the hold on the first one. An operator then consumes the second selection
+      -- before the in-visual debounce, so nothing was sent for it, and the first one is still in latest_selection with
+      -- its text intact. The debounce does nothing in the Claude terminal, so the cursor goes out at once.
+      it("reports the cursor when an operator consumes a different selection than the held one", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4) -- Claude holds "alpha"
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamma" })
+        start_selecting(5) -- a second selection, on "gamma"
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamm" }) -- d deletes its last character
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 14)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 14) -- no timer has fired
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+        go_to_buffer(2, 0)
+        settle()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 14)
+      end)
+
       -- Finding 1, HeldEndsWhenMoved (path B): ve, Esc, l, h within one debounce.
       it("ends when the cursor moves away and back before the debounce fires (ve Esc l h)", function()
         selection.enable(mock_server)
