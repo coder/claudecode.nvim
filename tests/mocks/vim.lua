@@ -559,7 +559,6 @@ local vim = {
       return 12345
     end,
 
-    -- No mapping exists, so utils.map_terminal_suspend maps the terminal buffer.
     maparg = function()
       return {}
     end,

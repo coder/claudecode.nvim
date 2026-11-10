@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Proves that Ctrl-Z in the Claude terminal suspends Neovim and never reaches the Claude job (#194).
+# Proves that Ctrl-Z in the Claude terminal suspends Neovim and never reaches the Claude job (#194). It launches its
+# own run with scripts/ctrl-z-probe-job.mjs as terminal_cmd, opens the terminal with :ClaudeCode and presses Ctrl-Z.
 # Usage: proof-ctrl-z-suspend.sh native|snacks
 #   snacks needs SNACKS_DIR=<a snacks.nvim checkout>. VERIFY_OUT=<new dir> picks the evidence dir.
-# It launches its own run with terminal_cmd set to scripts/ctrl-z-probe-job.mjs, a raw-mode stand-in for the
-# Claude CLI that logs every byte it reads and stops itself on 0x1a. It opens the terminal with :ClaudeCode,
-# presses Ctrl-Z, then types one more key.
 # vcn.sh runs nvim as the leader of its own session, so its process group is orphaned and the kernel drops the
 # SIGTSTP that `:suspend` sends. Neovim therefore never stops here. The proof counts VimSuspend events instead, and
 # compares the terminal's Ctrl-Z with the one in a normal window.
 # Prints `ok <check>` or `FAIL <check>` per check and ends with `CHECKS <n> FAILED <k>`. Exits 1 when any check
-# fails. On a main without the fix, the job reads 0x1a and stops, and Neovim never runs :suspend.
+# fails.
 # Evidence lands in the run's $OUT as ctrl-z-<provider>-*.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -55,10 +53,7 @@ check() {
     echo "FAIL $label"
   fi
 }
-# state <pid>: the first letter of ps' process state, "-" when the process is gone.
 state() { ps -o stat= -p "$1" 2>/dev/null | cut -c1 | grep . || echo -; }
-# The job logs `bytes <hex> ...` per read. job_log_lacks <hex>: it never read that byte. job_log_gets <hex>: it
-# reads that byte within 5 s.
 job_log_lacks() { ! grep -qE "^bytes( [0-9a-f]{2})* $1( |$)" "$log"; }
 job_log_gets() {
   local i
@@ -68,15 +63,17 @@ job_log_gets() {
   done
   return 1
 }
-# lua <code>: evaluate Lua over RPC. The code must use no single quote.
-lua() { "$V" expr "luaeval('$1')"; }
-# map_in <buffer name>: the terminal-mode <C-z> mapping, as seen from that buffer, or nothing.
+lua() {
+  [[ $1 != *"'"* ]] || {
+    echo "proof-ctrl-z-suspend: lua code must not contain a single quote" >&2
+    return 2
+  }
+  "$V" expr "luaeval('$1')"
+}
 map_in() {
   lua "vim.api.nvim_buf_call(vim.fn.bufnr(\"$1\"), function() return vim.fn.maparg(\"<C-z>\", \"t\") end)"
 }
 
-# :suspend fires VimSuspend, so the count shows whether Ctrl-Z reached Neovim's own suspend. Control: Ctrl-Z in a
-# normal window of hello.txt is the first suspend.
 "$V" keys ':let g:suspends = 0 | autocmd VimSuspend * let g:suspends += 1' Enter
 "$V" keys Ctrl+Z
 "$V" until 'g:suspends' 1 5

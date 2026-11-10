@@ -195,7 +195,6 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   winid = new_winid
   bufnr = new_bufnr
   vim.bo[bufnr].bufhidden = "hide"
-  -- Before the filetype is set, so a FileType handler finds the mapping and can replace it.
   utils.map_terminal_suspend(bufnr)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen

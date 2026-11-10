@@ -289,7 +289,6 @@ describe("claudecode.terminal.native toggle behavior", function()
         columns = 120,
         lines = 40,
       },
-      -- utils.map_terminal_suspend reads the buffer's existing <C-z> mapping, then maps it.
       keymap = {
         set = function() end,
       },
@@ -477,7 +476,6 @@ describe("claudecode.terminal.native toggle behavior", function()
   describe("Ctrl-Z in terminal mode (#194)", function()
     local keymap_calls
 
-    -- Records every vim.keymap.set call, with the filetype the buffer had at that moment.
     before_each(function()
       keymap_calls = {}
       local mock_state = _G.get_mock_state()

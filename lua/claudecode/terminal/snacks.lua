@@ -421,7 +421,7 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
-    -- After the FileType event, so the mapping that a user's handler set is kept.
+    -- Snacks.terminal.open has already fired FileType, so a <C-z> mapping that a user's handler set stays.
     utils.map_terminal_suspend(term_instance.buf)
     terminal = term_instance
   else

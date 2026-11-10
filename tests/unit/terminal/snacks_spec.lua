@@ -68,7 +68,6 @@ describe("claudecode.terminal.snacks command handling", function()
         end
         return res
       end,
-      -- utils.map_terminal_suspend reads the buffer's existing <C-z> mapping, then maps it.
       fn = {
         maparg = function()
           return {}
@@ -166,9 +165,9 @@ describe("claudecode.terminal.snacks command handling", function()
     assert.are.same({ home .. "/.claude/local/claude" }, captured.cmd)
   end)
 
-  -- A terminal passes Ctrl-Z to its job, and Claude Code then suspends itself with nothing to resume it (#194).
-  describe("Ctrl-Z in terminal mode", function()
+  describe("Ctrl-Z in terminal mode (#194)", function()
     local keymap_calls
+    local VISIBLE_WIN = 2
 
     before_each(function()
       keymap_calls = {}
@@ -190,7 +189,7 @@ describe("claudecode.terminal.snacks command handling", function()
     it("maps the buffer once: opening the existing terminal again adds no mapping", function()
       mock_snacks.terminal.open = spy.new(function()
         local instance = make_term_instance()
-        instance.win = 2 -- visible, so the second open only focuses it
+        instance.win = VISIBLE_WIN
         return instance
       end)
       _G.vim.api.nvim_win_get_config = function()

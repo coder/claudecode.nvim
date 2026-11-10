@@ -102,7 +102,6 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
           return rawget(t, win)
         end,
       }),
-      -- utils.map_terminal_suspend reads the buffer's existing <C-z> mapping, then maps it.
       keymap = { set = function() end },
       fn = {
         maparg = function()

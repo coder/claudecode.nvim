@@ -107,7 +107,6 @@ describe("claudecode.terminal.snacks close", function()
           return { channel = buf and buf.jobid or 0, buftype = "terminal" }
         end,
       }),
-      -- utils.map_terminal_suspend reads the buffer's existing <C-z> mapping, then maps it.
       keymap = { set = function() end },
       fn = {
         maparg = function()

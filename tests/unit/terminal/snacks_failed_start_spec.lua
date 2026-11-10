@@ -121,7 +121,6 @@ describe("claudecode.terminal.snacks failed start", function()
         end
         return res
       end,
-      -- utils.map_terminal_suspend reads the buffer's existing <C-z> mapping, then maps it.
       fn = {
         maparg = function()
           return {}
