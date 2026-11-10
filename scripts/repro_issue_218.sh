@@ -155,20 +155,6 @@ stop_tree() {
   # shellcheck disable=SC2086
   kill -KILL $live 2>/dev/null || true
 }
-# Run a command in its own session, so that a signal to this script's process group cannot
-# reach it. setsid(1) is not on macOS, but /usr/bin/perl is. Without either, run it as it is.
-# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
-in_new_session() {
-  if command -v setsid >/dev/null 2>&1; then
-    setsid -w "$@"
-  elif command -v perl >/dev/null 2>&1; then
-    perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV or die "exec $ARGV[0]: $!\n"' -- "$@"
-  else
-    "$@"
-  fi
-}
-# The socket directory of agent-tty home $1: /tmp/agent-tty/ and the first 8 hex digits of the
-# sha256 of the home path (agent-tty's sessionPaths.js). Prints nothing without a sha256 tool.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 socket_dir() {
   local sum=""
@@ -187,19 +173,24 @@ socket_dir() {
 warn() {
   printf '%s\n' "$*" >&8
 }
-# An agent-tty call from the cleanup: its own session, and SIGKILL after about $1 seconds. Node
-# resets a signal that `trap ''` ignores, so without the session a second signal to the process
-# group kills `list`, `inspect` or `destroy`, and the session survives. Output goes to the caller,
-# and the error output is dropped. A call that takes 3 s on a quiet host can take 10 s on a busy
-# one, so the deadlines are long. A call that the deadline stops prints a warning and returns 124.
+# An agent-tty call from the cleanup: its own process group, and SIGKILL after about $1 seconds.
+# Node resets a signal that `trap ''` ignores, so a second signal to this script's process group
+# would kill `list`, `inspect` or `destroy`, and the session would survive. Job control (`set -m`)
+# puts the call in a process group of its own, which that signal cannot reach, and needs no tool
+# beyond bash. The call reads /dev/null because a background group cannot read a terminal. Output
+# goes to the caller, and the error output is dropped. A call that takes 3 s on a quiet host can
+# take 10 s on a busy one, so the deadlines are long. A call that the deadline stops prints a
+# warning and returns 124.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 atty_cleanup() {
   local secs=$1 end=$((SECONDS + $1)) pid live what
   shift
   what=$1
   [[ "$1" != home ]] || what="$1 $2"
-  in_new_session "${ATTY[@]}" "$@" 2>/dev/null 8>&- &
+  set -m
+  "${ATTY[@]}" "$@" 2>/dev/null </dev/null 8>&- &
   pid=$!
+  set +m
   while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
   if kill -0 "$pid" 2>/dev/null; then
     live="$(tree_alive "$pid" "$pid")"
