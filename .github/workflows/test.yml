@@ -189,6 +189,7 @@ jobs:
 
   # Each .agents/skills/verify-*/check.sh model-checks one subsystem with TLC on the runner's Java,
   # then compares its covered.lock, which records the code that model was last confirmed against.
+  # scripts/tla/test-check-lib.sh tests the harness that all of them share.
   # Advisory: Required does not need this job, so a broken rule or a stale lock shows red without
   # blocking a merge.
   covered-lock:
@@ -235,6 +236,13 @@ jobs:
             echo "::endgroup::"
           done
           exit "$status"
+
+      # A toy skill on scripts/tla/check-lib.sh with a one-variable model. It runs even when a model above is red.
+      - name: Test the TLC harness
+        if: ${{ !cancelled() }}
+        env:
+          TLC_JAR: ${{ steps.tlc.outputs.jar }}
+        run: scripts/tla/test-check-lib.sh
 
   required:
     name: Required

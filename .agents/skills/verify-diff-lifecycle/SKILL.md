@@ -25,7 +25,7 @@ Claude calls `openDiff` and blocks until the plugin answers. If the plugin never
 .agents/skills/verify-diff-lifecycle/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
 .agents/skills/verify-diff-lifecycle/check.sh --mutants  # about 14 min, after you edit the model or a fact
 .agents/skills/verify-diff-lifecycle/check.sh --record   # rewrite covered.lock, only after "Update after an intended change" (refused together with --mutants, and refused when covered.lock is a symlink)
-.agents/skills/verify-diff-lifecycle/check.sh --hash-only  # under 1 s, no TLC: only compares covered.lock with the code (exit 0 or 3)
+.agents/skills/verify-diff-lifecycle/check.sh --hash-only  # about 5 s (it hashes about 40 files), no TLC: only compares covered.lock with the code (exit 0 or 3)
 ```
 
 CI runs every `.agents/skills/verify-*/check.sh`, this one and its model included, in the `covered-lock` job on every pull request. The runner's Java runs TLC. The job caches the TLC jar with `actions/cache`, keyed by the version and sha256 that the shared harness `scripts/tla/check-lib.sh` pins. `check.sh` checks the sha256 of a restored jar too, and exits 2 before TLC runs when it does not match. `Required` does not need that job: a PR that breaks a rule, or changes `lua/` or `plugin/` without a re-recorded `covered.lock`, shows the job red but can still merge.
