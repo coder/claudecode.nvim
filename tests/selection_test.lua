@@ -1885,11 +1885,14 @@ describe("Range Selection Tests", function()
         selection.on_text_changed()
       end
 
-      -- :b <buffer>, with the cursor at col: BufEnter. Buffer 2 is b.txt.
+      -- :b <buffer>: BufEnter fires while the window cursor is still at the start of the buffer, then Neovim
+      -- restores the buffer's last cursor position (col) and CursorMoved fires. Buffer 2 is b.txt.
       local function go_to_buffer(bufnr, col)
         _G.vim.api.nvim_get_current_buf = function()
           return bufnr
         end
+        _G.vim.test.set_cursor(0, 1, 0)
+        selection.on_cursor_moved(true)
         _G.vim.test.set_cursor(0, 1, col)
         selection.on_cursor_moved()
       end
@@ -1942,6 +1945,12 @@ describe("Range Selection Tests", function()
           return 2
         end
         go_to_buffer(2, 0)
+        settle()
+        move_cursor(0)
+        start_selecting(5) -- v in the terminal buffer, to copy text from it
+        _G.vim.test.set_mode("n")
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
         settle()
         go_to_buffer(1, 4)
         settle()
@@ -2053,6 +2062,20 @@ describe("Range Selection Tests", function()
         fire_debounce()
         assert.are.equal(pending_demotion, selection.state.demotion_timer)
         pending_demotion:fire()
+
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      it("never holds the selection after you visit another file and come back inside one debounce", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        settle()
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+
+        go_to_buffer(2, 0)
+        go_to_buffer(1, 4) -- the cursor is back where it was released, but you left the file
+        settle()
 
         assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
