@@ -167,6 +167,22 @@ in_new_session() {
     "$@"
   fi
 }
+# The socket directory of agent-tty home $1: /tmp/agent-tty/ and the first 8 hex digits of the
+# sha256 of the home path (agent-tty's sessionPaths.js). Prints nothing without a sha256 tool.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+socket_dir() {
+  local sum=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | sha256sum)"
+  elif command -v shasum >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | shasum -a 256)"
+  elif command -v openssl >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | openssl dgst -sha256 | sed 's/^.* //')"
+  fi
+  sum="${sum:0:8}"
+  [[ "$sum" =~ ^[0-9a-f]{8}$ ]] && printf '/tmp/agent-tty/%s' "$sum"
+  return 0
+}
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 warn() {
   printf '%s\n' "$*" >&8
@@ -199,7 +215,7 @@ atty_cleanup() {
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() {
   trap '' INT TERM HUP # a second signal must not cut the cleanup short
-  local pid sid sock end entry stopped='' forget_stopped='' q_home q_work
+  local pid sid sock socks dir end entry stopped='' forget_stopped='' q_home q_work
   # A create that is still running makes a session whose ID this script has not read yet.
   # Give it about 5 s to finish, then stop it.
   if [[ -n "$CREATE_PID" ]]; then
@@ -229,13 +245,23 @@ cleanup() {
     # includes a session whose Neovim has exited. `destroy` leaves the session's empty socket
     # directory in /tmp/agent-tty, and rmdir never removes a directory that still holds a
     # socket. It also leaves this run's home in agent-tty's per-user registry.
+    socks="$(socket_dir "$AGENT_HOME")"
     atty_cleanup 30 list --all --json >"$WORK/cleanup-list.json" || stopped=1
     for sid in $(jq -r '.result.sessions[]?.sessionId // empty' "$WORK/cleanup-list.json" 2>/dev/null); do
       atty_cleanup 30 inspect "$sid" --json >"$WORK/cleanup-inspect.json" || stopped=1
       sock="$(jq -r '.result.host.rpcSocketPath // empty' "$WORK/cleanup-inspect.json" 2>/dev/null)"
       atty_cleanup 60 destroy "$sid" --json >/dev/null || stopped=1
-      if [[ "$sock" == /* ]]; then rmdir "$(dirname "$sock")" 2>/dev/null || true; fi
+      if [[ "$sock" == /* ]]; then socks+=" $(dirname "$sock")"; fi
     done
+    # The directory of a session whose Neovim has exited has no path in `inspect`, so the home
+    # gives it. The host can delete its socket file a moment after `destroy` returns, so retry.
+    if [[ -z "$stopped" ]]; then
+      end=$((SECONDS + 5))
+      for dir in $socks; do
+        while [[ -d "$dir" ]] && ! rmdir "$dir" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+        [[ ! -d "$dir" ]] || warn "WARNING: the socket directory $dir still holds a socket. A session host of this run can still be running."
+      done
+    fi
     [[ -n "$stopped" ]] || atty_cleanup 30 home forget "$AGENT_HOME" --json >/dev/null || forget_stopped=1
   fi
   if [[ -n "$stopped" ]]; then
