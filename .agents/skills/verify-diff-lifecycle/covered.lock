@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 2e4a9339c6c649a5
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua e748b303eaefcaa7
+file lua/claudecode/diff.lua f6a11534295134b6
 block resolve_saved          5eeea81ac74a902f
 block resolve_rejected       0d1b8ae047185ddb
 block open_blocking          92067df7f9d4d4d9
@@ -60,7 +60,7 @@ site lua/claudecode/diff.lua: diff_data.status = "saved" @ function M._resolve_d
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, other in pairs(active_diffs) do @ local function save_window_sizes(tab)
-site lua/claudecode/diff.lua: for other_name, other in pairs(active_diffs) do @ local function other_diff_hid_float(tab_name, tab)
+site lua/claudecode/diff.lua: for other_name, other in pairs(active_diffs) do @ local function other_diff_that_hid_float(tab_name, tab)
 site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function close_active_diffs(filter_fn, reason, client_id)
 site lua/claudecode/diff.lua: function M._cleanup_all_active_diffs(reason) @ function M._cleanup_all_active_diffs(reason)
@@ -166,7 +166,7 @@ file lua/claudecode/server/tcp.lua f1f9833b4322b1ae
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
-file lua/claudecode/terminal.lua 854ad038c6f2232f
+file lua/claudecode/terminal.lua a97b87f7c78eac83
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
@@ -178,7 +178,7 @@ file lua/claudecode/terminal/owned.lua f64571d98221176c
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua 7abcde7216b7aba7
+file lua/claudecode/terminal/snacks.lua ed563ba2a43dcf8e
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 == lua/claudecode/tools/close_all_diff_tabs.lua
@@ -212,7 +212,7 @@ file lua/claudecode/tools/open_file.lua 6c7154d5427af9df
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua 2d7f0594363441b1
+file lua/claudecode/types.lua 9d42c11545f45a88
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua 97fae24d0ce4e33b
 == lua/claudecode/visual_commands.lua
