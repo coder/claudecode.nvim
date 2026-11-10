@@ -37,7 +37,7 @@ Steps:
 - **Arguments and model.** Run `$V keys ':ClaudeCode --model sonnet' Enter`. `$V until "match(getbufline($T, 1, '\$'), '^ARGS: --model sonnet') >= 0" 1` passes. Leave terminal mode and run `:ClaudeCodeClose`. Run `$V keys ':ClaudeCodeSelectModel' Enter`, then `$V capture term-model-list`: it shows `Select Claude model:` and `2: Claude Opus (Latest, 1M context)`. `$V keys 2 Enter` starts a terminal whose first line is `ARGS: --model opus[1m]`.
 - **Exit.** In terminal mode, run `$V keys exit Enter`. `$V until "winnr('\$')" 1` passes.
 - **Providers.** On a baseline launch (`none`), `:ClaudeCode`, `:ClaudeCodeFocus`, and `:ClaudeCodeOpen` leave `winnr('$')` at `1`. For `external`, launch with `VCN_SETUP=$(jq -nc --arg c "sh -c 'echo %s > ext.out'" '{terminal:{provider:"external",provider_opts:{external_terminal_cmd:$c}}}') $V launch` and run `$V keys ':ClaudeCode --model haiku' Enter`. `$V until "filereadable('ext.out')" 1` passes, `cat "$WORK/ext.out"` prints `claude --model haiku`, and `winnr('$')` stays `1`.
-- **Snacks.** Clone snacks.nvim as in [send-at-mention](./send-at-mention.md), and launch as in Preconditions with `provider:"snacks"` and `--cmd 'set rtp^=<dir>'`. Every step above gives the same result.
+- **Snacks.** Clone snacks.nvim as in [send-at-mention](./send-at-mention.md), and launch as in Preconditions with `provider:"snacks"` and `VCN_RTP=<dir>`. Every step above gives the same result.
 - **Proof.** Keep the `term-start` and `term-model-list` captures, and end with `$V record terminal`.
 
 ## Gotchas
