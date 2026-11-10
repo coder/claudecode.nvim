@@ -3,6 +3,17 @@ require("tests.busted_setup")
 local temp_dir = require("tests.helpers.temp_dir")
 local quote = temp_dir.quote
 
+local STUB_TIMEOUT = {
+  "#!/bin/sh",
+  'for arg in "$@"; do',
+  '  case "$arg" in',
+  "    [0-9]*s) arg=1s ;;",
+  "  esac",
+  '  set -- "$@" "$arg"',
+  "  shift",
+  "done",
+  'exec "$REAL_TIMEOUT" "$@"',
+}
 local STUB_NVIM = {
   "#!/bin/sh",
   'for arg in "$@"; do',
@@ -12,6 +23,10 @@ local STUB_NVIM = {
   "done",
   "name=${spec##*/}",
   'echo "$name" >> "$STUB_DIR/ran"',
+  'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
+  "  trap '' TERM",
+  "  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done",
+  "fi",
   'if [ -f "$STUB_DIR/$name.orphan" ]; then',
   "  sh -c 'trap \"\" TERM; exec sleep 60' > /dev/null 2>&1 &",
   '  echo $! > "$STUB_DIR/$name.orphan.pid"',
@@ -43,8 +58,10 @@ local function shell(command)
   assert(status == 0 or status == true, "failed: " .. command)
 end
 
-local has_timeout = os.execute("command -v timeout > /dev/null 2>&1")
-if not (has_timeout == 0 or has_timeout == true) then
+local timeout_pipe = assert(io.popen("command -v timeout 2> /dev/null"))
+local real_timeout = timeout_pipe:read("*l")
+timeout_pipe:close()
+if not real_timeout or real_timeout == "" then
   describe("scripts/run_integration_tests_individually.sh", function()
     pending("needs GNU timeout")
   end)
@@ -91,6 +108,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     orphan_pid = nil
     shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
     write(dir .. "/bin/nvim", STUB_NVIM, true)
+    write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
   end)
 
   after_each(function()
@@ -100,7 +118,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     temp_dir.remove(dir)
   end)
 
-  ---@param specs { name: string, exit: integer, output: string[], orphan: boolean|nil }[]
+  ---@param specs { name: string, exit: integer, output: string[], orphan: boolean|nil, ignore_term: boolean|nil }[]
   ---@return string status
   ---@return string output
   ---@return string[] ran
@@ -112,8 +130,18 @@ describe("scripts/run_integration_tests_individually.sh", function()
       if spec.orphan then
         write(dir .. "/" .. spec.name .. ".orphan", {})
       end
+      if spec.ignore_term then
+        write(dir .. "/" .. spec.name .. ".ignore_term", {})
+      end
     end
-    local command = "cd " .. quote(dir) .. " && PATH=" .. quote(dir .. "/bin") .. ':"$PATH" STUB_DIR=' .. quote(dir)
+    local command = "cd "
+      .. quote(dir)
+      .. " && PATH="
+      .. quote(dir .. "/bin")
+      .. ':"$PATH" STUB_DIR='
+      .. quote(dir)
+      .. " REAL_TIMEOUT="
+      .. quote(real_timeout)
     local pipe = assert(io.popen(command .. " " .. quote(script) .. " 2>&1; echo status=$?"))
     local output = pipe:read("*a")
     pipe:close()
@@ -207,6 +235,16 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     assert.is_truthy(output:find("Failed test files:\n  - crash_spec.lua", 1, true), output)
     assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("kills an nvim that ignores SIGTERM", function()
+    local status, output = run_script({
+      { name = "stuck_spec.lua", exit = 0, output = hung_output("stuck_spec.lua"), ignore_term = true },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("TIMEOUT: stuck_spec.lua was stopped (exit 137)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - stuck_spec.lua", 1, true), output)
   end)
 
   it("kills what a timed-out file leaves running", function()
