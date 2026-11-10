@@ -133,9 +133,9 @@ file lua/claudecode/lockfile.lua 70d01a16a6c0c5bc
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua f9cd61cbc71b82bb
+file lua/claudecode/selection.lua b19b6556c3162ac5
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua 9411e7b95e949d74
+file lua/claudecode/server/client.lua 17a9b0569e89a532
 block create_client      647b7523dea26af6
 == lua/claudecode/server/frame.lua
 file lua/claudecode/server/frame.lua 3c50766875878d56
@@ -157,7 +157,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua 47986b9e1060acd8
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 460039a8ac40d1cb
+file lua/claudecode/server/tcp.lua a3df52a32c9b4414
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
@@ -185,7 +185,7 @@ site lua/claudecode/tools/close_tab.lua: if diff_module_ok and diff.close_diff_b
 site lua/claudecode/tools/close_tab.lua: local closed = diff.close_diff_by_tab_name(tab_name, client and client.id or nil) @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: log.error("close_tab", "Failed to load diff module or close_diff_by_tab_name not available") @ local function handler(params, client)
 == lua/claudecode/tools/get_current_selection.lua
-file lua/claudecode/tools/get_current_selection.lua d93ca16aeabb5493
+file lua/claudecode/tools/get_current_selection.lua e2acaa312929eeb3
 == lua/claudecode/tools/get_diagnostics.lua
 file lua/claudecode/tools/get_diagnostics.lua e60d903c8042f813
 == lua/claudecode/tools/get_latest_selection.lua

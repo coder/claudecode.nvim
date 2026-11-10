@@ -99,7 +99,7 @@ Sent whenever the user's selection changes:
 }
 ```
 
-claudecode.nvim encodes these positions as follows. The `getCurrentSelection` and `getLatestSelection` results use the same encoding, because they return the last selection the plugin tracked.
+claudecode.nvim encodes these positions as follows. The `getCurrentSelection` and `getLatestSelection` results use the same encoding, because they return the last selection the plugin tracked. With `track_selection = false`, `getCurrentSelection` reads the editor when Claude asks, with the same encoding.
 
 - `line` is 0-based.
 - `character` is a 0-based UTF-8 byte offset into the buffer line. VS Code counts UTF-16 code units instead, so the two differ when the line has non-ASCII text before the position. In `日本語`, the position after `本` is `character` 6 here and 2 in VS Code.

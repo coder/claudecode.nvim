@@ -1718,6 +1718,34 @@ describe("Range Selection Tests", function()
       end)
     end)
 
+    describe("is_claude_terminal_buffer", function()
+      it("is true for a term:// buffer whose name contains claude", function()
+        _G.vim.test.add_buffer(7, "term://~/proj//123:claude --model x", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return nil
+        end
+        assert(selection.is_claude_terminal_buffer(7) == true)
+      end)
+
+      it("is true for the active Claude terminal buffer", function()
+        _G.vim.test.add_buffer(8, "term://~/proj//456:sh", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(8) == true)
+      end)
+
+      it("is false for a file buffer and for another terminal", function()
+        _G.vim.test.add_buffer(9, "/path/to/test.lua", { "" })
+        _G.vim.test.add_buffer(10, "term://~/proj//789:sh", { "" })
+        terminal_module.get_active_terminal_bufnr = function()
+          return 8
+        end
+        assert(selection.is_claude_terminal_buffer(9) == false)
+        assert(selection.is_claude_terminal_buffer(10) == false)
+      end)
+    end)
+
     describe("cursor-guarded demotion", function()
       local function seed_held_selection()
         local visual_selection = {
