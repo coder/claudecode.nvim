@@ -37,12 +37,33 @@ local function handler(params)
   local selection = selection_module.get_latest_selection()
 
   if not selection then
-    -- Check if there's an active editor/buffer
-    local current_buf = vim.api.nvim_get_current_buf()
-    local buf_name = vim.api.nvim_buf_get_name(current_buf)
+    -- Find the editor window. The Claude terminal is not an editor (tracked mode skips it
+    -- too), and Claude usually asks while the user types there, so use the window the
+    -- user came from instead.
+    local editor_buf = vim.api.nvim_get_current_buf()
+    local editor_win = nil -- nil: the current window
+    if selection_module.is_claude_terminal_buffer(editor_buf) then
+      local previous = vim.fn.winnr("#")
+      local previous_win = previous > 0 and vim.fn.win_getid(previous) or 0
+      if previous_win <= 0 then
+        -- winnr("#") is tab-local: a Claude terminal in its own tab has no previous window
+        -- there, so use the current window of the tab the user came from.
+        local previous_tab = vim.fn.tabpagenr("#")
+        if previous_tab > 0 then
+          previous_win = vim.fn.win_getid(vim.fn.tabpagewinnr(previous_tab), previous_tab)
+        end
+      end
+      editor_buf = nil
+      if previous_win > 0 then
+        local previous_buf = vim.api.nvim_win_get_buf(previous_win)
+        if not selection_module.is_claude_terminal_buffer(previous_buf) then
+          editor_win, editor_buf = previous_win, previous_buf
+        end
+      end
+    end
+    local buf_name = editor_buf and vim.api.nvim_buf_get_name(editor_buf)
 
-    -- The Claude terminal is not an editor; tracked mode skips it the same way.
-    if not buf_name or buf_name == "" or selection_module.is_claude_terminal_buffer(current_buf) then
+    if not buf_name or buf_name == "" then
       -- No active editor case - match VS Code format
       local no_editor_response = {
         success = false,
@@ -61,7 +82,12 @@ local function handler(params)
 
     -- No tracked selection: `track_selection` is off, or nothing was tracked yet.
     -- Read the editor now, so the answer is the user's real selection or cursor.
-    selection = selection_module.get_visual_selection() or selection_module.get_cursor_position()
+    if editor_win then
+      -- Visual mode belongs to the current window, so the other window has only a cursor.
+      selection = selection_module.get_cursor_position(editor_win)
+    else
+      selection = selection_module.get_visual_selection() or selection_module.get_cursor_position()
+    end
     assert(type(selection) == "table" and selection.selection, "expected a selection table from claudecode.selection")
   end
 
