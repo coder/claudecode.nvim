@@ -1,11 +1,23 @@
 -- Manual test helper for openDiff
 -- Run this in Neovim with :luafile scripts/manual_test_helper.lua
 
+-- The repo root holds this script's directory. Resolve it while the script loads, because :p reads the cwd.
+-- A chunk without a file name (for example one pasted into :lua) falls back to the cwd.
+local function repo_root()
+  local source = debug.getinfo(1, "S").source
+  if source:sub(1, 1) == "@" then
+    return vim.fn.fnamemodify(source:sub(2), ":p:h:h")
+  end
+  return vim.fn.getcwd()
+end
+
+local README_PATH = repo_root() .. "/README.md"
+
 local function test_opendiff_directly()
   print("🧪 Testing openDiff tool directly...")
 
   -- Use the actual README.md file like the real scenario
-  local readme_path = "/Users/thomask33/GitHub/claudecode.nvim/README.md"
+  local readme_path = README_PATH
 
   -- Check if README exists
   if vim.fn.filereadable(readme_path) == 0 then

@@ -935,12 +935,13 @@ function M.flush_visual_selection()
   end
 end
 
----Gets the current cursor position when no visual selection is active.
+---Gets the cursor position when no visual selection is active.
+---@param winid integer|nil Window to read; nil reads the current window.
 ---@return table A table containing an empty text, file path, URL, and cursor
 ---position as start/end, with isEmpty set to true.
-function M.get_cursor_position()
-  local cursor_pos = vim.api.nvim_win_get_cursor(0)
-  local current_buf = vim.api.nvim_get_current_buf()
+function M.get_cursor_position(winid)
+  local cursor_pos = vim.api.nvim_win_get_cursor(winid or 0)
+  local current_buf = winid and vim.api.nvim_win_get_buf(winid) or vim.api.nvim_get_current_buf()
   local file_path = vim.api.nvim_buf_get_name(current_buf)
 
   return {
@@ -1004,8 +1005,10 @@ function M.is_claude_terminal_buffer(bufnr)
   if not vim.api.nvim_buf_is_valid(bufnr) then
     return false
   end
-  local buf_name = vim.api.nvim_buf_get_name(bufnr)
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+  -- A terminal buffer is named term://{cwd}//{pid}:{cmd}. Look for claude in the command
+  -- only, so a shell started in a directory such as claudecode.nvim does not count.
+  local term_cmd = vim.api.nvim_buf_get_name(bufnr):match("^term://.-//%d+:(.*)$")
+  if term_cmd and term_cmd:lower():find("claude", 1, true) then
     return true
   end
   if terminal then
