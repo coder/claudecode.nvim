@@ -13,6 +13,9 @@ local jobid = nil
 -- The auto_close of the config that started (or adopted) the tracked job. Its exit handling uses this one.
 local job_auto_close = nil
 local tip_shown = false
+-- Whether get_active_bufnr already looked for a terminal to adopt. After a reload, its first call looks. Later calls
+-- need not: this module copy starts every terminal it tracks, and the entry points adopt for themselves.
+local adoption_checked = false
 
 -- Set on each terminal buffer this provider starts. Unlike the state above, a buffer variable survives a reload
 -- of this module, so the next module instance can adopt the terminal.
@@ -285,6 +288,8 @@ end
 
 local function close_terminal()
   if not is_valid() and not adopt_existing_terminal() then
+    -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
+    stop_snacks_terminal()
     return
   end
   local closing_bufnr, closing_jobid = bufnr, jobid
@@ -563,6 +568,11 @@ end
 
 --- @return number|nil
 function M.get_active_bufnr()
+  -- After a reload this copy tracks nothing, while the Claude that the earlier copy started still runs.
+  if not adoption_checked and not is_valid() then
+    adoption_checked = true
+    adopt_existing_terminal()
+  end
   -- A terminal whose job ended is not active, even before the exit cleanup that on_exit schedules has run.
   if is_valid() and not job_ended(bufnr) then
     return bufnr

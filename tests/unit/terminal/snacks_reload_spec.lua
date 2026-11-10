@@ -342,6 +342,19 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end)
   end
 
+  for _, hidden in ipairs({ false, true }) do
+    it("reports the terminal as active before any command runs (hidden=" .. tostring(hidden) .. ")", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      if hidden then
+        snacks_provider.simple_toggle("claude", {}, config)
+      end
+      reload_snacks()
+
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+    end)
+  end
+
   it("starts a new Claude when the earlier one exited", function()
     snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
     state.running_jobs[state.buffers[started[1].buf].jobid] = nil
@@ -383,6 +396,13 @@ describe("claudecode.terminal.snacks after a module reload", function()
         assert.are.equal(1, running_count())
       end)
     end
+
+    it("is stopped when close runs and the snacks provider tracks no terminal", function()
+      snacks_provider.close()
+
+      assert.are.equal(1, native_closed)
+      assert.is_nil(state.running_jobs[native_jobid])
+    end)
 
     it("is left alone when the snacks provider finds its own terminal", function()
       -- The snacks Claude starts while no native Claude runs. The native Claude appears after the reload.

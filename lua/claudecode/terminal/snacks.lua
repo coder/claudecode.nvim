@@ -386,7 +386,7 @@ local function find_terminal()
     return terminal
   end
   -- The terminal that M.open is starting is not tracked yet, and it is not one to adopt.
-  if starting or type(Snacks.terminal.list) ~= "function" then
+  if starting or not is_available() or type(Snacks.terminal.list) ~= "function" then
     return nil
   end
   for _, instance in ipairs(Snacks.terminal.list()) do
@@ -534,6 +534,8 @@ function M.close()
   end
   local closing = find_terminal()
   if not closing then
+    -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
+    stop_native_terminal()
     return
   end
   local closing_bufnr = closing.buf
@@ -638,10 +640,9 @@ end
 ---Get the active terminal buffer number
 ---@return number?
 function M.get_active_bufnr()
-  if terminal and terminal:buf_valid() and terminal.buf then
-    if vim.api.nvim_buf_is_valid(terminal.buf) then
-      return terminal.buf
-    end
+  local current = find_terminal()
+  if current and current.buf and vim.api.nvim_buf_is_valid(current.buf) then
+    return current.buf
   end
   return nil
 end

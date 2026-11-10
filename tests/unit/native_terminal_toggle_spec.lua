@@ -1622,6 +1622,33 @@ describe("claudecode.terminal.native toggle behavior", function()
     end
 
     for _, hidden in ipairs({ false, true }) do
+      it("should report the terminal as active before any command runs (hidden=" .. tostring(hidden) .. ")", function()
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        if hidden then
+          native_provider.simple_toggle("claude", {}, config)
+        end
+        reload_native()
+
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+      end)
+    end
+
+    it("should look for a terminal to adopt once when none runs", function()
+      local scans = 0
+      local list_bufs = mock_vim.api.nvim_list_bufs
+      mock_vim.api.nvim_list_bufs = function()
+        scans = scans + 1
+        return list_bufs()
+      end
+
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.is_nil(native_provider.get_active_bufnr())
+
+      assert.are.equal(1, scans)
+    end)
+
+    for _, hidden in ipairs({ false, true }) do
       it("should stop the job and delete the buffer when close runs (hidden=" .. tostring(hidden) .. ")", function()
         local mock_state = _G.get_mock_state()
         native_provider.open("claude", {}, config)
@@ -1693,6 +1720,16 @@ describe("claudecode.terminal.native toggle behavior", function()
           assert.is_not_nil(native_provider.get_active_bufnr())
         end)
       end
+
+      it("should be stopped when close runs and the native provider tracks no terminal", function()
+        local mock_state = _G.get_mock_state()
+
+        native_provider.close()
+
+        assert.are.equal(1, snacks_closed)
+        assert.are.equal(1, #notices)
+        assert.is_nil(mock_state.running_jobs[snacks_jobid])
+      end)
 
       it("should be left alone when the native provider adopts its own terminal", function()
         local mock_state = _G.get_mock_state()
