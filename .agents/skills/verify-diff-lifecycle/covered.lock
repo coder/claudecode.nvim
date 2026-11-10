@@ -201,7 +201,7 @@ block handle_invoke          0999461f45a3444b
 file lua/claudecode/tools/open_diff.lua 1637b47e7a5d6c35
 block open_diff_tool         f4bee70e46ded9af
 == lua/claudecode/tools/open_file.lua
-file lua/claudecode/tools/open_file.lua 14d83862aeb1e9b2
+file lua/claudecode/tools/open_file.lua 02b5268dc823d1e1
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
