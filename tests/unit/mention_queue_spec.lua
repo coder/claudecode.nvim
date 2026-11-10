@@ -25,7 +25,7 @@ describe("The @ mention queue", function()
     "claudecode.server.handshake",
   }
   local saved = {}
-  local loop, errors, claudecode, frame, terminal_opens
+  local loop, errors, error_times, claudecode, frame, terminal_opens
 
   -- A fake libuv loop. Like libuv, it fires every timer that is due in one phase, in the order they were started,
   -- and then the main loop runs every scheduled callback before time moves on. A callback that raises is recorded,
@@ -108,6 +108,7 @@ describe("The @ mention queue", function()
   before_each(function()
     loop = { now = 0, timers = {}, scheduled = {}, lua_errors = {} }
     errors = {}
+    error_times = {}
     saved = {
       new_timer = vim.loop.new_timer,
       now = vim.loop.now,
@@ -155,6 +156,7 @@ describe("The @ mention queue", function()
         parts[i] = tostring(select(i, ...))
       end
       table.insert(errors, table.concat(parts, " "))
+      table.insert(error_times, loop.now)
     end
     package.loaded["claudecode.logger"] = {
       setup = function() end,
@@ -314,6 +316,28 @@ describe("The @ mention queue", function()
     assert.same({}, loop.lua_errors)
   end
 
+  ---From now until `till` ms from now, a client connects every `period` ms and completes its handshake. Each one
+  ---leaves (EOF) `life` ms after it connected.
+  ---@return table[] clients The clients that connected so far
+  local function churn(period, life, till)
+    local clients = {}
+    for start = 0, till - 1, period do
+      at(start, function()
+        local claude = claude_connects()
+        claude.handshake()
+        table.insert(clients, claude)
+        at(life, claude.drop)
+      end)
+    end
+    return clients
+  end
+
+  local function assert_nothing_received(clients)
+    for _, claude in ipairs(clients) do
+      assert.same({}, claude.received())
+    end
+  end
+
   it("control: mentions queued while Claude starts reach Claude once it connects, in order, each once", function()
     send("/project/a.lua")
     send("/project/b.lua")
@@ -342,7 +366,7 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
-  it("A: Claude's handshake just before connection_timeout stops the timeout", function()
+  it("A: a Claude whose handshake comes 9.9 s after the send is ready at 10.5 s and gets the mention", function()
     send("/project/a.lua")
     run(9900)
     local claude = claude_connects()
@@ -351,7 +375,28 @@ describe("The @ mention queue", function()
 
     assert.same({ "a.lua" }, names(claude.received()))
     assert.same({}, errors)
+    assert.same({}, claudecode.state.mention_queue)
+    assert.is_nil(claudecode.state.connection_timer)
   end)
+
+  it(
+    "A, F4: a Claude whose handshake comes 10.3 s after the send is not ready by the deadline: you see an error",
+    function()
+      send("/project/a.lua")
+      run(10300)
+      local claude = claude_connects()
+      claude.handshake()
+      run(1500)
+
+      assert.same({}, claude.received())
+      assert.same({ 10600 }, error_times)
+      assert.matches(
+        "Send timeout %- clearing 1 queued @ mentions that the connected Claude did not take in time",
+        errors[1]
+      )
+      assert.same({}, claudecode.state.mention_queue)
+    end
+  )
 
   it("H: Claude drops during the wait after its handshake: the next Claude gets the mention", function()
     send("/project/a.lua")
@@ -385,22 +430,19 @@ describe("The @ mention queue", function()
     assert.same({}, claudecode.state.mention_queue)
   end)
 
-  it("H: after a drop in the wait, the mention gets a whole connection_timeout for Claude to come back", function()
+  it("H: a handshake and a drop just before the deadline do not move it", function()
     send("/project/a.lua")
     run(9900)
-    local first = claude_connects()
-    first.handshake()
+    local claude = claude_connects()
+    claude.handshake()
     run(50)
-    first.drop()
+    claude.drop()
     run(2000)
-    assert.same({}, errors, "the timeout that ran before the handshake must not fire after it")
 
-    local second = claude_connects()
-    second.handshake()
-    run(1500)
-
-    assert.same({ "a.lua" }, names(second.received()))
-    assert.same({}, errors)
+    assert.same({}, claude.received())
+    assert.same({ 10600 }, error_times)
+    assert.matches("Connection timeout %- clearing 1 queued @ mentions", errors[1])
+    assert.same({}, claudecode.state.mention_queue)
   end)
 
   it("control: a send in the tick after the handshake waits connection_wait_delay with the queued mentions", function()
@@ -552,36 +594,46 @@ describe("The @ mention queue", function()
     assert.same({ "a.lua" }, names(claude.received()))
   end)
 
-  it("S: clients that keep connecting and leaving before any is ready do not hold a mention forever", function()
-    -- Each client lives 300 ms and a new one connects every 200 ms, for 20 s: one is always connected, and none is
-    -- connected for connection_wait_delay (600 ms).
-    local clients = { claude_connects() }
-    clients[1].handshake()
+  it("S: clients that overlap but each leave before they are ready do not hold a mention past its deadline", function()
+    -- A client connects every 200 ms and stays 300 ms, for 20 s: one is always connected, and none is connected for
+    -- connection_wait_delay (600 ms). The mention is sent while the first client is connected.
+    local clients = churn(200, 300, 20000)
+    run(1)
     send("/project/a.lua")
-    local error_at
-    for i = 2, 101 do
-      local new = claude_connects()
-      new.handshake()
-      clients[i] = new
-      run(100)
-      clients[i - 1].drop()
-      run(100)
-      if #errors > 0 and not error_at then
-        error_at = loop.now
-      end
-    end
+    run(20400)
 
-    assert.equals(1, #errors)
-    assert.matches("Connection timeout %- clearing 1 queued", errors[1])
-    assert.is_true(error_at >= 10000 and error_at <= 11500, "the error came at " .. tostring(error_at) .. " ms")
+    assert.same({ 10601 }, error_times)
+    assert.matches("Send timeout %- clearing 1 queued", errors[1])
     assert.same({}, claudecode.state.mention_queue)
-    for _, claude in ipairs(clients) do
-      assert.same({}, claude.received())
-    end
+    assert_nothing_received(clients)
     assert_no_lua_error()
   end)
 
-  it("S, control: the bound on the wait for a ready Claude starts again after a mention went out", function()
+  -- A client connects every `period` ms and stays `life` ms, for 30 s: never two at once, and none for
+  -- connection_wait_delay (600 ms). The mention is sent while the first client is connected, after its handshake.
+  for _, case in ipairs({ { 1000, 300 }, { 700, 300 }, { 650, 500 }, { 900, 100 } }) do
+    local period, life = case[1], case[2]
+    it(
+      ("S: clients that connect every %d ms and stay %d ms do not hold a mention past its deadline"):format(
+        period,
+        life
+      ),
+      function()
+        local clients = churn(period, life, 30000)
+        run(1)
+        send("/project/a.lua")
+        run(30000)
+
+        assert.same({ 10601 }, error_times)
+        assert.matches("clearing 1 queued", errors[1])
+        assert.same({}, claudecode.state.mention_queue)
+        assert_nothing_received(clients)
+        assert_no_lua_error()
+      end
+    )
+  end
+
+  it("control: a mention sent 12 s after the last one went out gets its own deadline", function()
     local first = claude_connects()
     first.handshake()
     send("/project/a.lua")
@@ -597,7 +649,7 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
-  it("S, control: the bound on the wait for a ready Claude starts again after a stop", function()
+  it("C, control: a mention sent 12 s after a stop and a start gets its own deadline", function()
     local first = claude_connects()
     first.handshake()
     send("/project/a.lua")
@@ -647,7 +699,9 @@ describe("The @ mention queue", function()
     claude.handshake()
     run(100)
     claudecode.stop()
-    run(1500)
+    assert.is_nil(claudecode.state.mention_timer)
+    assert.is_nil(claudecode.state.connection_timer)
+    run(11000)
 
     assert_no_lua_error()
     assert.same({}, claude.received())
@@ -669,57 +723,103 @@ describe("The @ mention queue", function()
     assert.same({}, second.received())
   end)
 
-  it("C: a stop cancels a connection timeout whose callback already waits for the main loop", function()
+  it("C: a stop cancels a deadline whose callback already waits for the main loop", function()
     send("/project/old.lua")
-    -- In the timer phase in which the timeout fires, before its callback runs: stop, start, and send again.
-    at(10000, function()
+    -- In the timer phase in which the deadline passes, before its callback runs: stop, start, and send again.
+    at(10600, function()
       claudecode.stop()
       assert(claudecode.start(false))
       send("/project/new.lua")
     end)
-    run(10000)
-    assert.same({}, errors, "the old timeout must not clear the mention sent after the stop")
+    run(10600)
+    assert.same({}, errors, "the old deadline must not clear the mention sent after the stop")
 
-    run(10100)
-    assert.equals(1, #errors)
+    run(10700)
+    assert.same({ 21200 }, error_times)
     assert.matches("clearing 1 queued", errors[1])
     assert_no_lua_error()
   end)
 
-  it("B: :ClaudeCodeStop resets the connection timeout", function()
-    send("/project/old.lua")
-    run(5000)
-    claudecode.stop()
-    assert(claudecode.start(false))
-    send("/project/new.lua")
-    run(9000)
-    assert.same({}, errors, "a mention sent after a restart gets the whole connection_timeout")
+  it(
+    "B, C: :ClaudeCodeStop drops the deadline of the old mention: a mention sent after a restart gets its own",
+    function()
+      send("/project/old.lua")
+      run(5000)
+      claudecode.stop()
+      assert(claudecode.start(false))
+      send("/project/new.lua")
+      run(10599)
+      assert.same({}, errors, "the old deadline at 10.6 s must not clear the mention sent after the restart")
 
-    run(1100)
-    assert.equals(1, #errors)
-    assert.matches("Connection timeout", errors[1])
-  end)
+      run(1)
+      assert.same({ 15600 }, error_times)
+      assert.matches("Connection timeout %- clearing 1 queued", errors[1])
+      assert_no_lua_error()
+    end
+  )
 
-  it("B, control: the connection timeout runs from the first queued mention, not from the latest", function()
+  it("B: mentions sent 5 s apart with no Claude each time out at their own deadline", function()
     send("/project/first.lua")
-    run(8000)
+    run(5000)
     send("/project/second.lua")
-    run(1900)
+    run(5000)
+    send("/project/third.lua")
+    run(599)
     assert.same({}, errors)
 
-    run(200)
-    assert.equals(1, #errors)
-    assert.matches("clearing 2 queued", errors[1])
+    run(1)
+    assert.matches("Connection timeout %- clearing 1 queued", errors[1])
+    assert.equals(2, #claudecode.state.mention_queue)
+    run(10000)
+
+    assert.same({ 10600, 15600, 20600 }, error_times)
+    assert.matches("Connection timeout %- clearing 1 queued", errors[2])
+    assert.matches("Connection timeout %- clearing 1 queued", errors[3])
     assert.same({}, claudecode.state.mention_queue)
+    assert.is_nil(claudecode.state.connection_timer)
+  end)
+
+  it("B: of two mentions sent 5 s apart, a Claude ready between their deadlines gets the second", function()
+    send("/project/first.lua")
+    run(5000)
+    send("/project/second.lua")
+    run(6000)
+    local claude = claude_connects()
+    claude.handshake()
+    run(10000)
+
+    assert.same({ "second.lua" }, names(claude.received()))
+    assert.same({ 10600 }, error_times)
+    assert.same({}, claudecode.state.mention_queue)
+  end)
+
+  it("B, control: the deadline of a mention that went out clears no later mention", function()
+    send("/project/first.lua")
+    run(5000)
+    send("/project/second.lua")
+    run(1000)
+    local first = claude_connects()
+    first.handshake()
+    -- The first mention goes out once Claude is ready, at 6.6 s. Claude leaves before the second one goes out.
+    run(610)
+    first.drop()
+    run(5390)
+    local second = claude_connects()
+    second.handshake()
+    run(1000)
+
+    assert.same({ "first.lua" }, names(first.received()))
+    assert.same({ "second.lua" }, names(second.received()))
+    assert.same({}, errors)
   end)
 
   it("B: after a connection timeout, a later mention times out with an error too", function()
     send("/project/first.lua")
-    run(10100)
+    run(10700)
     assert.equals(1, #errors)
 
     send("/project/second.lua")
-    run(10100)
+    run(10700)
 
     assert.equals(2, #errors)
     assert.matches("Connection timeout", errors[2])
@@ -791,16 +891,36 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
-  it("D: a connection timeout that fires as Claude completes its handshake leaves the queue to that Claude", function()
-    send("/project/a.lua")
-    run(9000)
-    local claude = claude_connects()
-    claude.upgrade()
-    -- The 101 write completes in the timer phase in which connection_timeout fires, before the main loop runs.
-    at(1000, claude.handshake_written)
-    run(2000)
+  it(
+    "D: a Claude that gets ready just at the deadline is too late: you see one error, and Claude gets nothing",
+    function()
+      send("/project/a.lua")
+      run(9000)
+      local claude = claude_connects()
+      claude.upgrade()
+      -- The handshake completes at 10 s, so the flush for this Claude is due at the deadline, 10.6 s.
+      at(1000, claude.handshake_written)
+      run(2000)
 
-    assert.same({ "a.lua" }, names(claude.received()))
+      assert.same({}, claude.received())
+      assert.same({ 10600 }, error_times)
+      assert.matches("Send timeout %- clearing 1 queued", errors[1])
+      assert_no_lua_error()
+    end
+  )
+
+  it("E: a send while a flush is due does not postpone that flush", function()
+    local claude = claude_connects()
+    claude.handshake()
+    run(1000)
+    send("/project/first.lua")
+    run(40)
+    send("/project/second.lua")
+    run(15)
+    assert.same({ "first.lua" }, names(claude.received()), "the flush was due 50 ms after the first send")
+
+    run(100)
+    assert.same({ "first.lua", "second.lua" }, names(claude.received()))
     assert.same({}, errors)
   end)
 
