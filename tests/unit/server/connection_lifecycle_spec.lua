@@ -479,6 +479,35 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.spy(callback).was_called(1)
     end)
 
+    -- A server frame with a payload of 64 KiB or more has a 10-byte header, so a payload of `size - 10` bytes makes a
+    -- frame of exactly `size` bytes. A frame of a whole number of pieces plus one byte ends in a piece of one byte, and
+    -- only that piece may call back.
+    for _, case in ipairs({
+      { size = piece, pieces = 1 },
+      { size = piece + 1, pieces = 2 },
+      { size = 2 * piece + 1, pieces = 3 },
+    }) do
+      it("calls back once for a frame of " .. case.size .. " bytes", function()
+        local client, writes = connect_and_upgrade()
+        local callback = spy.new(function() end)
+
+        tcp.send_to_client(server, client.id, string.rep("x", case.size - 10), callback)
+
+        assert.equals(1 + case.pieces, #writes, "the 101 reply and the pieces")
+        local total = 0
+        for index = 2, #writes do
+          total = total + #writes[index].data
+        end
+        assert.equals(case.size, total)
+        for index = 2, #writes - 1 do
+          writes[index].done()
+        end
+        assert.spy(callback).was_not_called()
+        writes[#writes].done()
+        assert.spy(callback).was_called(1)
+      end)
+    end
+
     it("queues a message of one piece or less as one write", function()
       local client, writes = connect_and_upgrade()
 
@@ -582,6 +611,21 @@ describe("The lifecycle of a WebSocket connection", function()
 
       -- A deadline that runs after the socket closed does nothing: closing a handle twice is an error in libuv.
       deadline.callback()
+      assert.equals("closed", client.state)
+    end)
+
+    it("closes the socket once when libuv cancels the Close frame's write after the deadline closed it", function()
+      start_ping_timer()
+      local client, writes, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      handle._read_cb(nil, binary())
+      local deadline = close_deadline()
+
+      run_after_window(deadline)
+      assert.is_true(handle:is_closing())
+
+      -- libuv runs the callback of each write still queued, with ECANCELED, once the handle closes.
+      writes[#writes].done("ECANCELED")
       assert.equals("closed", client.state)
     end)
 
