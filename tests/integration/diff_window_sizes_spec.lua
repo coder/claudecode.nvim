@@ -245,6 +245,20 @@ describe("openDiff window sizes", function()
     assert.equal(user_win, vim.api.nvim_get_current_win())
   end)
 
+  it("puts the cursor back in the window it was in after the user closed the proposed window", function()
+    use_layout("vertical")
+    two_editors()
+    local user_win = vim.api.nvim_get_current_win()
+
+    -- :q gives the proposed window's space, and the cursor, to the editor on its right.
+    local diff_data = open_diff("a.txt")
+    vim.api.nvim_set_current_win(diff_data.new_window)
+    vim.cmd("quit")
+    close_tab()
+
+    assert.equal(user_win, vim.api.nvim_get_current_win())
+  end)
+
   it("leaves the cursor in the window the user moved it to during the diff", function()
     use_layout("vertical")
     two_editors()
