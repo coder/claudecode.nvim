@@ -232,6 +232,13 @@ describe("The @ mention queue", function()
       assert(not claude.closed, "write after close")
       if data:sub(1, 12) == "HTTP/1.1 101" then
         claude.reply_written = callback
+      elseif claude.write_error then
+        -- The socket fails during the write: libuv reports it only to the write callback, in a later loop turn.
+        if callback then
+          at(0, function()
+            callback(claude.write_error)
+          end)
+        end
       else
         table.insert(claude.written, data)
         if callback then
@@ -401,6 +408,19 @@ describe("The @ mention queue", function()
 
     assert.same({ "first.lua", "second.lua" }, names(claude.received()))
     assert.same({}, errors)
+  end)
+
+  it("H: a connected client takes the mention but its socket fails during the write: you see an error", function()
+    local claude = claude_connects()
+    claude.handshake()
+    run(1000)
+    claude.write_error = "ECONNRESET"
+    send("/project/a.lua")
+    run(1000)
+
+    assert.same({}, claude.received())
+    assert.equals(1, #errors)
+    assert.matches("connection failed while the @ mention a.lua was sent", errors[1])
   end)
 
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()

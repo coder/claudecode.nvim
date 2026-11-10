@@ -297,14 +297,37 @@ end
 ---Broadcast a message to all connected clients
 ---@param server TCPServer The server object
 ---@param message string The message to broadcast
+---@param on_written fun(written: integer)|nil When a client took the message: called once, after the last write
+---  finished, with how many writes succeeded. A socket that fails during the write reports it only here.
 ---@return integer sent How many clients took the message: those whose state is "connected"
-function M.broadcast(server, message)
-  local sent = 0
+function M.broadcast(server, message, on_written)
+  local sent, pending, written, dispatched, reported = 0, 0, 0, false, false
+  local function finish()
+    if dispatched and not reported and pending == 0 and sent > 0 then
+      reported = true
+      on_written(written)
+    end
+  end
   for _, client in pairs(server.clients) do
     if client.state == "connected" then
-      client_manager.send_message(client, message)
       sent = sent + 1
+      if on_written then
+        pending = pending + 1
+        client_manager.send_message(client, message, function(err)
+          pending = pending - 1
+          if not err then
+            written = written + 1
+          end
+          finish()
+        end)
+      else
+        client_manager.send_message(client, message)
+      end
     end
+  end
+  if on_written then
+    dispatched = true
+    finish()
   end
   return sent
 end

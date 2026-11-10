@@ -430,8 +430,10 @@ end
 ---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table|nil The parameters to send
+---@param on_written fun(written: integer)|nil When a connected client took the message: called once after the writes
+---  finished, with how many succeeded (see tcp.lua broadcast)
 ---@return boolean success Whether a connected client took the message
-function M.broadcast(method, params)
+function M.broadcast(method, params, on_written)
   if not M.state.server then
     return false
   end
@@ -443,7 +445,7 @@ function M.broadcast(method, params)
   }
 
   local json_message = vim.json.encode(message)
-  return tcp_server.broadcast(M.state.server, json_message) > 0
+  return tcp_server.broadcast(M.state.server, json_message, on_written) > 0
 end
 
 ---Get server status information

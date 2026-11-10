@@ -158,6 +158,19 @@ local function start_connection_timeout_if_needed()
   end)
 end
 
+---A server.broadcast callback that shows an error when no write of the mention succeeded: the connection failed after
+---the client took the frame, so Claude did not get it. It runs in a libuv callback, and logger schedules the message.
+---@param component string The logger component
+---@param file_path string
+---@return fun(written: integer)
+local function report_unwritten(component, file_path)
+  return function(written)
+    if written == 0 then
+      logger.error(component, "Claude's connection failed while the @ mention " .. file_path .. " was sent")
+    end
+  end
+end
+
 ---Send the oldest queued mention to Claude, then schedule the next one.
 local function flush_mention_queue()
   local queue = mention_queue()
@@ -170,7 +183,7 @@ local function flush_mention_queue()
 
   local mention = queue[1]
   local params = { filePath = mention.file_path, lineStart = mention.start_line, lineEnd = mention.end_line }
-  if not server.broadcast("at_mentioned", params) then
+  if not server.broadcast("at_mentioned", params, report_unwritten("queue", mention.file_path)) then
     -- No connected client took the frame, as Claude went away since this flush was scheduled. The mention waits for
     -- Claude's next handshake, or times out with an error.
     logger.debug("queue", "No connected client took queued @ mention: " .. mention.file_path)
@@ -1331,7 +1344,8 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
   local immediate = (M.state.config and M.state.config.disable_broadcast_debouncing)
     or (package.loaded["busted"] and not (M.state.config and M.state.config.enable_broadcast_debouncing_in_tests))
   if immediate and #mention_queue() == 0 then
-    local broadcast_success = M.state.server.broadcast("at_mentioned", params)
+    local broadcast_success =
+      M.state.server.broadcast("at_mentioned", params, report_unwritten("command", formatted_path))
     if broadcast_success then
       return true, nil, sent
     else

@@ -29,6 +29,20 @@ describe("The mock server's broadcast", function()
     assert.equals("at_mentioned", client.messages[1].method)
   end)
 
+  it("reports how many clients took the message only when one did", function()
+    local reports = {}
+    local function on_written(count)
+      table.insert(reports, count)
+    end
+
+    mock.broadcast("at_mentioned", { filePath = "a.lua" }, on_written)
+    mock.add_client("client_a")
+    mock.add_client("client_b")
+    mock.broadcast("at_mentioned", { filePath = "a.lua" }, on_written)
+
+    assert.same({ 2 }, reports)
+  end)
+
   it("returns false again once the last client is gone", function()
     mock.add_client("client_a")
     mock.remove_client("client_a")
