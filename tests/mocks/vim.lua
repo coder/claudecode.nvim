@@ -1375,7 +1375,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40 }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
   __index = function(_, k)
     return vim._options[k]
   end,
