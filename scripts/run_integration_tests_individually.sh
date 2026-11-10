@@ -75,14 +75,8 @@ run_test_file() {
   rm -f "$temp_output"
 }
 
-# Run each test file, skipping command_args_spec.lua which is known to hang
+# Run each test file
 for test_file in tests/integration/*_spec.lua; do
-  if [[ $test_file == *"command_args_spec.lua" ]]; then
-    echo ""
-    echo "Skipping: $(basename "$test_file") (known to hang in CI)"
-    continue
-  fi
-
   run_test_file "$test_file"
 done
 

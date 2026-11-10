@@ -40,7 +40,7 @@ CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scr
 
 ### Test harnesses
 
-- `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout 30s`, skips `command_args_spec.lua`, and prints totals [run_integration_tests_individually.sh:run_test_file].
+- `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout 30s`, and prints totals [run_integration_tests_individually.sh:run_test_file].
 - `test_opendiff.lua` is a raw-socket Lua client that sends `tools/call openDiff` with an edited `README.md` [test_opendiff.lua:test_opendiff].
 - `test_opendiff_simple.sh` sends the same `openDiff` call through `websocat` or `wscat` and reports exit 124 as "blocked" [test_opendiff_simple.sh:JSON_MESSAGE].
 - `manual_test_helper.lua` is run with `:luafile`. It calls the `claudecode.tools.open_diff` handler in a coroutine and reports whether it yields [manual_test_helper.lua:test_opendiff_directly].
@@ -85,7 +85,7 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - `ws_connect` disconnects an existing connection with the same `CONN_ID` first, and returns 1 unless the process is alive after 0.5 s [lib_ws_persistent.sh:ws_connect].
 - `claude_interactive.sh` exits 1 when `claude_is_running` fails [claude_interactive.sh:claude_is_running]. `claude_running`, `claude_get_selection`, `claude_open_file`, `claude_list_tools`, and `claude_send` return 1 when it fails. `claude_port`, `claude_ws_url`, `claude_interactive`, and `claude_help` do not call it [claude_shell_helpers.sh:claude_send].
 - `claude_interactive.sh` `handle_reconnect` calls `ws_connect` without the auth token [claude_interactive.sh:handle_reconnect].
-- `run_integration_tests_individually.sh` must run from the repo root. It adds a file to `FAILED_FILES` when it parses failures or errors, or when nvim exits nonzero with a code other than 124 or 143 (timeouts). This includes an nvim crash that prints no `Failed :` line. It exits 1 when `FAILED_FILES` is non-empty or the parsed failure or error totals are non-zero, else 0 [run_integration_tests_individually.sh:FAILED_FILES, TOTAL_FAILED].
+- `run_integration_tests_individually.sh` must run from the repo root. It adds a file to `FAILED_FILES` when it parses failures or errors, or when nvim exits nonzero with a code other than 124 or 143 (timeouts). It also adds a file that exits 124 or 143 before plenary printed its `Errors :` summary line, because a spec hung or was killed while it ran. A 124 or 143 after that line passes: the specs finished and only nvim's exit hung. This includes an nvim crash that prints no `Failed :` line. It exits 1 when `FAILED_FILES` is non-empty or the parsed failure or error totals are non-zero, else 0 [run_integration_tests_individually.sh:FAILED_FILES, TOTAL_FAILED].
 - `test_opendiff.lua`, `test_opendiff_simple.sh`, and `repro_issue_238.sh` take the first lock file found, not the newest [test_opendiff.lua:discover_port] [test_opendiff_simple.sh:LOCK_FILE] [repro_issue_238.sh:LOCK_FILE].
 - `test_opendiff.lua` and `test_opendiff_simple.sh` hardcode `~/.claude/ide` and ignore `CLAUDE_CONFIG_DIR` [test_opendiff.lua:discover_port] [test_opendiff_simple.sh:LOCK_DIR].
 - `manual_test_helper.lua` hardcodes an absolute path to `README.md` in one developer's checkout, and returns early when that file is not readable [manual_test_helper.lua:readme_path].

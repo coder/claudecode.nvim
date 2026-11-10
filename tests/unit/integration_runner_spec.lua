@@ -40,6 +40,12 @@ local function before_summary(spec)
   return { "Testing: \t/repo/tests/integration/" .. spec, "\27[32mSuccess\27[0m\t||\tfirst test" }
 end
 
+---@param command string
+local function shell(command)
+  local status = os.execute(command)
+  assert(status == 0 or status == true, "failed: " .. command)
+end
+
 describe("scripts/run_integration_tests_individually.sh", function()
   -- The repo root, from this file's path, so the spec runs from any directory.
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
@@ -54,17 +60,13 @@ describe("scripts/run_integration_tests_individually.sh", function()
     file:write(table.concat(lines, "\n"), "\n")
     file:close()
     if executable then
-      assert(os.execute("chmod +x " .. quote(path)) ~= nil)
+      shell("chmod +x " .. quote(path))
     end
   end
 
   before_each(function()
     dir = temp_dir.new()
-    assert(
-      os.execute(
-        "mkdir " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests") .. " " .. quote(dir .. "/tests/integration")
-      ) ~= nil
-    )
+    shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
     write(dir .. "/bin/nvim", STUB_NVIM, true)
   end)
@@ -106,6 +108,16 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
     assert.are.equal("0", status, output)
     assert.is_truthy(output:find("All integration tests passed!", 1, true), output)
+  end)
+
+  it("runs command_args_spec.lua like every other file", function()
+    local status, output, ran = run_script({
+      { name = "command_args_spec.lua", exit = 0, output = summary(8, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.are.same({ "command_args_spec.lua" }, ran)
+    assert.is_nil(output:find("Skipping", 1, true), output)
   end)
 
   it("fails a file that hit the timeout before busted printed its summary", function()
