@@ -7,12 +7,14 @@
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
-#   none-passes       every candidate fails doctor: launch exits 1 with one message that lists each failure (a stack
-#                     trace line and a mise shim error line) and the fix, and claims no saved screen
+#   none-passes       every candidate fails doctor: launch exits 1 with one message that lists each failure (the
+#                     `Error:` line of a Node stack trace, and a `mise ERROR` line) and the fix, and claims no saved
+#                     screen
 #   rtp               VCN_RTP=<dir>:<dir> puts both dirs on nvim's runtimepath, so require() finds a module in each
 #   rtp-relative      relative VCN_RTP entries resolve against the directory launch runs in
 #   rtp-missing       a VCN_RTP entry that is not a directory: launch exits 1 naming it
 #   rtp-control       without VCN_RTP the same require() fails
+#   sigterm           SIGTERM to the process group of a running launch: it exits 143 and leaves no state dir or process
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
 # need everything under Needs in SKILL.md.
 # Prints one `ok <case>` per case, or `FAIL <case>: <reason>` and exits 1, and ends with `CASES <n>`.
@@ -24,11 +26,9 @@ cleanup_all() {
   if [[ -n $live_state ]]; then
     env PATH="$live_path" VCN_STATE="$live_state" "$V" cleanup >/dev/null 2>&1 || true
   fi
-  cd /
   rm -rf "$TMP"
 }
 trap cleanup_all EXIT
-cd "$TMP"
 cases=0
 
 fail() {
@@ -49,11 +49,33 @@ for dir in /usr/bin /bin; do
   [[ ! -e $dir/agent-tty ]] || fail setup "$dir holds an agent-tty, so no case can leave PATH without a good one"
 done
 
-# The stand-ins die the way a mise-installed agent-tty without node-pty's native build does, and the way a mise shim
-# does when its tool is disabled.
+# The stand-ins die the way a mise-installed agent-tty without node-pty's native build does (Node prints the source
+# line with `new Error(` before the `Error:` line) and the way a mise shim does when its tool is disabled.
 mkdir "$TMP/broken" "$TMP/shim" "$TMP/mise" "$TMP/good" "$TMP/good2"
-printf '%s\n' '#!/bin/sh' "echo 'Error: Failed to load native module: pty.node, checked: build/Release' >&2" 'exit 1' >"$TMP/broken/agent-tty"
-printf '%s\n' '#!/bin/sh' "echo 'mise ERROR agent-tty is not a valid shim.' >&2" 'exit 1' >"$TMP/shim/agent-tty"
+cat >"$TMP/broken/agent-tty" <<'BROKEN'
+#!/bin/sh
+cat >&2 <<'TRACE'
+/node_modules/node-pty/lib/utils.js:36
+    throw new Error("Failed to load native module: " + name + ".node, checked: " + dirs.join(', ') + ": " + lastError);
+          ^
+
+Error: Failed to load native module: pty.node, checked: build/Release, build/Debug, prebuilds/linux-x64: Error: Cannot find module './prebuilds/linux-x64//pty.node'
+Require stack:
+- /node_modules/node-pty/lib/utils.js
+    at Object.loadNativeModule (/node_modules/node-pty/lib/utils.js:36:11)
+
+Node.js v26.12.1
+TRACE
+exit 1
+BROKEN
+cat >"$TMP/shim/agent-tty" <<'SHIM'
+#!/bin/sh
+cat >&2 <<'ERRORS'
+mise ERROR agent-tty is not a valid shim. This likely means you uninstalled a tool and the shim does not point to anything.
+mise ERROR Version: 2026.10.25 linux-x64 (2026-10-31)
+ERRORS
+exit 1
+SHIM
 # The stand-in answers `mise which agent-tty` with $FAKE_MISE_ATT, and nothing else differently.
 cat >"$TMP/mise/mise" <<MISE
 #!/bin/sh
@@ -68,7 +90,7 @@ ln -s "$good" "$TMP/good/agent-tty"
 ln -s "$good" "$TMP/good2/agent-tty"
 good_path=$TMP/mise:$TMP/good:$base
 
-# launch <case> <PATH> [VAR=value...]: runs launch in $TMP and sets rc, out and state.
+# launch <case> <PATH> [VAR=value...]: runs launch and sets rc, out and state.
 launch() {
   local name=$1 path=$2
   shift 2
@@ -147,7 +169,47 @@ rtp_case() { # <case> <want require() result> [VAR=value...]
 }
 
 rtp_case rtp onetwo VCN_RTP="$TMP/rtp-one:$TMP/rtp-two"
-rtp_case rtp-relative onetwo VCN_RTP="rtp-one:rtp-two"
+rtp_case rtp-relative onetwo VCN_RTP="$(realpath -s --relative-to=. "$TMP/rtp-one"):$(realpath -s --relative-to=. "$TMP/rtp-two")"
 refused rtp-missing "$good_path" "VCN_RTP entry $TMP/nope is not a directory" VCN_RTP="$TMP/rtp-one:$TMP/nope"
 rtp_case rtp-control --
+
+# A signal ends bash with $? still 0 in an EXIT trap, so launch must turn it into an exit to clean up its run. The
+# signal lands after launch made the agent-tty session, so the cleanup must destroy a live session: its host process
+# and its nvim both carry the run's tag.
+sigterm_case() {
+  local name=sigterm pid f st="" rc=0 pids=()
+  env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$good_path" VERIFY_OUT="$TMP/out-$name" \
+    "$TMP/tools/setsid" "$V" launch >"$TMP/$name.txt" 2>&1 </dev/null &
+  pid=$!
+  for _ in $(seq 300); do
+    for f in /tmp/vcn.*/run.env; do
+      if [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$name" "$f" 2>/dev/null; then st=$(dirname "$f"); fi
+    done
+    [[ -z $st ]] || break
+    sleep 0.1
+  done
+  [[ -n $st ]] || fail "$name" "launch wrote no run.env within 30 s: $(cat "$TMP/$name.txt")"
+  live_state=$st live_path=$good_path
+  for _ in $(seq 600); do
+    grep -q '^TUI_PID=' "$st/run.env" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q '^TUI_PID=' "$st/run.env" || fail "$name" "launch made no session within 60 s: $(cat "$TMP/$name.txt")"
+  [[ ! -e $TMP/out-$name/run.env ]] || fail "$name" "launch finished before the signal"
+  kill -TERM -- "-$pid" || fail "$name" "no process group $pid to signal"
+  wait "$pid" || rc=$?
+  [[ $rc == 143 ]] || fail "$name" "launch exited $rc after SIGTERM, wanted 143: $(cat "$TMP/$name.txt")"
+  [[ ! -e $st ]] || fail "$name" "state dir $st is still there after SIGTERM"
+  mapfile -t pids < <(grep -lzxF "VCN_RUN_TAG=$st" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
+  if ((${#pids[@]} > 0)); then
+    # Every PID here carries this run's tag, so it is the proof's own.
+    kill "${pids[@]}" 2>/dev/null || true
+    fail "$name" "${#pids[@]} processes of the run $st are still alive (stopped now): ${pids[*]}"
+  fi
+  live_state=""
+  echo "ok $name: SIGTERM to a running launch exited 143 and left no state dir or process"
+  cases=$((cases + 1))
+}
+
+sigterm_case
 echo "CASES $cases"

@@ -92,8 +92,9 @@ pick_agent_tty() {
     fi
     why=$(jq -r '[.result.checks[]?[]? | select(.status != "pass") | "\(.name): \(.message)"] | join("; ")' \
       "$OUT/agent-tty-doctor.json" 2>/dev/null || true)
-    # A candidate that dies before doctor prints anything leaves only stderr: a stack trace, or a mise shim's error.
-    [[ -n $why ]] || why=$(grep -m1 -E 'Error|ERROR' "$VCN_STATE/doctor.err" || sed -n '/./{p;q;}' "$VCN_STATE/doctor.err")
+    # A candidate that dies before doctor prints anything leaves only stderr. Take the `Error:` line of a Node stack
+    # trace (a source line with `new Error(` comes first) or a mise shim's `mise ERROR` line.
+    [[ -n $why ]] || why=$(grep -m1 -E '^([A-Za-z]*Error:|mise ERROR)' "$VCN_STATE/doctor.err" || sed -n '/./{p;q;}' "$VCN_STATE/doctor.err")
     [[ -n $why ]] || why="no usable output"
     tried+=$'\n'"  $cand: $why"
   done
@@ -415,6 +416,7 @@ cmd_launch() {
   fi
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   state=$(mktemp -d /tmp/vcn.XXXXXX)
+  trap 'rm -rf -- "$state"; exit 143' TERM INT HUP
   out=${out:-$guard/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
   if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
     rmdir "$state"
@@ -484,6 +486,8 @@ cmd_launch() {
   export VCN_STATE=$state
   load
   trap launch_failed EXIT
+  # A signal ends bash with $? still 0 in the EXIT trap, and launch_failed then skips its cleanup: make it an exit.
+  trap 'exit 143' TERM INT HUP
   pick_agent_tty "${att_cands[@]}"
   load
   [[ $# -gt 0 ]] || set -- hello.txt
@@ -524,7 +528,7 @@ cmd_launch() {
     "$nvim_exe" --version | head -n 1
     echo "agent-tty $(att version --json | jq -r .result.cliVersion)"
   } >>"$OUT/run.env"
-  trap - EXIT
+  trap - EXIT TERM INT HUP
   echo "VCN_STATE=$state"
   echo "OUT=$OUT"
 }
