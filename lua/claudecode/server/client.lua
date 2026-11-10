@@ -297,7 +297,7 @@ end
 ---Send a text message to a client
 ---@param client WebSocketClient The client object
 ---@param message string The message to send
----@param callback function? Optional callback: function(err)
+---@param callback function? Optional callback: function(err), run once when the write finished or failed
 function M.send_message(client, message, callback)
   if client.state ~= "connected" then
     if callback then
@@ -309,7 +309,12 @@ function M.send_message(client, message, callback)
   -- Every outbound message passes here. A buffer name or path in it can hold any bytes, and the client drops the
   -- connection on a text frame that is not valid UTF-8.
   local text_frame = frame.create_text_frame(utils.valid_utf8(message))
-  client.tcp_handle:write(text_frame, callback)
+  -- libuv runs the callback only for a write it queued. A write it refuses at once returns nil and the error, and
+  -- never runs the callback, so the caller hears about that failure here.
+  local queued, err = client.tcp_handle:write(text_frame, callback)
+  if not queued and err and callback then
+    callback(err)
+  end
 end
 
 ---Send a ping to a client
