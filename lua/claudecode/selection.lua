@@ -879,8 +879,6 @@ function M.send_selection_update(selection)
   M.server.broadcast("selection_changed", selection)
 end
 
----Gets the latest recorded selection.
----@return table|nil The latest selection object, or nil if none recorded.
 ---Whether a buffer is the Claude terminal, which selection tracking ignores.
 ---@param bufnr integer
 ---@return boolean
@@ -898,6 +896,8 @@ function M.is_claude_terminal_buffer(bufnr)
   return false
 end
 
+---Gets the latest recorded selection.
+---@return table|nil The latest selection object, or nil if none recorded.
 function M.get_latest_selection()
   return M.state.latest_selection
 end
