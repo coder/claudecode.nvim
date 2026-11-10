@@ -296,7 +296,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
 
   pcall(vim.api.nvim_buf_set_name, buf, tab_name .. " (unified diff)")
   vim.api.nvim_buf_set_option(buf, "buftype", "acwrite")
-  vim.api.nvim_buf_set_option(buf, "bufhidden", "wipe")
+  vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
 
   -- Render content + highlights
   M.render_diff_buffer(buf, lines, line_types)
@@ -483,6 +483,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
       })
     end
 
+    diff._register_reject_when_hidden(tab_name, buf, autocmd_ids)
+
     diff._register_diff_state(tab_name, {
       old_file_path = params.old_file_path,
       new_file_path = params.new_file_path,
@@ -633,7 +635,6 @@ function M.cleanup_inline_diff(tab_name, diff_data)
     end
   end
 
-  -- Buffer might already be wiped by bufhidden=wipe when its window closed
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
     pcall(vim.api.nvim_buf_delete, diff_data.new_buffer, { force = true })
   end

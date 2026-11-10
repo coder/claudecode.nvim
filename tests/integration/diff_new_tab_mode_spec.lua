@@ -61,6 +61,8 @@ describe("openDiff in a new tab: mode", function()
       config.diff_opts.layout = opts.layout
       config.diff_opts.open_in_new_tab = true
       config.diff_opts.keep_terminal_focus = opts.keep_terminal_focus == true
+      config.terminal = config.terminal or {}
+      config.terminal.auto_insert = opts.auto_insert ~= false
       require("claudecode.diff").setup(config)
       require("claudecode.tools.init").register_all()
       _G.claude_deferred_responses = {}
@@ -113,6 +115,16 @@ describe("openDiff in a new tab: mode", function()
     )
   end
 
+  local function focus_terminal_in_tab()
+    call([[
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if vim.api.nvim_win_get_buf(win) == _G.terminal_buf then
+          vim.api.nvim_set_current_win(win)
+        end
+      end
+    ]])
+  end
+
   local function shows_proposal(state)
     return state.name:find("(proposed)", 1, true) ~= nil or state.name:find("(unified diff)", 1, true) ~= nil
   end
@@ -159,17 +171,34 @@ describe("openDiff in a new tab: mode", function()
         open_diff("b.txt", "second diff")
         assert.equal("n", child_state().mode)
 
-        call([[
-          for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-            if vim.api.nvim_win_get_buf(win) == _G.terminal_buf then
-              vim.api.nvim_set_current_win(win)
-            end
-          end
-        ]])
+        focus_terminal_in_tab()
         local state = child_state()
 
         assert.equal("terminal", state.buftype)
         assert.equal("t", state.mode)
+      end)
+
+      it("enters terminal mode on focusing the terminal in the new tab through the diff's own handler", function()
+        start_child({ layout = layout })
+        open_diff("a.txt", "first diff")
+        assert.equal("n", child_state().mode)
+
+        focus_terminal_in_tab()
+        local state = child_state()
+
+        assert.equal("terminal", state.buftype)
+        assert.equal("t", state.mode)
+      end)
+
+      it("stays in terminal-normal mode on focusing that terminal with terminal.auto_insert = false", function()
+        start_child({ layout = layout, auto_insert = false })
+        open_diff("a.txt", "first diff")
+
+        focus_terminal_in_tab()
+        local state = child_state()
+
+        assert.equal("terminal", state.buftype)
+        assert.equal("nt", state.mode)
       end)
 
       it("leaves the cursor in the terminal, in terminal mode, with keep_terminal_focus", function()

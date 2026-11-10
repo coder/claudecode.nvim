@@ -271,7 +271,7 @@ UserAccepts(t) ==
   /\ SetW(Resolve(W, t, "saved"))
   /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
-(* :q, :bdelete, :ClaudeCodeDiffDeny (WinClosed / BufDelete / deny_current_diff). *)
+(* :q, :edit away, :bdelete, :ClaudeCodeDiffDeny (WinClosed / BufHidden / BufDelete / deny_current_diff). *)
 UserRejects(t) ==
   /\ Idle /\ Open(t)
   /\ Resolve(W, t, "rejected") # W
