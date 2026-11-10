@@ -84,6 +84,9 @@ local function reconcile_held_selection(compare_cursor)
   end
   local current_buf = vim.api.nvim_get_current_buf()
   if is_claude_terminal_buffer(current_buf) then
+    -- Cancel the pending demotion now: if it fired first, its callback would resolve the held state in the
+    -- terminal, before the terminal's own debounced update cancels it.
+    M._cancel_demotion_timer()
     return
   end
   if caf.bufnr ~= current_buf or (compare_cursor and not cursor_unmoved_since_flush(current_buf)) then
@@ -187,7 +190,8 @@ function M._cancel_demotion_timer()
 end
 
 ---Creates autocommands for tracking selections.
----Sets up listeners for CursorMoved, CursorMovedI, BufEnter, ModeChanged, and TextChanged events.
+---Sets up listeners for CursorMoved, CursorMovedI, BufEnter, ModeChanged, TextChanged, TextChangedI and
+---TextChangedP events.
 ---@local
 function M._create_autocommands()
   local group = vim.api.nvim_create_augroup("ClaudeCodeSelection", { clear = true })
@@ -206,7 +210,7 @@ function M._create_autocommands()
     end,
   })
 
-  vim.api.nvim_create_autocmd("TextChanged", {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, {
     group = group,
     callback = function()
       M.on_text_changed()

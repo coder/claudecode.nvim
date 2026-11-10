@@ -2123,6 +2123,41 @@ describe("Range Selection Tests", function()
         assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
 
+      it("keeps the selection when its demotion is armed just before you enter the Claude terminal", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce() -- arms the demotion
+        local demotion = selection.state.demotion_timer
+        assert(demotion ~= nil)
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2
+        end
+
+        go_to_buffer(2, 0)
+        assert.is_nil(selection.state.demotion_timer) -- cancelled when the terminal is entered
+        demotion:fire() -- the old timer fires before the terminal's own debounce, and must do nothing
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+      end)
+
+      it("listens for text changes made in Insert mode too", function()
+        selection.enable(mock_server)
+
+        local events = {}
+        for _, autocmd in ipairs(_G.vim._autocmds["ClaudeCodeSelection"].events) do
+          for _, event in ipairs(type(autocmd.events) == "table" and autocmd.events or { autocmd.events }) do
+            events[event] = true
+          end
+        end
+
+        assert.is_true(events["TextChanged"])
+        assert.is_true(events["TextChangedI"])
+        assert.is_true(events["TextChangedP"])
+      end)
+
       -- Finding 3, SameFile: a long visual_demotion_delay_ms, so the demotion is still pending (it never fires
       -- in this test until the end).
       it("never holds another file's cursor after you come back (:b b.txt, :b a.txt)", function()
