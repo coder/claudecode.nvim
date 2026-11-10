@@ -471,6 +471,27 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
+  it(
+    "D: when the Claude a flush was kept for leaves, a newly connected Claude still gets connection_wait_delay",
+    function()
+      local first = claude_connects()
+      first.handshake()
+      run(1000)
+      send("/project/a.lua")
+      run(10)
+      local second = claude_connects()
+      second.handshake()
+      run(10)
+      first.drop()
+      run(280)
+      assert.same({}, second.received(), "nothing goes out before the new Claude's connection_wait_delay ends")
+
+      run(400)
+      assert.same({ "a.lua" }, names(second.received()))
+      assert.same({}, errors)
+    end
+  )
+
   it("E: a mention sent during the wait after a connect arrives after the one queued before it", function()
     send("/project/first.lua")
     local claude = claude_connects()

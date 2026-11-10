@@ -28,6 +28,7 @@ local CLOSE_REASONS = {
 ---@field fragments table|nil Joined pieces of the text message whose last fragment has not arrived, and their total `size`
 ---@field handshake_complete boolean Whether WebSocket handshake is complete
 ---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
+---@field connected_at number|nil When the WebSocket handshake completed (vim.loop.now())
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
 
@@ -195,6 +196,8 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
         -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
         client.last_pong = vim.loop.now()
+        -- init.lua sends the first @ mention to a client connection_wait_delay ms after this.
+        client.connected_at = client.last_pong
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
           on_open(client)
@@ -403,6 +406,7 @@ function M.get_client_info(client)
     buffer_size = #client.buffer + (client.pending and client.pending.size or 0),
     last_ping = client.last_ping,
     last_pong = client.last_pong,
+    connected_at = client.connected_at,
   }
 end
 

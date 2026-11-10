@@ -80,22 +80,25 @@ function M.is_claude_connected()
   end
 end
 
----@return integer count The clients that count as connected for M.is_claude_connected
-local function connected_client_count()
-  local count = 0
+---@return number|nil wait Milliseconds until some connected client completed its handshake connection_wait_delay ms
+---  ago: 0 when one did, nil when no connected client reports when it connected
+local function ms_until_a_client_is_ready()
+  local wait
   for _, info in ipairs(require("claudecode.server.init").get_status().clients or {}) do
-    if info.state == "connected" and info.handshake_complete == true then
-      count = count + 1
+    if info.state == "connected" and info.handshake_complete == true and info.connected_at then
+      local left = math.max(0, info.connected_at + M.state.config.connection_wait_delay - vim.loop.now())
+      wait = wait and math.min(wait, left) or left
     end
   end
-  return count
+  return wait
 end
 
 -- The @ mention queue. A send that does not go out at once waits in M.state.mention_queue, oldest first. A mention
 -- leaves the queue only when a connected Claude took it, when its wait timed out with an error, or when the
 -- integration stops. While the queue holds a mention, one of two timers runs:
 -- - M.state.mention_timer is the next flush: 50 ms after a send, connection_wait_delay ms after Claude's handshake,
---   or 25 ms after the previous mention went out. A flush sends only the oldest mention, so the order holds.
+--   or 25 ms after the previous mention went out. A flush sends only the oldest mention, so the order holds, and only
+--   once some connected client completed its handshake connection_wait_delay ms ago.
 -- - M.state.connection_timer runs while the mentions wait for Claude to connect. After connection_timeout ms it clears
 --   them with an error. Claude's handshake stops it, and a flush that finds no connected Claude starts it.
 -- A timer's callback runs on the main loop and does nothing once its timer was stopped or replaced, so a stop cancels
@@ -191,6 +194,13 @@ local function flush_mention_queue()
   end
   -- M.stop clears the queue when it drops the server, and the stop cancels this flush too.
   local server = assert(M.state.server, "the @ mention queue holds mentions while the integration is stopped")
+  -- Claude gets connection_wait_delay ms after its handshake before the first mention. A client connected that long
+  -- takes the mention now, whatever other clients do meanwhile.
+  local wait = ms_until_a_client_is_ready()
+  if wait and wait > 0 then
+    start_timer("mention_timer", wait, flush_mention_queue)
+    return
+  end
 
   local mention = queue[1]
   local params = { filePath = mention.file_path, lineStart = mention.start_line, lineEnd = mention.end_line }
@@ -239,11 +249,8 @@ end
 ---@param from_new_connection boolean|nil true after a handshake; otherwise the oldest mention goes out now
 function M.process_mention_queue(from_new_connection)
   if from_new_connection then
-    -- A flush that is already due while another client was connected stays: repeated handshakes of a second client
-    -- must not postpone it again and again.
-    if not (M.state.mention_timer and connected_client_count() > 1) then
-      stop_timer("mention_timer")
-    end
+    -- The handshake stops the connection timeout, and a flush is due. The flush itself waits until a client has been
+    -- connected for connection_wait_delay ms, so another client's handshake cannot postpone it.
     schedule_mention_flush(M.state.config.connection_wait_delay)
   else
     flush_mention_queue()
