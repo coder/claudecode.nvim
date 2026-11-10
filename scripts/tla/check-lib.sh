@@ -15,7 +15,7 @@
 #                rewrites an unquoted [FactA+FactB] to [FactA + FactB], and --mutants then exits 2 on that key.
 #   tla_constants NAME KIND
 #                function printing the CONSTANTS lines (indented, without the facts) for run NAME,
-#                KIND is "inv" or "live"
+#                KIND is "inv" or "live". It must return 0: a non-zero return exits 2.
 #   CONSTRAINT   optional state constraint name
 #   MUTANT_NOTES optional array of lines that --mutants prints after its last row, before its closing line
 #
@@ -130,6 +130,10 @@ tla_coverage() {
       echo "ERROR: covered file $file does not exist; update COVERED in check.sh" >&2
       exit 2
     }
+    [[ -r $file ]] || {
+      echo "ERROR: covered file $file is not readable" >&2
+      exit 2
+    }
   done
   while IFS= read -r file; do
     printf '== %s\n' "$file"
@@ -197,13 +201,20 @@ run_tlc() {
   {
     echo "SPECIFICATION Spec"
     echo "CONSTANTS"
-    tla_constants "$name" "$kind"
+    # run_tlc runs under `|| rc=$?`, where set -e is off: check what can fail, or TLC runs on a partial cfg.
+    tla_constants "$name" "$kind" || {
+      echo "ERROR: tla_constants failed for run $name" >&2
+      exit 2
+    }
     for f in "${FACTS[@]}"; do echo "  $f = ${vals[$f]}"; done
     [[ -z $invariants ]] || echo "INVARIANT $invariants"
     [[ -z $properties ]] || echo "PROPERTY $properties"
     [[ -z $CONSTRAINT ]] || echo "CONSTRAINT $CONSTRAINT"
     echo "CHECK_DEADLOCK FALSE"
-  } >"$work/$name.cfg"
+  } >"$work/$name.cfg" || {
+    echo "ERROR: could not write $work/$name.cfg" >&2
+    exit 2
+  }
   local rc=0
   (cd "$work" && "$JAVA" -Xmx4g -XX:+UseParallelGC -Djava.io.tmpdir="$work" -cp "$TLC_JAR" tlc2.TLC \
     -workers 1 -lncheck final -cleanup -metadir "$work/meta-$name" -config "$name.cfg" "$MODEL.tla") \
@@ -356,7 +367,10 @@ tla_main() {
   fi
   tla_lock
   tla_fetch_jar
-  cp "$here/model/$MODEL.tla" "$work/"
+  cp "$here/model/$MODEL.tla" "$work/" || {
+    echo "ERROR: cannot copy the model $here/model/$MODEL.tla" >&2
+    exit 2
+  }
   if [[ $mutants == 1 ]]; then tla_mutants; else tla_check; fi
 }
 
