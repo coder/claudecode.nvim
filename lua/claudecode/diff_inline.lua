@@ -483,7 +483,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
       })
     end
 
-    autocmd_ids[#autocmd_ids + 1] = diff._register_reject_on_window_close(tab_name, buf)
+    diff._register_reject_when_hidden(tab_name, buf, autocmd_ids)
 
     diff._register_diff_state(tab_name, {
       old_file_path = params.old_file_path,

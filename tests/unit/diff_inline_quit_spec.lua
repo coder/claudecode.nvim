@@ -1,6 +1,7 @@
 require("tests.busted_setup")
 
--- Mock-vim guard for the unified diff's :q reject. The real :q runs in tests/integration/diff_quit_reject_spec.lua.
+-- Mock-vim guard for the unified diff's :q and buffer-switch rejects.
+-- The real :q and the real switches run in tests/integration/diff_quit_reject_spec.lua.
 describe("Unified diff and :q", function()
   local open_diff_tool = require("claudecode.tools.open_diff")
   local diff = require("claudecode.diff")
@@ -9,16 +10,20 @@ describe("Unified diff and :q", function()
   local test_tab_name = "inline-quit"
   local saved_win_findbuf
 
-  local function winclosed_callbacks()
+  local function callbacks_for(event_name)
     local group = vim._autocmds["ClaudeCodeMCPDiff"]
     assert(group, "ClaudeCodeMCPDiff augroup was not created")
     local callbacks = {}
     for _, ev in ipairs(group.events) do
-      if ev.events == "WinClosed" then
+      if ev.events == event_name then
         callbacks[#callbacks + 1] = ev.opts.callback
       end
     end
     return callbacks
+  end
+
+  local function winclosed_callbacks()
+    return callbacks_for("WinClosed")
   end
 
   local function open_diff()
@@ -61,13 +66,27 @@ describe("Unified diff and :q", function()
     assert.equal("hide", vim.api.nvim_buf_get_option(state.new_buffer, "bufhidden"))
   end)
 
-  it("registers the window-close reject and tears it down with the diff", function()
+  it("registers the window-close and hidden-buffer rejects and tears them down with the diff", function()
     open_diff()
 
     assert.equal(1, #winclosed_callbacks())
+    assert.equal(1, #callbacks_for("BufHidden"))
 
     diff._cleanup_diff_state(test_tab_name, "test cleanup")
     assert.equal(0, #winclosed_callbacks(), "cleanup left the WinClosed autocmd behind")
+    assert.equal(0, #callbacks_for("BufHidden"), "cleanup left the BufHidden autocmd behind")
+  end)
+
+  it("rejects when the window switches to another buffer and the proposal is shown nowhere", function()
+    local state, result = open_diff()
+    vim.fn.win_findbuf = function()
+      return {}
+    end
+
+    callbacks_for("BufHidden")[1]({ buf = state.new_buffer })
+
+    assert.equal("rejected", diff._get_active_diffs()[test_tab_name].status)
+    assert.equal("DIFF_REJECTED", result().content[1].text)
   end)
 
   it("rejects once the closing window was the last to show the proposal", function()
