@@ -2043,15 +2043,16 @@ describe("Range Selection Tests", function()
         fire_autocmd("CursorMoved")
       end
 
-      -- What Neovim does for nvim_buf_attach: runs the callback of each listener on the buffer, and drops one that
-      -- returns true. A reload (on_detach) drops them all.
+      -- What Neovim does for nvim_buf_attach: runs the callback of each listener on the buffer. on_lines drops a
+      -- listener whose callback returns true. on_reload (:checktime, autoread) ignores what the callback returns and
+      -- keeps the listener. on_detach (:edit, :edit!, :bunload) means every listener is gone.
       local function fire_buffer_listeners(bufnr, name)
         local listeners = _G.vim._buf_listeners[bufnr] or {}
         _G.vim._buf_listeners[bufnr] = {}
         for _, listener in ipairs(listeners) do
           -- A callback can attach a new listener, so the list is a fresh one and each callback runs once.
           local detach = listener[name](nil, bufnr)
-          if name ~= "on_detach" and detach ~= true then
+          if name == "on_reload" or (name == "on_lines" and detach ~= true) then
             table.insert(_G.vim._buf_listeners[bufnr], listener)
           end
         end
@@ -2593,17 +2594,17 @@ describe("Range Selection Tests", function()
           assert.is_nil(mock_server.last_broadcast)
         end)
 
-        it("listens again after a reload detaches the listener, and sees the change of that reload", function()
+        it("listens again after :edit! detaches the listener, and sees the change of that reload", function()
           hold_alpha_and_enter_the_terminal()
 
           ticks[1] = 6
           _G.vim.test.add_buffer(1, "/path/to/a.txt", { "beta gamma" })
-          fire_buffer_listeners(1, "on_detach") -- the reload
+          fire_buffer_listeners(1, "on_detach") -- :edit!
 
           assert_claude_holds_cursor("/path/to/a.txt", 4)
         end)
 
-        it("listens again after a reload that left the text in place", function()
+        it("listens again after :edit! that left the text in place", function()
           hold_alpha_and_enter_the_terminal()
 
           ticks[1] = 6
@@ -2615,7 +2616,7 @@ describe("Range Selection Tests", function()
           assert_claude_holds_cursor("/path/to/a.txt", 4)
         end)
 
-        it("does nothing for the buffer you are in: TextChanged handles that one", function()
+        it("reports a change of the buffer you are in at once, before TextChanged", function()
           selection.enable(mock_server)
           ticks = { [1] = 5 }
           _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
@@ -2709,6 +2710,31 @@ describe("Range Selection Tests", function()
           assert.are.equal(1, #queue)
           queue[1]()
           assert_claude_holds_cursor("/path/to/a.txt", 4)
+        end)
+
+        it("sees the change of a reload (:checktime), which keeps the listener", function()
+          hold_alpha_and_enter_the_terminal()
+
+          ticks[1] = 6
+          _G.vim.test.add_buffer(1, "/path/to/a.txt", { "beta gamma" })
+          fire_buffer_listeners(1, "on_reload")
+
+          assert_claude_holds_cursor("/path/to/a.txt", 4)
+          assert.are.equal(1, #_G.vim._buf_listeners[1])
+        end)
+
+        -- on_reload cannot detach a listener: if it forgot the buffer, the next read would attach a second one.
+        it("keeps one listener when a reload comes while Claude holds only a cursor", function()
+          hold_alpha_and_enter_the_terminal()
+          change_buffer_1({ "beta gamma" }) -- Claude holds the cursor now
+          fire_buffer_listeners(1, "on_reload")
+          assert.are.equal(1, #_G.vim._buf_listeners[1])
+
+          go_to_buffer(1, 0)
+          start_selecting(6)
+          release_selection(1, 4, 3) -- Claude holds a selection of buffer 1 again
+
+          assert.are.equal(1, #_G.vim._buf_listeners[1])
         end)
 
         it("stops listening when Claude no longer holds a selection", function()

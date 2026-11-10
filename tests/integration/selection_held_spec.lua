@@ -225,7 +225,7 @@ describe("a held selection with the real plugin", function()
       assert.are.same({ "alpha beta gamma, and more" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
       assert.are.equal("alpha", selection.get_latest_selection().text)
 
-      -- The reload detached the listener: the next change is seen too.
+      -- The listener survives the reload: the next change is seen too.
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {})
       wait(300)
       assert.is_true(selection.get_latest_selection().selection.isEmpty)

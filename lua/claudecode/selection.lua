@@ -134,8 +134,8 @@ end
 
 ---Listens for changes to the buffer of the selection that Claude holds, for as long as it holds one. Neovim fires
 ---TextChanged only for the current buffer, so this is the only way to see a reload or a plugin's edit of a buffer
----while you are in the Claude terminal. A reload detaches the listener (on_detach), so it is attached again when the
----buffer still holds the selection.
+---while you are in the Claude terminal. `:checktime` and autoread reload a buffer and keep the listener (on_reload).
+---`:edit` and `:edit!` detach it (on_detach), so it is attached again when the buffer still holds the selection.
 ---@param bufnr integer
 local function watch_selection_buffer(bufnr)
   if M.state.watched_buffers[bufnr] then
@@ -143,12 +143,8 @@ local function watch_selection_buffer(bufnr)
   end
   M.state.watched_buffers[bufnr] = true
   local check_scheduled = false
-  local function on_changed(_, buf)
-    if not holds_selection_of(buf) then
-      M.state.watched_buffers[buf] = nil
-      return true
-    end
-    -- Do not touch the buffer here: it is being changed. One check after a burst of changes (a :%s) is enough.
+  -- Do not touch the buffer in a callback: it is being changed. One check after a burst of changes (a :%s) is enough.
+  local function check_soon()
     if not check_scheduled then
       check_scheduled = true
       vim.schedule(function()
@@ -158,8 +154,19 @@ local function watch_selection_buffer(bufnr)
     end
   end
   vim.api.nvim_buf_attach(bufnr, false, {
-    on_lines = on_changed,
-    on_reload = on_changed,
+    on_lines = function(_, buf)
+      if not holds_selection_of(buf) then
+        M.state.watched_buffers[buf] = nil
+        return true -- detach
+      end
+      check_soon()
+    end,
+    -- Neovim ignores what on_reload returns and keeps the listener, so only on_lines can detach it.
+    on_reload = function(_, buf)
+      if holds_selection_of(buf) then
+        check_soon()
+      end
+    end,
     on_detach = function(_, buf)
       M.state.watched_buffers[buf] = nil
       vim.schedule(function()
