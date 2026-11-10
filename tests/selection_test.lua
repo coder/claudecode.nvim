@@ -2139,6 +2139,41 @@ describe("Range Selection Tests", function()
         assert_claude_holds_cursor("/path/to/a.txt", 14)
       end)
 
+      it("does not report early when Claude holds only a cursor and an operator consumes a selection", function()
+        selection.enable(mock_server)
+        _G.vim.test.set_cursor(0, 1, 2)
+        selection.update_selection() -- Claude holds the cursor
+        assert.is_true(selection.get_latest_selection().selection.isEmpty)
+        mock_server.last_broadcast = nil
+
+        start_selecting(5)
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamm" })
+        _G.vim.test.set_mode("n")
+        _G.vim.test.set_cursor(0, 1, 14)
+        _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+        selection.on_mode_changed()
+
+        assert.is_nil(mock_server.last_broadcast) -- nothing to replace: the debounce reports the cursor
+      end)
+
+      it("reads the live selection again at once when its text changes in visual mode", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        _G.vim._marks = { v = { 0, 1, 1, 0 } }
+        _G.vim.test.set_cursor(0, 1, 4)
+        fire_autocmd("CursorMoved")
+        fire_debounce()
+        assert.are.equal("alpha", selection.get_latest_selection().text) -- read at changedtick 5
+
+        _G.vim._changedtick = 6
+        _G.vim.test.add_buffer(1, "/path/to/a.txt", { "ALPHA beta gamma" }) -- a plugin edits while you select
+        _G.vim.test.set_cursor(0, 1, 3)
+        fire_autocmd("CursorMoved")
+
+        assert.are.equal("ALPH", selection.get_latest_selection().text) -- before the debounce fires
+      end)
+
       -- Finding 1, HeldEndsWhenMoved (path B): ve, Esc, l, h within one debounce.
       it("ends when the cursor moves away and back before the debounce fires (ve Esc l h)", function()
         selection.enable(mock_server)
