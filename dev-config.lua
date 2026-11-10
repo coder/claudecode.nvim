@@ -75,7 +75,7 @@ return {
     -- visual_demotion_delay_ms = 50, -- Delay before demoting visual selection (ms)
 
     -- Connection Management
-    -- connection_wait_delay = 200, -- Wait time after connection before sending queued @ mentions (ms)
+    -- connection_wait_delay = 600, -- Wait time after Claude's handshake before sending queued @ mentions (ms)
     -- connection_timeout = 10000, -- Max time queued @ mentions wait for Claude Code to connect (ms)
     -- queue_timeout = 5000, -- Unused, still accepted: queued @ mentions wait up to connection_timeout
 
