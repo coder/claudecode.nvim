@@ -67,6 +67,9 @@ local function build_opts(config, env_table, focus)
       width = config.split_width_percentage,
       height = 0,
       relative = "editor",
+      -- Default, not a lock. Snacks' terminal style would set "snacks_terminal", and Snacks re-applies `bo` each time
+      -- it re-creates the window, so the filetype goes through the options. `snacks_win_opts.bo.filetype` wins.
+      bo = { filetype = "claudecode" },
       keys = {
         claude_new_line = {
           "<S-CR>",
@@ -418,7 +421,6 @@ function M.open(cmd_string, env_table, config, focus)
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     terminal = term_instance
-    vim.bo[term_instance.buf].filetype = "claudecode"
   else
     terminal = nil
     local logger = require("claudecode.logger")
