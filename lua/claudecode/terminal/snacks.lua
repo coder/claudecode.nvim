@@ -52,10 +52,10 @@ end
 ---@param config ClaudeCodeTerminalConfig Terminal configuration
 ---@param env_table table Environment variables to set for the terminal process
 ---@param focus boolean|nil Whether to focus the terminal when opened (defaults to true)
----@return snacks.terminal.Opts opts Snacks terminal options with start_insert/auto_insert controlled by focus parameter
+---@return snacks.terminal.Opts opts Snacks terminal options: enter and start_insert follow focus, auto_insert follows config
 local function build_opts(config, env_table, focus)
   focus = utils.normalize_focus(focus)
-  local should_insert = focus and config.auto_insert ~= false
+  local auto_insert = config.auto_insert ~= false
   -- Snacks enters every window it opens (#423).
   local enter = nil
   if not focus then
@@ -64,8 +64,8 @@ local function build_opts(config, env_table, focus)
   return {
     env = env_table,
     cwd = config.cwd,
-    start_insert = should_insert,
-    auto_insert = should_insert,
+    start_insert = focus and auto_insert,
+    auto_insert = auto_insert,
     auto_close = false,
     win = vim.tbl_deep_extend("force", {
       position = config.split_side,
@@ -311,7 +311,7 @@ local function cc_show(term, focus, config)
   if (not is_native_split or (term._cc and term._cc.kind == "float")) and term._cc and term._cc.orig_show then
     logger.debug("terminal", "Snacks show: re-creating via Snacks (position=" .. tostring(position) .. ")")
     term._cc.kind = nil
-    if focus then
+    if focus or win_opts.enter ~= nil then
       term._cc.orig_show(term)
     else
       -- In Snacks, opts.enter = false skips both entering the window and its queued insert.
@@ -454,6 +454,10 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
+    if not focus then
+      -- enter = false was only for this start.
+      term_instance.opts.enter = (config.snacks_win_opts or {}).enter
+    end
     terminal = term_instance
   else
     terminal = nil

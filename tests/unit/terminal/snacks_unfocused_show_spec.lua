@@ -12,6 +12,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local next_buf_id
   local pending_insert
   local bufenter_handlers
+  local bufenter_ignored_during_set_buf
+  local shows
   local mock_snacks
 
   local function make_window(buf, relative)
@@ -44,6 +46,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     next_buf_id = 1
     pending_insert = false
     bufenter_handlers = {}
+    bufenter_ignored_during_set_buf = nil
+    shows = {}
     source_win = make_window(500, "")
     current_win = source_win
 
@@ -128,6 +132,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         end,
         nvim_win_set_buf = function(w, b)
           windows[w].buf = b
+          bufenter_ignored_during_set_buf = ignores_bufenter()
           if bufenter_handlers[b] and not ignores_bufenter() then
             bufenter_handlers[b]()
           end
@@ -163,6 +168,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
             close = function() end,
             hide = function() end,
             show = function(self)
+              table.insert(shows, { enter = self.opts.enter })
               open_win(self)
               return self
             end,
@@ -200,13 +206,13 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     package.loaded["claudecode.terminal.snacks"] = nil
   end)
 
-  local function config(win_opts)
+  local function config(win_opts, auto_insert)
     return {
       cwd = "/w",
       split_side = "right",
       split_width_percentage = 0.3,
       auto_close = false,
-      auto_insert = true,
+      auto_insert = auto_insert ~= false,
       snacks_win_opts = win_opts or {},
     }
   end
@@ -254,6 +260,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
     assert.are.equal(term.win, current_win)
     assert.is_true(pending_insert)
+    assert.is_false(bufenter_ignored_during_set_buf)
   end)
 
   it("re-showing an externally closed float without focus keeps the caller's window and queues no insert", function()
@@ -268,6 +275,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     snacks_provider.open("claude", {}, cfg, false)
 
     assert_shown_and_caller_untouched(term)
+    assert.are.equal(1, #shows)
+    assert.is_false(shows[1].enter)
+    assert.is_nil(term.opts.enter)
   end)
 
   it("re-showing an externally closed float with focus still enters it", function()
@@ -281,6 +291,42 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     snacks_provider.open("claude", {}, cfg, true)
 
     assert.are.equal(term.win, current_win)
+    assert.are.equal(1, #shows)
+    assert.is_nil(shows[1].enter)
+    assert.is_nil(term.opts.enter)
+  end)
+
+  it("puts the float's enter option back when Snacks fails to re-show it without focus", function()
+    local cfg = config({ position = "float" })
+    snacks_provider.open("claude", {}, cfg, true)
+    local term = snacks_provider._get_terminal_for_test()
+    windows[term.win].valid = false
+    term.win = nil
+    term._cc.orig_show = function()
+      error("E5555: boom")
+    end
+
+    assert.has_error(function()
+      snacks_provider.open("claude", {}, cfg, false)
+    end)
+
+    assert.is_nil(term.opts.enter)
+  end)
+
+  it("a user's snacks_win_opts.enter also decides whether a re-created float is entered", function()
+    local cfg = config({ position = "float", enter = true })
+    snacks_provider.open("claude", {}, cfg, true)
+    local term = snacks_provider._get_terminal_for_test()
+    windows[term.win].valid = false
+    term.win = nil
+    current_win = source_win
+
+    snacks_provider.open("claude", {}, cfg, false)
+
+    assert.are.equal(1, #shows)
+    assert.is_true(shows[1].enter)
+    assert.are.equal(term.win, current_win)
+    assert.is_true(term.opts.enter)
   end)
 
   it("creating the terminal without focus keeps the caller's window and queues no insert", function()
@@ -303,6 +349,52 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
     local term = snacks_provider._get_terminal_for_test()
     assert.are.equal(term.win, current_win)
+    assert.is_true(term.opts.enter)
+  end)
+
+  it("a terminal created without focus does not keep enter = false for later shows", function()
+    snacks_provider.open("claude", {}, config(), false)
+
+    local term = snacks_provider._get_terminal_for_test()
+    assert.is_nil(term.opts.enter)
+  end)
+
+  describe("auto_insert of a terminal created without focus", function()
+    local function open_options()
+      return mock_snacks.terminal.open.calls[1].vals[2]
+    end
+
+    it("is on like for a terminal created with focus, and start_insert stays off", function()
+      snacks_provider.open("claude", {}, config(), false)
+
+      local term = snacks_provider._get_terminal_for_test()
+      assert.is_true(open_options().auto_insert)
+      assert.is_false(open_options().start_insert)
+      assert.is_false(pending_insert)
+
+      vim.api.nvim_win_set_buf(term.win, term.buf)
+
+      assert.is_true(pending_insert)
+    end)
+
+    it("stays off with terminal.auto_insert = false", function()
+      snacks_provider.open("claude", {}, config(nil, false), false)
+
+      local term = snacks_provider._get_terminal_for_test()
+      assert.is_false(open_options().auto_insert)
+      assert.is_false(open_options().start_insert)
+
+      vim.api.nvim_win_set_buf(term.win, term.buf)
+
+      assert.is_false(pending_insert)
+    end)
+
+    it("is on, with start_insert, for a terminal created with focus", function()
+      snacks_provider.open("claude", {}, config(), true)
+
+      assert.is_true(open_options().auto_insert)
+      assert.is_true(open_options().start_insert)
+    end)
   end)
 
   describe("'eventignore'", function()
@@ -314,6 +406,17 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       snacks_provider.open("claude", {}, cfg, false)
 
       assert.are.equal("WinEnter", vim.o.eventignore)
+    end)
+
+    it("keeps ignoring BufEnter when it already lists other events", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      vim.o.eventignore = "CursorHold"
+
+      snacks_provider.open("claude", {}, cfg, false)
+
+      assert_shown_and_caller_untouched(term)
+      assert.are.equal("CursorHold", vim.o.eventignore)
     end)
 
     it("is back to the caller's value when the unfocused show fails", function()
