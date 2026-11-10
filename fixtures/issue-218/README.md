@@ -48,6 +48,11 @@ NVIM_BIN=/path/to/nvim-0.12.x scripts/repro_issue_218.sh
 scripts/repro_issue_218.sh --no-render-markdown
 ```
 
+Either run exits 2 when Neovim does not show `Repro218 ready` within 10 s, and 3 when
+`Lazy! restore` leaves a fixture plugin off its commit in `lazy-lock.json`. Both mean the run
+reached no verdict. Exit 1 also covers a missing `agent-tty`, `nvim` or `jq`, and an
+`agent-tty` session that could not be created.
+
 The reported crash was in the redraw/teardown path, which does **not** run under
 `--headless`, so the driver uses the `agent-tty` CLI to get a real terminal UI.
 

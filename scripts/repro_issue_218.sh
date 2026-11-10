@@ -38,6 +38,9 @@
 # directory is removed on exit. So are the agent-tty session, its entry in agent-tty's
 # per-user home registry, and its empty socket directory under /tmp/agent-tty (the
 # session's home is a fresh temp directory, so none of them belongs to another run).
+# SIGTERM, SIGINT and SIGHUP run the same cleanup. It stops the Neovim that is restoring
+# plugins, lets an `agent-tty create` that is already running finish, and destroys every
+# session in the run's own agent-tty home.
 # Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
@@ -57,6 +60,9 @@
 #      run never reached the ready state and checked nothing.
 #   3  Either run: after `Lazy! restore` a fixture plugin is not at its commit in
 #      lazy-lock.json (the restore failed), so the run would test other revisions.
+# 143, 130, 129
+#      Either run: the script received SIGTERM, SIGINT or SIGHUP, ran its cleanup and
+#      reached no verdict.
 
 # Note: no `set -e` — agent-tty subcommands can return non-zero on benign
 # conditions (e.g. a `wait` that times out), and we handle outcomes explicitly.
@@ -84,19 +90,46 @@ WORK="$(mktemp -d)"
 AGENT_HOME="$WORK/atty"
 ATTY=(agent-tty --home "$AGENT_HOME")
 SID=""
-SOCK_DIR=""
+# bash runs a trap only after a foreground command ends, but `wait` returns at once. So the
+# long commands run in the background and the script waits for them. A signal then runs the
+# cleanup at once, and the cleanup deals with the job that is still running:
+BG_PID=""     # a command that the cleanup kills: the restore Neovim or an agent-tty wait
+CREATE_PID="" # `agent-tty create`: the cleanup lets it finish, then destroys its session
+# Run a command that the cleanup can kill. Returns the exit status of the command.
+run_killable() {
+  "$@" &
+  BG_PID=$!
+  wait "$BG_PID"
+  local rc=$?
+  BG_PID=""
+  return "$rc"
+}
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() {
-  if [[ -n "$SID" ]]; then
-    "${ATTY[@]}" destroy "$SID" --json >/dev/null 2>&1 || true
+  trap '' INT TERM HUP # a second signal must not cut the cleanup short
+  if [[ -n "$BG_PID" ]]; then
+    kill "$BG_PID" 2>/dev/null || true
+    wait "$BG_PID" 2>/dev/null || true
   fi
-  # `destroy` leaves this run's home in agent-tty's per-user registry and its empty socket
-  # directory in /tmp/agent-tty. The home is a fresh temp dir, so both belong to this run.
+  # A create that is still running makes a session whose ID this script has not read yet.
+  if [[ -n "$CREATE_PID" ]]; then wait "$CREATE_PID" 2>/dev/null || true; fi
+  # The home is a fresh temp dir, so every session in it belongs to this run. `destroy`
+  # leaves the session's empty socket directory in /tmp/agent-tty, and rmdir never removes a
+  # directory that still holds a socket. It also leaves this run's home in agent-tty's
+  # per-user registry.
+  local sid sock
+  for sid in $("${ATTY[@]}" list --json 2>/dev/null | jq -r '.result.sessions[]?.sessionId // empty' 2>/dev/null); do
+    sock="$("${ATTY[@]}" inspect "$sid" --json 2>/dev/null | jq -r '.result.host.rpcSocketPath // empty' 2>/dev/null)"
+    "${ATTY[@]}" destroy "$sid" --json >/dev/null 2>&1 || true
+    if [[ "$sock" == /* ]]; then rmdir "$(dirname "$sock")" 2>/dev/null || true; fi
+  done
   "${ATTY[@]}" home forget "$AGENT_HOME" --json >/dev/null 2>&1 || true
-  if [[ -n "$SOCK_DIR" ]]; then rmdir "$SOCK_DIR" 2>/dev/null || true; fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
 mkdir -p "$AGENT_HOME" # agent-tty requires its --home dir to exist before `create`
 EXITF="$WORK/nvim_exit.txt"
 : >"$EXITF"
@@ -153,7 +186,7 @@ if #stale > 0 then
 end
 EOF
 RESTORE_LOG="$WORK/restore.log"
-NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
+run_killable env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
   REPRO218_LOCKFILE="$REPO_ROOT/fixtures/issue-218/lazy-lock.json" REPRO218_RESTORE_CHECK="$RESTORE_CHECK" \
   "$NVIM_BIN" --headless "+Lazy! restore" "+lua dofile(vim.env.REPRO218_RESTORE_CHECK)" "+qa" >"$RESTORE_LOG" 2>&1
 RESTORE_RC=$?
@@ -185,24 +218,25 @@ EOF
 chmod +x "$LAUNCH"
 
 echo "==> Launching Neovim under agent-tty…"
-SID="$("${ATTY[@]}" create --json --cols 150 --rows 44 -- \
+CREATE_OUT="$WORK/create.json"
+"${ATTY[@]}" create --json --cols 150 --rows 44 -- \
   env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
-  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" | jq -r '.result.sessionId')"
+  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" >"$CREATE_OUT" &
+CREATE_PID=$!
+wait "$CREATE_PID"
+CREATE_PID=""
+SID="$(jq -r '.result.sessionId' "$CREATE_OUT")"
 if [[ -z "$SID" || "$SID" == "null" ]]; then
   echo "ERROR: failed to create agent-tty session." >&2
   exit 1
 fi
-# The socket directory is empty after `destroy`; cleanup removes it. rmdir never removes a
-# directory that still holds a socket.
-SOCK="$("${ATTY[@]}" inspect "$SID" --json 2>/dev/null | jq -r '.result.host.rpcSocketPath // empty')"
-if [[ "$SOCK" == /* ]]; then SOCK_DIR="$(dirname "$SOCK")"; fi
 
-"${ATTY[@]}" wait "$SID" --screen-stable-ms 1800 --json >/dev/null 2>&1 || true
+run_killable "${ATTY[@]}" wait "$SID" --screen-stable-ms 1800 --json >/dev/null 2>&1 || true
 
 echo "==> :Repro218 (open new-file markdown diff in a new tab)…"
 "${ATTY[@]}" type "$SID" ":Repro218" --json >/dev/null 2>&1
 "${ATTY[@]}" send-keys "$SID" "Enter" --json >/dev/null 2>&1
-"${ATTY[@]}" wait "$SID" --text "Repro218 ready" --timeout 10000 --json >/dev/null 2>&1
+run_killable "${ATTY[@]}" wait "$SID" --text "Repro218 ready" --timeout 10000 --json >/dev/null 2>&1
 READY_RC=$?
 if [[ "$READY_RC" -ne 0 ]]; then
   # Without the ready state the :w below checks nothing, so any verdict would be meaningless.
@@ -210,7 +244,7 @@ if [[ "$READY_RC" -ne 0 ]]; then
   echo "       The run never reached the ready state, so it reached no verdict." >&2
   exit 2
 fi
-"${ATTY[@]}" wait "$SID" --screen-stable-ms 1200 --json >/dev/null 2>&1 || true
+run_killable "${ATTY[@]}" wait "$SID" --screen-stable-ms 1200 --json >/dev/null 2>&1 || true
 
 echo "==> :w (accept the diff)…"
 "${ATTY[@]}" send-keys "$SID" "Escape" --json >/dev/null 2>&1
@@ -218,7 +252,7 @@ echo "==> :w (accept the diff)…"
 "${ATTY[@]}" send-keys "$SID" "Enter" --json >/dev/null 2>&1
 
 # Give Neovim a moment to crash (or not).
-"${ATTY[@]}" wait "$SID" --exit --timeout 8000 --json >/dev/null 2>&1 || true
+run_killable "${ATTY[@]}" wait "$SID" --exit --timeout 8000 --json >/dev/null 2>&1 || true
 
 STATUS="$("${ATTY[@]}" inspect "$SID" --json 2>&1 | jq -r '.result.session.status')"
 RAW="$(sed -n 's/^RAW=//p' "$EXITF" 2>/dev/null || true)"
