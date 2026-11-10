@@ -37,6 +37,14 @@ local function is_last_window(win)
   return true
 end
 
+-- A marked buffer has no job until termopen runs, and keeps its mark after the job exits until the on_exit of the
+-- module copy that started it runs. jobpid raises for a job that exited or was stopped. jobwait({ id }, 0) would
+-- instead block until a stopped job exits.
+local function job_ended(buf)
+  local channel = vim.bo[buf].channel
+  return channel ~= 0 and not pcall(vim.fn.jobpid, channel)
+end
+
 local function is_valid()
   -- First check if we have a valid buffer
   if not bufnr or not vim.api.nvim_buf_is_valid(bufnr) then
@@ -44,8 +52,9 @@ local function is_valid()
     return false
   end
 
-  -- If buffer is valid but window is invalid, try to find a window displaying this buffer
-  if not winid or not vim.api.nvim_win_is_valid(winid) then
+  -- If the tracked window is gone, or shows another buffer (for example after `:e file` in it), try to find a
+  -- window displaying this buffer
+  if not winid or not vim.api.nvim_win_is_valid(winid) or vim.api.nvim_win_get_buf(winid) ~= bufnr then
     -- Search all windows for our terminal buffer
     local windows = vim.api.nvim_list_wins()
     for _, win in ipairs(windows) do
@@ -57,6 +66,7 @@ local function is_valid()
       end
     end
     -- Buffer exists but no window displays it - this is normal for hidden terminals
+    winid = nil
     return true -- Buffer is valid even though not visible
   end
 
@@ -88,16 +98,22 @@ local function forget_exited_job(job_id, auto_close)
     and vim.api.nvim_win_is_valid(current_winid_for_job)
     and not is_last_window(current_winid_for_job)
   then
+    -- Close the window only while it shows the terminal buffer. After the user shows a file in it, or after a wipe of
+    -- the buffer, it is the user's window now.
     if current_bufnr_for_job and vim.api.nvim_buf_is_valid(current_bufnr_for_job) then
-      -- Optional: Check if the window still holds the same terminal buffer
       if vim.api.nvim_win_get_buf(current_winid_for_job) == current_bufnr_for_job then
         vim.api.nvim_win_close(current_winid_for_job, true)
       end
-    else
-      -- Buffer is invalid, but window might still be there (e.g. if user changed buffer in term window)
-      -- Still try to close the window we tracked.
-      vim.api.nvim_win_close(current_winid_for_job, true)
     end
+  end
+end
+
+---Runs the exit cleanup of the tracked terminal when its job already ended but the cleanup that on_exit schedules has
+---not run yet. An open or a toggle in that gap must not show or focus the dead terminal, so each one calls this first.
+---@param auto_close boolean|nil
+local function forget_ended_terminal(auto_close)
+  if bufnr and vim.api.nvim_buf_is_valid(bufnr) and job_ended(bufnr) then
+    forget_exited_job(jobid, auto_close)
   end
 end
 
@@ -284,6 +300,11 @@ end
 local function hide_terminal()
   -- Hide the terminal window but keep the buffer and job alive
   if bufnr and vim.api.nvim_buf_is_valid(bufnr) and winid and vim.api.nvim_win_is_valid(winid) then
+    -- The only window cannot close (E444). Claude stays where it is.
+    if is_last_window(winid) then
+      logger.debug("terminal", "Terminal window is the last window, not hiding it")
+      return
+    end
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
     winid = nil -- Clear window reference
@@ -342,14 +363,6 @@ local function show_hidden_terminal(effective_config, focus)
   return true
 end
 
--- A marked buffer has no job until termopen runs, and keeps its mark after the job exits until the on_exit of the
--- module copy that started it runs. jobpid raises for a job that exited or was stopped. jobwait({ id }, 0) would
--- instead block until a stopped job exits.
-local function job_ended(buf)
-  local channel = vim.bo[buf].channel
-  return channel ~= 0 and not pcall(vim.fn.jobpid, channel)
-end
-
 ---Tracks a visible terminal that this provider started but lost track of, for example after a module reload.
 ---@return boolean adopted
 local function adopt_existing_terminal()
@@ -394,6 +407,7 @@ end
 --- @param focus boolean|nil
 function M.open(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
+  forget_ended_terminal(effective_config.auto_close)
 
   if is_valid() then
     -- Check if terminal exists but is hidden (no window)
@@ -427,6 +441,7 @@ end
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
 function M.simple_toggle(cmd_string, env_table, effective_config)
+  forget_ended_terminal(effective_config.auto_close)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
   local is_visible = has_buffer and is_terminal_visible()
@@ -460,6 +475,7 @@ end
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
 function M.focus_toggle(cmd_string, env_table, effective_config)
+  forget_ended_terminal(effective_config.auto_close)
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
   local is_visible = has_buffer and is_terminal_visible()
@@ -513,7 +529,8 @@ end
 
 --- @return number|nil
 function M.get_active_bufnr()
-  if is_valid() then
+  -- A terminal whose job ended is not active, even before the exit cleanup that on_exit schedules has run.
+  if is_valid() and not job_ended(bufnr) then
     return bufnr
   end
   return nil
