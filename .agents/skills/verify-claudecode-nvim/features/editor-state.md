@@ -10,7 +10,7 @@ Claude asks Neovim about the user's editor before it acts. `getWorkspaceFolders`
 - `ed-diag-uri` with `uri` answers only that file, `[]` when it has no diagnostics, and error `-32001` `File not open` when no buffer has it.
 - `ed-dirty` answers `"success":true` with `isDirty` and `isUntitled` for an open file, and `"success":false` with `Document not open: <filePath>` otherwise. The second is a normal answer, not a JSON-RPC error.
 - `ed-save` writes the file, current or hidden, and answers `"saved":true` with `Document saved successfully`.
-- `ed-save-fail` answers `"success":false` with a message that starts with `Failed to save file:` when `:write` fails.
+- `ed-save-fail` answers `"success":false` with `Failed to save file: <Vim error>` when `:write` fails.
 
 ## How to get to it (user POV)
 
@@ -34,11 +34,10 @@ Steps:
 - **Open editors.** Run `$V keys ':e other.txt' Enter`, `$V until "expand('%:t')" other.txt`, and `$V tool e6 getOpenEditors`. `jq -c '[.tabs[] | {label, isActive, isDirty, languageId, lineCount}]'` on its text prints `hello.txt` (not active, 3 lines) and `other.txt` (active, 4 lines), both not dirty, with `languageId` `text`. The e5 call again as `e7` now answers `[]`.
 - **Dirty file.** Run `$V keys G o five Escape`, `$V until 'mode()' n`, `$V keys ':b hello.txt' Enter`, and `$V until "expand('%:t')" hello.txt`. `$V tool e8 checkDocumentDirty "$(jq -nc --arg p "$WORK/other.txt" '{filePath:$p}')"` answers `"success":true`, `"isDirty":true`, and `"isUntitled":false`. `$V tool e9 getOpenEditors` shows `other.txt` with `"isDirty":true` and `"isActive":false`. The same call as e8 for `$WORK/missing.txt`, with id `e10`, answers `"success":false` and `Document not open: <WORK>/missing.txt`.
 - **Save a hidden file.** Record `sha256sum "$WORK/other.txt"`, then run `$V tool e11 saveDocument "$(jq -nc --arg p "$WORK/other.txt" '{filePath:$p}')"`. It answers `"success":true`, `"saved":true`, and `Document saved successfully`. `$V until "getbufvar('other.txt', '&modified')" 0` passes, `tail -n 1 "$WORK/other.txt"` prints `five`, the sha256 changed, and `$V doctor` stays all `ok`. Run `$V capture ed-save` and `$V screenshot ed-save`.
-- **Save fails.** Run this last, because `readonly` stays set. Run `$V keys ':set ro' Enter`, record `sha256sum "$WORK/hello.txt"`, and run `$V tool e13 saveDocument "$(jq -nc --arg p "$WORK/hello.txt" '{filePath:$p}')"`. It answers `"success":false` with a message that starts with `Failed to save file:` and contains `E45`. The sha256 is unchanged.
+- **Save fails.** Run this last, because `readonly` stays set. Run `$V keys ':set ro' Enter`, record `sha256sum "$WORK/hello.txt"`, and run `$V tool e13 saveDocument "$(jq -nc --arg p "$WORK/hello.txt" '{filePath:$p}')"`. It answers `"success":false` and `Failed to save file: E45: 'readonly' option is set (add ! to override)`. The sha256 is unchanged.
 - **Proof.** Keep each response with `$V await <id> > "$OUT/<sub-feature>-<id>.json"`, and end with `$V record editor-state`.
 
 ## Gotchas
 
 - Key order in the JSON answers is not stable. Compare fields with jq, never the raw text.
 - After `:cd`, getWorkspaceFolders follows the new directory, but `workspaceFolders` in `$VCN_STATE/claude/ide/$PORT.lock` keeps the launch directory.
-- The `ed-save-fail` message also carries a Lua stack trace. Match only its start and the `E45` code.
