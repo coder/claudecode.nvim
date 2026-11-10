@@ -513,6 +513,25 @@ vim.api.nvim_create_autocmd("FileType", {
 
 - `external` and `none` create no Neovim buffer, so they set no filetype.
 
+### Suspending Neovim with Ctrl-Z
+
+A Neovim terminal passes Ctrl-Z to its job, and Claude Code then suspends itself. Nothing in the terminal can resume
+it (#194). So the `native` and `snacks` providers map `<C-z>` in terminal mode on the Claude terminal buffer to
+`:suspend`. Ctrl-Z there suspends Neovim, as it does in any other window. The mapping is buffer-local, so other
+terminals keep their own Ctrl-Z behavior. `external` and `none` create no Neovim buffer, so they map nothing.
+
+To change it, set your own buffer-local mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer
+Filetype above). Your mapping wins on both providers. For example, to send Ctrl-Z to Claude Code again:
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode",
+  callback = function(args)
+    vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = args.buf })
+  end,
+})
+```
+
 ## Floating Window Configuration
 
 The `snacks_win_opts` configuration allows you to create floating Claude Code terminals with custom positioning, sizing, and key bindings. Here are several practical examples:
