@@ -48,3 +48,4 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Open a file for the user](./open-file.md) covers openFile with text and line selections and the background (`makeFrontmost: false`) form.
 - [Share the selection](./selection.md) covers `selection_changed` notifications, `getCurrentSelection`, and `getLatestSelection`.
 - [Send context with an at-mention](./send-at-mention.md) covers `:ClaudeCodeSend` from visual mode and `:ClaudeCodeAdd` with and without a line range.
+- [Suspend Neovim with Ctrl-Z in the Claude terminal](./terminal-ctrl-z.md) covers the terminal-mode `<C-z>` mapping of the `native` and `snacks` providers: Ctrl-Z runs `:suspend` and never reaches the Claude job.
