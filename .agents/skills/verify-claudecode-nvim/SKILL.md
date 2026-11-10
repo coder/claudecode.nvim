@@ -1,6 +1,6 @@
 ---
 name: verify-claudecode-nvim
-description: Drive the real claudecode.nvim plugin in a real Neovim (an agent-tty terminal) while a scripted WebSocket client (scripts/ws-client.mjs) plays the Claude Code CLI over the plugin's WebSocket MCP server, and capture screen text, PNG screenshots, WebM video, JSON-RPC traffic, and file state as evidence. Use to prove a claudecode.nvim feature works end to end (openDiff accept/reject, openFile, selection tracking, :ClaudeCodeSend at-mentions, closing diffs) without the claude CLI or network. Also use it to reproduce a bug report, and for any change that can raise a prompt or change the editor mode.
+description: Drive the real claudecode.nvim plugin in a real Neovim (an agent-tty terminal) while a scripted WebSocket client (scripts/ws-client.mjs) plays the Claude Code CLI over the plugin's WebSocket MCP server, and capture screen text, PNG screenshots, WebM video, JSON-RPC traffic, and file state as evidence. Use to prove a claudecode.nvim feature works end to end (openDiff accept/reject, openFile, selection tracking, :ClaudeCodeSend at-mentions, closing diffs, the Claude terminal commands, the editor-state tools, server start/stop) without the claude CLI or network. Also use it to reproduce a bug report, and for any change that can raise a prompt or change the editor mode.
 ---
 
 # Verify claudecode.nvim
