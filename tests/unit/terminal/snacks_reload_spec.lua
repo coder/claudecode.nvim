@@ -97,8 +97,6 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
   before_each(function()
     original_vim = vim
-    -- The registry of started instances lives in _G, so it would carry over from the previous test.
-    _G.claudecode_snacks_terminals = nil
     started = {}
     notices = {}
     logged_errors = {}
@@ -170,6 +168,17 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end,
         maparg = function()
           return {}
+        end,
+        -- The windows that show a buffer.
+        win_findbuf = function(bufnr)
+          local wins = {}
+          for win, w in pairs(state.windows) do
+            if w.buf == bufnr then
+              table.insert(wins, win)
+            end
+          end
+          table.sort(wins)
+          return wins
         end,
         -- Neovim raises for a job that exited or was stopped.
         jobpid = function(id)
@@ -316,7 +325,6 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
   after_each(function()
     _G.vim = original_vim
-    _G.claudecode_snacks_terminals = nil
     package.loaded["snacks"] = nil
     package.loaded["claudecode.utils"] = nil
     package.loaded["claudecode.logger"] = nil
@@ -362,7 +370,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
       assert.are.equal(1, #started)
       assert.are.equal(1, running_count())
-      assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+      assert.are.equal(claude.buf, snacks_provider._get_terminal_for_test().buf)
       assert.are.equal(1, windows_showing(claude.buf))
     end)
   end
@@ -430,20 +438,17 @@ describe("claudecode.terminal.snacks after a module reload", function()
     end)
   end
 
-  it("keeps the tracked terminal when another marked terminal is listed first", function()
+  it("keeps the tracked terminal when another marked terminal appears", function()
     snacks_provider.open("claude", {}, config, true)
     local claude = started[1]
     reload_snacks()
     snacks_provider.open("claude", {}, config, true)
-    assert.are.equal(claude, snacks_provider._get_terminal_for_test())
-    -- Snacks lists a second marked terminal before the tracked one.
+    assert.are.equal(claude.buf, snacks_provider._get_terminal_for_test().buf)
     local other = snacks_open("claude", { win = {}, count = 2 })
     state.buffers[other.buf].vars.claudecode_snacks_terminal = true
-    state.terminals[#state.terminals] = nil
-    table.insert(state.terminals, 1, other)
 
     assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
-    assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+    assert.are.equal(claude.buf, snacks_provider._get_terminal_for_test().buf)
   end)
 
   -- A job that a stop kills exits with an error status. The provider reports such an exit, except when another
@@ -695,7 +700,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
       snacks_provider.open("claude", {}, config, true)
 
       assert.are.equal(1, #started)
-      assert.are.equal(claude, snacks_provider._get_terminal_for_test())
+      assert.are.equal(claude.buf, snacks_provider._get_terminal_for_test().buf)
     end)
   end)
 

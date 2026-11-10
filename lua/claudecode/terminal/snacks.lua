@@ -14,20 +14,9 @@ local starting = false
 -- module, so the next module instance can find the terminal again.
 local OWNED_MARK = owned.SNACKS_MARK
 
--- Every instance that this provider started, by buffer. The table lives in _G, so it survives a reload of this module.
--- Snacks.terminal.list() cannot serve for that alone: Snacks keys an instance by its command, directory, env and
--- count, and it clears the key when a buffer is wiped, whichever instance holds it. A Claude that starts while an
--- exited one is still waiting for its close has the same key, and the late wipe of the exited one removes the
--- new Claude from the list.
-local REGISTRY = "claudecode_snacks_terminals"
-
----@return table<number, table> instances weak values, so a wiped instance goes
-local function registry()
-  if _G[REGISTRY] == nil then
-    _G[REGISTRY] = setmetatable({}, { __mode = "v" })
-  end
-  return _G[REGISTRY]
-end
+-- Written on each terminal buffer this provider starts: whether it started with auto_close. A buffer variable
+-- survives a reload of this module, like the mark, so the next module instance knows without the Snacks instance.
+local AUTO_CLOSE_VAR = "claudecode_snacks_auto_close"
 
 --- @return boolean
 local function is_available()
@@ -434,52 +423,56 @@ local function forget_ended_terminal()
   end
 end
 
----The instances that an adoption can take: the ones that this provider started (even before a reload), then the ones
----that Snacks lists, for a Claude that an older version started.
----@return table[] instances
-local function known_instances()
-  local instances, seen = {}, {}
-  local function add(instance)
-    if instance and instance.buf and not seen[instance] then
-      seen[instance] = true
-      table.insert(instances, instance)
+---A stand-in for the Snacks instance of a Claude that an earlier copy of this module started (before a reload). The
+---Claude buffer keeps its mark, but nothing hands out its instance: Snacks.terminal.list() keys an instance by its
+---command, directory, env and count, and clears the key when any buffer with that key is wiped, so it can lose a
+---running Claude. The stand-in shows, hides and closes the buffer through the window functions that the Snacks
+---instance would use for a split. A float that is gone comes back as a split.
+---@param buf number
+---@return table handle
+local function handle_for(buf)
+  local handle = {
+    buf = buf,
+    win = vim.fn.win_findbuf(buf)[1],
+    adopted = true,
+    _cc = { kind = "split", config = { auto_close = vim.b[buf][AUTO_CLOSE_VAR] == true } },
+  }
+  function handle:buf_valid()
+    return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
+  end
+  ---Closes the windows that show the buffer, then wipes it. That ends a Claude that still runs.
+  function handle:close()
+    local closing = self.buf
+    self.buf, self.win = nil, nil
+    if closing and vim.api.nvim_buf_is_valid(closing) then
+      for _, win in ipairs(vim.fn.win_findbuf(closing)) do
+        pcall(vim.api.nvim_win_close, win, true)
+      end
+      pcall(vim.api.nvim_buf_delete, closing, { force = true })
     end
   end
-  local started = registry()
-  local bufs = {}
-  for buf in pairs(started) do
-    table.insert(bufs, buf)
-  end
-  table.sort(bufs)
-  for _, buf in ipairs(bufs) do
-    add(started[buf])
-  end
-  if type(Snacks.terminal.list) == "function" then
-    for _, instance in ipairs(Snacks.terminal.list()) do
-      add(instance)
-    end
-  end
-  return instances
+  return handle
 end
 
----Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the one that an earlier copy
----of this module started (before a reload): the Claude buffer keeps its mark, and the registry and Snacks keep its
----instance. A window may or may not show it.
+---Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the Claude that an earlier
+---copy of this module started (before a reload): its buffer keeps its mark, and a live job shows that it still runs. A
+---window may or may not show it.
 local function adopt_existing_terminal()
   forget_ended_terminal()
   if terminal and terminal:buf_valid() then
+    if terminal.adopted then
+      terminal.win = vim.fn.win_findbuf(terminal.buf)[1]
+    end
     return
   end
   -- A terminal gets its mark only after its start succeeded, so the one that M.open is starting is not adopted here.
   if not is_available() then
     return
   end
-  for _, instance in ipairs(known_instances()) do
-    if owned.is_live(instance.buf, OWNED_MARK) then
-      terminal = instance
-      require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", instance.buf)
-      return
-    end
+  local buf = owned.find(OWNED_MARK)
+  if buf then
+    terminal = handle_for(buf)
+    require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", buf)
   end
 end
 
@@ -565,13 +558,13 @@ function M.open(cmd_string, env_table, config, focus)
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
     vim.b[term_instance.buf][OWNED_MARK] = true
+    vim.b[term_instance.buf][AUTO_CLOSE_VAR] = config.auto_close and true or false
     if not focus then
       -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter
     end
     -- Snacks.terminal.open has already fired FileType, so a <C-z> mapping that a user's handler set stays.
     utils.map_terminal_suspend(term_instance.buf)
-    registry()[term_instance.buf] = term_instance
     terminal = term_instance
   else
     terminal = nil
