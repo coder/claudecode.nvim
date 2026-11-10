@@ -1885,14 +1885,18 @@ describe("Range Selection Tests", function()
         selection.on_text_changed()
       end
 
-      -- :b <buffer>: BufEnter fires while the window cursor is still at the start of the buffer, then Neovim
-      -- restores the buffer's last cursor position (col) and CursorMoved fires. Buffer 2 is b.txt.
-      local function go_to_buffer(bufnr, col)
+      -- :b <buffer>: BufEnter fires while the window cursor is still at the start of the buffer. Buffer 2 is b.txt.
+      local function enter_buffer(bufnr)
         _G.vim.api.nvim_get_current_buf = function()
           return bufnr
         end
         _G.vim.test.set_cursor(0, 1, 0)
         selection.on_cursor_moved(true)
+      end
+
+      -- :b <buffer>, then Neovim restores the buffer's last cursor position (col) and CursorMoved fires.
+      local function go_to_buffer(bufnr, col)
+        enter_buffer(bufnr)
         _G.vim.test.set_cursor(0, 1, col)
         selection.on_cursor_moved()
       end
@@ -2073,10 +2077,29 @@ describe("Range Selection Tests", function()
         settle()
         assert.are.equal("alpha", selection.get_latest_selection().text)
 
-        go_to_buffer(2, 0)
-        go_to_buffer(1, 4) -- the cursor is back where it was released, but you left the file
+        -- BufEnter only: the cursor lands on the same line and column, so CursorMoved does not fire.
+        enter_buffer(2)
+        enter_buffer(1)
+        _G.vim.test.set_cursor(0, 1, 4) -- back where it was released, but you left the file
         settle()
 
+        assert_claude_holds_cursor("/path/to/a.txt", 4)
+      end)
+
+      it("ends the hold when a pending-demotion update reports the cursor, even if no CursorMoved came", function()
+        selection.enable(mock_server, 1000)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce()
+        assert(selection.state.demotion_timer ~= nil)
+
+        _G.vim.test.set_cursor(0, 1, 6) -- moved, and no CursorMoved reached the plugin
+        selection.update_selection()
+        assert_claude_holds_cursor("/path/to/a.txt", 6)
+        assert.is_nil(selection.state.cursor_at_flush)
+
+        _G.vim.test.set_cursor(0, 1, 4) -- back at the position of the release
+        selection.update_selection()
         assert_claude_holds_cursor("/path/to/a.txt", 4)
       end)
 
