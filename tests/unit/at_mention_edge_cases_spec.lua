@@ -326,4 +326,56 @@ describe("At Mention Edge Cases", function()
       assert_contains(result, "file.lua")
     end)
   end)
+
+  describe("custom base_cwd parameter", function()
+    it("should use custom base_cwd when provided", function()
+      mock_vim.fn.filereadable = function(path)
+        return path == "/git/repo/src/main.lua" and 1 or 0
+      end
+
+      -- Default behavior uses vim.fn.getcwd() which returns /Users/test/project
+      local result_default = init_module._format_path_for_at_mention("/git/repo/src/main.lua")
+      expect(result_default).to_be("/git/repo/src/main.lua") -- Not relative to /Users/test/project
+
+      -- With custom base_cwd, should be relative to /git/repo
+      local result_custom = init_module._format_path_for_at_mention("/git/repo/src/main.lua", "/git/repo")
+      expect(result_custom).to_be("src/main.lua")
+    end)
+
+    it("should use custom base_cwd for directories", function()
+      mock_vim.fn.isdirectory = function(path)
+        return path == "/git/repo/src" and 1 or 0
+      end
+      mock_vim.fn.filereadable = function()
+        return 0
+      end
+
+      -- With custom base_cwd, directory should be relative
+      local result_custom = init_module._format_path_for_at_mention("/git/repo/src", "/git/repo")
+      expect(result_custom).to_be("src/")
+    end)
+
+    it("should fall back to vim.fn.getcwd() when base_cwd is nil", function()
+      mock_vim.fn.filereadable = function(path)
+        return path == "/Users/test/project/config.lua" and 1 or 0
+      end
+
+      -- When base_cwd is nil, should use vim.fn.getcwd()
+      local result = init_module._format_path_for_at_mention("/Users/test/project/config.lua", nil)
+      expect(result).to_be("config.lua") -- Relative to /Users/test/project (getcwd)
+    end)
+
+    it("should handle root directory with custom base_cwd", function()
+      mock_vim.fn.isdirectory = function(path)
+        return path == "/git/repo" and 1 or 0
+      end
+      mock_vim.fn.filereadable = function()
+        return 0
+      end
+
+      -- Path is exactly the base_cwd
+      local result = init_module._format_path_for_at_mention("/git/repo", "/git/repo")
+      expect(result).to_be("./")
+    end)
+  end)
 end)
