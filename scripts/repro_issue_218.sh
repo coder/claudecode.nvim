@@ -226,9 +226,10 @@ cleanup() {
     stop_tree "$pid"
     wait "$pid" 2>/dev/null || true
   done
-  # The fixture's bootstrap skips the clone when lazy.nvim's directory exists, and Lazy! restore
-  # trusts a plugin directory. An interrupted restore can leave a half-installed one, so remove
-  # the entries that this run added.
+  # The fixture's bootstrap skips the clone when lazy.nvim's own directory exists. So a bootstrap
+  # clone that only SIGKILL stopped leaves a half-installed lazy.nvim that the next run trusts.
+  # (lazy.nvim marks the clones that it makes for the other plugins with a `.cloning` file and
+  # clones them again.) Remove the entries that this run added.
   if [[ "$RESTORING" -eq 1 && -n "$LAZY_DIR" && -d "$LAZY_DIR" ]]; then
     for entry in "$LAZY_DIR"/* "$LAZY_DIR"/.[!.]*; do
       [[ -e "$entry" || -L "$entry" ]] || continue
