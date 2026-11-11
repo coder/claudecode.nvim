@@ -12,6 +12,7 @@ describe("openDiff when the diff setup fails", function()
   local group = "diff_failed_setup_leftovers_spec"
   local tabnew_group = "diff_failed_setup_leftovers_spec_tabnew"
   local winclosed_group = "diff_failed_setup_leftovers_spec_winclosed"
+  local leaving_group = "diff_failed_setup_leftovers_spec_leaving"
   local dir, real_hidden
   local real_set_buf = vim.api.nvim_win_set_buf
 
@@ -54,6 +55,28 @@ describe("openDiff when the diff setup fails", function()
     })
   end
 
+  local function fail_the_setup_and_then_raise_when(event)
+    local failed = false
+    local handlers = vim.api.nvim_create_augroup(leaving_group, { clear = true })
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+      group = handlers,
+      callback = function(args)
+        if vim.api.nvim_buf_get_name(args.buf):find(tab, 1, true) then
+          failed = true
+          error("a BufWinEnter handler of the user raised")
+        end
+      end,
+    })
+    vim.api.nvim_create_autocmd(event, {
+      group = handlers,
+      callback = function()
+        if failed then
+          error("a " .. event .. " handler of the user raised")
+        end
+      end,
+    })
+  end
+
   local function open_diff_that_fails(name, contents)
     local call = tools.handle_invoke({ id = "failed_setup_spec" }, {
       name = "openDiff",
@@ -69,6 +92,16 @@ describe("openDiff when the diff setup fails", function()
     assert.equal("Diff setup failed", call.error.message)
     assert.is_nil(diff._get_active_diffs()[tab])
     return call.error
+  end
+
+  local function assert_no_diff_mode_and_no_new_file_buffer(answer)
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      assert.is_false(vim.wo[win].diff, "the window " .. win .. " is in diff mode")
+    end
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      assert.is_nil(vim.api.nvim_buf_get_name(buf):find("(NEW FILE)", 1, true), "a (NEW FILE) buffer is left")
+    end
+    assert.is_nil(answer.data:find("stays", 1, true), "the answer names a window")
   end
 
   local function assert_still_there(wins, bufs)
@@ -112,6 +145,7 @@ describe("openDiff when the diff setup fails", function()
     pcall(vim.api.nvim_del_augroup_by_name, group)
     pcall(vim.api.nvim_del_augroup_by_name, tabnew_group)
     pcall(vim.api.nvim_del_augroup_by_name, winclosed_group)
+    pcall(vim.api.nvim_del_augroup_by_name, leaving_group)
     vim.o.hidden = real_hidden
     vim.api.nvim_win_set_buf = real_set_buf
     diff._cleanup_all_active_diffs("test cleanup")
@@ -171,7 +205,7 @@ describe("openDiff when the diff setup fails", function()
     assert.same(wins, vim.api.nvim_list_wins())
     assert_still_there(wins, bufs)
     assert.is_false(vim.wo[user_win].diff, "the window is still in diff mode")
-    assert.is_nil(answer.data:find("stays", 1, true), "the window closed")
+    assert_no_diff_mode_and_no_new_file_buffer(answer)
     assert.is_truthy(answer.data:find("the proposal cannot be shown", 1, true), "the answer names the cause")
   end)
 
@@ -230,5 +264,55 @@ describe("openDiff when the diff setup fails", function()
     assert.same(tabs, vim.api.nvim_list_tabpages())
     assert.equal(tab_before, vim.api.nvim_get_current_tabpage())
     assert.is_truthy(answer.data:find("Invalid buffer id", 1, true), "the answer names the cause")
+  end)
+
+  local function closes_the_new_tab_when_a_handler_raises_on(event)
+    use({ open_in_new_tab = true })
+    vim.cmd("edit " .. vim.fn.fnameescape(path("a.txt")))
+    local tabs, tab_before = vim.api.nvim_list_tabpages(), vim.api.nvim_get_current_tabpage()
+    local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
+    add_sidebar_hook_to_new_tab()
+    fail_the_setup_and_then_raise_when(event)
+
+    local answer = open_diff_that_fails("a.txt", "alpha\nBETA\n")
+
+    assert.same(tabs, vim.api.nvim_list_tabpages())
+    assert.equal(tab_before, vim.api.nvim_get_current_tabpage())
+    assert.same(wins, vim.api.nvim_list_wins())
+    assert_still_there(wins, bufs)
+    assert_no_diff_mode_and_no_new_file_buffer(answer)
+  end
+
+  it("closes the new tab and goes back when a WinLeave handler raises during the cleanup", function()
+    closes_the_new_tab_when_a_handler_raises_on("WinLeave")
+  end)
+
+  it("closes the new tab and goes back when a BufLeave handler raises during the cleanup", function()
+    closes_the_new_tab_when_a_handler_raises_on("BufLeave")
+  end)
+
+  it("leaves no window in diff mode when a WinLeave handler keeps the split of an existing file", function()
+    use()
+    vim.cmd("edit " .. vim.fn.fnameescape(path("b.txt")))
+    local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
+    fail_the_setup_and_then_raise_when("WinLeave")
+
+    local answer = open_diff_that_fails("a.txt", "alpha\nBETA\n")
+
+    assert_still_there(wins, bufs)
+    assert_no_diff_mode_and_no_new_file_buffer(answer)
+  end)
+
+  it("leaves no window and no (NEW FILE) buffer when a WinLeave handler raises for a new file", function()
+    use()
+    vim.cmd("edit " .. vim.fn.fnameescape(path("b.txt")))
+    local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
+    fail_the_setup_and_then_raise_when("WinLeave")
+
+    local answer = open_diff_that_fails("new.txt", "brand new\n")
+
+    assert.same(wins, vim.api.nvim_list_wins())
+    assert_still_there(wins, bufs)
+    assert_no_diff_mode_and_no_new_file_buffer(answer)
   end)
 end)
