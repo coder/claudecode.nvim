@@ -53,6 +53,14 @@ describe("a held selection with the real plugin", function()
     return sent
   end
 
+  -- Makes the plugin take a buffer for the Claude terminal, by a rename to a term://...claude name. Neovim opens a
+  -- swap file under the new name at the rename. One that a killed Neovim left behind (a hung spec that a timeout
+  -- killed, or a HOME that other runs share) raises E325 there, and the name is fixed. The buffer gets no swap file.
+  local function rename_to_claude_terminal(buf)
+    vim.bo[buf].swapfile = false
+    vim.api.nvim_buf_set_name(buf, "term://x//1:claude")
+  end
+
   local function open_file(line)
     local path = vim.fn.tempname() .. ".txt"
     vim.fn.writefile({ line }, path)
@@ -256,7 +264,7 @@ describe("a held selection with the real plugin", function()
       local file_buf = vim.api.nvim_get_current_buf()
       select_and_release()
       local sent = record_broadcasts()
-      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+      rename_to_claude_terminal(file_buf)
 
       vim.v.errmsg = ""
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
@@ -277,11 +285,13 @@ describe("a held selection with the real plugin", function()
       local file_buf = vim.api.nvim_get_current_buf()
       select_and_release()
       local sent = record_broadcasts()
-      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+      rename_to_claude_terminal(file_buf)
 
+      vim.v.errmsg = ""
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
       wait(1300) -- the demotion delay passes
 
+      assert.are.equal("", vim.v.errmsg)
       assert.are.same({}, sent)
       assert.are.equal("alpha", selection.get_latest_selection().text)
     end)
@@ -303,7 +313,7 @@ describe("a held selection with the real plugin", function()
       wait(300)
       local sent = record_broadcasts()
 
-      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+      rename_to_claude_terminal(file_buf)
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
       wait(300)
 

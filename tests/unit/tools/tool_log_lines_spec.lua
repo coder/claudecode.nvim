@@ -50,7 +50,7 @@ describe("close_tab and getDiagnostics log lines", function()
     local close_tab = require("claudecode.tools.close_tab").handler
     local diff_tab = "✻ [Claude Code] notes.txt (abc123) ⧉"
 
-    close_tab({})
+    pcall(close_tab, {})
     close_tab({ tab_name = "no-such-tab" })
     close_tab({ tab_name = diff_tab })
     package.loaded["claudecode.diff"] = {

@@ -52,6 +52,15 @@ describe("close_tab", function()
     assert.equal("DIFF_REJECTED", answer and answer.content[1].text)
   end)
 
+  it("answers a missing tab_name with the invalid-params error, as the other tools do", function()
+    local response = tools.handle_invoke(client, { name = "close_tab", arguments = {} })
+
+    assert.same(
+      { error = { code = -32602, message = "Invalid params", data = "Missing required parameter: tab_name" } },
+      response
+    )
+  end)
+
   it("never deletes a buffer the user opened", function()
     vim._mock.add_buffer(user_buffer, "/tmp/project/README.md", "# readme")
 
