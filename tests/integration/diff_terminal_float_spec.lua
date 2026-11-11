@@ -650,7 +650,7 @@ describe("openDiff with a floating Claude terminal", function()
     end)
   end
 
-  it("shows the float when the last diff closes, if that diff shared the newest hide", function()
+  it("shows the float when the last diff closes, if that diff opened while the float was hidden", function()
     setup_diff({ layout = "unified" })
 
     open_diff("proposed.txt")
@@ -770,6 +770,87 @@ describe("openDiff with a floating Claude terminal", function()
       end
     )
   end
+
+  for _, where in ipairs({ "same", "other" }) do
+    it("hides the float when a tiled window in the " .. where .. " tab also shows the terminal", function()
+      setup_diff({ layout = "vertical" })
+      local first_tab = vim.api.nvim_get_current_tabpage()
+      if where == "other" then
+        vim.cmd("tabnew")
+      end
+      vim.cmd("botright vsplit")
+      vim.api.nvim_win_set_buf(0, float.buf)
+      vim.api.nvim_set_current_tabpage(first_tab)
+      vim.cmd("wincmd t")
+      assert.equal(1, #visible_floats(first_tab), "the float starts visible")
+
+      open_diff("proposed.txt")
+
+      assert.equal(0, #visible_floats(first_tab), "no float covers the diff")
+    end)
+  end
+
+  -- A diff that opens while a tiled window shows the terminal neither hides the float nor has a hide of its own. When
+  -- that window goes away, the float must not come back over it as the first diff closes.
+  for _, where in ipairs({ "another tab", "the same tab" }) do
+    for _, order in ipairs(pair_orders) do
+      it(
+        "does not show the float over a diff that opened while a tiled window in "
+          .. where
+          .. " showed the terminal, closing "
+          .. order_name(order),
+        function()
+          setup_diff({ layout = "unified" })
+          local first_tab = vim.api.nvim_get_current_tabpage()
+          open_diff("proposed.txt")
+          assert.equal(0, #visible_floats(first_tab), "the first diff hid the float")
+
+          local tiled_win
+          if where == "another tab" then
+            vim.cmd("tabnew")
+            tiled_win = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_set_buf(tiled_win, float.buf)
+            vim.api.nvim_set_current_tabpage(first_tab)
+          else
+            vim.cmd("botright vsplit")
+            tiled_win = vim.api.nvim_get_current_win()
+            vim.api.nvim_win_set_buf(tiled_win, float.buf)
+          end
+          open_diff("second.txt")
+          assert.equal(1, float.hide_calls, "a window shows the terminal, so the second diff hid nothing")
+          vim.api.nvim_win_close(tiled_win, true)
+          vim.api.nvim_set_current_tabpage(first_tab)
+
+          close_tab(order[1])
+          if order[1] == "proposed.txt" then
+            assert.equal(0, #visible_floats(first_tab), "the second diff is still open in this tab")
+          end
+          close_tab(order[2])
+
+          assert.equal(1, #visible_floats(first_tab), "the float is back when the last diff closes")
+          assert.equal(1, float.show_calls)
+        end
+      )
+    end
+  end
+
+  it("shows the float when the first diff closes while a second vertical diff is in its own tab", function()
+    setup_diff({ layout = "vertical", hide_terminal_in_new_tab = true })
+    local first_tab = vim.api.nvim_get_current_tabpage()
+    open_diff("proposed.txt")
+    vim.cmd("tabnew")
+    local tiled_win = vim.api.nvim_get_current_win()
+    vim.api.nvim_win_set_buf(tiled_win, float.buf)
+    vim.api.nvim_set_current_tabpage(first_tab)
+    local second = open_diff("second.txt")
+    assert.is_true(second.created_new_tab, "a tab that already has a diff gets the second one in a new tab")
+    vim.api.nvim_win_close(tiled_win, true)
+    vim.api.nvim_set_current_tabpage(first_tab)
+
+    close_tab("proposed.txt")
+
+    assert.equal(1, #visible_floats(first_tab), "the second diff is in another tab, so the float does not cover it")
+  end)
 
   for _, layout in ipairs({ "vertical", "unified" }) do
     it("hides a float when a tiled window also shows its terminal buffer, with a " .. layout .. " diff", function()

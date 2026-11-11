@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 2e4a9339c6c649a5
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 9ee835d50109594a
+file lua/claudecode/diff.lua 8de8a32a785bf76d
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -61,7 +61,6 @@ site lua/claudecode/diff.lua: diff_data.status = "saved" @ function M._resolve_d
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, other in pairs(active_diffs) do @ local function save_window_sizes(tab)
-site lua/claudecode/diff.lua: for other_name, other in pairs(active_diffs) do @ local function other_diff_that_hid_float(tab_name, tab)
 site lua/claudecode/diff.lua: for other_name, other in pairs(active_diffs) do @ local function show_terminal_float_after_diff(tab_name, diff_data)
 site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function close_active_diffs(filter_fn, reason, client_id)
