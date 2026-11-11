@@ -80,13 +80,13 @@ FACTS=(NativeMarkBeforeTermopen OwnedUnstartedIsNotEnded OwnedLiveNeedsMark Owne
   SnacksMarksStartedTerminal SnacksEntriesAdopt SnacksEntriesForgetEndedJob SnacksCloseAdopts SnacksExitForgets
   SnacksForgetChecksInstance
   SnacksCloseForgetsFirst SnacksHideKeepsLastWindow SnacksFailCleansUp SnacksStopsNativeClaude
-  SnacksAvailabilityCached)
+  SnacksAvailabilityCached OwnedStopOtherStops)
 
-# native.lua: the mark goes on the new buffer before termopen, so an open() from a BufEnter or TermOpen autocmd
-# adopts the terminal being started.
+# native.lua: the mark goes on the new buffer before the window shows it (nvim_win_set_buf fires BufEnter) and before
+# termopen (TermOpen), so an open() from either autocmd adopts the terminal being started.
 fact[NativeMarkBeforeTermopen]=$(as_bool in_order '^  local new_bufnr = vim\.api\.nvim_create_buf\(' \
-  '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' 'pcall\(vim\.fn\.termopen, term_cmd_arg, termopen_opts\)' \
-  <<<"$open_terminal")
+  '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' '^  vim\.api\.nvim_win_set_buf\(new_winid, new_bufnr\)$' \
+  'pcall\(vim\.fn\.termopen, term_cmd_arg, termopen_opts\)' <<<"$open_terminal")
 # owned.lua: a buffer whose job has not started (channel 0) has not ended, so the autocmd's open() can adopt it.
 fact[OwnedUnstartedIsNotEnded]=$(as_bool grep -qE \
   '^  return channel ~= 0 and not pcall\(vim\.fn\.jobpid, channel\)$' <<<"$owned_job_ended")
@@ -173,6 +173,19 @@ native_stops_snacks() {
     grep -qE 'owned\.stop_other\(owned\.SNACKS_MARK, "snacks"\)' <<<"$stop_snacks"
 }
 fact[NativeStopsSnacksClaude]=$(as_bool native_stops_snacks)
+
+# owned.lua: stop_other stops every marked live buffer of the other provider, one by one until none is left, and stop_buffer
+# clears the mark, stops the job, waits for its exit and deletes the buffer. The providers call it before a start and in
+# close (NativeStopsSnacksClaude, SnacksStopsNativeClaude), and the model's StopAll step relies on it.
+owned_stop_other_stops() {
+  in_order '^  if not M\.find\(mark\) then$' '^    return false$' '^  local buf = M\.find\(mark\)$' '^  while buf do$' \
+    '^    if not stop_buffer\(buf, mark\) then$' '^      return false$' '^    buf = M\.find\(mark\)$' '^  return true$' \
+    <<<"$owned_stop_other" &&
+    in_order '^  vim\.b\[buf\]\[mark\] = nil$' 'vim\.fn\.jobstop\(vim\.bo\[buf\]\.channel\) == 1' \
+      '^    vim\.wait\(1000, function\(\)$' '^    vim\.api\.nvim_buf_delete\(buf, \{ force = true \}\)$' \
+      '^  return not vim\.api\.nvim_buf_is_valid\(buf\)$' <<<"$owned_stop_buffer"
+}
+fact[OwnedStopOtherStops]=$(as_bool owned_stop_other_stops)
 
 # snacks.lua
 snacks_open_skips_during_start() {
@@ -273,6 +286,7 @@ EXPECT=(
   [SnacksHideKeepsLastWindow]=HideNoError
   [SnacksFailCleansUp]=FailedStartLeavesNoWindow
   [SnacksStopsNativeClaude]=AtMostOneClaude
+  [OwnedStopOtherStops]=AtMostOneClaude
   ["SnacksAvailabilityCached+SnacksStopsNativeClaude"]=AtMostOneClaude
 )
 
@@ -286,6 +300,9 @@ tla_constants() {
     case "$name" in
     mut-NativeMarkBeforeTermopen-* | mut-OwnedUnstartedIsNotEnded-*)
       providers='{"native"}' loadable='{FALSE}' reenters=TRUE
+      ;;
+    mut-OwnedStopOtherStops-*)
+      loadable='{TRUE}' reloads=TRUE changes=TRUE
       ;;
     mut-Owned*)
       loadable='{TRUE}' early=TRUE

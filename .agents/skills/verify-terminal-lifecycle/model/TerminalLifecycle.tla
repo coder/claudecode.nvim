@@ -67,6 +67,7 @@ CONSTANTS
   SnacksHideKeepsLastWindow,     \* snacks.lua cc_hide pcalls nvim_win_close
   SnacksFailCleansUp,            \* snacks.lua M.open closes the window Snacks showed for a failed start
   SnacksStopsNativeClaude,       \* snacks.lua stops the native provider's Claude before a start and in close
+  OwnedStopOtherStops,           \* owned.lua stop_other stops every marked live buffer of the other provider (stop_buffer: job, wait, delete)
   SnacksAvailabilityCached       \* snacks.lua reads require("snacks") once; terminal.lua caches the module
 
 None == "none"
@@ -269,7 +270,7 @@ NativeEntry(w0, kind) ==
      ELSE LET wn == [w EXCEPT !.ntrack = None]                        \* is_valid() forgets an invalid buffer
               ad == Adoptable(wn)
           IN IF ad = {}
-             THEN {Out(IF NativeStopsSnacksClaude THEN StopAll(wn, Foreign(wn, "snacks")) ELSE wn, TRUE)}
+             THEN {Out(IF NativeStopsSnacksClaude /\ OwnedStopOtherStops THEN StopAll(wn, Foreign(wn, "snacks")) ELSE wn, TRUE)}
              ELSE UNION {NativeAdopted(wn, b, kind) : b \in ad}
 
 (* A start of snacks is in progress: Snacks.terminal.open runs and `terminal` is not set yet. *)
@@ -288,7 +289,7 @@ SnacksEntry(w0, kind) ==
   IN IF t0 # None /\ w.buf[t0] THEN SnacksTracked(w, t0, kind)
      ELSE IF ad # {} THEN UNION {SnacksTracked(SnacksAdopt(w, b), b, kind) : b \in ad}
      ELSE IF SnacksOpenSkipsDuringStart /\ SnacksStarting THEN {Out(w, FALSE)}
-     ELSE {Out(IF SnacksStopsNativeClaude THEN StopAll(w, Foreign(w, "native")) ELSE w, TRUE)}
+     ELSE {Out(IF SnacksStopsNativeClaude /\ OwnedStopOtherStops THEN StopAll(w, Foreign(w, "native")) ELSE w, TRUE)}
 
 Entry(w, p, kind) == IF p = "native" THEN NativeEntry(w, kind) ELSE SnacksEntry(w, kind)
 
@@ -345,7 +346,7 @@ CloseBegin(w0, p) ==
       t == IF tracked THEN t0 ELSE IF ad = {} THEN None ELSE CHOOSE b \in ad : TRUE
       wb == IF tracked \/ ad = {} THEN wa ELSE IF p = "native" THEN Adopt(wa, t) ELSE SnacksAdopt(wa, t)
       other == IF p = "native" THEN "snacks" ELSE "native"
-      stops == IF p = "native" THEN NativeStopsSnacksClaude ELSE SnacksStopsNativeClaude
+      stops == OwnedStopOtherStops /\ IF p = "native" THEN NativeStopsSnacksClaude ELSE SnacksStopsNativeClaude
   IN IF t = None
      THEN [w |-> IF stops THEN StopAll(wb, Foreign(wb, other)) ELSE wb, t |-> None, wait |-> FALSE]
      ELSE LET w1 == IF p = "native"
