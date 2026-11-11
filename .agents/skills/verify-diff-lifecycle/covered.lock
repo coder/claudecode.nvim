@@ -146,7 +146,7 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua 6cce14152036da09
+file lua/claudecode/server/init.lua 5da424108afc9927
 block server_stop            4dae0bf675cf2cc1
 block on_disconnect          9110ffdfd72d4ea6
 block handle_request         b74ff7dc2e55a2b8
@@ -193,7 +193,7 @@ site lua/claudecode/tools/close_tab.lua: log.error("close_tab", "Failed to load 
 == lua/claudecode/tools/get_current_selection.lua
 file lua/claudecode/tools/get_current_selection.lua 5fb9ade5d26239ae
 == lua/claudecode/tools/get_diagnostics.lua
-file lua/claudecode/tools/get_diagnostics.lua 053c639ddf31ec5b
+file lua/claudecode/tools/get_diagnostics.lua 8b617a9f222b2aae
 == lua/claudecode/tools/get_latest_selection.lua
 file lua/claudecode/tools/get_latest_selection.lua ca8dfa01572dc62b
 == lua/claudecode/tools/get_open_editors.lua
