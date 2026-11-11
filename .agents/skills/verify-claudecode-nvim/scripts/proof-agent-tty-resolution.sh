@@ -16,11 +16,16 @@
 #   rtp-symlink       a VCN_RTP entry with `..` after a symlink means the parent of the link's target
 #   rtp-missing       a VCN_RTP entry that is not a directory: launch exits 1 naming it
 #   rtp-control       without VCN_RTP the same require() fails
-#   sigterm           SIGTERM to the process group of a launch with a live session: it exits 143 and leaves no state dir
-#                     or process
+#   sigterm           SIGTERM to the process group of a launch with a live session: it exits 143, leaves no state dir
+#                     or process, and saves no evidence (final screen, PNG, WebM), which takes long on a loaded host
 #   signal-early      SIGTERM, SIGINT and SIGHUP before the run exists (launch held in `mkdir`): exit 143, no state dir
-#   signal-doctor     the same three signals while `agent-tty doctor` runs: exit 143, no state dir, and the full cleanup
-#                     ran (it calls `agent-tty home forget`), not only the early trap that removes the state dir
+#   signal-doctor     the same three signals while `agent-tty doctor` runs: exit 143, no state dir, the full cleanup
+#                     ran (it calls `agent-tty home forget`), and launch printed `vcn: launch failed` to its caller
+#   signal-mktemp     the same three signals while mktemp is making the state dir: exit 143, no state dir left
+#   signal-twice      a second SIGTERM, SIGINT or SIGHUP while the teardown is held in `agent-tty home forget` (or, for
+#                     the early teardown, in the `rm` of the state dir): the teardown still finishes (exit 143, no state
+#                     dir)
+#   signal-printed    SIGTERM while launch is blocked printing VCN_STATE (stdout is a full pipe): exit 143, no state dir
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
 # need everything under Needs in SKILL.md, and the signal cases need perl.
 # Prints one `ok <case>` per case, or `FAIL <case>: <reason>` and exits 1, and ends with `CASES <n>`.
@@ -46,6 +51,8 @@ fail() {
 good=${VCN_AGENT_TTY:-$(command -v agent-tty || mise which agent-tty)} || fail setup "no agent-tty to use as the good one"
 real_mise=$(command -v mise)
 real_mkdir=$(command -v mkdir)
+real_mktemp=$(command -v mktemp)
+real_rm=$(command -v rm)
 perl=$(command -v perl) || fail setup "perl not found"
 # The tools vcn.sh needs, each linked by name, so PATH holds no agent-tty. A mise shim dir would hold one.
 mkdir "$TMP/tools"
@@ -95,10 +102,11 @@ if [ "\$1" = which ] && [ "\$2" = agent-tty ]; then
 fi
 cd "$root" && exec "$real_mise" "\$@"
 MISE
-# The signal cases hold launch at a known point: in the `mkdir` that makes the run's dirs, which runs before run.env
-# exists, or in `agent-tty doctor` (the stand-in logs every call to $GATE/calls and answers all but doctor at once).
-# Each stand-in tells the proof it was reached through $GATE/reached.
-mkdir "$TMP/gate-bin" "$TMP/slow"
+# The signal cases hold launch at a known point: in the `mktemp` that makes the state dir, in the `mkdir` that makes
+# the run's dirs, which runs before run.env exists, in the `rm` of the early teardown (while $GATE/hold-rm exists), or
+# in `agent-tty doctor` (the stand-in logs every call to $GATE/calls and answers all but doctor at once, and holds
+# `home forget` while $GATE/hold-forget exists). Each stand-in tells the proof it was reached through $GATE/reached.
+mkdir "$TMP/gate-bin" "$TMP/gate-mktemp" "$TMP/slow"
 cat >"$TMP/gate-bin/mkdir" <<MKDIR
 #!/bin/sh
 case "\$*" in
@@ -112,15 +120,46 @@ case "\$*" in
 esac
 exec "$real_mkdir" "\$@"
 MKDIR
+cat >"$TMP/gate-bin/rm" <<RM
+#!/bin/sh
+case "\$*" in
+"-rf -- /tmp/vcn."*)
+  if [ -f "\$GATE/hold-rm" ]; then
+    : >"\$GATE/rm-reached"
+    while [ -f "\$GATE/hold-rm" ]; do sleep 0.05; done
+  fi
+  ;;
+esac
+exec "$real_rm" "\$@"
+RM
+cat >"$TMP/gate-mktemp/mktemp" <<MKTEMP
+#!/bin/sh
+case "\$*" in
+"-d /tmp/vcn.XXXXXX")
+  name=\$("$real_mktemp" "\$@") || exit 1
+  printf '%s\\n' "\$name" >"\$GATE/state"
+  : >"\$GATE/reached"
+  while [ -f "\$GATE/hold" ]; do sleep 0.05; done
+  printf '%s\\n' "\$name"
+  exit 0
+  ;;
+esac
+exec "$real_mktemp" "\$@"
+MKTEMP
 cat >"$TMP/slow/agent-tty" <<'SLOW'
 #!/bin/sh
 echo "$3 $4" >>"$GATE/calls"
+if [ "$3 $4" = "home forget" ] && [ -f "$GATE/hold-forget" ]; then
+  : >"$GATE/forget-reached"
+  while [ -f "$GATE/hold-forget" ]; do sleep 0.05; done
+fi
 if [ "$3" = doctor ]; then
   : >"$GATE/reached"
   sleep 300
 fi
 SLOW
-chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise" "$TMP/gate-bin/mkdir" "$TMP/slow/agent-tty"
+chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise" "$TMP/gate-bin/mkdir" "$TMP/gate-bin/rm" \
+  "$TMP/gate-mktemp/mktemp" "$TMP/slow/agent-tty"
 ln -s "$good" "$TMP/good/agent-tty"
 ln -s "$good" "$TMP/good2/agent-tty"
 good_path=$TMP/mise:$TMP/good:$base
@@ -149,6 +188,7 @@ launched_with() { # <case> <PATH> <want ATT_BIN> [VAR=value...]
   ((rc == 0)) || fail "$name" "launch exited $rc: $out"
   got=$(sed -n 's/^ATT_BIN=//p' "$TMP/out-$name/run.env" | head -n 1)
   stop "$path"
+  [[ -f $TMP/out-$name/final.screen.txt ]] || fail "$name" "cleanup saved no final screen"
   [[ $got == "$want" ]] || fail "$name" "run.env has ATT_BIN=$got, wanted $want"
   echo "ok $name: ATT_BIN=$got"
   cases=$((cases + 1))
@@ -215,13 +255,14 @@ rtp_case rtp-control --
 # A signal ends bash with $? still 0 in an EXIT trap, so launch must turn it into an exit to clean up its run.
 # A background job starts with SIGINT ignored, and a harness can start it with SIGHUP ignored, and bash cannot trap a
 # signal that was ignored at entry: perl resets both before launch starts.
-# start_launch <case> <PATH> [VAR=value...]: runs launch in the background in its own process group and sets pid.
+# start_launch <case> <PATH> [VAR=value...]: runs launch in the background in its own process group and sets pid. Its
+# output goes to $launch_out when that is set.
 start_launch() {
   local name=$1 path=$2
   shift 2
   # shellcheck disable=SC2016
   env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" \
-    "$perl" -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV' "$TMP/tools/setsid" "$V" launch >"$TMP/$name.txt" 2>&1 </dev/null &
+    "$perl" -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV' "$TMP/tools/setsid" "$V" launch >"${launch_out:-$TMP/$name.txt}" 2>&1 </dev/null &
   pid=$!
 }
 
@@ -248,16 +289,30 @@ wait_for() {
   fail "$1" "launch did not reach the stand-in within 30 s: $(cat "$TMP/$1.txt")"
 }
 
-# signal_group <case> <signal> <state dir>: signals launch's process group and checks it exited 143 and removed the dir.
-signal_group() {
-  local name=$1 sig=$2 dir=$3 rc=0 left
-  kill -"$sig" -- "-$pid" || fail "$name" "no process group $pid to signal"
+# await_exit <case> <signal> <state dir>: waits for launch and checks it exited 143 and removed the dir.
+await_exit() {
+  local name=$1 sig=$2 dir=$3 rc=0 left pstat
+  for _ in $(seq 1800); do
+    pstat=$(ps -o stat= -p "$pid" 2>/dev/null) || true
+    [[ -z $pstat || $pstat == Z* ]] && break
+    sleep 0.1
+  done
+  if [[ -n $pstat && $pstat != Z* ]]; then
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    fail "$name" "launch was still running 180 s after SIG$sig (stopped now)"
+  fi
   wait "$pid" || rc=$?
   if [[ $rc != 143 || -e $dir ]]; then
     left=$([[ -e $dir ]] && echo yes || echo no)
-    [[ $dir != /tmp/vcn.* ]] || rm -rf -- "$dir"
+    [[ $dir != /tmp/vcn.* || $live_state == "$dir" ]] || rm -rf -- "$dir"
     fail "$name" "SIG$sig made launch exit $rc (wanted 143), state dir left: $left"
   fi
+}
+
+# signal_group <case> <signal> <state dir>: signals launch's process group, then runs await_exit.
+signal_group() {
+  kill -"$2" -- "-$pid" || fail "$1" "no process group $pid to signal"
+  await_exit "$1" "$2" "$3"
 }
 
 signal_case() { # <case> <early|doctor>
@@ -277,8 +332,9 @@ signal_case() { # <case> <early|doctor>
     fi
     signal_group "$run" "$sig" "$st"
     # Only the late trap runs launch_failed, whose cleanup ends with `agent-tty home forget`. The early trap only removes
-    # the state dir. The output of launch is no evidence: a trap that runs inside `att` writes to att's redirections.
+    # the state dir. The line must reach launch's caller even though the trap runs while `agent-tty doctor` runs.
     [[ $where == early ]] || grep -qx 'home forget' "$gate/calls" || fail "$run" "launch did not run its cleanup, agent-tty calls: $(tr '\n' ',' <"$gate/calls")"
+    [[ $where == early ]] || grep -q '^vcn: launch failed' "$TMP/$run.txt" || fail "$run" "launch printed no failure line: $(cat "$TMP/$run.txt")"
   done
   echo "ok $name: SIGTERM, SIGINT and SIGHUP made launch exit 143 and remove its state dir"
   cases=$((cases + 1))
@@ -298,6 +354,7 @@ sigterm_case() {
   grep -q '^TUI_PID=' "$st/run.env" || fail "$name" "launch made no session within 60 s: $(cat "$TMP/$name.txt")"
   [[ ! -e $TMP/out-$name/run.env ]] || fail "$name" "launch finished before the signal"
   signal_group "$name" TERM "$st"
+  [[ ! -e $TMP/out-$name/final.screen.txt ]] || fail "$name" "launch took the time to save evidence after SIGTERM"
   mapfile -t pids < <(grep -lzxF "VCN_RUN_TAG=$st" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
   if ((${#pids[@]} > 0)); then
     # Every PID here carries this run's tag, so it is the proof's own.
@@ -309,7 +366,94 @@ sigterm_case() {
   cases=$((cases + 1))
 }
 
+# release <file>: removes the file one second later, in a background job whose PID goes to rel, so a signal sent right
+# after it lands while the stand-in still holds.
+release() {
+  (sleep 1 && rm -f "$1") &
+  rel=$!
+}
+
+# A signal lands while mktemp is held after it made the state dir and before launch learns the dir's name.
+signal_mktemp_case() {
+  local name=signal-mktemp sig gate run
+  for sig in TERM INT HUP; do
+    run=$name-$sig gate=$TMP/gate-$name-$sig
+    mkdir "$gate"
+    : >"$gate/hold"
+    start_launch "$run" "$TMP/gate-mktemp:$good_path" GATE="$gate"
+    wait_for "$run" "$gate/reached"
+    st=$(<"$gate/state")
+    release "$gate/hold"
+    signal_group "$run" "$sig" "$st"
+    wait "$rel"
+  done
+  echo "ok $name: SIGTERM, SIGINT and SIGHUP while mktemp ran made launch exit 143 and remove its state dir"
+  cases=$((cases + 1))
+}
+
+# A second signal lands while the teardown that the first one started is held: in `agent-tty home forget` for the full
+# teardown, or in the `rm` of the state dir for the early one.
+signal_twice_case() {
+  local name=signal-twice sig gate run where
+  for where in doctor early; do
+    for sig in TERM INT HUP; do
+      run=$name-$where-$sig gate=$TMP/gate-$name-$where-$sig
+      mkdir "$gate"
+      if [[ $where == doctor ]]; then
+        : >"$gate/hold-forget"
+        start_launch "$run" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
+        wait_for "$run" "$gate/reached"
+        find_state "$run"
+        kill -TERM -- "-$pid" || fail "$run" "no process group $pid to signal"
+        wait_for "$run" "$gate/forget-reached"
+        release "$gate/hold-forget"
+      else
+        : >"$gate/hold" && : >"$gate/hold-rm"
+        start_launch "$run" "$TMP/gate-bin:$good_path" GATE="$gate"
+        wait_for "$run" "$gate/reached"
+        st=$(<"$gate/state")
+        kill -TERM -- "-$pid" || fail "$run" "no process group $pid to signal"
+        wait_for "$run" "$gate/rm-reached"
+        release "$gate/hold-rm"
+      fi
+      signal_group "$run" "$sig" "$st"
+      wait "$rel"
+    done
+  done
+  echo "ok $name: a second SIGTERM, SIGINT or SIGHUP did not stop the teardown (exit 143, no state dir)"
+  cases=$((cases + 1))
+}
+
+# A signal lands while launch is blocked printing VCN_STATE: stdout is a full pipe that nobody reads. The run exists and
+# is complete, so launch must tear it down, because its caller never learns its name.
+signal_printed_case() {
+  local name=signal-printed fifo=$TMP/fifo-printed
+  mkfifo "$fifo"
+  exec 8<>"$fifo"
+  dd if=/dev/zero bs=1 count=1000000 of="$fifo" oflag=nonblock status=none 2>/dev/null || true
+  launch_out=$fifo start_launch "$name" "$good_path"
+  find_state "$name"
+  live_state=$st live_path=$good_path
+  for _ in $(seq 900); do
+    grep -q '^agent-tty ' "$TMP/out-$name/run.env" 2>/dev/null && break
+    sleep 0.1
+  done
+  grep -q '^agent-tty ' "$TMP/out-$name/run.env" || fail "$name" "launch did not finish its run within 90 s"
+  sleep 1
+  kill -TERM -- "-$pid" || fail "$name" "no process group $pid to signal"
+  # bash runs a trap only after the write that blocks it ends, so read the pipe empty to let that write end.
+  dd if=/dev/fd/8 of=/dev/null bs=65536 count=64 iflag=nonblock status=none 2>/dev/null || true
+  await_exit "$name" TERM "$st"
+  exec 8>&-
+  live_state=""
+  echo "ok $name: SIGTERM while launch was blocked printing VCN_STATE made it exit 143 and remove the run"
+  cases=$((cases + 1))
+}
+
 signal_case signal-early early
 signal_case signal-doctor doctor
+signal_mktemp_case
+signal_twice_case
+signal_printed_case
 sigterm_case
 echo "CASES $cases"

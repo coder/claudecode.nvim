@@ -411,8 +411,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
     vim.api.nvim_win_set_buf(diff_win, buf)
   end)
 
-  -- Configure window for sign column display
-  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { win = diff_win })
+  -- Without scope = "local", Neovim also sets the window's default, which a buffer opened later in the window inherits.
+  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { scope = "local", win = diff_win })
 
   -- Equalize window widths
   guard_inline_setup(function()
@@ -468,8 +468,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
       group = aug,
       buffer = buf,
       callback = function()
-        diff._resolve_diff_as_saved(tab_name, buf)
-        return true -- prevent actual write
+        diff._write_proposal(tab_name, buf)
       end,
     })
 
@@ -614,9 +613,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
   else
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close the diff split window
-    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-      pcall(vim.api.nvim_win_close, diff_data.new_window, true)
-    end
+    diff._close_proposal_window(diff_data)
 
     if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
       pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)

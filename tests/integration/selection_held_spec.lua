@@ -43,6 +43,16 @@ describe("a held selection with the real plugin", function()
     end
   end
 
+  -- Replaces server.broadcast with a recorder. Returns the list of what was sent after the call.
+  local function record_broadcasts()
+    local sent = {}
+    server.broadcast = function(method, params)
+      table.insert(sent, { method = method, params = params })
+      return true
+    end
+    return sent
+  end
+
   local function open_file(line)
     local path = vim.fn.tempname() .. ".txt"
     vim.fn.writefile({ line }, path)
@@ -135,6 +145,232 @@ describe("a held selection with the real plugin", function()
     local held = selection.get_latest_selection()
     assert.is_true(held.selection.isEmpty)
     assert.are.equal(14, held.selection.start.character)
+  end)
+
+  -- The Claude terminal keeps a held selection, and Neovim fires TextChanged only for the current buffer. When the
+  -- file changes while you are in the terminal (Claude rewrites it and Neovim reloads it, or a plugin edits it),
+  -- Claude must not keep the text that is gone until you come back.
+  describe("when the file of the held selection changes while you are in the Claude terminal", function()
+    local function path_of(buf)
+      return vim.api.nvim_buf_get_name(buf)
+    end
+
+    -- Neovim reloads a file whose modification time differs from the one it stored.
+    local function rewrite_on_disk_and_reload(buf, line)
+      local path = path_of(buf)
+      vim.fn.writefile({ line }, path)
+      local later = os.time() + 10
+      (vim.uv or vim.loop).fs_utime(path, later, later)
+      vim.cmd("checktime " .. buf)
+    end
+
+    it("reports the cursor when a plugin edits the text, and the file is not in a window", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("terminal sh -c 'sleep 60' claude")
+      local term_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("buffer " .. file_buf)
+      wait(200)
+      select_and_release()
+
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
+      local held = selection.get_latest_selection()
+      assert.is_true(held.selection.isEmpty)
+      assert.are.equal(path_of(file_buf), held.filePath)
+      assert.are.equal(4, held.selection.start.character) -- where you released the selection
+    end)
+
+    it("reports the cursor of the file's window when Neovim reloads the file", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      local file_win = vim.api.nvim_get_current_win()
+      vim.cmd("vsplit | terminal sh -c 'sleep 60' claude") -- the file stays in its own window
+      local term_win = vim.api.nvim_get_current_win()
+      vim.cmd("stopinsert")
+      vim.api.nvim_set_current_win(file_win)
+      wait(200)
+      select_and_release()
+
+      vim.api.nvim_set_current_win(term_win)
+      vim.cmd("stopinsert")
+      wait(300)
+      rewrite_on_disk_and_reload(file_buf, "beta gamma")
+      wait(300)
+
+      assert.are.same({ "beta gamma" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
+      assert.are.equal(term_win, vim.api.nvim_get_current_win())
+      local held = selection.get_latest_selection()
+      assert.is_true(held.selection.isEmpty)
+      assert.are.equal(path_of(file_buf), held.filePath)
+      assert.are.equal(4, held.selection.start.character)
+    end)
+
+    -- :bunload! detaches the listener, and nvim_buf_attach cannot attach to an unloaded buffer. When the file is loaded
+    -- again and selected from, a new listener must be attached.
+    it("listens again when the file was unloaded and a new selection is read after it loads again", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("terminal sh -c 'sleep 60' claude")
+      local term_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("buffer " .. file_buf)
+      wait(200)
+      select_and_release()
+
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+      vim.cmd("bunload! " .. file_buf)
+      wait(200)
+      vim.cmd("buffer " .. file_buf)
+      vim.api.nvim_win_set_cursor(0, { 1, 0 }) -- Neovim put the cursor back where it was
+      wait(200)
+      select_and_release()
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
+
+    -- A buffer can become the Claude terminal after a selection was read in it: termopen() in it, or a rename to a
+    -- term://...claude name. Its text then changes: the check used to call update_selection, which called the check
+    -- again, until "stack overflow".
+    it("does not overflow the stack when the buffer of the held selection is taken for the Claude terminal", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      select_and_release()
+      local sent = record_broadcasts()
+      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+
+      vim.v.errmsg = ""
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal("", vim.v.errmsg)
+      assert.are.same({}, sent) -- no selection and no cursor of the terminal reached Claude
+      assert.are.equal("alpha", selection.get_latest_selection().text) -- Claude keeps the selection it has
+      assert.is_nil(selection.state.selection_tick) -- nothing checks the read again
+      assert.is_nil(selection.state.cursor_at_flush)
+    end)
+
+    -- The demotion timer is pending when the buffer becomes the terminal. When it fires it only knows the terminal
+    -- that the provider registered, so it used to take this buffer for an ordinary one and send its cursor.
+    it("does not send a cursor of the buffer that became the Claude terminal when a demotion is pending", function()
+      start({ provider = "none" }, 1000)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      select_and_release()
+      local sent = record_broadcasts()
+      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(1300) -- the demotion delay passes
+
+      assert.are.same({}, sent)
+      assert.are.equal("alpha", selection.get_latest_selection().text)
+    end)
+
+    -- You are in a Claude terminal, and the buffer of the held selection becomes a Claude terminal too. Its text changes.
+    -- The check sent the cursor of that buffer, with its term:// path.
+    it("sends nothing when the buffer of the held selection became a Claude terminal and you are in another", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("terminal sh -c 'sleep 60' claude")
+      local term_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("buffer " .. file_buf)
+      wait(200)
+      select_and_release()
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+      local sent = record_broadcasts()
+
+      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
+      assert.are.same({}, sent)
+      assert.are.equal("alpha", selection.get_latest_selection().text)
+      assert.is_nil(selection.state.selection_tick)
+    end)
+
+    -- Neovim ignores what on_reload returns and keeps the listener. A listener that forgot its buffer there would let
+    -- the next selection attach a second one, one more after every reload.
+    it("keeps one listener on the file through reloads while Claude holds only a cursor", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      local attached = 0
+      local real_attach = vim.api.nvim_buf_attach
+      vim.api.nvim_buf_attach = function(buf, ...)
+        attached = attached + (buf == file_buf and 1 or 0)
+        return real_attach(buf, ...)
+      end
+
+      local ok, err = pcall(function()
+        for cycle = 1, 3 do
+          vim.api.nvim_win_set_cursor(0, { 1, 0 })
+          select_and_release()
+          vim.cmd("enew") -- another file: the debounce replaces the selection with that buffer's cursor
+          wait(300)
+          assert.is_true(selection.get_latest_selection().selection.isEmpty)
+          rewrite_on_disk_and_reload(file_buf, "alpha beta gamma, cycle " .. cycle) -- on_reload, nothing held
+          wait(200)
+          vim.cmd("buffer " .. file_buf)
+          wait(200)
+        end
+      end)
+      vim.api.nvim_buf_attach = real_attach
+      assert(ok, err)
+
+      assert.are.equal(1, attached)
+    end)
+
+    it("keeps the selection when a reload leaves its text in place", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      local file_win = vim.api.nvim_get_current_win()
+      vim.cmd("vsplit | terminal sh -c 'sleep 60' claude")
+      local term_win = vim.api.nvim_get_current_win()
+      vim.cmd("stopinsert")
+      vim.api.nvim_set_current_win(file_win)
+      wait(200)
+      select_and_release()
+
+      vim.api.nvim_set_current_win(term_win)
+      vim.cmd("stopinsert")
+      wait(300)
+      rewrite_on_disk_and_reload(file_buf, "alpha beta gamma, and more")
+      wait(300)
+
+      assert.are.same({ "alpha beta gamma, and more" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
+      assert.are.equal("alpha", selection.get_latest_selection().text)
+
+      -- The listener survives the reload: the next change is seen too.
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {})
+      wait(300)
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
   end)
 
   -- A popup that wipes itself when you leave it: its buffer number is gone at the next event, and the plugin must

@@ -1244,6 +1244,9 @@ local vim = {
           end
           return true
         end,
+        get_write_queue_size = function(self)
+          return 0
+        end,
         close = function(self)
           return true
         end,
@@ -1265,9 +1268,44 @@ local vim = {
         end,
       }
     end,
+    -- Check handles run a callback right after the poll phase of a loop iteration, and idle handles keep that poll from
+    -- waiting. The mock never runs them.
+    new_idle = function()
+      return {
+        start = function(self, callback)
+          return true
+        end,
+        stop = function(self)
+          return true
+        end,
+        close = function(self)
+          return true
+        end,
+        is_closing = function(self)
+          return false
+        end,
+      }
+    end,
+    new_check = function()
+      return {
+        start = function(self, callback)
+          return true
+        end,
+        stop = function(self)
+          return true
+        end,
+        close = function(self)
+          return true
+        end,
+        is_closing = function(self)
+          return false
+        end,
+      }
+    end,
     now = function()
       return os.time() * 1000
     end,
+    update_time = function() end,
     timer_stop = function(timer)
       return true
     end,
