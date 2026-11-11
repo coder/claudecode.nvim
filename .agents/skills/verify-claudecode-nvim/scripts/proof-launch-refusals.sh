@@ -12,6 +12,7 @@
 #   above-world    a dir above the default parent dir is world-writable and not sticky
 #   tmp-world      TMPDIR, where launch makes its state dir, is world-writable and not sticky
 #   tmp-above-world  a dir above TMPDIR is world-writable and not sticky
+#   tmp-missing    TMPDIR does not exist, under a sticky dir where another user could make it after the checks
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
@@ -107,6 +108,10 @@ refused tmp-world "$TMP/tmp-world, above the state dir, is writable by others an
 mkdir -m 700 "$TMP/above/tmp"
 refused tmp-above-world "$TMP/above, above the state dir, is writable by others and not sticky" \
   TMPDIR="$TMP/above/tmp" VERIFY_OUT="$TMP/tmp-out"
+mkdir "$TMP/tmp-shared"
+chmod 1777 "$TMP/tmp-shared"
+refused tmp-missing "TMPDIR=$TMP/tmp-shared/later is not an existing directory" \
+  TMPDIR="$TMP/tmp-shared/later" VERIFY_OUT="$TMP/tmp-out"
 refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"

@@ -21,8 +21,8 @@
 #                      passes `agent-tty doctor`).
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
 # VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
-# TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path, and
-#              neither it nor a dir above it may be writable by others without the sticky bit.
+# TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path to an
+#              existing directory, and neither it nor a dir above it may be writable by others without the sticky bit.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -47,9 +47,13 @@ env_line() { printf '%s=%q\n' "$1" "$2"; }
 load() {
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
   [[ -f $VCN_STATE/run.env ]] || die "no run at $VCN_STATE (already cleaned up?)"
+  # run.env is sourced, so it must be a file this user made: a stale VCN_STATE can name a dir that another user made since.
+  [[ ! -L $VCN_STATE/run.env && -O $VCN_STATE/run.env ]] || die "refusing $VCN_STATE/run.env: it is a symlink or owned by another user"
   [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
+  # A run that an older vcn.sh started has no JQ_BIN.
+  [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
 }
 
 # agent-tty needs Node 24+, so it runs on the repo's mise node. During a teardown (own_session set) it gets a session of
@@ -273,9 +277,10 @@ cmd_cleanup() {
   ((${#pids[@]} == 0)) || die "processes from this run still alive: ${pids[*]}"
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
   [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
-  # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the home path) at its first call, but
-  # ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK.
-  rmdir "/tmp/agent-tty/$(printf %s "$ATT_HOME" | sha256sum | cut -c1-8)" 2>/dev/null || true
+  # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the real path of the home) at its first
+  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. A symlink in TMPDIR makes the
+  # real path differ from ATT_HOME.
+  rmdir "/tmp/agent-tty/$(printf %s "$(realpath -m -- "$ATT_HOME")" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
   echo "vcn: cleanup ok, no processes left; evidence kept in $OUT"
@@ -446,6 +451,8 @@ cmd_launch() {
     die "$out is not a directory; pick a fresh VERIFY_OUT"
   fi
   [[ ${TMPDIR:-/tmp} == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
+  # A dir that is missing now could be made by another user after the check below and before mktemp.
+  [[ -d ${TMPDIR:-/tmp} ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
   # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
   why=$(unsafe_above "${TMPDIR:-/tmp}/vcn" "the state dir")

@@ -9,6 +9,10 @@
 #   setsid-resolved   a failing setsid on PATH and a working one that only `mise which setsid` names: a launch that
 #                     fails by itself still saves its failure screen and the final evidence, and runs `agent-tty home
 #                     forget`, all through the setsid that mise names
+#   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
+#                     reaches every call site, which the two cases above do not)
+#   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
+#   load-symlink      a run.env that is a symlink (to a file this user owns) is refused, not sourced
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
@@ -27,6 +31,8 @@
 #   signal-doctor     the same three signals while `agent-tty doctor` runs: exit 143, no state dir, the full cleanup
 #                     ran (it calls `agent-tty home forget`), launch printed `vcn: launch failed` to its caller, and the
 #                     socket directory that agent-tty made under the run's home is gone
+#   signal-symlink    the same, with a TMPDIR that is a symlink: agent-tty names the socket directory after the real path
+#                     of the home, and the cleanup removes that one
 #   signal-mktemp     the same three signals while mktemp is making the state dir: exit 143, no state dir left
 #   signal-twice      a second SIGTERM, SIGINT or SIGHUP while the teardown is held in `agent-tty home forget` (or, for
 #                     the early teardown, in the `rm` of the state dir): the teardown still finishes (exit 143, no state
@@ -39,8 +45,8 @@
 #   signal-printed    SIGTERM while launch is blocked printing VCN_STATE (stdout is a full pipe): exit 143, no state dir
 #   signal-failed     a launch that fails by itself (initialize answers an error), then SIGTERM to its process group
 #                     while the real `agent-tty snapshot` of the failure screen runs: launch exits 1, screen has text
-#   decoy-state       a /tmp/vcn.* dir whose run.env would touch a marker: every launch of this proof runs with a
-#                     private TMPDIR, so find_state does not pick the decoy and stop_run does not run it
+#   decoy-state       a /tmp/vcn.* dir (made with mktemp) whose run.env would touch a marker: every launch of this proof
+#                     runs with a private TMPDIR, so find_state does not pick the decoy and stop_run does not run it
 #   signal-gap        a launch that fails by itself, with SIGTERM, SIGINT and SIGHUP sent while launch_failed is held
 #                     before its first command: launch tears the run down (exit 143, its failure line, no state dir)
 #   cleanup-no-agent-tty  `vcn.sh cleanup` of a run that stopped before an agent-tty passed doctor, so run.env has no
@@ -69,7 +75,7 @@ cleanup_all() {
     env PATH="$live_path" VCN_STATE="$live_state" "$V" cleanup >/dev/null 2>&1 || true
   fi
   stop_run "$st"
-  [[ -z $decoy ]] || rm -rf -- "$decoy"
+  if [[ $decoy == /tmp/vcn.?????? ]]; then rm -rf -- "$decoy"; fi
   rm -rf "$TMP"
 }
 trap cleanup_all EXIT
@@ -648,8 +654,7 @@ signal_gap_case() {
 decoy_case() {
   local name=decoy-state gate=$TMP/gate-decoy marker=$TMP/decoy-marker why=""
   mkdir "$gate"
-  decoy=/tmp/vcn.zzzzzzzz$RANDOM$RANDOM
-  mkdir -m 700 "$decoy"
+  decoy=$(mktemp -d /tmp/vcn.XXXXXX)
   printf 'OUT=%s\ntouch %s\n' "$TMP/out-$name" "$marker" >"$decoy/run.env"
   start_launch "$name" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
   wait_for "$name" "$gate/reached"
@@ -660,7 +665,7 @@ decoy_case() {
   [[ -f $decoy/run.env ]] || why="${why:+$why, }stop_run removed the decoy"
   kill -TERM -- "-$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  rm -rf -- "$decoy"
+  if [[ $decoy == /tmp/vcn.?????? ]]; then rm -rf -- "$decoy"; fi
   decoy=""
   [[ -z $why ]] || fail "$name" "$why"
   echo "ok $name: a /tmp/vcn.* decoy was neither picked by find_state nor run by stop_run"
@@ -683,6 +688,67 @@ setsid_resolved_case() {
   stop_run "$state"
   [[ -z $why ]] || fail "$name" "$why: $out"
   echo "ok $name: a launch that failed by itself saved its screens and forgot its home through the setsid that mise names"
+  cases=$((cases + 1))
+}
+
+# jq-resolved and setsid-resolved reach only the calls that a launch makes. This case reads the source: any word jq or
+# setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it. The
+# pattern is checked on a known bare call first, so a pattern that finds nothing cannot pass.
+bare_tools_case() {
+  local name=no-bare-tools hits word_re='(^|[^[:alnum:]_./$-])(jq|setsid)($|[^[:alnum:]_-])'
+  grep -qE "$word_re" <<<'  x=$(y | jq -r .z)' || fail "$name" "the pattern misses a known bare jq"
+  hits=$(grep -nE "$word_re" "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '=\$\(bin (jq|setsid)\)$' || true)
+  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare jq or setsid: $(tr '\n' ' ' <<<"$hits")"
+  echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
+  cases=$((cases + 1))
+}
+
+# The run.env of a run that an older vcn.sh started has no JQ_BIN. A command that needs jq must resolve it again.
+jq_old_run_case() {
+  local name=jq-old-run dir out rc=0
+  dir=$(mktemp -d "$priv/vcn.XXXXXX")
+  mkdir "$TMP/out-$name"
+  printf '%s=%s\n' VCN_STATE "$dir" OUT "$TMP/out-$name" >"$dir/run.env"
+  out=$(env PATH="$base" VCN_STATE="$dir" "$V" rpc old1 ping 2>&1) || rc=$?
+  [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  ((rc == 0)) || fail "$name" "rpc on a run.env without JQ_BIN exited $rc: $out"
+  grep -q '"id":"old1"' "$TMP/out-$name/ws-out.jsonl" || fail "$name" "rpc wrote no request: $out"
+  echo "ok $name: a run.env without JQ_BIN still runs jq"
+  cases=$((cases + 1))
+}
+
+# load sources run.env, so it refuses one that is a symlink, here to a file this user owns that would touch a marker.
+load_symlink_case() {
+  local name=load-symlink dir marker=$TMP/load-marker out rc=0
+  dir=$(mktemp -d "$priv/vcn.XXXXXX")
+  printf 'touch %s\n' "$marker" >"$TMP/linked-run.env"
+  ln -s "$TMP/linked-run.env" "$dir/run.env"
+  out=$(env PATH="$base" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+  [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  [[ ! -e $marker ]] || fail "$name" "vcn.sh sourced the symlinked run.env"
+  ((rc == 1)) && [[ $out == *"refusing $dir/run.env: it is a symlink or owned by another user"* ]] ||
+    fail "$name" "cleanup exited $rc, wanted 1 with the refusal: $out"
+  echo "ok $name: a symlinked run.env was refused and not sourced"
+  cases=$((cases + 1))
+}
+
+# TMPDIR holds a symlink. agent-tty names its socket directory after the real path of the home, so a signal before
+# `inspect` leaves that directory unless the cleanup hashes the real path too.
+signal_symlink_case() {
+  local name=signal-symlink gate=$TMP/gate-signal-symlink sockdir
+  ln -s "$priv" "$TMP/priv-link"
+  mkdir "$gate"
+  start_launch "$name" "$TMP/mise:$TMP/slow:$base" GATE="$gate" REAL_ATT="$good" TMPDIR="$TMP/priv-link"
+  wait_for "$name" "$gate/reached"
+  find_state "$name"
+  sockdir=/tmp/agent-tty/$(printf %s "$st/att" | sha256sum | cut -c1-8)
+  [[ -d $sockdir ]] || fail "$name" "the real agent-tty made no $sockdir, so the proof cannot show launch removes it"
+  signal_group "$name" TERM "$st"
+  [[ ! -e $sockdir ]] || {
+    rmdir "$sockdir"
+    fail "$name" "launch left the socket dir $sockdir of its agent-tty home"
+  }
+  echo "ok $name: SIGTERM with a symlink in TMPDIR removed the socket dir that agent-tty named after the real home path"
   cases=$((cases + 1))
 }
 
@@ -712,5 +778,9 @@ signal_failed_case
 signal_gap_case
 cleanup_no_agent_tty_case
 setsid_resolved_case
+bare_tools_case
+jq_old_run_case
+load_symlink_case
+signal_symlink_case
 sigterm_case
 echo "CASES $cases"
