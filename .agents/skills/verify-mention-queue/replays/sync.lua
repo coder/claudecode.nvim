@@ -1,11 +1,9 @@
--- Waits until Claude's handshake armed the flush (the 600 ms connection_wait_delay) while the mention is still queued:
--- the point the original replays reach with "the queue is empty" under the old design.
+-- Waits until Claude's handshake started the 600 ms connection_wait_delay wait for the queued mention. Since #454 the
+-- mention stays queued and the handshake arms the flush timer. Before #454 the handshake moved the queue into a
+-- deferred batch, so the queue turned empty. Either point lets a replay act inside the wait on both designs.
 return function(L)
-  return L.wait_for(
-    1000,
-    "the handshake arms the flush for after the 600 ms wait; the mention is still queued",
-    function()
-      return require("claudecode").state.mention_timer ~= nil and L.queue_len() >= 1
-    end
-  )
+  return L.wait_for(1000, "the handshake starts the 600 ms wait for the queued mention", function()
+    local queued = L.queue_len()
+    return (require("claudecode").state.mention_timer ~= nil and queued >= 1) or queued == 0
+  end)
 end
