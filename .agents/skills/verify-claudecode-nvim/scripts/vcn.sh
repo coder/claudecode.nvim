@@ -312,8 +312,9 @@ cmd_cleanup() {
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
   [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
   # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the real path of the home) at its first
-  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK.
-  rmdir "/tmp/agent-tty/$(printf %s "$ATT_HOME" | sha256sum | cut -c1-8)" 2>/dev/null || true
+  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. ATT_HOME is $VCN_STATE/att,
+  # and load refuses a VCN_STATE that is not its own real path, so the path needs no resolving here.
+  rmdir "/tmp/agent-tty/$(printf %s "$VCN_STATE/att" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
   echo "vcn: cleanup ok, no processes left; evidence kept in $OUT"
@@ -505,6 +506,7 @@ cmd_launch() {
   fi
   tmpdir=${TMPDIR:-/tmp}
   [[ $tmpdir == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
+  # As for VERIFY_OUT, a path that has a . or .. part is refused, not resolved: TMPDIR must already be the dir it names.
   [[ /$tmpdir/ != */./* && /$tmpdir/ != */../* ]] || die "TMPDIR=$tmpdir has a . or .. part"
   # Resolve once and use only the result, so the check below and mktemp see the same path. A dir that is missing now could
   # be made by another user after the check and before mktemp.
