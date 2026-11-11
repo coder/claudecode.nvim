@@ -73,6 +73,19 @@ describe("tests.mocks.vim wait", function()
     assert.are.equal(101, polls)
   end)
 
+  it("calls a table that has a __call function, as Neovim's vim.wait does", function()
+    local polls = 0
+    local condition = setmetatable({}, {
+      __call = function()
+        polls = polls + 1
+        return polls == 3
+      end,
+    })
+
+    assert.is_true(mock_vim.wait(1000, condition, 10))
+    assert.are.equal(3, polls)
+  end)
+
   it("returns false without a condition", function()
     assert.is_false(mock_vim.wait(50))
   end)
@@ -113,8 +126,15 @@ describe("tests.mocks.vim wait", function()
       return tostring(err)
     end
 
-    it("rejects a condition that is not a function", function()
-      assert.is_truthy(wait_error(100, false):find("vim.wait: condition must be a function", 1, true))
+    it("rejects a condition that is not callable", function()
+      assert.is_truthy(wait_error(100, false):find("vim.wait: condition must be callable", 1, true))
+    end)
+
+    it("rejects a table without a __call function", function()
+      local message = "vim.wait: condition must be callable"
+
+      assert.is_truthy(wait_error(100, {}):find(message, 1, true))
+      assert.is_truthy(wait_error(100, setmetatable({}, { __call = {} })):find(message, 1, true))
     end)
 
     it("rejects a timeout that is not a number", function()

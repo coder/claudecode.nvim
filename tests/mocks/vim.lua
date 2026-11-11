@@ -59,6 +59,12 @@ if _G.spy == nil then
   }
 end
 
+---A function, or a value whose metatable has a `__call` function, as Neovim's vim.wait accepts.
+local function is_callable(value)
+  local metatable = getmetatable(value)
+  return type(value) == "function" or (type(metatable) == "table" and type(metatable.__call) == "function")
+end
+
 local vim = {
   _buffers = {},
   _windows = { [1000] = { buf = 1, width = 80 } }, -- winid -> { buf, width, cursor, config }
@@ -921,7 +927,7 @@ local vim = {
   -- Additional missing vim functions
   wait = function(timeout, condition, interval, fast_only)
     assert(timeout == nil or type(timeout) == "number", "vim.wait: timeout must be a number")
-    assert(condition == nil or type(condition) == "function", "vim.wait: condition must be a function")
+    assert(condition == nil or is_callable(condition), "vim.wait: condition must be callable")
     assert(interval == nil or type(interval) == "number", "vim.wait: interval must be a number")
     timeout = timeout or 1000
     interval = interval or 10
