@@ -102,6 +102,27 @@ describe("a diff tab that :tabclose cannot close because of a modified buffer of
     assert.equal(0, child.leftovers().handlers)
   end)
 
+  it("leaves no WinClosed autocmd of the terminal window it closed", function()
+    child.start({ layout = "vertical", show_terminal_again = true })
+    open_diff_with_modified_user_buffer(true)
+    child.call(
+      [[_G.terminal_win_id = require("claudecode.diff")._get_active_diffs()["first diff"].terminal_win_in_new_tab]]
+    )
+    local function terminal_window_autocmds()
+      return child.call([[
+        local pattern = tostring(_G.terminal_win_id)
+        return #vim.api.nvim_get_autocmds({ group = "ClaudeCodeMCPDiff", event = "WinClosed", pattern = pattern })
+      ]])
+    end
+    assert.equal(1, terminal_window_autocmds())
+
+    child.close_diff("first diff")
+    child.state()
+
+    assert.equal(0, tab_leftovers(2).term)
+    assert.equal(0, terminal_window_autocmds())
+  end)
+
   local function expect_closed_without_error_or_leftovers()
     local leftovers = child.call([[
       return {
@@ -162,7 +183,7 @@ describe("a diff tab that :tabclose cannot close because of a modified buffer of
     )
   end
 
-  it("survives an autocmd of the user's that closes the tab while the cursor leaves the terminal", function()
+  it("survives an autocmd of the user's that closes the tab while the cursor leaves the proposal window", function()
     child.start({ layout = "vertical", show_terminal_again = true })
     open_diff_with_modified_user_buffer(false)
     child.call([[
@@ -173,8 +194,9 @@ describe("a diff tab that :tabclose cannot close because of a modified buffer of
       vim.cmd("tabclose")
       vim.api.nvim_set_current_tabpage(_G.diff_tab)
     ]])
-    child.focus_terminal_in_tab()
-    child.leave_terminal_mode()
+    child.call(
+      [[vim.api.nvim_set_current_win(require("claudecode.diff")._get_active_diffs()["first diff"].new_window)]]
+    )
     child.call([[
       _G.ran = false
       vim.api.nvim_create_autocmd("BufEnter", {

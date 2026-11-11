@@ -29,9 +29,9 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
           assert.equal(2, leftovers.windows)
           assert.equal(0, leftovers.handlers)
           assert.is_true(leftovers.job_running)
-          assert.is_false(
+          assert.is_true(
             child.call([[return vim.api.nvim_win_is_valid(_G.diff_terminal_win)]]),
-            "the diff's terminal window must close"
+            "the diff's terminal window must stay: it is the only window that shows the terminal, and the close shows it again"
           )
         end
 

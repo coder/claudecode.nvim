@@ -68,7 +68,8 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
     ))
   end
 
-  ---Records every event that shows or leaves a window or a buffer, and whether a window of the diff was still open.
+  ---Records every event that shows or leaves a window or a buffer, and whether the diff's terminal window and its proposal
+  ---window were still open.
   local function record_events()
     child.call([[
       _G.fired = {}
@@ -87,7 +88,8 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
             table.insert(_G.fired, {
               event = event,
               buffer = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ":t"),
-              diff_window_open = terminal_open or proposal_open,
+              terminal_open = terminal_open,
+              proposal_open = proposal_open,
             })
           end,
         })
@@ -96,7 +98,7 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
   end
 
   for _, layout in ipairs({ "vertical", "unified" }) do
-    it("fires only WinEnter and BufEnter, after the windows of the diff closed, with layout = " .. layout, function()
+    it("fires only WinEnter and BufEnter, once the proposal window is gone, with layout = " .. layout, function()
       open_in_last_tab(layout, true)
       record_events()
 
@@ -106,11 +108,30 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
 
       local expected_buffer = layout == "vertical" and "a.txt" or ""
       assert.same({
-        { event = "WinEnter", buffer = expected_buffer, diff_window_open = false },
-        { event = "BufEnter", buffer = expected_buffer, diff_window_open = false },
+        { event = "WinEnter", buffer = expected_buffer, terminal_open = true, proposal_open = false },
+        { event = "BufEnter", buffer = expected_buffer, terminal_open = true, proposal_open = false },
       }, fired)
       assert.equal(0, child.leftovers().in_diff_mode)
     end)
+
+    it(
+      "fires only WinEnter and BufEnter, once the terminal window is gone too, when the user hid the terminal before the diff, with layout = "
+        .. layout,
+      function()
+        open_in_last_tab(layout, true, { hide_original_terminal = true })
+        record_events()
+
+        child.close_diff("first diff")
+        child.state()
+        local fired = child.call([[return _G.fired]])
+
+        local expected_buffer = layout == "vertical" and "a.txt" or ""
+        assert.same({
+          { event = "WinEnter", buffer = expected_buffer, terminal_open = false, proposal_open = false },
+          { event = "BufEnter", buffer = expected_buffer, terminal_open = false, proposal_open = false },
+        }, fired)
+      end
+    )
 
     it("fires no event when the cursor was in a window of the user's, with layout = " .. layout, function()
       open_in_last_tab(layout, false)
@@ -128,7 +149,7 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
     it(
       "starts no insert when an autocmd enters a terminal at the end, with Snacks' auto_insert, layout = " .. layout,
       function()
-        open_in_last_tab(layout, true, { snacks_auto_insert = true })
+        open_in_last_tab(layout, true, { snacks_auto_insert = true, hide_original_terminal = true })
         user_autocmd(
           "WinEnter",
           [[
@@ -176,7 +197,10 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
     child.close_diff("first diff")
     child.state()
 
-    assert.same({ { event = "BufEnter", buffer = "", diff_window_open = false } }, child.call([[return _G.fired]]))
+    assert.same(
+      { { event = "BufEnter", buffer = "", terminal_open = true, proposal_open = false } },
+      child.call([[return _G.fired]])
+    )
   end)
 
   it(
@@ -192,8 +216,8 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
 
       assert.is_true(child.call([[return vim.api.nvim_get_current_win() == _G.file_win]]))
       assert.same({
-        { event = "WinEnter", buffer = "a.txt", diff_window_open = false },
-        { event = "BufEnter", buffer = "a.txt", diff_window_open = false },
+        { event = "WinEnter", buffer = "a.txt", terminal_open = true, proposal_open = false },
+        { event = "BufEnter", buffer = "a.txt", terminal_open = true, proposal_open = false },
       }, child.call([[return _G.fired]]))
     end
   )
@@ -226,29 +250,25 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
     assert.same(before, after.lines)
   end)
 
-  it("does not let a BufLeave autocmd that enters a window of the user's make it show the empty buffer", function()
-    open_in_last_tab("unified", true)
-    local before = open_user_window()
-    user_autocmd("BufLeave", [[vim.api.nvim_set_current_win(_G.user_win)]])
-
-    child.close_diff("first diff")
-    child.state()
-    local after = child.call([[
-      local valid = vim.api.nvim_win_is_valid(_G.user_win)
-      return {
-        ran = _G.ran,
-        win_valid = valid,
-        shown_buf = valid and vim.api.nvim_win_get_buf(_G.user_win) or -1,
-        user_buf = _G.user_buf,
-        lines = vim.api.nvim_buf_get_lines(_G.user_buf, 0, -1, false),
-        modified = vim.bo[_G.user_buf].modified,
-      }
+  it(
+    "moves a cursor in the proposal window to the window the diff stored for the file, not to a window of the user's",
+    function()
+      open_in_last_tab("vertical", false)
+      child.call([[
+      vim.fn.writefile({ "one", "two" }, _G.dir .. "/other.txt")
+      vim.api.nvim_win_call(_G.proposal_win, function()
+        vim.cmd("split " .. vim.fn.fnameescape(_G.dir .. "/other.txt"))
+        _G.user_win = vim.api.nvim_get_current_win()
+      end)
+      _G.file_win = require("claudecode.diff")._get_active_diffs()["first diff"].target_window
     ]])
+      assert.is_true(child.call([[return vim.api.nvim_get_current_win() == _G.proposal_win]]))
 
-    assert.is_false(after.ran, "no BufLeave autocmd may run while the release swaps the proposal buffer out")
-    assert.is_true(after.win_valid)
-    assert.equal(after.user_buf, after.shown_buf, "the window of the user's file must keep showing it")
-    assert.same(before, after.lines)
-    assert.is_true(after.modified)
-  end)
+      child.close_diff("first diff")
+      local state = child.state()
+
+      assert.is_true(child.call([[return vim.api.nvim_get_current_win() == _G.file_win]]))
+      assert.equal("n", state.mode)
+    end
+  )
 end)

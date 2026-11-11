@@ -1367,13 +1367,16 @@ end
 ---terminal window, which takes its `BufEnter` handler along and keeps the cursor out of the terminal, the proposal window
 ---of a split diff, and the diff mode of the windows that show the file. A window of the diff, the proposal or the
 ---terminal, is only touched while it still shows the buffer the diff put there: a window that the user switched to a file
----of their own stays as it is, and the terminal handler goes either way. A cursor in a window that closes goes to the
----window the diff stored for the file, which a unified diff gives an empty buffer. The caller deletes the proposal buffer.
+---of their own stays as it is, and the terminal handler goes either way. The terminal window also stays when it is the
+---only one that shows the terminal and the cleanup shows the terminal again afterwards: the provider's new window fires
+---`BufLeave`, and an autocmd of the user's that enters a window then makes the provider put the terminal into it. A
+---cursor in a window that closes goes to the window the diff stored for the file, which a unified diff gives an empty
+---buffer. The caller deletes the proposal buffer.
 ---An autocmd of the user's can run inside any call that changes a window or a buffer, after the check that made the call
 ---safe, and switch a window of the diff to a file of their own, enter the terminal, or close the tab. So the whole release
 ---runs with every autocmd blocked (`utils.without_autocmds`), after a check that the tab page is still there. Afterwards,
----with no window of the diff left, it fires `WinEnter` and `BufEnter` for the window and the buffer the cursor ends in, if
----they changed.
+---once every close is done, it fires `WinEnter` and `BufEnter` for the window and the buffer the cursor ends in, if they
+---changed.
 ---@param diff_data table
 local function release_surviving_diff_tab(diff_data)
   local tab = diff_data.new_tab_number
@@ -1397,6 +1400,19 @@ local function release_surviving_diff_tab(diff_data)
   end
   local function file_window()
     return in_tab(diff_data.target_window) and diff_data.target_window or nil
+  end
+  ---`ensure_visible` runs after the release when the terminal was shown in the original tab, and it opens a window when no
+  ---other one shows the terminal on screen (a float that Snacks parked with `hide` still lists the buffer).
+  local function close_would_reopen_terminal(win)
+    if not diff_data.had_terminal_in_original then
+      return false
+    end
+    for _, other in ipairs(vim.fn.win_findbuf(diff_data.terminal_buffer_in_new_tab)) do
+      if other ~= win and vim.api.nvim_win_get_config(other).hide ~= true then
+        return false
+      end
+    end
+    return true
   end
 
   if diff_data.terminal_enter_handler then
@@ -1439,8 +1455,14 @@ local function release_surviving_diff_tab(diff_data)
     end
 
     local terminal_win = terminal_window()
-    if terminal_win then
-      pcall(vim.api.nvim_win_close, terminal_win, false)
+    if terminal_win and not close_would_reopen_terminal(terminal_win) then
+      if pcall(vim.api.nvim_win_close, terminal_win, false) then
+        pcall(vim.api.nvim_clear_autocmds, {
+          group = get_autocmd_group(),
+          event = "WinClosed",
+          pattern = tostring(terminal_win),
+        })
+      end
     end
     local remaining_proposal_win = proposal_window()
     if remaining_proposal_win then
