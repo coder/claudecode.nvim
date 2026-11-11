@@ -61,6 +61,7 @@ covered_block register_state "$DIFF" '^function M\._register_diff_state\('
 covered_block windows_locked "$DIFF" '^local function windows_locked\('
 covered_block cleanup_state "$DIFF" '^function M\._cleanup_diff_state\('
 covered_block diff_autocmds "$DIFF" '^local function register_diff_autocmds\('
+covered_block write_proposal "$DIFF" '^function M\._write_proposal\('
 covered_block reject_when_hidden "$DIFF" '^function M\._register_reject_when_hidden\('
 covered_block deny_current "$DIFF" '^function M\.deny_current_diff\('
 

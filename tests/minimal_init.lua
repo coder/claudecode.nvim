@@ -1,5 +1,13 @@
 -- Minimal Neovim configuration for tests
 
+-- Put the stub tests/bin/claude first on PATH so no test starts the host's real claude. Neovims that plenary's
+-- test_file starts load this file again with the inherited PATH, so prepend only once.
+local stub_dir = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/bin"
+local path = vim.env.PATH or ""
+if path:sub(1, #stub_dir + 1) ~= stub_dir .. ":" then
+  vim.env.PATH = stub_dir .. (path ~= "" and ":" .. path or "")
+end
+
 -- Set up package path
 local package_root = vim.fn.stdpath("data") .. "/site/pack/vendor/start/"
 local install_path = package_root .. "plenary.nvim"
