@@ -85,6 +85,16 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
   local tool_name = params.name
   local input = params.arguments
 
+  if type(tool_name) ~= "string" then
+    return {
+      error = {
+        code = M.ERROR_CODES.INVALID_PARAMS,
+        message = "Invalid params",
+        data = "Missing or invalid parameter: name (a string is required)",
+      },
+    }
+  end
+
   if not M.tools[tool_name] then
     return {
       error = {
