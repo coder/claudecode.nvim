@@ -132,6 +132,18 @@ describe("openDiff when the diff setup fails", function()
     assert_still_there(wins, bufs)
   end)
 
+  it("closes the window that the setup split when the (NEW FILE) buffer name is taken", function()
+    use()
+    vim.cmd("edit " .. vim.fn.fnameescape(path("b.txt")))
+    vim.api.nvim_buf_set_name(vim.api.nvim_create_buf(true, false), path("new.txt") .. " (NEW FILE)")
+    local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
+
+    open_diff_that_fails("new.txt", "brand new\n")
+
+    assert.same(wins, vim.api.nvim_list_wins())
+    assert_still_there(wins, bufs)
+  end)
+
   it("deletes the (NEW FILE) buffer that a new file's setup made", function()
     use()
     vim.cmd("edit " .. vim.fn.fnameescape(path("b.txt")))
