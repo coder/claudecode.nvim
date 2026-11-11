@@ -62,15 +62,30 @@ describe("tests.mocks.vim wait", function()
     assert.are.equal(11, polls)
   end)
 
-  it("defaults to a 1000 ms timeout and a 10 ms interval", function()
+  it("defaults to a 10 ms interval", function()
     local polls = 0
 
-    mock_vim.wait(nil, function()
+    mock_vim.wait(1000, function()
       polls = polls + 1
       return false
     end)
 
     assert.are.equal(101, polls)
+  end)
+
+  it("polls once for a timeout of 0, as Neovim does", function()
+    local polls = 0
+
+    local ok = mock_vim.wait(0, function()
+      polls = polls + 1
+      return false
+    end)
+
+    assert.is_false(ok)
+    assert.are.equal(1, polls)
+    assert.is_true(mock_vim.wait(0, function()
+      return true
+    end))
   end)
 
   it("calls a table that has a __call function, as Neovim's vim.wait does", function()
@@ -138,10 +153,6 @@ describe("tests.mocks.vim wait", function()
     local zero = never_true_until(1000)
     assert.is_false(mock_vim.wait(100, zero.condition, 0))
     assert.are.equal(101, zero.polls)
-
-    local negative = never_true_until(1000)
-    assert.is_false(mock_vim.wait(100, negative.condition, -5))
-    assert.are.equal(101, negative.polls)
   end)
 
   describe("argument checks", function()
@@ -168,6 +179,32 @@ describe("tests.mocks.vim wait", function()
       end)
 
       assert.is_truthy(err:find("vim.wait: timeout must be a number", 1, true))
+    end)
+
+    it("rejects a missing timeout, as Neovim does", function()
+      local message = "vim.wait: timeout must be a number"
+
+      assert.is_truthy(wait_error():find(message, 1, true))
+      assert.is_truthy(wait_error(nil, function()
+        return true
+      end):find(message, 1, true))
+    end)
+
+    it("rejects a negative timeout, as Neovim does", function()
+      local message = "vim.wait: timeout must be >= 0"
+
+      assert.is_truthy(wait_error(-1, function()
+        return true
+      end):find(message, 1, true))
+      assert.is_truthy(wait_error(-0.5):find(message, 1, true))
+    end)
+
+    it("rejects a negative interval, as Neovim does", function()
+      local err = wait_error(20, function()
+        return true
+      end, -1)
+
+      assert.is_truthy(err:find("vim.wait: interval must be >= 0", 1, true))
     end)
 
     it("rejects an interval that is not a number", function()

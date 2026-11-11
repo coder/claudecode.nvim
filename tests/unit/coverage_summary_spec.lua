@@ -118,7 +118,7 @@ describe("scripts/coverage-summary.sh", function()
 
     assert.are.equal(
       heading
-        .. "❌ luacov.report.out repeats a path (2 extra rows, first `lua/claudecode/a.lua`). Check `modules` in .luacov.\n",
+        .. "❌ luacov.report.out repeats a path (2 extra rows, first `lua/claudecode/a.lua`). A spec loads plugin files by a second path, such as a `./lua/?.lua` entry on package.path.\n",
       stdout
     )
     assert.are.equal(1, code)
@@ -136,7 +136,7 @@ describe("scripts/coverage-summary.sh", function()
 
     assert.are.equal(
       heading
-        .. "❌ luacov.report.out repeats a path (1 extra rows, first `lua/claudecode/a.lua`). Check `modules` in .luacov.\n",
+        .. "❌ luacov.report.out repeats a path (1 extra rows, first `lua/claudecode/a.lua`). A spec loads plugin files by a second path, such as a `./lua/?.lua` entry on package.path.\n",
       stdout
     )
     assert.are.equal(1, code)
