@@ -123,8 +123,8 @@ mkdir -m 700 "$TMP/dd" "$TMP/dd/y" "$TMP/dd/real"
 ln -s "$TMP/dd/real" "$TMP/dd/L"
 refused tmp-dotdot "TMPDIR=$TMP/dd/L/../y has a . or .. part" TMPDIR="$TMP/dd/L/../y" VERIFY_OUT="$TMP/tmp-out"
 refused tmp-dot "TMPDIR=$TMP/dd/./y has a . or .. part" TMPDIR="$TMP/dd/./y" VERIFY_OUT="$TMP/tmp-out"
-# A dir that others can write is refused whatever its name ends in. A twin symlink with the name cut at the trailing
-# space sits next to it: a walk that read the name back from a line of stat output tested the twin and passed it.
+# A twin symlink with the name cut at the trailing space sits next to it: a walk that read the name back from a line of
+# stat output tested the twin and passed it.
 mkdir -m 700 "$TMP/sp"
 mkdir -m 777 "$TMP/sp/q "
 ln -s "$TMP/sp" "$TMP/sp/q"

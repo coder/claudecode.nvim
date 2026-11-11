@@ -13,14 +13,14 @@
 #                     reaches every call site, which the two cases above do not)
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
 #   state-resolved    a VCN_STATE with a . or .. part, a symlink in its path, or a symlink as its last part is refused, not
-#                     sourced: after the check another user could repoint the symlink
+#                     sourced
 #   state-mode        a VCN_STATE that is group-writable is refused, not sourced
 #   state-parent      a VCN_STATE under a dir that others can write without the sticky bit is refused, not sourced
 #   state-names       the same, when the name of that dir ends in a space, a tab or a newline, and a symlink with the
 #                     shorter name sits next to it
 #   state-env         a state_checked in the caller's environment does not skip the check
 #   state-owner       a VCN_STATE that another user owns, with a run.env in it, is refused, not sourced (a bwrap user
-#                     namespace with a read-only overlay stands in for the other user; SKIP where bwrap is missing)
+#                     namespace with a read-only overlay stands in for the other user; SKIP where bwrap cannot make it)
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
@@ -744,8 +744,6 @@ marker_state_dir() {
   printf '%s' "$dir"
 }
 
-# After the check of $VCN_STATE another user could repoint a symlink in its path, and source and rm -rf would follow it,
-# so a VCN_STATE must be its own resolved path. Each of the three has a run.env that touches the marker.
 state_resolved_case() {
   local name=state-resolved rdir=$TMP/res-case real dotted linked final
   mkdir -m 700 "$rdir" "$rdir/y" "$rdir/real"
@@ -784,9 +782,8 @@ state_parent_case() {
   cases=$((cases + 1))
 }
 
-# A dir above the state dir that others can write is refused whatever its name ends in. stat prints the mode of such a dir
-# in a line, and a name read back from the line loses a trailing space or tab and splits at a newline: the walk then
-# tested the symlink with the shorter name, which sits next to the dir, and passed it.
+# A twin symlink with the shorter name sits next to each dir: a walk that read the name back from a line of stat output
+# lost a trailing space or tab, split at a newline, tested the twin and passed it.
 state_names_case() {
   local name=state-names ndir=$TMP/names stem suffix loose dir
   mkdir -m 700 "$ndir"
@@ -807,7 +804,6 @@ state_names_case() {
   cases=$((cases + 1))
 }
 
-# load records that its check passed, in a variable that a caller's environment must not be able to preset.
 state_env_case() {
   local name=state-env dir
   dir=$(marker_state_dir "$priv")
@@ -864,8 +860,6 @@ state_owner_case() {
   cases=$((cases + 1))
 }
 
-# TMPDIR holds a symlink. Launch resolves it, so the agent-tty home has no symlink in its path, and the socket directory
-# that agent-tty names after the real path of the home is the one the cleanup removes.
 signal_symlink_case() {
   local name=signal-symlink gate=$TMP/gate-signal-symlink sockdir
   ln -s "$priv" "$TMP/priv-link"

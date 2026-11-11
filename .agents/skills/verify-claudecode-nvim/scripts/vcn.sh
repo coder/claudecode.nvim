@@ -49,7 +49,7 @@ env_line() { printf '%s=%q\n' "$1" "$2"; }
 
 # load sources run.env, so $VCN_STATE must be a dir that only this user can write, in a place where no other user can swap
 # it. After that one check nothing in it can change under another user's hand. A stale VCN_STATE can name a dir or
-# symlink that another user made at a freed name. stat without -L describes a symlink itself.
+# symlink that another user made at a freed name.
 unsafe_state() {
   local uid mode real
   # A path with a symlink or a . or .. part could be pointed elsewhere by another user after the check, and source and rm -rf
@@ -312,8 +312,7 @@ cmd_cleanup() {
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
   [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
   # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the real path of the home) at its first
-  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. ATT_HOME is its own real path,
-  # because launch resolves TMPDIR and load refuses a VCN_STATE that is not its own realpath.
+  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK.
   rmdir "/tmp/agent-tty/$(printf %s "$ATT_HOME" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
@@ -367,9 +366,7 @@ unsafe_dir() {
   fi
 }
 
-# Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the dirs above it as given
-# and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the message (default: the
-# evidence dir).
+# Another user who can write a dir above <dir> can rename <dir> away after the checks.
 unsafe_above() {
   local logical="" resolved="" why
   IFS= read -r -d "" logical < <(realpath -smz -- "$1/..") || true
@@ -381,10 +378,9 @@ unsafe_above() {
   [[ -z $why ]] || echo "$why"
 }
 
-# Prints why <start> or a dir above it is unsafe, or nothing: owned by another user (root is fine), or writable by others
-# without the sticky bit. The dirs are the entries of a list that this function builds from <start>. stat prints one record
-# per dir, mode, owner and type and no name, so no path is ever read back from a line of text: a name with a trailing space,
-# a tab or a newline would be cut, and a twin symlink with the shorter name tested in its place.
+# stat prints one record per dir, mode, owner and type and no name, so no path is ever read back from a line of text:
+# a name with a trailing space, a tab or a newline would be cut, and a twin symlink with the shorter name tested in its
+# place.
 unsafe_walk() {
   local dir=$1 what=$2 mode uid type rec i=0 dirs=() existing=()
   while :; do
@@ -509,14 +505,13 @@ cmd_launch() {
   fi
   tmpdir=${TMPDIR:-/tmp}
   [[ $tmpdir == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
-  # A . or .. after a symlink would hide that symlink from unsafe_above, as it does for VERIFY_OUT.
   [[ /$tmpdir/ != */./* && /$tmpdir/ != */../* ]] || die "TMPDIR=$tmpdir has a . or .. part"
   # Resolve once and use only the result, so the check below and mktemp see the same path. A dir that is missing now could
   # be made by another user after the check and before mktemp.
   IFS= read -r -d "" tmpdir < <(realpath -ez -- "$tmpdir" 2>/dev/null) || tmpdir=""
   [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
-  # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
+  # cleanup and every other command source.
   why=$(unsafe_walk "$tmpdir" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
