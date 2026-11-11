@@ -112,7 +112,7 @@ The first model of this queue, on the code before #454, broke five of its six ru
 8. `FlushDelivers`, the handshake window (#454 finding D, `handshake-window.lua`). The flush hook ran at the TCP accept, before the WebSocket handshake. A send in between waited for the timeout while Claude was connected. Fixed in #454 with `on_open`. Checked by `HandshakeFlushes`.
 9. The path of a queued mention (#454 finding G). A queued mention kept the raw path you gave, while a connected send went through `_format_path_for_at_mention`. The model has no paths. Fixed in #454. The `G:` tests pin it.
 
-Review of the fixes found three more, the model's second version found one, and #480 fixed them all:
+Review of the fixes found four more, this model's second version found one, and #480 fixed all five:
 
 10. A second client's handshakes postponed a flush that was due for a connected Claude (Codex, round 6 on #454). The readiness rule from `connected_at` fixed it. An untimed model cannot see a flush that comes later, so the test `D: handshakes of other clients do not postpone a flush that is due for a connected Claude` pins it.
 11. `NoSilentDrop`, a refused write. A write that libuv refused at once never ran its callback, so the broadcast never reported, and the queue dropped the mention with no error. Checked by `RefusedWriteReported`.
