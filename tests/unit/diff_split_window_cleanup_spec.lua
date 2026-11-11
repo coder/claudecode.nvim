@@ -159,28 +159,74 @@ describe("Diff split window cleanup", function()
     assert.are.equal("diffoff", vim._last_command)
   end)
 
-  it("leaves no window and no buffer of the diff when a new file's setup fails", function()
-    local real = { create_buf = vim.api.nvim_create_buf, set_option_value = vim.api.nvim_set_option_value }
+  local function replace(tbl, name, make)
+    local real = tbl[name]
+    tbl[name] = make(real)
     finally(function()
-      vim.api.nvim_create_buf = real.create_buf
-      vim.api.nvim_set_option_value = real.set_option_value
+      tbl[name] = real
     end)
-    local created = {}
-    vim.api.nvim_create_buf = function(...)
-      local buf = real.create_buf(...)
-      created[#created + 1] = buf
-      return buf
-    end
-    vim.api.nvim_set_option_value = function(name, value, opts)
-      if name == "filetype" then
-        error("Invalid buffer id")
-      end
-      return real.set_option_value(name, value, opts)
-    end
+  end
 
+  local function fail_when_the_filetype_is_set()
+    replace(vim.api, "nvim_set_option_value", function(real)
+      return function(name, value, opts)
+        if name == "filetype" then
+          error("Invalid buffer id")
+        end
+        return real(name, value, opts)
+      end
+    end)
+  end
+
+  local function fail_when_the_proposal_is_shown()
+    replace(vim.api, "nvim_win_set_buf", function(real)
+      return function(win, buf)
+        if vim.api.nvim_buf_get_name(buf):find("proposed", 1, true) then
+          error("Invalid buffer id")
+        end
+        return real(win, buf)
+      end
+    end)
+  end
+
+  local function record_the_buffers_created()
+    local created = {}
+    replace(vim.api, "nvim_create_buf", function(real)
+      return function(...)
+        local buf = real(...)
+        created[#created + 1] = buf
+        return buf
+      end
+    end)
+    return created
+  end
+
+  local function switch_diff_mode_with_diffthis_and_diffoff()
+    local win_in_call
+    replace(vim.api, "nvim_win_call", function(real)
+      return function(win, callback)
+        win_in_call = win
+        local result = real(win, callback)
+        win_in_call = nil
+        return result
+      end
+    end)
+    replace(vim, "cmd", function(real)
+      return function(command)
+        if command == "diffthis" then
+          vim.api.nvim_win_set_option(vim.api.nvim_get_current_win(), "diff", true)
+        elseif command == "diffoff" then
+          vim.api.nvim_win_set_option(win_in_call or vim.api.nvim_get_current_win(), "diff", false)
+        end
+        return real(command)
+      end
+    end)
+  end
+
+  local function open_diff_that_fails(file)
     local ok, err = pcall(diff._setup_blocking_diff, {
-      old_file_path = dir .. "/new_file.lua",
-      new_file_path = dir .. "/new_file.lua",
+      old_file_path = file,
+      new_file_path = file,
       new_file_contents = "new content\n",
       tab_name = tab_name,
     }, function() end)
@@ -188,6 +234,14 @@ describe("Diff split window cleanup", function()
     assert.is_false(ok)
     assert.are.equal("Diff setup failed", err.message)
     assert.is_nil(diff._get_active_diffs()[tab_name])
+  end
+
+  it("leaves no window and no buffer of the diff when a new file's setup fails", function()
+    local created = record_the_buffers_created()
+    fail_when_the_filetype_is_set()
+
+    open_diff_that_fails(dir .. "/new_file.lua")
+
     assert.are.same({ 1000 }, vim.api.nvim_tabpage_list_wins(1))
     assert.are.equal(2, #created)
     for _, buf in ipairs(created) do
@@ -197,45 +251,11 @@ describe("Diff split window cleanup", function()
 
   it("turns diff mode off in the reused window when a later step fails the setup", function()
     vim.cmd("edit " .. vim.fn.fnameescape(test_old_file))
+    switch_diff_mode_with_diffthis_and_diffoff()
+    fail_when_the_proposal_is_shown()
 
-    local real = { cmd = vim.cmd, win_call = vim.api.nvim_win_call, set_buf = vim.api.nvim_win_set_buf }
-    finally(function()
-      vim.cmd = real.cmd
-      vim.api.nvim_win_call = real.win_call
-      vim.api.nvim_win_set_buf = real.set_buf
-    end)
-    local win_in_call
-    vim.api.nvim_win_call = function(win, callback)
-      win_in_call = win
-      local result = real.win_call(win, callback)
-      win_in_call = nil
-      return result
-    end
-    vim.cmd = function(command)
-      if command == "diffthis" then
-        vim.api.nvim_win_set_option(vim.api.nvim_get_current_win(), "diff", true)
-      elseif command == "diffoff" then
-        vim.api.nvim_win_set_option(win_in_call or vim.api.nvim_get_current_win(), "diff", false)
-      end
-      return real.cmd(command)
-    end
-    vim.api.nvim_win_set_buf = function(win, buf)
-      if vim.api.nvim_buf_get_name(buf):find("proposed", 1, true) then
-        error("Invalid buffer id")
-      end
-      return real.set_buf(win, buf)
-    end
+    open_diff_that_fails(test_old_file)
 
-    local ok, err = pcall(diff._setup_blocking_diff, {
-      old_file_path = test_old_file,
-      new_file_path = test_old_file,
-      new_file_contents = "new content\n",
-      tab_name = tab_name,
-    }, function() end)
-
-    assert.is_false(ok)
-    assert.are.equal("Diff setup failed", err.message)
-    assert.is_nil(diff._get_active_diffs()[tab_name])
     assert.are.same({ 1000 }, vim.api.nvim_tabpage_list_wins(1))
     assert.is_false(vim.api.nvim_win_get_option(1000, "diff"))
   end)

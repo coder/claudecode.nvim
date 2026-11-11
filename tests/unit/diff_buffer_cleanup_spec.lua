@@ -148,7 +148,7 @@ describe("Diff Buffer Cleanup Edge Cases", function()
           true,
           nil,
           nil,
-          { windows = {}, buffers = {}, diff_windows = {} }
+          { split_windows = {}, empty_buffers = {}, diffthis_windows = {} }
         )
       end)
 
@@ -172,7 +172,7 @@ describe("Diff Buffer Cleanup Edge Cases", function()
           true,
           nil,
           nil,
-          { windows = {}, buffers = {}, diff_windows = {} }
+          { split_windows = {}, empty_buffers = {}, diffthis_windows = {} }
         )
       end)
 
@@ -202,7 +202,7 @@ describe("Diff Buffer Cleanup Edge Cases", function()
           true,
           nil,
           nil,
-          { windows = {}, buffers = {}, diff_windows = {} }
+          { split_windows = {}, empty_buffers = {}, diffthis_windows = {} }
         )
       end)
 

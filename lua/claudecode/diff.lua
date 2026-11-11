@@ -671,7 +671,7 @@ local function load_original_buffer(original_win, old_file_path, is_new_file, ex
       logger.error("diff", error_msg)
       error({ code = -32000, message = "Buffer creation failed", data = error_msg })
     end
-    created.buffers[#created.buffers + 1] = empty_buffer
+    created.empty_buffers[#created.empty_buffers + 1] = empty_buffer
 
     local ok, err = pcall(function()
       vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
@@ -723,12 +723,12 @@ local function setup_new_buffer(
   created
 )
   vim.api.nvim_set_current_win(original_win)
-  created.diff_windows[#created.diff_windows + 1] = original_win
+  created.diffthis_windows[#created.diffthis_windows + 1] = original_win
   vim.cmd("diffthis")
 
   create_split()
   local new_win = vim.api.nvim_get_current_win()
-  created.windows[#created.windows + 1] = new_win
+  created.split_windows[#created.split_windows + 1] = new_win
   vim.api.nvim_win_set_buf(new_win, new_buf)
 
   local original_ft = detect_filetype(old_file_path, original_buf)
@@ -1297,7 +1297,7 @@ function M._create_diff_view_from_window(
         or filetype == "snacks_layout_box"
       then
         create_split()
-        created.windows[#created.windows + 1] = vim.api.nvim_get_current_win()
+        created.split_windows[#created.split_windows + 1] = vim.api.nvim_get_current_win()
       end
 
       target_window = vim.api.nvim_get_current_win()
@@ -1314,7 +1314,7 @@ function M._create_diff_view_from_window(
     vim.api.nvim_set_current_win(target_window)
     create_split()
     original_window = vim.api.nvim_get_current_win()
-    created.windows[#created.windows + 1] = original_window
+    created.split_windows[#created.split_windows + 1] = original_window
     target_window_created_by_plugin = true
   else
     original_window = choice.original_win
@@ -1524,7 +1524,7 @@ function M._setup_blocking_diff(params, resolution_callback)
   local new_buffer = nil
   local window_sizes = nil
   local cursor_origin = nil
-  local created = { windows = {}, buffers = {}, diff_windows = {} }
+  local created = { split_windows = {}, empty_buffers = {}, diffthis_windows = {} }
   -- Same rationale for the open_in_new_tab path: display_terminal_in_new_tab() runs `:tabnew`
   -- early, so a failure before registration would strand that tab. Hoist its handle (and the tab
   -- we came from, to refocus) so the error handler can close it and switch back. Issue #262.
@@ -1791,19 +1791,19 @@ function M._setup_blocking_diff(params, resolution_callback)
       if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
         pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
       end
-      for _, win in ipairs(created.windows) do
+      for _, win in ipairs(created.split_windows) do
         if vim.api.nvim_win_is_valid(win) then
           vim.api.nvim_win_close(win, true)
         end
       end
-      for _, win in ipairs(created.diff_windows) do
+      for _, win in ipairs(created.diffthis_windows) do
         if vim.api.nvim_win_is_valid(win) then
           vim.api.nvim_win_call(win, function()
             vim.cmd("diffoff")
           end)
         end
       end
-      for _, buf in ipairs(created.buffers) do
+      for _, buf in ipairs(created.empty_buffers) do
         if vim.api.nvim_buf_is_valid(buf) then
           vim.api.nvim_buf_delete(buf, { force = true })
         end
@@ -2393,10 +2393,10 @@ return M
 ---@field original_buffer NvimBuf
 ---@field original_buffer_created_by_plugin boolean
 
----@class DiffCreated
----@field windows NvimWin[] Windows the setup split off, to close if it fails
----@field buffers NvimBuf[] Buffers the setup made besides the proposed one, to delete if it fails
----@field diff_windows NvimWin[] Windows the setup turned diff mode on in, to turn it off in if it fails
+---@class DiffCreated What a diff setup made, for the failure handler to undo
+---@field split_windows NvimWin[]
+---@field empty_buffers NvimBuf[]
+---@field diffthis_windows NvimWin[]
 
 ---@class DiffWindowChoice
 ---@field decision DiffWindowDecision
