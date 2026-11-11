@@ -638,13 +638,14 @@ end
 
 ---Hides the Claude terminal when it is a floating window, so that it does not cover a diff. Only a provider that
 ---implements `hide_float` has a float to hide.
+---@param tab number? Passed to the provider, which hides only a float in this tab (a float in any tab when nil).
 ---@return boolean hidden True when a visible float was hidden
-function M.hide_float()
+function M.hide_float(tab)
   local provider = get_provider()
   if not provider.hide_float then
     return false
   end
-  return provider.hide_float() == true
+  return provider.hide_float(tab) == true
 end
 
 ---Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).
