@@ -1344,6 +1344,111 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal(running[1], mock_state.buffers[native_provider.get_active_bufnr()].jobid)
     end)
 
+    -- An autocmd that fires while Claude starts can close the new split. A focus_toggle hides the window that it finds
+    -- focused, a second simple_toggle hides it too, and a plain close ends it. The start must then leave Claude running
+    -- in no window, as a hidden terminal, and raise nothing.
+    describe("when an autocmd of the start closes the new split", function()
+      local mock_state
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        -- Neovim raises for a window that is gone, where the mock ignores it.
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if not mock_state.windows[winid] then
+            error("Invalid window id: " .. tostring(winid))
+          end
+          set_current_win(winid)
+        end
+      end)
+
+      local function close_current_window()
+        mock_vim.api.nvim_win_close(mock_state.current_win, false)
+      end
+
+      local function focus_toggle()
+        native_provider.focus_toggle("claude", {}, config)
+      end
+
+      local function simple_toggle_twice()
+        native_provider.simple_toggle("claude", {}, config)
+        native_provider.simple_toggle("claude", {}, config)
+      end
+
+      -- Runs `action` once, from the first BufEnter of a buffer that is no start buffer (before termopen runs).
+      local function on_bufenter(action)
+        local fired = false
+        mock_state.bufenter_autocmd = function(_, bufnr)
+          if not fired and bufnr ~= 0 then
+            fired = true
+            action()
+          end
+        end
+        return function()
+          return fired
+        end
+      end
+
+      -- Runs `action` once, from TermOpen (inside termopen).
+      local function on_termopen(action)
+        local fired = false
+        mock_vim.api.nvim_create_autocmd("TermOpen", {
+          callback = function()
+            if not fired then
+              fired = true
+              action()
+            end
+          end,
+        })
+        return function()
+          return fired
+        end
+      end
+
+      local autocmds = {
+        { "a BufEnter autocmd", on_bufenter },
+        { "a TermOpen autocmd", on_termopen },
+      }
+      local actions = {
+        { "calls focus_toggle", focus_toggle },
+        { "calls simple_toggle twice", simple_toggle_twice },
+        { "closes the window", close_current_window },
+      }
+      for _, autocmd in ipairs(autocmds) do
+        for _, action in ipairs(actions) do
+          it("should leave Claude running in no window when " .. autocmd[1] .. " " .. action[1], function()
+            local fired = autocmd[2](action[2])
+
+            local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+
+            assert.is_true(ok, tostring(err))
+            assert.is_true(fired())
+            local running = {}
+            for id in pairs(mock_state.running_jobs) do
+              table.insert(running, id)
+            end
+            assert.are.equal(1, #running)
+            local active = native_provider.get_active_bufnr()
+            assert.is_not_nil(active)
+            assert.are.equal(running[1], mock_state.buffers[active].jobid)
+            assert.are.equal(0, windows_showing(active))
+            assert.is_not_nil(mock_state.windows[mock_state.current_win])
+
+            -- Claude is tracked as a hidden terminal, so the next toggle shows it, and no second one starts.
+            mock_state.bufenter_autocmd = nil
+            native_provider.simple_toggle("claude", {}, config)
+            assert.are.equal(1, windows_showing(active))
+            assert.are.equal(active, native_provider.get_active_bufnr())
+            local still_running = 0
+            for _ in pairs(mock_state.running_jobs) do
+              still_running = still_running + 1
+            end
+            assert.are.equal(1, still_running)
+          end)
+        end
+      end
+    end)
+
     it("should keep one exit handler on a terminal it adopts again after each reload", function()
       local mock_state = _G.get_mock_state()
       local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = true }

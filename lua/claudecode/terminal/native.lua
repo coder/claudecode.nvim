@@ -260,10 +260,13 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   jobid = termopen_result
-  if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+  -- An autocmd of the start can close the split. A focus_toggle from a BufEnter or TermOpen autocmd adopts this
+  -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
+  -- terminal, and the next toggle shows it.
+  if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
-  winid = new_winid
+  winid = vim.api.nvim_win_is_valid(new_winid) and new_winid or nil
   bufnr = new_bufnr
   job_auto_close = effective_config.auto_close
   vim.bo[bufnr].bufhidden = "hide"
@@ -271,7 +274,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen
 
-  if focus then
+  if focus and winid then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
     if effective_config.auto_insert ~= false then
