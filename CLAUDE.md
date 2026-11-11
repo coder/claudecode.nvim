@@ -350,7 +350,7 @@ Log levels for authentication events:
 
 ### Performance Optimizations
 
-- Selection tracking is debounced (100 ms) to reduce overhead. Leaving visual mode, editing or consuming the held text, and moving the cursor away from a held selection report at once
+- Selection tracking is debounced (100 ms) to reduce overhead. Leaving visual mode, editing or consuming the held text, and moving the cursor away from a held selection report at once. So does a change to the held text while you are in the Claude terminal (a reload, a plugin's edit): a listener from `nvim_buf_attach` on its buffer sees it, because `TextChanged` fires only for the current buffer
 - WebSocket frame processing optimized for JSON-RPC payload sizes
 - Connection pooling and cleanup to prevent resource leaks
 

@@ -337,6 +337,9 @@ describe("TCP server disconnect handling", function()
     function handle:is_closing()
       return self.closed
     end
+    function handle:get_write_queue_size()
+      return 0
+    end
     local client = client_manager.create_client(handle)
     client.state, client.handshake_complete, client.last_pong = "connected", true, vim.loop.now() - 61000
     local server = { clients = { [client.id] = client }, on_disconnect = spy.new(function() end) }
