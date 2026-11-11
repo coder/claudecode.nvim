@@ -58,7 +58,7 @@ FACTS=(FlushOnVisualExit FlushSkipsOperator FlushSkipsTerminal FlushRecordsCurso
 
 # ModeChanged runs on_mode_changed, which flushes when visual mode ends.
 flush_on_visual_exit() {
-  in_order 'nvim_create_autocmd\("ModeChanged", \{' 'M\.on_mode_changed\(\)' <<<"$autocmds" &&
+  in_order '^  vim\.api\.nvim_create_autocmd\("ModeChanged", \{$' '^      M\.on_mode_changed\(\)$' <<<"$autocmds" &&
     in_order 'local leaving_visual = is_visual_mode\(event\.old_mode\) and not is_visual_mode\(event\.new_mode\)$' \
       '^    elseif leaving_visual then$' '^      M\.flush_visual_selection\(\)$' <<<"$on_mode_changed"
 }
@@ -158,13 +158,13 @@ fact[PendingClearsHeld]=$(as_bool pending_clears_held)
 # not restored yet then.
 reconcile_on_cursor_moved() {
   in_order '^  reconcile_held_selection\(not entered_buffer\)$' '^  M\.debounce_update\(\)$' <<<"$on_cursor_moved" &&
-    in_order 'nvim_create_autocmd\(\{ "CursorMoved", "CursorMovedI", "BufEnter" \}' 'M\.on_cursor_moved\(args\.event == "BufEnter"\)' \
-      <<<"$autocmds"
+    in_order '^  vim\.api\.nvim_create_autocmd\(\{ "CursorMoved", "CursorMovedI", "BufEnter" \}, \{$' \
+      '^      M\.on_cursor_moved\(args\.event == "BufEnter"\)$' <<<"$autocmds"
 }
 fact[ReconcileOnCursorMoved]=$(as_bool reconcile_on_cursor_moved)
 reconcile_on_text_changed() {
   in_order '^  reconcile_held_selection\(true\)$' '^  M\.debounce_update\(\)$' <<<"$on_text_changed" &&
-    in_order 'nvim_create_autocmd\(\{ "TextChanged", ' 'M\.on_text_changed\(\)' <<<"$autocmds"
+    in_order '^  vim\.api\.nvim_create_autocmd\(\{ "TextChanged", "TextChangedI", "TextChangedP" \}, \{$' '^      M\.on_text_changed\(\)$' <<<"$autocmds"
 }
 fact[ReconcileOnTextChanged]=$(as_bool reconcile_on_text_changed)
 # reconcile_held_selection first reports the cursor when the changedtick moved since the selection was read and its
@@ -227,7 +227,7 @@ update_checks_held_text() {
 }
 fact[UpdateChecksHeldText]=$(as_bool update_checks_held_text)
 
-RULES=(ReleaseSent NoPhantomSelection NoTerminalSelection HeldUntilMoved HeldEndsWhenMoved SameFile ClaudeSeesCursor
+RULES=(ReleaseSent NoPhantomSelection NoTerminalSelection HeldUntilMoved HeldInTerminal HeldEndsWhenMoved SameFile ClaudeSeesCursor
   NoDeletedText TimerClosedOnce)
 LIVE=()
 # Five guards break no rule alone, because another guard in the code covers for them. EXPECT lists each with a guard
