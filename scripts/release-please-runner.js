@@ -73,6 +73,12 @@ const DRAFT_NODE_TYPES = new Set([
   "image",
   "html_inline",
 ]);
+// A line that starts with `## ` once the blanks that Communique removes are gone. Communique 1.1.3 trims a line with
+// Rust's `trim` (U+0009 to U+000D, a space, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F
+// and U+3000), and it ends its draft at a trimmed line `## <version>`. CommonMark keeps most of those blanks as text,
+// so such a line is not a heading to the update.
+const COMMUNIQUE_SECTION_LINE_PATTERN =
+  /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*## /;
 // A list item line that holds a marker and nothing else (`-`, `*`, `+`, `1.`, `2)`, or `- -`).
 const EMPTY_ITEM_LINE_PATTERN = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]*)+$/;
 // CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
@@ -382,7 +388,8 @@ function topLevelHeadings(text) {
  * blocks after it, up to the next top-level heading of the anchor's level or a higher one (an H1 or H2 after an H2
  * anchor), or to the end of the text. An H3 under an H2 anchor is a subsection of the draft, whatever it says. `level`
  * is the level of the anchor. `headEnd` is the last line of the anchor and `restStart` the first line after the draft,
- * both numbered from 1. `restStart` is null when the draft runs to the end of the text.
+ * both numbered from 1. `restStart` is null when the draft runs to the end of the text, and `end` is the heading that
+ * ends the draft, or null.
  */
 function findUnreleasedDraft(lines) {
   assert.ok(Array.isArray(lines), "lines must be an array");
@@ -405,6 +412,7 @@ function findUnreleasedDraft(lines) {
     blocks: blocks.slice(anchor + 1, next === -1 ? blocks.length : next),
     headEnd: blocks[anchor].sourcepos[1][0],
     restStart: next === -1 ? null : blocks[next].sourcepos[0][0],
+    end: next === -1 ? null : blocks[next],
   };
 }
 
@@ -417,7 +425,11 @@ function findUnreleasedDraft(lines) {
  * error names the line and the node type, and it comes before anything is formatted. A code fence keeps the error of
  * the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique reads a
  * draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An empty
- * draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it
+ * draft under an H3 anchor is fine. A draft line that starts with `## ` once the blanks that Communique trims are
+ * removed (a no-break space before `## [0.4.1]`, for example) is refused, because Communique ends its draft there and
+ * reads nothing below it. The heading that ends the draft must be a one-line heading with text: an empty heading or a
+ * setext heading is refused, because Communique reads the text below it and the update would keep it. `draft` is the
+ * result of `findUnreleasedDraft`, and `lines` the lines of the text it
  * read. The cost: a draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused
  * until a maintainer edits it.
  */
@@ -495,6 +507,28 @@ function assertDraftIsPlain(lines, draft) {
           "Move it out of the Unreleased draft.",
       );
     }
+    if (COMMUNIQUE_SECTION_LINE_PATTERN.test(lines[line - 1] ?? "")) {
+      throw new Error(
+        `The Unreleased draft has a line that Communique reads as a section heading. Line ${line}: ${shownLine(line)}. ` +
+          "Communique ends its draft there, so it never reads the lines below it, and the update would drop them. " +
+          "Move it out of the Unreleased draft, or write it as a paragraph.",
+      );
+    }
+  }
+  // The heading that ends the draft is a one-line heading with text. Communique reads the text below any other end
+  // (an empty heading or a setext heading) as part of its draft and folds it into the new entry, and the update keeps
+  // it, so it would show twice.
+  if (
+    draft.end !== null &&
+    (draft.end.sourcepos[0][0] !== draft.end.sourcepos[1][0] ||
+      headingText(draft.end) === "")
+  ) {
+    const line = draft.end.sourcepos[0][0];
+    throw new Error(
+      `The Unreleased draft ends at a heading that is empty or a setext heading. Line ${line} starts it: ${shownLine(line)}. ` +
+        "Communique reads the text below it as draft too and folds it into the new entry, so the update would write that text twice. " +
+        "Write the heading on one line with `## ` and its text, or move the text out of the Unreleased draft.",
+    );
   }
 }
 

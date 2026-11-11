@@ -1243,6 +1243,24 @@ function uncoveredRefusal(lineNumber, line) {
   );
 }
 
+/** The error of `updateContent` for a draft line that Communique reads as a section heading. */
+function communiqueLineRefusal(lineNumber, line) {
+  return (
+    `The Unreleased draft has a line that Communique reads as a section heading. Line ${lineNumber}: ${JSON.stringify(line.slice(0, 80))}. ` +
+    "Communique ends its draft there, so it never reads the lines below it, and the update would drop them. " +
+    "Move it out of the Unreleased draft, or write it as a paragraph."
+  );
+}
+
+/** The error of `updateContent` for a heading that ends the draft and is empty or a setext heading. */
+function endRefusal(lineNumber, line) {
+  return (
+    `The Unreleased draft ends at a heading that is empty or a setext heading. Line ${lineNumber} starts it: ${JSON.stringify(line.slice(0, 80))}. ` +
+    "Communique reads the text below it as draft too and folds it into the new entry, so the update would write that text twice. " +
+    "Write the heading on one line with `## ` and its text, or move the text out of the Unreleased draft."
+  );
+}
+
 /** The error of `updateContent` for a draft under an H3 heading, which Communique does not read. */
 function levelRefusal(level, lineNumber, line) {
   return (
@@ -1474,6 +1492,13 @@ async function testUnreleasedDraftStructure() {
       directly: true,
     },
     {
+      name: "a link definition after an empty marker",
+      draft: "-\n  [x]: https://e.x",
+      line: "  [x]: https://e.x",
+      formattedLine: "- [x]: https://e.x",
+      error: uncoveredRefusal,
+    },
+    {
       name: "a link definition in a list item",
       draft: "- [docs]: https://example.com/docs",
       line: "- [docs]: https://example.com/docs",
@@ -1587,21 +1612,208 @@ async function testUnreleasedDraftStructure() {
     assert.equal(update(testCase.raw), released, "raw");
     assert.equal(update(formatted), released, "after prettier");
   });
-  // A heading with no text is still a section heading. Prettier keeps it.
-  assert.deepEqual(
-    topLevelHeadingsOf(update(`${head}Draft text.\n\n##\n\n- Previous\n`)),
-    ["1 Changelog", "2 [Unreleased]", "2 [0.4.0] - 2026-06-15", "2 "],
-    "a heading with no text keeps the older release",
+  // 2b. The heading that ends the draft is a one-line heading with text. Communique reads the text below an empty or a
+  // setext heading as draft too and folds it into the new entry, so the update refuses them. Each case is { name,
+  // draft, line, formattedLine }: `formattedLine` is the heading line after prettier, or null when prettier turns the
+  // heading into a one-line heading with text (a setext heading becomes an ATX heading), which the update reads.
+  const endCases = [
+    ["an empty H1", "Draft text.\n\n#\n\n- Rest of the draft", "#", "#"],
+    ["an empty H2", "Draft text.\n\n##\n\n- Rest of the draft", "##", "##"],
+    [
+      "an H2 with blanks only",
+      "Draft text.\n\n##   \n\n- Rest of the draft",
+      "##   ",
+      "##",
+    ],
+    [
+      "an H2 with a closing sequence only",
+      "Draft text.\n\n## ##\n\n- Rest of the draft",
+      "## ##",
+      "##",
+    ],
+    [
+      "an empty H2 right after the anchor",
+      "##\n\n- Rest of the draft",
+      "##",
+      "##",
+    ],
+    [
+      "a setext H1",
+      "Draft text.\n\nTitle\n=====\n\n- Rest of the draft",
+      "Title",
+      null,
+    ],
+    [
+      "a setext H2",
+      "Draft text.\n\nTitle\n-----\n\n- Rest of the draft",
+      "Title",
+      null,
+    ],
+    [
+      "a setext H2 of two lines",
+      "Draft text.\n\nLine one\nline two\n-----\n\n- Rest of the draft",
+      "Line one",
+      // Prettier does not read a setext heading of two lines. It writes a paragraph and a thematic break.
+      "---",
+      (number, line) => nodeRefusal(number, line, "thematic_break"),
+    ],
+  ].map(([name, draft, line, formattedLine, formattedError]) => ({
+    name,
+    text: `${head}${draft}${previous}`,
+    line,
+    formattedLine,
+    formattedError,
+  }));
+  const endFormatted = formatDocuments(endCases.map(({ text }) => text));
+  checkCases(endCases, (testCase) => {
+    const number = lineNumberOf(testCase.text, testCase.line);
+    assert.ok(number > 0, "the text holds the heading");
+    assert.throws(
+      () => withMissingFormatter(() => update(testCase.text)),
+      { message: endRefusal(number, testCase.line) },
+      "raw",
+    );
+    const formatted = endFormatted[endCases.indexOf(testCase)];
+    if (testCase.formattedLine === null) {
+      // The ATX heading that prettier writes ends the draft, as it does for the line reader, and the text below it stays.
+      assert.equal(
+        withIdentityFormatter(() => update(formatted)),
+        mainText(formatted),
+        "after prettier",
+      );
+    } else {
+      const formattedNumber = lineNumberOf(formatted, testCase.formattedLine);
+      assert.ok(formattedNumber > 0, "the formatted text holds the heading");
+      assert.throws(
+        () => withMissingFormatter(() => update(formatted)),
+        {
+          message: (testCase.formattedError ?? endRefusal)(
+            formattedNumber,
+            testCase.formattedLine,
+          ),
+        },
+        "after prettier",
+      );
+    }
+  });
+
+  // 2c. Communique trims a line with Rust's `trim` and ends its draft at a trimmed `## <version>` line. CommonMark keeps
+  // most of those blanks as text, so a draft line that starts with one of them, then `## `, is a paragraph to the update,
+  // and Communique never reads the lines below it. The update refuses such a line. The blanks are the ones that Rust
+  // trims, except the space and the tab, which CommonMark reads as indent: VT, FF, NEL, no-break space, U+1680, U+2000
+  // to U+200A, the line and paragraph separators, U+202F, U+205F and U+3000.
+  const communiqueBlanks = [
+    "\u000b",
+    "\u000c",
+    "\u0085",
+    "\u00a0",
+    "\u1680",
+    ...Array.from({ length: 11 }, (_, k) => String.fromCharCode(0x2000 + k)),
+    "\u2028",
+    "\u2029",
+    "\u202f",
+    "\u205f",
+    "\u3000",
+  ];
+  const blankCases = [
+    ...communiqueBlanks.map((blank) => ({
+      name: `U+${blank.codePointAt(0).toString(16).padStart(4, "0")} before the heading`,
+      line: `${blank}## [0.2.0] - 2026-02-02 MK2`,
+      draft: `- MK1\n\n${blank}## [0.2.0] - 2026-02-02 MK2\n\n- MK3`,
+      // Prettier removes a form feed, so only the raw text holds it.
+      rawOnly: blank === "\u000c",
+    })),
+    {
+      name: "a no-break space before an H2 with no version",
+      line: "\u00a0## Notes",
+      draft: "- MK1\n\n\u00a0## Notes\n\n- MK3",
+    },
+    {
+      name: "a no-break space before an H2 right after the anchor",
+      line: "\u00a0## [0.2.0] - 2026-02-02 MK2",
+      draft: "\u00a0## [0.2.0] - 2026-02-02 MK2\n\n- MK3",
+    },
+    {
+      name: "a line of the draft paragraph with four spaces of indent",
+      line: "    ## [0.2.0] - 2026-02-02 MK2",
+      draft: "Some text\n    ## [0.2.0] - 2026-02-02 MK2\n\n- MK3",
+      rawOnly: true,
+    },
+    {
+      name: "a line of a list item paragraph with six spaces of indent",
+      line: "      ## [0.2.0] - 2026-02-02 MK2",
+      draft: "- item\n      ## [0.2.0] - 2026-02-02 MK2\n\n- MK3",
+      rawOnly: true,
+    },
+    {
+      name: "a line of the draft paragraph with a tab of indent",
+      line: "\t## [0.2.0] - 2026-02-02 MK2",
+      draft: "Some text\n\t## [0.2.0] - 2026-02-02 MK2\n\n- MK3",
+      rawOnly: true,
+    },
+  ];
+  const blankTexts = blankCases.map(
+    ({ draft }) => `${head}${draft}${previous}`,
   );
+  const blankFormatted = formatDocuments(blankTexts);
+  checkCases(blankCases, (testCase) => {
+    const index = blankCases.indexOf(testCase);
+    const variants = [["raw", blankTexts[index]]];
+    // Prettier joins a lazy line into its paragraph and removes a form feed, so the line no longer starts with `## `.
+    if (!testCase.rawOnly) {
+      variants.push(["after prettier", blankFormatted[index]]);
+    }
+    for (const [label, text] of variants) {
+      const number = lineNumberOf(text, testCase.line);
+      assert.ok(number > 0, `${label}: the text holds the line`);
+      assert.throws(
+        () => withMissingFormatter(() => update(text)),
+        { message: communiqueLineRefusal(number, testCase.line) },
+        label,
+      );
+    }
+  });
+  // These lines are not `## ` for Communique, so they are read as text, and the text of main is the text that the
+  // update writes: a character that Rust does not trim, a blank inside the line, a deeper heading, no space after the marks.
+  const readLines = [
+    [
+      "a zero width space before the marks",
+      "\u200b## [0.2.0] - 2026-02-02 MK2",
+    ],
+    ["a byte order mark before the marks", "\ufeff## [0.2.0] - 2026-02-02 MK2"],
+    [
+      "a no-break space inside the line",
+      "text\u00a0## [0.2.0] - 2026-02-02 MK2",
+    ],
+    [
+      "a no-break space after the marks",
+      "\u00a0##\u00a0[0.2.0] - 2026-02-02 MK2",
+    ],
+    ["a no-break space before an H3", "\u00a0### Added"],
+    ["no space after the marks", "\u00a0##[0.2.0] - 2026-02-02 MK2"],
+  ].map(([name, line]) => ({ name, line }));
+  checkCases(readLines, ({ line }) => {
+    const text = `${head}- MK1\n\n${line}\n\n- MK3${previous}`;
+    withIdentityFormatter(() =>
+      assert.equal(update(text), mainText(text), "the text of main"),
+    );
+  });
 
   // 3. A setext heading is a heading. After a list item, prettier moves it into the item and writes a thematic
   // break, so the update refuses the text before the formatter (when it is already formatted) or after it (when it is
   // raw). Nothing is written, and the older release is not lost.
   const setext = "- Draft\n\n0.3.0\n-----\n\n- Previous\n";
   assert.throws(
-    () => update(`${head}${setext}`),
+    () => withMissingFormatter(() => update(`${head}${setext}`)),
+    { message: endRefusal(7, "0.3.0") },
+    "a raw setext heading that ends the draft",
+  );
+  // A raw setext older release further down is kept text. Prettier moves it into the list item above it, so the
+  // update refuses the formatted text.
+  assert.throws(
+    () => update(`${head}- Draft${previous}\n0.2.0\n-----\n\n- Older\n`),
     { message: changedRefusal("2 [0.4.0] - 2026-06-15", "2 [Unreleased]") },
-    "a raw setext older release below the list of the new entry",
+    "a raw setext older release below the list of an older release",
   );
   const formattedSetext = runner.formatChangelogMarkdown(`${head}${setext}`);
   assert.equal(
@@ -1729,6 +1941,9 @@ async function testUnreleasedDraftStructure() {
       "- Use `vim.paste` and <kbd>Ctrl</kbd>+<kbd>S</kbd> with [docs](https://example.com/a_b) and ![img](x.png)\n- <b>Bold</b> text and a bare https://example.com/x link\n",
     ],
     ["an empty list item", "- One\n-\n- Three\n"],
+    ["an empty item that holds an empty item", "- One\n- -\n"],
+    ["an empty item with a parenthesis marker", "1) One\n2)\n3) Three\n"],
+    ["an empty item with blanks after the marker", "- One\n-   \n- Three\n"],
     ["an empty ordered list item", "1. One\n2.\n3. Three\n"],
     ["empty lists", "-\n\n1.\n\n*\n"],
     ["a nested empty list item", "- a\n\n  -\n"],
@@ -2625,6 +2840,12 @@ function generateDraftFragment(random, fragments) {
     ["an indented H2", () => [" ## Notes", "", "- note"]],
     ["an H2 with a tab", () => ["##\tNotes", "", "- note"]],
     ["an H2", () => ["## Upgrade notes", "", "- note"]],
+    ["an empty H2", () => ["##", "", "- note"]],
+    [
+      "a no-break space before an H2",
+      () => ["\u00a0## [0.9.0] - 2025-12-01", "", "- Old nine"],
+    ],
+    ["a lazy indented H2", () => ["Some text", "    ## [0.9.0]"]],
     ["an H1", () => ["# Top"]],
     ["a div", () => ["<div>", "## inner", "</div>"]],
     [
@@ -2693,7 +2914,7 @@ function checkUpdaterDocument(text, plain, where, expectedFormat) {
   } catch (error) {
     assert.match(
       error.message,
-      /^(The Unreleased draft has (a code fence|a node that the update does not read|a line that no paragraph)|The update would change the older releases)/,
+      /^(The Unreleased draft (has (a code fence|a node that the update does not read|a line that no paragraph|a line that Communique reads)|ends at a heading)|The update would change the older releases)/,
       `the refusal in ${where}`,
     );
     assert.ok(
@@ -2800,7 +3021,7 @@ async function testUnreleasedUpdaterProperty() {
   }
   // A generator that stops making a fragment would silently stop testing it.
   assert.ok(
-    Object.keys(fragments).length >= 35,
+    Object.keys(fragments).length >= 38,
     `fragments of the updater documents: ${JSON.stringify(fragments)}`,
   );
 
