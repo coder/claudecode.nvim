@@ -1260,7 +1260,7 @@ M._register_diff_autocmds = register_diff_autocmds
 ---@param is_new_file boolean Whether this is a new file (doesn't exist yet)
 ---@param terminal_win_in_new_tab NvimWin|nil Terminal window in new tab if created
 ---@param existing_buffer NvimBuf|nil Existing buffer for the file if already loaded
----@param created DiffCreated Gets what this makes, as it makes it, so that the caller can undo it if a later step fails
+---@param created DiffCreated
 ---@return DiffLayoutInfo layout Info about the created diff layout
 function M._create_diff_view_from_window(
   target_window,
@@ -1784,8 +1784,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     else
       -- Errored before the diff state was registered, so the state-based cleanup can't run. Close
       -- the fallback split we may have created (its bufhidden=wipe scratch self-cleans) and delete
-      -- the proposed buffer; neither is owned by a registered diff. The same goes for what
-      -- _create_diff_view_from_window made before it or a later step failed.
+      -- the proposed buffer; neither is owned by a registered diff.
       if fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
         pcall(vim.api.nvim_win_close, fallback_window, true)
       end

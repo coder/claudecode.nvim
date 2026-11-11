@@ -171,7 +171,6 @@ describe("Diff split window cleanup", function()
       created[#created + 1] = buf
       return buf
     end
-    -- The proposed side gets the original's filetype after the original side is split off and shown.
     vim.api.nvim_set_option_value = function(name, value, opts)
       if name == "filetype" then
         error("Invalid buffer id")
@@ -199,7 +198,6 @@ describe("Diff split window cleanup", function()
   it("turns diff mode off in the reused window when a later step fails the setup", function()
     vim.cmd("edit " .. vim.fn.fnameescape(test_old_file))
 
-    -- The mock's vim.cmd records the last command only, so this spec models the two commands that switch diff mode.
     local real = { cmd = vim.cmd, win_call = vim.api.nvim_win_call, set_buf = vim.api.nvim_win_set_buf }
     finally(function()
       vim.cmd = real.cmd
@@ -221,7 +219,6 @@ describe("Diff split window cleanup", function()
       end
       return real.cmd(command)
     end
-    -- The proposed buffer goes into its window after the original side is in diff mode.
     vim.api.nvim_win_set_buf = function(win, buf)
       if vim.api.nvim_buf_get_name(buf):find("proposed", 1, true) then
         error("Invalid buffer id")
