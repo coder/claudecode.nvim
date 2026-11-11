@@ -3,7 +3,7 @@ file lua/claudecode/config.lua b4eaec92b6d04b40
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 976669d231558f4b
+file lua/claudecode/diff.lua 53c0f9034a7df662
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -139,7 +139,7 @@ file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
 file lua/claudecode/selection.lua 4d6678af786fa69f
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua 4304e6496b5c4f32
+file lua/claudecode/server/client.lua d630d84ea8ce44a7
 block create_client          24fa2a266b76e6ad
 == lua/claudecode/server/frame.lua
 file lua/claudecode/server/frame.lua 3c50766875878d56
@@ -161,11 +161,11 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 63cbb8922056279a
+file lua/claudecode/server/tcp.lua 0cfb4b3ed4c138a1
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
-file lua/claudecode/terminal.lua 717a0cc7427574d2
+file lua/claudecode/terminal.lua 37d9b6e1f414123e
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
@@ -177,7 +177,7 @@ file lua/claudecode/terminal/owned.lua f64571d98221176c
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua bd4b4b58555efb78
+file lua/claudecode/terminal/snacks.lua 339e6215cb20f702
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 == lua/claudecode/tools/close_all_diff_tabs.lua
@@ -211,7 +211,7 @@ file lua/claudecode/tools/open_file.lua 6c7154d5427af9df
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua c540b9848557a02a
+file lua/claudecode/types.lua 8028e6f291700f28
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua c4a21fe74858afe2
 == lua/claudecode/visual_commands.lua
