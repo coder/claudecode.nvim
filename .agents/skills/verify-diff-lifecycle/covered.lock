@@ -3,11 +3,11 @@ file lua/claudecode/config.lua b4eaec92b6d04b40
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 53c0f9034a7df662
+file lua/claudecode/diff.lua a93103cd3f24ff06
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
-block setup_blocking         5873be8346fa1b52
+block setup_blocking         43a1b398e2703b0f
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
@@ -60,6 +60,7 @@ site lua/claudecode/diff.lua: diff_data.status = "rejected" @ function M._resolv
 site lua/claudecode/diff.lua: diff_data.status = "saved" @ function M._resolve_diff_as_saved(tab_name, buffer_id)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
+site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ local function rename_orphaned_diff_buffers(tab_name, old_file_path)
 site lua/claudecode/diff.lua: for _, other in pairs(active_diffs) do @ local function save_window_sizes(tab)
 site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function close_active_diffs(filter_fn, reason, client_id)
