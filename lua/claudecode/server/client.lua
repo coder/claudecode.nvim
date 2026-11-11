@@ -37,7 +37,7 @@ local CLOSE_REASONS = {
 ---@field drained_bytes integer The bytes libuv had written to the socket when `sample_write_progress` last saw progress
 ---@field last_drain number Timestamp of the last `sample_write_progress` check that found the write queue empty or smaller
 ---@field write_stalled boolean|nil True after a ping tick found no write progress. The next such tick asks for a look after the next poll, and only that look drops the client
----@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
+---@field ping_unanswered_since number|nil Loop time of the oldest ping sent since bytes were last read from the client
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -287,12 +287,9 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         end
         client.handshake_complete = true
         client.state = "connected"
-        -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
-        -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
-        client.last_pong = vim.loop.now()
         -- init.lua sends queued @ mentions only once some connected client has been connected for
         -- connection_wait_delay ms since this point. The broadcast then also reaches clients that connected later.
-        client.connected_at = client.last_pong
+        client.connected_at = vim.loop.now()
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
           on_open(client)
@@ -483,21 +480,6 @@ end
 function M.abandon_close_frame(client)
   client.close_pending = nil
   stop_close_timer(client)
-end
-
----Check if a client connection is alive
----@param client WebSocketClient The client object
----@param timeout number Timeout in milliseconds (default: 30000)
----@return boolean alive True if the client is considered alive
-function M.is_client_alive(client, timeout)
-  timeout = timeout or 30000 -- 30 seconds default
-
-  if client.state ~= "connected" then
-    return false
-  end
-
-  local now = vim.loop.now()
-  return (now - client.last_pong) < timeout
 end
 
 ---Check whether libuv wrote a byte of the write queue of a client since the last check that saw progress, or the queue
