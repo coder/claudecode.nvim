@@ -1,7 +1,8 @@
 --- A malformed tools/call gets -32602 "Invalid params" and plain text in `data`, never a Lua error with a file path.
 --- Malformed means params that is not an object, a name that is not a string, or arguments that is not an object. An
 --- empty or unknown string name is a well-formed request for a tool that does not exist (-32601), a call without
---- arguments reaches its tool with an empty table, and a notification gets no answer.
+--- arguments reaches its tool with an empty table, and a notification gets no answer. The mock vim cannot tell {} from
+--- [], so the answer for "params": {} is in tests/integration/tools_call_json_arrays_spec.lua.
 require("tests.busted_setup")
 
 describe("the shape of a tools/call", function()
@@ -40,9 +41,6 @@ describe("the shape of a tools/call", function()
   end
 
   for _, case in ipairs({
-    { label = "no params", request = '{"jsonrpc":"2.0","id":6,"method":"tools/call"}' },
-    { label = "empty params", request = '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{}}' },
-    { label = "a list as params", request = '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":[]}' },
     {
       label = "arguments and no name",
       request = '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"arguments":{}}}',
@@ -85,6 +83,8 @@ describe("the shape of a tools/call", function()
     { label = "a number as params", params = "5" },
     { label = "a boolean as params", params = "true" },
     { label = "a string as params", params = '"x"' },
+    { label = "a list as params", params = "[1]" },
+    { label = "an empty list as params", params = "[]" },
   }) do
     it("answers -32602 naming params for " .. case.label, function()
       send(tools_call(case.params))
@@ -99,6 +99,19 @@ describe("the shape of a tools/call", function()
       }, replies[1].error)
     end)
   end
+
+  it("answers -32602 naming params for a request without params", function()
+    send('{"jsonrpc":"2.0","id":6,"method":"tools/call"}')
+
+    assert.equals(1, #replies)
+    assert.equals(6, replies[1].id)
+    assert.is_nil(replies[1].result)
+    assert.same({
+      code = -32602,
+      message = "Invalid params",
+      data = "Missing or invalid parameter: params (an object is required)",
+    }, replies[1].error)
+  end)
 
   for _, case in ipairs({
     { label = "a number", arguments = "5" },

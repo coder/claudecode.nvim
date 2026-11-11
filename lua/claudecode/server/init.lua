@@ -348,7 +348,9 @@ function M.register_handlers()
 
     ["tools/call"] = function(client, params)
       local invalid
-      if type(params) ~= "table" then
+      -- A request without params arrives as a plain {}, which islist counts as a list, like []. A JSON {} carries the
+      -- empty-dict mark and passes.
+      if type(params) ~= "table" or islist(params) then
         invalid = "params (an object is required)"
       elseif type(params.name) ~= "string" then
         invalid = "name (a string is required)"
