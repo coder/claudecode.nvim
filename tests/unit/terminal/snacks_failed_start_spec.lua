@@ -136,6 +136,11 @@ describe("claudecode.terminal.snacks failed start", function()
         end
         return res
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       fn = {
         maparg = function()
           return {}
@@ -143,6 +148,9 @@ describe("claudecode.terminal.snacks failed start", function()
       },
       keymap = { set = spy.new(function() end) },
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_call = function(_, fn)
           return fn()
         end,
