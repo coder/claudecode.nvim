@@ -44,6 +44,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 ## Features
 
 - [Review a proposed diff](./open-diff.md) covers openDiff blocking, accept through `:w` and `:ClaudeCodeDiffAccept`, reject through `:q` and `:ClaudeCodeDiffDeny`, `close_tab` finalization, new-file proposals, the unsaved-buffer refusal, and the `unified` layout.
+- [Review a diff with a floating Claude terminal](./terminal-float-diff.md) covers the Snacks float that hides when a diff opens and stays hidden after `close_tab`, for the split and unified layouts and `keep_terminal_focus = true`.
 - [Close diffs in bulk](./close-diffs.md) covers the `closeAllDiffTabs` tool and the `:ClaudeCodeCloseAllDiffs` command.
 - [Open a file for the user](./open-file.md) covers openFile with text and line selections, the background (`makeFrontmost: false`) form, the target window, the preview window, and reloads of files changed on disk.
 - [Share the selection](./selection.md) covers `selection_changed` notifications, `getCurrentSelection`, `getLatestSelection`, and `track_selection = false`.
