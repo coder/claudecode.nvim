@@ -58,7 +58,8 @@ H.check(
     or string.format("no on_disconnect in %d ms, still listed", SETTLE)
 )
 
--- Claude stops answering: it is still dropped, at the first read after the third tick that follows its first unanswered ping.
+-- Claude stops answering: it is still dropped, by the first check after a tick that finds its oldest unanswered ping
+-- 2.5 intervals old.
 claude.answer_pings = false
 local silent_at = H.ms()
 H.log("claude: stops answering pings")

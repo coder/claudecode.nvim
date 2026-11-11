@@ -1,6 +1,7 @@
 -- Scenario: a tick gap while Claude's handshake is still in flight. Before #455 the gap counted against Claude, and the
 -- ping timer dropped it with 1011 one interval after its handshake, before any ping reached it.
--- Promise: a Claude that answers every ping is never dropped. The 101 write callback starts its keepalive window.
+-- Promise: a Claude that answers every ping is never dropped. Since #488 a client has no stamp until a tick pings it, so
+-- a gap in the handshake cannot time it out.
 -- Model path: Accept, TimerTicksAfterGap (the client is still connecting), Read (the upgrade request), WriteDone (101,
 -- connected), TimerTicks (a ping, not a drop).
 local H = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")

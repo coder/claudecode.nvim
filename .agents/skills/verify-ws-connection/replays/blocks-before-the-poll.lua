@@ -8,8 +8,10 @@
 --                 and the oldest ping is 2.8 intervals old at the check. Claude writes 300 KB and then its pong.
 --   sleep:        the loop blocks for 2.7 intervals in an idle callback right after a tick, and Claude sleeps as long
 --                 before its answer, as a machine that sleeps with Neovim does.
--- Promise: Claude is not dropped. The first two need the read callback to clear the stamp on any bytes (BytesClearStamp),
--- the last one needs the check to judge nothing after a block longer than 1.5 intervals (GapSkip).
+-- Promise: Claude is not dropped. big-message needs one of the two guards: the read callback clears the stamp on any
+-- bytes (BytesClearStamp), or the check judges nothing after a block longer than 1.5 intervals (GapSkip). two-blocks
+-- needs BytesClearStamp (the gap skip with a clear on a PONG only still drops Claude), and sleep needs GapSkip (the
+-- any-bytes clear without the gap skip still drops Claude). The code of f3576ea has neither and breaks all three.
 -- Model path: MachineSleeps, PollAndCheck (the check is skipped), TimerTicksAfterGap (the wake clears the stamp).
 local H = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
 local INTERVAL = 200

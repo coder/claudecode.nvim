@@ -51,7 +51,7 @@ site lua/claudecode/server/init.lua: M.state.ping_timer:close() @ function M.sto
 site lua/claudecode/server/init.lua: M.state.ping_timer:stop() @ function M.stop()
 site lua/claudecode/server/init.lua: tcp_server.stop_server(M.state.server) @ function M.stop()
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 0f1deeb861a3a286
+file lua/claudecode/server/tcp.lua f0b2acfc1ccaf3b9
 block new_connection         e1daff4237326df4
 block release_socket         de7e50701ce4c83d
 block disconnect             122662fc03352d6b

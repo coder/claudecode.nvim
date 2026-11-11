@@ -118,11 +118,12 @@ stop_waits_for_close_write() {
       <<<"$close_client"
 }
 fact[StopWaitsForCloseWrite]=$(as_bool stop_waits_for_close_write)
-# The ping timer arms after_next_poll once for the clients it pinged. The callback runs judge_silence with a limit of
-# interval * 2.5 (the third tick after the stamp, the model's Limit). judge_silence drops a client that is still listed and
+# The ping timer pings each connected client, collects it in pinged, and arms after_next_poll once for the clients it
+# pinged. The callback runs judge_silence with a limit of interval * 2.5 (the third tick after the stamp, the model's Limit). judge_silence drops a client that is still listed and
 # connected and whose stamp is that old, with drop_client: close_client(1011), abandon_close_frame, _disconnect_client(1006).
 keepalive_reaps() {
-  in_order '^    if #pinged > 0 then$' '^      after_next_poll\(server, function\(\)$' \
+  in_order '^        client_manager\.send_ping\(client, "ping"\)$' '^        table\.insert\(pinged, client\)$' \
+    '^    if #pinged > 0 then$' '^      after_next_poll\(server, function\(\)$' \
     '^          judge_silence\(server, pinged, interval \* 2\.5\)$' <<<"$ping_timer" &&
     in_order '^local function judge_silence\(server, clients, limit\)$' '^  local now = vim\.loop\.now\(\)$' \
       '^  for _, client in ipairs\(clients\) do$' '^    local since = client\.ping_unanswered_since$' \
@@ -135,9 +136,13 @@ fact[KeepaliveReaps]=$(as_bool keepalive_reaps)
 # Only the callback that after_next_poll runs after a libuv check handle drops a client: libuv runs the check handle after
 # the poll phase that reads the sockets. The timer callback closes and disconnects nothing, and arms the callback for the
 # clients it pinged.
+# judge_silence has one call in the timer callback, the one inside the callback that after_next_poll runs, and
+# after_next_poll calls fn once, from the callback of its check handle.
 judges_after_read() {
   ! { grep -vE '^ *--' <<<"$ping_timer" | grep -qE 'close_client|_disconnect_client|drop_client'; } &&
-    in_order '^  local check = vim\.loop\.new_check\(\)$' '^  check:start\(function\(\)$' '^    fn\(\)$' <<<"$after_next_poll"
+    [[ $(grep -vE '^ *--' <<<"$ping_timer" | grep -c 'judge_silence(') == 1 ]] &&
+    in_order '^  local check = vim\.loop\.new_check\(\)$' '^  check:start\(function\(\)$' '^    fn\(\)$' <<<"$after_next_poll" &&
+    [[ $(grep -vE '^ *--' <<<"$after_next_poll" | grep -c 'fn()') == 1 ]]
 }
 fact[JudgesAfterRead]=$(as_bool judges_after_read)
 # The tick calls update_time before it reads the clock for the wake test, the stamp and the gap: libuv runs the timers of a
@@ -157,7 +162,8 @@ fact[BytesClearStamp]=$(as_bool in_order '^  client_tcp:read_start\(function\(er
 # The callback judges the silence only when its loop time is at most interval * 1.5 after its tick: the machine can have
 # slept between the tick and the poll, and Claude with it.
 fact[GapSkip]=$(as_bool in_order '^      local tick_time = now$' '^      after_next_poll\(server, function\(\)$' \
-  '^        if vim\.loop\.now\(\) - tick_time <= interval \* 1\.5 then$' '^          judge_silence\(server, pinged, interval \* 2\.5\)$' <<<"$ping_timer")
+  '^        if vim\.loop\.now\(\) - tick_time <= interval \* 1\.5 then$' '^          judge_silence\(server, pinged, interval \* 2\.5\)$' \
+  '^        end$' '^        for _, client in ipairs\(stalled\) do$' <<<"$ping_timer")
 fact[WakeClearsStamp]=$(as_bool in_order '^    local is_wake_from_sleep = elapsed > \(interval \* 1\.5\)$' \
   '^    if is_wake_from_sleep then$' '^      for _, client in pairs\(server\.clients\) do$' '^        if client\.state == "connected" then$' \
   '^          client\.ping_unanswered_since = nil$' '^    last_run = now$' <<<"$ping_timer")
@@ -180,9 +186,10 @@ EXPECT=(
 MUTANT_NOTES=("  RejectClosesSocket alone is caught by no rule: _disconnect_client also closes the socket of a client that left the server.")
 
 # Safety rules: one connection, Claude sends 3 frames (its upgrade request included), two delayed ticks (a gap above
-# 1.5 intervals, a tick in a pass that an earlier callback blocked, or a sleep between a tick and its poll). Liveness rules: 2 frames and no delayed tick,
-# which keeps each run under 10 s. DroppedSocketCloses alone assumes that Claude reads again. NoFalseTimeout alone
-# assumes that a Claude that reads answers a ping before the next tick.
+# 1.5 intervals, a tick in a pass that an earlier callback blocked, or a sleep between a tick and its poll). Liveness
+# rules: 2 frames and no delayed tick. A run takes 25 to 165 s (main 24 s, NoFalseTimeout 31 s, the two liveness runs
+# 120 s and 162 s at a host load average of 7 to 20). DroppedSocketCloses alone assumes that Claude reads again.
+# NoFalseTimeout alone assumes that a Claude that reads answers a ping before the next tick.
 tla_constants() {
   local reads=FALSE answers=FALSE
   [[ $1 != *DroppedSocketCloses ]] || reads=TRUE
