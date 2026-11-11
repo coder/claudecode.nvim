@@ -2,7 +2,8 @@
 // Sends malformed and valid `tools/call` messages to the plugin server of one tree over a real WebSocket and judges
 // every answer against the case table below. Prints one line per case and ends with one COUNT line.
 // Usage: node proof-tools-call-wire.mjs <lock file> <tree> <cwd>   (proof-tools-call-wire.sh starts nvim, then this)
-// Exit: 0 every case passed, 1 a case failed or an answer leaked, 2 the probe could not run.
+// Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run or judged fewer cases than
+// the table holds (no case at all included).
 // The token is read from the 0600 lock file and goes only into the upgrade header, as in ws-client.mjs.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -15,15 +16,16 @@ if (!cwd) {
   process.exit(2);
 }
 
-// Normalization. Every string of a decoded answer is rewritten before it is compared or checked for a leak. The cwd
-// goes first, so a run dir under the real home folder is not a leak: getWorkspaceFolders names the cwd on purpose.
+// Normalization. Every string of every frame that the server sends is rewritten before it is compared or checked for a
+// leak. A string that holds a JSON object or list, a tool's text item, is decoded first, so its paths are plain text.
+// The cwd goes first, so a run dir under the real home folder is not a leak: getWorkspaceFolders names the cwd on purpose.
 const PLACEHOLDERS = [
   [cwd, "$CWD"],
   [tree, "$TREE"],
   [homedir(), "$HOME"],
 ].filter(([path]) => path.length > 1);
 // A leak is a Lua source path with a line number, the plugin tree, or a path under the real home folder. The last
-// two are the placeholders that the normalization leaves in an answer.
+// two are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is one too.
 const LEAK = /\.lua:\d|\$TREE|\$HOME/;
 
 // The case table. A row is [name, params of tools/call, expected answer]. An expected answer is one of:
@@ -112,6 +114,11 @@ for (const { name, ok, strings = {} } of TOOLS) {
 
 const normalize = (value) => {
   if (typeof value === "string") {
+    if (/^[[{]/.test(value)) {
+      try {
+        return normalize(JSON.parse(value));
+      } catch {} // not JSON: plain text
+    }
     return PLACEHOLDERS.reduce(
       (text, [path, mark]) => text.replaceAll(path, mark),
       value,
@@ -125,18 +132,12 @@ const normalize = (value) => {
   }
   return value;
 };
-// An answer as the table states it: the error, or the result with its one text item decoded.
+// An answer as the table states it: the error, or the result with its one text item.
 const view = ({ error, result }) => {
-  if (error) return { error };
   const [item] = result?.content?.length === 1 ? result.content : [];
-  if (item?.type !== "text") return { result };
-  try {
-    return {
-      result: /^[[{]/.test(item.text) ? JSON.parse(item.text) : item.text,
-    };
-  } catch {
-    return { result: item.text };
-  }
+  return error
+    ? { error }
+    : { result: item?.type === "text" ? item.text : result };
 };
 
 const die = (error) => {
@@ -148,7 +149,15 @@ process.on("uncaughtException", die);
 async function main() {
   if (typeof WebSocket !== "function")
     throw new Error("this Node has no global WebSocket: use Node 22 or newer");
+  assert(rows.length > 0, "the case table is empty");
   const { authToken } = JSON.parse(readFileSync(lockPath, "utf8"));
+  assert(
+    typeof authToken === "string" && authToken,
+    "the lock file has no token",
+  );
+  // The token must not reach stdout, so a frame that holds it is a leak and its text is not printed.
+  const show = (text) =>
+    text.includes(authToken) ? "<holds the auth token>" : text;
   const ws = new WebSocket(
     `ws://127.0.0.1:${lockPath.match(/(\d+)\.lock$/)[1]}`,
     {
@@ -157,9 +166,16 @@ async function main() {
   );
   let want = 100; // the id of the call in flight
   let answer = null; // its answer
+  let leak = null; // the first frame since the call that leaks, which is any frame, not only the answer
+  let leaks = 0;
   let wake = () => {};
   ws.onmessage = ({ data }) => {
-    const frame = JSON.parse(data);
+    const frame = normalize(JSON.parse(data));
+    const text = JSON.stringify(frame);
+    if (LEAK.test(text) || text.includes(authToken)) {
+      leaks++;
+      leak ??= text;
+    }
     if (frame.id === want) {
       answer ??= frame;
       wake();
@@ -171,10 +187,10 @@ async function main() {
     ws.onerror = () => reject(new Error("WebSocket handshake failed"));
   });
 
+  let judged = 0;
   let failed = 0;
-  let leaks = 0;
   for (const { name, params, expect } of rows) {
-    answer = null;
+    answer = leak = null;
     const replied = new Promise((resolve) => (wake = resolve));
     ws.send(
       JSON.stringify({
@@ -188,12 +204,11 @@ async function main() {
       replied,
       new Promise((resolve) => setTimeout(resolve, 3000)),
     ]);
-    const seen = answer && normalize(view(answer));
+    const seen = answer && view(answer);
     const text = JSON.stringify(seen);
-    const leaked = LEAK.test(text);
     let problem = null;
-    if (!answer) problem = "no answer in 3 s";
-    else if (leaked) problem = `the answer leaks a path: ${text}`;
+    if (leak) problem = `a frame leaks a path: ${show(leak)}`;
+    else if (!answer) problem = "no answer in 3 s";
     else if (expect.param !== undefined) {
       if (
         seen.error?.code !== -32602 ||
@@ -206,15 +221,26 @@ async function main() {
     ) {
       problem = `want ${JSON.stringify(expect.answer)}, got ${text}`;
     }
-    if (leaked) leaks++;
+    judged++;
     if (problem) failed++;
     console.log(
       problem ? `FAIL: ${name}: ${problem.slice(0, 240)}` : `ok: ${name}`,
     );
   }
+  // A frame that comes after the last answer is read too.
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (leak) {
+    failed++;
+    console.log(
+      `FAIL: after the last case: a frame leaks a path: ${show(leak).slice(0, 240)}`,
+    );
+  }
+  if (judged !== rows.length) {
+    throw new Error(`the checker judged ${judged} of ${rows.length} cases`);
+  }
   console.log(
-    `COUNT tools-call-wire cases=${rows.length} failed=${failed} leaks=${leaks}`,
+    `COUNT tools-call-wire cases=${judged} failed=${failed} leaks=${leaks}`,
   );
-  process.exit(failed ? 1 : 0);
+  process.exit(failed || leaks ? 1 : 0);
 }
 main().catch(die);

@@ -57,13 +57,14 @@ trap 'exit 129' HUP
 RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)"
 RUN="$(cd "$RUN" && pwd -P)"
 mkdir "$RUN/work"
-# nvim quits by itself after 3 minutes, in case this script dies before its cleanup.
-env -i PATH=/usr/bin:/bin HOME="$RUN/home" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" \
+# nvim quits by itself when this script is gone, SIGKILL included: it checks its parent every half second. Its server
+# stop closes the socket, which ends the checker, and removes the lock file.
+env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" HOME="$RUN/home" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" \
   XDG_STATE_HOME="$RUN/state" XDG_CACHE_HOME="$RUN/cache" CLAUDE_CONFIG_DIR="$RUN/claude" \
   WIRE_TREE="$TREE" WIRE_CWD="$RUN/work" "$NVIM" --headless -u NONE -i NONE \
   --cmd 'lua vim.opt.rtp:prepend(vim.env.WIRE_TREE); vim.api.nvim_set_current_dir(vim.env.WIRE_CWD)' \
   -c "lua require('claudecode').setup({ terminal = { provider = 'none' }, track_selection = false })" \
-  -c "lua vim.defer_fn(function() vim.cmd('qa!') end, 180000)" >"$RUN/nvim.out" 2>&1 &
+  -c "lua vim.fn.timer_start(500, function() if (vim.uv or vim.loop).os_getppid() ~= tonumber(vim.env.WIRE_PARENT) then vim.cmd('qa!') end end, { ['repeat'] = -1 })" >"$RUN/nvim.out" 2>&1 &
 NVIM_PID=$!
 
 shopt -s nullglob
