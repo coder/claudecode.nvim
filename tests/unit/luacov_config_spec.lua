@@ -16,6 +16,12 @@ describe(".luacov", function()
     local chunk = assert(loadfile(".luacov"))
     local outputs = { ["pwd"] = typed, ["pwd -P"] = resolved }
     local env = setmetatable({
+      -- No TMPDIR: an exclude built from it falls back to /tmp on every host, where the /tmp cases catch it.
+      os = {
+        getenv = function()
+          return nil
+        end,
+      },
       io = {
         popen = function(command)
           local line = assert(outputs[command], "unexpected command: " .. command)
@@ -86,6 +92,21 @@ describe(".luacov", function()
     local root = "/home/runner/work/claudecode.nvim/claudecode.nvim"
 
     assert_plugin_only(load_runner(root, root), root)
+  end)
+
+  it("keeps the files of a checkout in a folder named like a temp folder", function()
+    local root = "/tmp/claudecode.Ab1234"
+
+    assert_plugin_only(load_runner(root, root), root)
+  end)
+
+  it("keeps the files of a checkout that a symlink points to in a folder named like a temp folder", function()
+    local typed = "/home/u/link"
+    local resolved = "/tmp/claudecode.Ab1234"
+    local runner = load_runner(typed, resolved)
+
+    assert_plugin_only(runner, typed)
+    assert_plugin_only(runner, resolved)
   end)
 
   it("takes a folder name's pattern characters literally", function()
