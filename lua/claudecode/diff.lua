@@ -1014,6 +1014,42 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
+---Free the buffer names that a split diff of `tab_name` for `old_file_path` is about to take. An unlisted buffer of the
+---plugin's kind under such a name that no active diff owns is left by a reload, which drops `active_diffs`. It keeps
+---its windows and text, but not its tab name, so that `:ClaudeCodeDiffAccept` in its window cannot resolve a new diff.
+---@param tab_name string
+---@param old_file_path string
+local function rename_orphaned_diff_buffers(tab_name, old_file_path)
+  local owned = {}
+  for _, diff_data in pairs(active_diffs) do
+    if diff_data.new_buffer then
+      owned[diff_data.new_buffer] = true
+    end
+    if diff_data.original_buffer then
+      owned[diff_data.original_buffer] = true
+    end
+  end
+  local orphan_names = {
+    { name = tab_name .. " (proposed)", buftype = "acwrite" },
+    { name = tab_name .. " (NEW FILE - proposed)", buftype = "acwrite" },
+    { name = old_file_path .. " (NEW FILE)", buftype = "nofile" },
+  }
+  for _, orphan in ipairs(orphan_names) do
+    local wanted = vim.fn.fnamemodify(orphan.name, ":p")
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if
+        not owned[buf]
+        and vim.api.nvim_buf_get_name(buf) == wanted
+        and vim.bo[buf].buftype == orphan.buftype
+        and not vim.bo[buf].buflisted
+      then
+        vim.b[buf].claudecode_diff_tab_name = nil
+        pcall(vim.api.nvim_buf_set_name, buf, wanted .. " (orphaned " .. buf .. ")")
+      end
+    end
+  end
+end
+
 local diffs_registered = 0
 
 ---Register diff state for tracking
@@ -1611,6 +1647,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
       return
     end
+
+    rename_orphaned_diff_buffers(tab_name, params.old_file_path)
 
     local original_tab_number = vim.api.nvim_get_current_tabpage()
     local created_new_tab = false
