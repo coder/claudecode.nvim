@@ -42,9 +42,12 @@ V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 root=$PWD
 TMP=$(mktemp -d)
 live_state="" live_path="" st=""
+# own_dir <dir>: true for a real directory that this user owns. `vcn.sh cleanup` sources the run.env of a state dir, so the
+# proof never acts on one that another user made.
+own_dir() { [[ -d $1 && ! -L $1 && -O $1 ]]; }
 # stop_run <state dir>: stops a run that a case left behind, so no process of it outlives the proof.
 stop_run() {
-  [[ $1 == /tmp/vcn.* && -e $1 ]] || return 0
+  [[ $1 == /tmp/vcn.* ]] && own_dir "$1" || return 0
   env PATH="$base" VCN_STATE="$1" "$V" cleanup >/dev/null 2>&1 || true
   rm -rf -- "$1"
 }
@@ -313,7 +316,7 @@ find_state() {
   st=""
   for _ in $(seq 300); do
     for f in /tmp/vcn.*/run.env; do
-      if [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$1" "$f" 2>/dev/null; then st=$(dirname "$f"); fi
+      if own_dir "${f%/*}" && [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$1" "$f" 2>/dev/null; then st=${f%/*}; fi
     done
     [[ -z $st ]] || return 0
     sleep 0.1
