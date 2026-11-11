@@ -232,6 +232,17 @@ async function testFenceTracking() {
     1,
     "a backtick fence cannot carry a backtick in its info string",
   );
+  // CommonMark reads an info string literally for this rule: an escape or a character reference changes nothing.
+  assert.equal(
+    outside(["```\\`x", "## Real", "```", "## Real"]),
+    1,
+    "a backslash before a backtick does not let a backtick fence carry it",
+  );
+  assert.equal(
+    outside(["```&#96;", "## Real", "```", "## Real"]),
+    3,
+    "a character reference for a backtick is not a backtick in the info string",
+  );
   assert.equal(
     outside(["~~~ a`b", "## Real", "~~~", "## Real"]),
     3,
@@ -444,6 +455,25 @@ async function testFenceTracking() {
           }
         }
       }
+      // Then a marker after it: a backtick opener cannot carry a backtick, wherever it stands, and a closer cannot
+      // carry any marker.
+      assert.equal(
+        outside([fence + character + marker, "## Real", fence, "## Real"]),
+        marker === "`" ? 1 : 3,
+        `${name} then a ${marker} after the markers of a ${marker} opener`,
+      );
+      assert.equal(
+        outside([
+          fence,
+          "## Real",
+          fence + character + marker,
+          "## Real",
+          fence,
+          "## Real",
+        ]),
+        5,
+        `${name} then a ${marker} after a closing fence of ${marker} keeps the fence open`,
+      );
     }
   }
   assert.equal(
@@ -463,23 +493,26 @@ async function testFenceTracking() {
       (other) => other !== marker && other !== " ",
     )) {
       const name = `U+${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
-      assert.equal(
-        outside([character + fence, "## Real", fence, "## Real"]),
-        1,
-        `${name} before a fence of ${marker} is not indent for an opener`,
-      );
-      assert.equal(
-        outside([
-          fence,
-          "## Real",
-          character + fence,
-          "## Real",
-          fence,
-          "## Real",
-        ]),
-        5,
-        `${name} before a fence of ${marker} is not indent for a closer`,
-      );
+      // Also after up to three spaces: the code unit ends the indent wherever it stands.
+      for (const spaces of ["", " ", "  ", "   "]) {
+        assert.equal(
+          outside([spaces + character + fence, "## Real", fence, "## Real"]),
+          1,
+          `${name} after ${spaces.length} spaces before a fence of ${marker} is not indent for an opener`,
+        );
+        assert.equal(
+          outside([
+            fence,
+            "## Real",
+            spaces + character + fence,
+            "## Real",
+            fence,
+            "## Real",
+          ]),
+          5,
+          `${name} after ${spaces.length} spaces before a fence of ${marker} is not indent for a closer`,
+        );
+      }
     }
   }
   // An info string has no length limit, and neither has a marker run.
@@ -601,6 +634,29 @@ async function testFenceTracking() {
   }
 }
 
+/**
+ * Runs `fn` with a formatter that prints its input, so a test sees the text that `updateContent` builds. prettier
+ * rewrites some generated documents (it dedents a line that CommonMark reads as a paragraph continuation, for
+ * example), and each prettier run takes far longer than the script.
+ */
+function withIdentityFormatter(fn) {
+  const directory = mkdtempSync(join(tmpdir(), "identity-formatter-"));
+  const formatter = join(directory, "format.sh");
+  writeFileSync(formatter, "#!/bin/sh\ncat\n", { mode: 0o755 });
+  const previousFormatter = process.env.PRETTIER_BIN;
+  process.env.PRETTIER_BIN = formatter;
+  try {
+    return fn();
+  } finally {
+    if (previousFormatter === undefined) {
+      delete process.env.PRETTIER_BIN;
+    } else {
+      process.env.PRETTIER_BIN = previousFormatter;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 async function testUnreleasedUpdaterFences() {
   const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
   const released =
@@ -682,6 +738,26 @@ async function testUnreleasedUpdaterFences() {
     );
   }
 
+  // `updateContent` splits the text itself, so every other code unit must stay inside its line too. One text holds a
+  // line "Note<unit>```" for each code unit but LF and CR. If any unit ended a line, a fence would open and swallow the
+  // next release.
+  withIdentityFormatter(() => {
+    const noteLines = [];
+    for (let code = 0; code <= 0xffff; code += 1) {
+      if (code !== 0x0a && code !== 0x0d) {
+        noteLines.push(`Note${String.fromCharCode(code)}\`\`\``);
+      }
+    }
+    assert.equal(
+      update(
+        `# Changelog\n\n## [Unreleased]\n\n${noteLines.join("\n")}${previous}`,
+      ),
+      // The formatter does not turn the `*` bullet of `entry` into `-`.
+      released.replace("- Added x", "* Added x"),
+      "no code unit but LF and CR ends a line in updateContent",
+    );
+  });
+
   // A text without a line ending, and a missing changelog file, still work.
   // Without a title or an Unreleased heading, CR CR LF is still two line endings.
   assert.equal(
@@ -707,9 +783,9 @@ async function testUnreleasedUpdaterFences() {
     );
   }
 
-  // A CR after an LF, and two CRs before an LF, are separate line endings: each one ends a line, so the
-  // fenced block keeps its blank line.
-  for (const inside of ["x\n\ry", "x\r\r\ny"]) {
+  // A CR after an LF, two CRs before an LF, and a CR LF after an LF are separate line endings: each one ends a line,
+  // so the fenced block keeps its blank line.
+  for (const inside of ["x\n\ry", "x\r\r\ny", "x\n\r\ny"]) {
     assert.equal(
       update(
         `# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2025-09-15\n\n\`\`\`\n${inside}\n\`\`\`\n`,
@@ -762,7 +838,6 @@ const LOOKALIKES = [
   "\u3000",
   "\ufeff",
 ];
-
 /**
  * commonmark.js 0.31.2 opens a backtick fence for "```x<U+2028>`", but the spec says a backtick info string cannot
  * hold a backtick, and markdown-it 14 agrees with the spec and with the runner. The cause: commonmark.js checks the
@@ -1045,24 +1120,9 @@ async function testFenceDifferential() {
     `lines with an extra code unit as indent: ${coverage.oddIndent}`,
   );
 
-  // The existing sections of a changelog stay headings. prettier would rewrite some of these documents (it dedents a
-  // line that CommonMark reads as a paragraph continuation, for example), so the formatter here is a script that
-  // prints its input. The real formatter runs in the updater tests above.
-  const directory = mkdtempSync(join(tmpdir(), "fence-differential-"));
-  const formatter = join(directory, "format.sh");
-  writeFileSync(formatter, "#!/bin/sh\ncat\n", { mode: 0o755 });
-  const previousFormatter = process.env.PRETTIER_BIN;
-  process.env.PRETTIER_BIN = formatter;
-  try {
-    checkUpdaterDocuments(random, coverage);
-  } finally {
-    if (previousFormatter === undefined) {
-      delete process.env.PRETTIER_BIN;
-    } else {
-      process.env.PRETTIER_BIN = previousFormatter;
-    }
-    rmSync(directory, { recursive: true, force: true });
-  }
+  // The existing sections of a changelog stay headings. The formatter prints its input (see `withIdentityFormatter`).
+  // The real formatter runs in the updater tests above.
+  withIdentityFormatter(() => checkUpdaterDocuments(random, coverage));
 }
 
 function checkUpdaterDocuments(random, coverage) {
