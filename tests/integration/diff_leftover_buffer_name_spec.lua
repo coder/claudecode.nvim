@@ -323,29 +323,35 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert(ok, err)
   end
 
-  local function open_nested(trigger, layout, loud)
+  -- Each trigger runs one openDiff for the same tab name from inside the first setup. Returns the first call, the
+  -- nested calls in the order they ran, and the suffix of the first diff's buffer name.
+  local function open_nested(triggers, layout, loud)
     local _, tools = load_plugin(layout)
     local suffix = layout == "unified" and "(unified diff)" or "(proposed)"
-    local nested
-    local fired = false
+    local nested = {}
     local group = vim.api.nvim_create_augroup("LeftoverNestedOpen", { clear = true })
-    vim.api.nvim_create_autocmd(trigger, {
-      group = group,
-      callback = function(event)
-        local bound = trigger == "FileType" and vim.b[event.buf].claudecode_inline_diff
-        local named = vim.api.nvim_buf_get_name(event.buf):find(suffix, 1, true)
-        if fired or not (bound or named) then
-          return
-        end
-        fired = true
-        vim.schedule(function()
-          nested = open_diff(tools, "alpha two\n")
-        end)
-        vim.wait(200, function()
-          return nested ~= nil
-        end, 10)
-      end,
-    })
+    for _, trigger in ipairs(triggers) do
+      local fired = false
+      vim.api.nvim_create_autocmd(trigger, {
+        group = group,
+        callback = function(event)
+          local bound = trigger == "FileType" and vim.b[event.buf].claudecode_inline_diff
+          local named = vim.api.nvim_buf_get_name(event.buf):find(suffix, 1, true)
+          if fired or not (bound or named) then
+            return
+          end
+          fired = true
+          local call
+          vim.schedule(function()
+            call = open_diff(tools, "alpha two\n")
+          end)
+          vim.wait(200, function()
+            return call ~= nil
+          end, 10)
+          nested[#nested + 1] = call
+        end,
+      })
+    end
     local first
     local run = function()
       first = open_diff(tools, "alpha one\n")
@@ -381,9 +387,9 @@ describe("openDiff with a leftover diff buffer under its name", function()
         .. ", "
         .. order.layout,
       function()
-        local first, nested, suffix = open_nested(order.trigger, order.layout)
+        local first, nested, suffix = open_nested({ order.trigger }, order.layout)
 
-        assert.is_not_nil(nested, "the second openDiff ran inside the first setup")
+        assert.equal(1, #nested, "the second openDiff ran inside the first setup")
         assert.is_true(first._deferred, vim.inspect(first.error))
         local diff = require("claudecode.diff")
         local state = diff._get_active_diffs()[tab_name]
@@ -398,10 +404,21 @@ describe("openDiff with a leftover diff buffer under its name", function()
     )
   end
 
-  it("opens the first diff when the default notification runs inside its setup, in the unified layout", function()
-    local first, nested = open_nested("BufEnter", "unified", true)
+  it("keeps the name of a diff's buffer when a second and a third openDiff run inside its setup", function()
+    local first, nested, suffix = open_nested({ "BufEnter", "BufWinEnter" }, "vertical")
 
-    assert.is_not_nil(nested, "the second openDiff ran inside the first setup")
+    assert.equal(2, #nested, "both openDiff calls ran inside the first setup")
+    assert.is_true(first._deferred, vim.inspect(first.error))
+    local state = require("claudecode.diff")._get_active_diffs()[tab_name]
+    assert.equal("alpha one\n", state.new_file_contents, "the first diff is the registered one")
+    assert.same({ state.new_buffer }, buffers_named(suffix), "the first diff keeps the name of its buffer")
+    assert.equal(tab_name, vim.b[state.new_buffer].claudecode_diff_tab_name)
+  end)
+
+  it("opens the first diff when the default notification runs inside its setup, in the unified layout", function()
+    local first, nested = open_nested({ "BufEnter" }, "unified", true)
+
+    assert.equal(1, #nested, "the second openDiff ran inside the first setup")
     assert.is_true(first._deferred, vim.inspect(first.error))
     assert.equal("alpha one\n", require("claudecode.diff")._get_active_diffs()[tab_name].new_file_contents)
   end)
