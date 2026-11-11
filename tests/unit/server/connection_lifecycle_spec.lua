@@ -782,6 +782,36 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
     end)
 
+    -- The two tests below pin the wake threshold from both sides, to the millisecond. A gap of exactly 1.5 intervals is
+    -- not a wake, and a gap 1 ms above it is.
+    it(
+      "counts a tick at exactly the wake threshold, so that it is not a wake and a stalled client is dropped",
+      function()
+        local tick, _, client, handle = stalled_client()
+        answer_and(tick, 1)(handle)
+        assert.is_true(client.write_stalled)
+
+        answer_and(tick, 1.5)(handle)
+
+        assert.is_nil(server.clients[client.id], "a gap of exactly 1.5 intervals restarted the stall window")
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+      end
+    )
+
+    it("starts a fresh stall window at a tick 1 ms above the wake threshold", function()
+      local tick, _, client, handle = stalled_client()
+      answer_and(tick, 1)(handle)
+      assert.is_true(client.write_stalled)
+
+      handle._read_cb(nil, pong)
+      clock = clock + 1.5 * interval + 1
+      tick()
+
+      assert.is_nil(client.write_stalled, "a gap above 1.5 intervals kept the count")
+      assert.is_not_nil(server.clients[client.id], "a gap above 1.5 intervals counted against the client")
+      assert.equals(0, #checks, "a wake tick asked for a confirmation")
+    end)
+
     it("judges only the clients that answered at the tick", function()
       local tick, _, client, handle = stalled_client()
       answer_and(tick, 1)(handle)
@@ -994,6 +1024,21 @@ describe("The lifecycle of a WebSocket connection", function()
         assert.same({}, lines, "a client that already left was logged as not reading")
         assert.spy(callbacks.on_disconnect).was_called(1)
         assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "EOF")
+      end)
+
+      it("skips a client whose socket failed to read in the poll of its confirmation, and logs no stall", function()
+        local client, handle = pending_confirmation()
+
+        local lines = logged_info_during(function()
+          poll(function()
+            handle._read_cb("ECONNRESET", nil) -- the poll reads the error of a reset connection
+          end)
+        end)
+
+        assert.same({}, lines, "a client that already left was logged as not reading")
+        assert.spy(callbacks.on_disconnect).was_called(1)
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Client read error: ECONNRESET")
+        assert.is_nil(server.clients[client.id])
       end)
 
       it("closes the handles of a confirmation in stop_server, and the confirmation never runs", function()
@@ -1288,6 +1333,20 @@ describe("The lifecycle of a WebSocket connection", function()
         assert.is_true(deadline.stopped and deadline.closed, "the deadline keeps running")
       end
     )
+
+    -- The fake timers run only when a test calls their callback, so no other test reads `delay`. A deadline that first
+    -- runs at once cuts off a Claude that is still reading, and one that first runs after three windows keeps the queue
+    -- three times as long as the bound says. Real sockets showed both (verifier probes at a 3 s interval).
+    it("first runs the deadline one window after the frame, not at once and not later", function()
+      start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      handle._read_cb(nil, binary())
+
+      local deadline = close_deadline()
+
+      assert.equals(2 * interval, deadline.delay, "the deadline does not first run one window after the frame")
+    end)
 
     it("waits while Claude reads, and the write callback then closes the socket and ends the deadline", function()
       start_ping_timer()
