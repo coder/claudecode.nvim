@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# openDiff accept via :w, from a fresh `vcn.sh launch` (hello.txt open). Needs VCN_STATE and OUT, the two values launch prints.
+# openDiff accept via :w, from a fresh `vcn.sh launch` (hello.txt open).
 # Evidence lands in $OUT as opendiff-accept-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"

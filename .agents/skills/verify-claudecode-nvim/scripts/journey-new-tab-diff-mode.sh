@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Two openDiff calls that each open in a new tab leave the cursor in the proposal in Normal mode. Needs VCN_STATE and OUT, the
-# two values a launch prints, from a launch with a real Claude terminal and diff_opts.open_in_new_tab, for example:
+# Two openDiff calls that each open in a new tab leave the cursor in the proposal in Normal mode. Run it after a launch
+# with a real Claude terminal and diff_opts.open_in_new_tab, for example:
 #   VCN_SETUP='{"terminal_cmd":"sleep 300","terminal":{"provider":"native"},"diff_opts":{"open_in_new_tab":true}}' vcn.sh launch
 # Add "layout":"unified" to diff_opts for the unified layout. Evidence lands in $OUT as new-tab-diff-mode-*.
 set -euo pipefail

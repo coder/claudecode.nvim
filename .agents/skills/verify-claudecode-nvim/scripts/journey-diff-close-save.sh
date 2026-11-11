@@ -2,7 +2,7 @@
 # Checks that `:wq`, `:x` and `ZZ` close the proposal window, a second `:w` neither fails nor answers again, no buffer
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
 # that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
-# after the `:e` stays. Needs VCN_STATE and OUT, the two values a fresh launch prints:
+# after the `:e` stays. Run it after a fresh launch:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
