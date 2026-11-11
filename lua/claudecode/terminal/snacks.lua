@@ -14,9 +14,11 @@ local starting = false
 -- module, so the next module instance can find the terminal again.
 local OWNED_MARK = owned.SNACKS_MARK
 
--- Written on each terminal buffer this provider starts: whether it started with auto_close. A buffer variable
--- survives a reload of this module, like the mark, so the next module instance knows without the Snacks instance.
+-- Written on each terminal buffer this provider starts: whether it started with auto_close, and its window options (as
+-- plain data: position, size, border and so on). A buffer variable survives a reload of this module, like the mark, so
+-- the next module instance knows both without the Snacks instance.
 local AUTO_CLOSE_VAR = "claudecode_snacks_auto_close"
+local WINDOW_VAR = "claudecode_snacks_window"
 
 --- @return boolean
 local function is_available()
@@ -60,6 +62,24 @@ local function setup_terminal_events(term_instance, config)
     logger.debug("terminal", "Terminal buffer wiped")
     forget()
   end, { buf = true })
+end
+
+---A copy of a table without the values that a buffer variable cannot hold (functions), so that it can be stored.
+---@param value any
+---@return any copy nil for a function
+local function plain(value)
+  local kind = type(value)
+  if kind == "function" or kind == "userdata" or kind == "thread" then
+    return nil
+  end
+  if kind ~= "table" then
+    return value
+  end
+  local copy = {}
+  for key, item in pairs(value) do
+    copy[key] = plain(item)
+  end
+  return copy
 end
 
 ---Builds Snacks terminal options with focus control
@@ -423,45 +443,67 @@ local function forget_ended_terminal()
   end
 end
 
----A stand-in for the Snacks instance of a Claude that an earlier copy of this module started (before a reload). The
----Claude buffer keeps its mark, but nothing hands out its instance: Snacks.terminal.list() keys an instance by its
----command, directory, env and count, and clears the key when any buffer with that key is wiped, so it can lose a
----running Claude. The stand-in shows, hides and closes the buffer through the window functions that the Snacks
----instance would use for a split. A float that is gone comes back as a split.
+---The config of an adopted terminal: the config that the entry passes, except that `auto_close` is what the terminal
+---started with, when the buffer says (an older version does not write it, so the entry's config decides).
 ---@param buf number
----@return table handle
-local function handle_for(buf)
-  local handle = {
-    buf = buf,
-    win = vim.fn.win_findbuf(buf)[1],
-    adopted = true,
-    _cc = { kind = "split", config = { auto_close = vim.b[buf][AUTO_CLOSE_VAR] == true } },
-  }
-  function handle:buf_valid()
-    return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
+---@param config table|nil
+---@return table
+local function adopted_config(buf, config)
+  local merged = {}
+  for key, value in pairs(config or {}) do
+    merged[key] = value
   end
-  ---Closes the windows that show the buffer, then wipes it. That ends a Claude that still runs.
-  function handle:close()
-    local closing = self.buf
-    self.buf, self.win = nil, nil
-    if closing and vim.api.nvim_buf_is_valid(closing) then
-      for _, win in ipairs(vim.fn.win_findbuf(closing)) do
-        pcall(vim.api.nvim_win_close, win, true)
-      end
-      pcall(vim.api.nvim_buf_delete, closing, { force = true })
-    end
+  local started_with = vim.b[buf][AUTO_CLOSE_VAR]
+  if started_with ~= nil then
+    merged.auto_close = started_with
   end
-  return handle
+  return merged
+end
+
+---A Snacks instance for the Claude that an earlier copy of this module started (before a reload). The Claude buffer
+---keeps its mark, but Snacks.terminal.list() cannot hand out its instance: Snacks keys an instance by its command,
+---directory, env and count, and clears the key when any buffer with that key is wiped, so it can lose a running Claude.
+---So this wraps the buffer in a new Snacks window with the window options that the terminal started with (from the
+---buffer variable, or the entry's config for an older version), and shows no window of its own. A split or a float
+---then comes back the way it started.
+---@param buf number
+---@param config table|nil
+---@return table instance
+local function wrap_terminal(buf, config)
+  local stored = vim.b[buf][WINDOW_VAR]
+  local win_opts
+  if type(stored) == "table" then
+    win_opts = plain(stored)
+  else
+    -- An older version stored nothing. Snacks.terminal.open gives a split the winbar below.
+    win_opts = plain(build_opts(config or {}, {}, true).win)
+    win_opts.wo = win_opts.wo or {}
+    win_opts.wo.winbar = win_opts.position == "float" and "" or "1: %{get(b:, 'term_title', '')}"
+  end
+  win_opts.keys, win_opts.bo = nil, nil
+  win_opts.buf, win_opts.show = buf, false
+  local instance = Snacks.win(win_opts)
+  -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
+  -- buffer of a scratch instance when it closes, and this terminal buffer was started by Snacks.terminal.
+  instance.buf, instance.scratch_buf = buf, buf
+  instance.win = vim.fn.win_findbuf(buf)[1]
+  patch_instance(instance, adopted_config(buf, config))
+  instance.adopted = true
+  return instance
 end
 
 ---Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the Claude that an earlier
 ---copy of this module started (before a reload): its buffer keeps its mark, and a live job shows that it still runs. A
 ---window may or may not show it.
-local function adopt_existing_terminal()
+---@param config table|nil The config of the entry, when it has one
+local function adopt_existing_terminal(config)
   forget_ended_terminal()
   if terminal and terminal:buf_valid() then
     if terminal.adopted then
       terminal.win = vim.fn.win_findbuf(terminal.buf)[1]
+      if config then
+        terminal._cc.config = adopted_config(terminal.buf, config)
+      end
     end
     return
   end
@@ -471,7 +513,7 @@ local function adopt_existing_terminal()
   end
   local buf = owned.find(OWNED_MARK)
   if buf then
-    terminal = handle_for(buf)
+    terminal = wrap_terminal(buf, config)
     require("claudecode.logger").debug("terminal", "Recovered existing Claude terminal in buffer", buf)
   end
 end
@@ -507,7 +549,7 @@ function M.open(cmd_string, env_table, config, focus)
 
   focus = utils.normalize_focus(focus)
 
-  adopt_existing_terminal()
+  adopt_existing_terminal(config)
 
   if terminal and terminal:buf_valid() then
     -- Reuse the existing terminal. Route through cc_show so a hidden terminal is
@@ -559,6 +601,13 @@ function M.open(cmd_string, env_table, config, focus)
     patch_instance(term_instance, config)
     vim.b[term_instance.buf][OWNED_MARK] = true
     vim.b[term_instance.buf][AUTO_CLOSE_VAR] = config.auto_close and true or false
+    -- The resolved options of the instance (the terminal style, position, size, window options), not the ones passed.
+    local window = plain(term_instance.opts or opts.win)
+    window.keys, window.on_buf, window.on_win, window.bo, window.win = nil, nil, nil, nil, nil
+    -- A table that mixes list and map keys cannot be stored. The adoption then uses the entry's config.
+    pcall(function()
+      vim.b[term_instance.buf][WINDOW_VAR] = window
+    end)
     if not focus then
       -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter
@@ -660,7 +709,7 @@ function M.simple_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
-  adopt_existing_terminal()
+  adopt_existing_terminal(config)
   if terminal and terminal:buf_valid() then
     if cc_is_visible(terminal) then
       logger.debug("terminal", "Simple toggle: hiding visible terminal")
@@ -687,7 +736,7 @@ function M.focus_toggle(cmd_string, env_table, config)
 
   local logger = require("claudecode.logger")
 
-  adopt_existing_terminal()
+  adopt_existing_terminal(config)
   if terminal and terminal:buf_valid() then
     if not cc_is_visible(terminal) then
       -- Terminal exists but is hidden -> show and focus it.

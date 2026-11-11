@@ -58,7 +58,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
     local key = snacks_key(cmd, opts)
     state.buffers[bufnr] = { jobid = jobid, vars = {}, key = key }
     state.running_jobs[jobid] = true
-    local term = { buf = bufnr, key = key, opts = { wo = {}, w = {} } }
+    local win_opts = opts.win or {}
+    local term =
+      { buf = bufnr, key = key, opts = { wo = {}, w = {}, position = win_opts.position, width = win_opts.width } }
     state.keyed[key] = term
     function term:buf_valid()
       return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
@@ -104,6 +106,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
       buffers = {},
       windows = {},
       terminals = {},
+      wrapped = {}, -- every Snacks.win call
       keyed = {},
       running_jobs = {},
       exiting_jobs = {},
@@ -297,6 +300,28 @@ describe("claudecode.terminal.snacks after a module reload", function()
     }
 
     package.loaded["snacks"] = {
+      -- Snacks.win: an instance for an existing buffer (opts.buf), with no window of its own yet. Snacks sets `buf` only
+      -- when it shows the instance, and its close wipes the buffer only when it is the instance's scratch buffer.
+      win = function(opts)
+        local term = { opts = { wo = opts.wo or {}, w = opts.w or {}, position = opts.position }, config = opts }
+        function term:buf_valid()
+          return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
+        end
+        function term:close()
+          local win, buf = self.win, self.buf
+          local wipe = buf ~= nil and buf == self.scratch_buf
+          self.win, self.buf = nil, nil
+          if win and state.windows[win] then
+            state.windows[win] = nil
+          end
+          if wipe and state.buffers[buf] then
+            vim.api.nvim_buf_delete(buf, { force = true })
+          end
+        end
+        term.hide, term.show, term.toggle = function() end, function() end, function() end
+        table.insert(state.wrapped, term)
+        return term
+      end,
       terminal = {
         open = snacks_open,
         -- Snacks.terminal.list: the instances that a key still holds.
@@ -454,18 +479,57 @@ describe("claudecode.terminal.snacks after a module reload", function()
     assert.are.equal(1, running_count())
   end)
 
-  -- A Claude that an older version started has the mark but not the auto_close variable. An exited one is not forgotten
-  -- then, like a terminal that started without auto_close.
-  it("keeps an adopted Claude that has no auto_close variable after it exits", function()
-    snacks_provider.open("claude", {}, config, true)
-    local claude = started[1]
-    state.buffers[claude.buf].vars.claudecode_snacks_auto_close = nil
-    reload_snacks()
-    assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+  describe("a Claude that the terminal was adopted from", function()
+    it("is wrapped in a Snacks window with the options that it started with", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      reload_snacks()
 
-    state.running_jobs[state.buffers[claude.buf].jobid] = nil
+      -- The entry's config differs now, but the window keeps what the terminal started with.
+      snacks_provider.open("claude", {}, vim.tbl_deep_extend("force", config, { split_side = "left" }), true)
 
-    assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      assert.are.equal(1, #state.wrapped)
+      local wrapped = state.wrapped[1]
+      assert.are.equal(claude.buf, wrapped.config.buf)
+      assert.is_false(wrapped.config.show)
+      assert.are.equal("right", wrapped.config.position)
+      assert.are.equal(0.3, wrapped.config.width)
+      assert.is_nil(wrapped.config.keys)
+      assert.is_nil(wrapped.config.bo)
+      assert.are.equal(claude.buf, wrapped.buf)
+    end)
+
+    it("is wiped when the wrapped instance closes", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+
+      snacks_provider.close()
+
+      assert.is_false(vim.api.nvim_buf_is_valid(claude.buf))
+      assert.are.equal(0, running_count())
+    end)
+
+    -- An older version wrote neither variable. The entry's config then decides the window options and auto_close.
+    for _, auto_close in ipairs({ true, false }) do
+      it("from an older version follows the configured auto_close (" .. tostring(auto_close) .. ")", function()
+        snacks_provider.open("claude", {}, config, true)
+        local claude = started[1]
+        state.buffers[claude.buf].vars.claudecode_snacks_auto_close = nil
+        state.buffers[claude.buf].vars.claudecode_snacks_window = nil
+        reload_snacks()
+        local older = vim.tbl_deep_extend("force", config, { auto_close = auto_close, split_side = "left" })
+        snacks_provider.open("claude", {}, older, true)
+        assert.are.equal("left", state.wrapped[1].config.position)
+        assert.are.equal("1: %{get(b:, 'term_title', '')}", state.wrapped[1].config.wo.winbar)
+
+        state.running_jobs[state.buffers[claude.buf].jobid] = nil
+        snacks_provider.open("claude", {}, older, true)
+
+        assert.are.equal(auto_close and 2 or 1, #started)
+      end)
+    end
   end)
 
   it("keeps the tracked terminal when another marked terminal appears", function()
