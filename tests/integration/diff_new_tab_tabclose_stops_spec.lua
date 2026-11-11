@@ -25,7 +25,6 @@ describe("a diff tab that :tabclose cannot close because of a modified buffer of
     end
   end
 
-  -- What of the diff is left in tab page `n`: windows in diff mode and Claude terminal windows.
   local function tab_leftovers(n)
     return child.call(
       [[

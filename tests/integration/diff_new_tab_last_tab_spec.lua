@@ -127,5 +127,23 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
       assert.equal("n", state.mode)
       assert.equal(0, child.leftovers().in_diff_mode)
     end)
+
+    it("turns diff mode off in the proposal window when the user closed the file window", function()
+      child.start({ layout = "vertical", show_terminal_again = true })
+      child.call([[vim.o.diffopt = "internal,filler"]])
+      child.open_diff("a.txt", "first diff")
+      child.close_first_tab()
+      child.call([[
+        local diff_data = assert(require("claudecode.diff")._get_active_diffs()["first diff"])
+        vim.api.nvim_win_close(diff_data.target_window, true)
+      ]])
+      assert.equal(1, child.leftovers().in_diff_mode, "the proposal window must still be in diff mode before the close")
+
+      child.close_diff("first diff")
+      local state = child.state()
+
+      assert.equal("n", state.mode)
+      assert.equal(0, child.leftovers().in_diff_mode)
+    end)
   end)
 end)
