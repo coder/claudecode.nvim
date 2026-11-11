@@ -158,7 +158,7 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
         end)
       ]])
       assert.equal(1, child.leftovers().handlers)
-      user_autocmd("WinEnter", [[vim.api.nvim_set_current_win(_G.second_terminal_win)]])
+      user_autocmd("WinEnter", [[vim.api.nvim_set_current_win(_G.second_terminal_win)]], "nested = true,")
 
       child.close_diff("first diff")
       local state = child.state()
@@ -178,6 +178,25 @@ describe("autocmds of the user while a diff tab that stays open is released", fu
 
     assert.same({ { event = "BufEnter", buffer = "", diff_window_open = false } }, child.call([[return _G.fired]]))
   end)
+
+  it(
+    "moves the cursor to the window the diff stored for the file, not to a window of the user's by the terminal",
+    function()
+      open_in_last_tab("vertical", true)
+      open_user_window()
+      child.call([[_G.file_win = require("claudecode.diff")._get_active_diffs()["first diff"].target_window]])
+      record_events()
+
+      child.close_diff("first diff")
+      child.state()
+
+      assert.is_true(child.call([[return vim.api.nvim_get_current_win() == _G.file_win]]))
+      assert.same({
+        { event = "WinEnter", buffer = "a.txt", diff_window_open = false },
+        { event = "BufEnter", buffer = "a.txt", diff_window_open = false },
+      }, child.call([[return _G.fired]]))
+    end
+  )
 
   it("does not let a BufLeave autocmd of the proposal buffer switch its window during the swap", function()
     open_in_last_tab("unified", true)
