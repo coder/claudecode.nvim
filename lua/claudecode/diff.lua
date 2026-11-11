@@ -1059,7 +1059,8 @@ end
 
 ---Name a diff buffer. When a leftover diff buffer holds the name, Neovim raises E95. If `may_free_leftover`, rename the
 ---leftover to `<name> (orphaned <bufnr>)`, which keeps its window and its text, and name again. Both steps run without
----events, because the name is free in between. A setup that did not free the name raises the E95 error as before.
+---events, because the name is free in between. When the name stays taken (a listed buffer or one of another kind holds
+---it, or the setup may not free it), the error of the first naming is raised unchanged.
 ---Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
 ---@param buf integer
 ---@param name string
@@ -1081,7 +1082,9 @@ name_diff_buffer = function(buf, name, buftype)
       pcall(set_name_without_events, other, other_name .. " (orphaned " .. other .. ")")
     end
   end
-  set_name_without_events(buf, name)
+  if not pcall(set_name_without_events, buf, name) then
+    error(err, 0)
+  end
   _G[SETUP_RUNNING].recovered = true
 end
 

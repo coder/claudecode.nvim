@@ -44,6 +44,14 @@ describe("openDiff with a leftover diff buffer under its name", function()
     return call
   end
 
+  -- Main raises the plain error of nvim_buf_set_name. A second naming without events (`:noautocmd call ...`) wraps it in
+  -- E5555, so the error of the first naming must be the one that reaches the user.
+  local function assert_plain_e95(err)
+    local text = vim.inspect(err)
+    assert.is_truthy(text:find("Vim:E95:", 1, true), text)
+    assert.is_nil(text:find("E5555", 1, true), text)
+  end
+
   local function buffers_named(suffix)
     local wanted = vim.fn.fnamemodify(tab_name .. " " .. suffix, ":p")
     local found = {}
@@ -317,7 +325,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
       local call = open_diff(tools, "alpha\n")
 
       assert.is_nil(call._deferred)
-      assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+      assert_plain_e95(call.error)
       assert.equal(tabs, #vim.api.nvim_list_tabpages())
       assert.same({ "the user's notes" }, vim.api.nvim_buf_get_lines(foreign, 0, -1, false))
     end
@@ -1114,7 +1122,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
       local call = open_diff(tools, "alpha\n")
 
       assert.is_nil(call._deferred)
-      assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+      assert_plain_e95(call.error)
       assert.is_true(vim.api.nvim_buf_is_valid(owned), "the buffer is not wiped")
       assert.same({ "the user's notes" }, vim.api.nvim_buf_get_lines(owned, 0, -1, false))
       assert.is_nil(diff._get_active_diffs()[tab_name])
