@@ -1026,14 +1026,21 @@ local vim = {
 
   w = setmetatable({}, {
     __index = function(_, winid)
-      -- Return window-local variables for the given window
-      if vim._windows[winid] then
-        if not vim._windows[winid].w_vars then
-          vim._windows[winid].w_vars = {}
-        end
-        return vim._windows[winid].w_vars
+      -- As in Neovim, an invalid window raises, and a value that is read or written is a copy. nvim_list_wins always lists
+      -- the current window, even when the mock has no entry for it.
+      local window = vim._windows[winid] or (winid == vim._current_window and {} or nil)
+      if not window then
+        error("Invalid window id: " .. tostring(winid), 2)
       end
-      return {}
+      window.w_vars = window.w_vars or {}
+      return setmetatable({}, {
+        __index = function(_, name)
+          return vim.deepcopy(window.w_vars[name])
+        end,
+        __newindex = function(_, name, value)
+          window.w_vars[name] = vim.deepcopy(value)
+        end,
+      })
     end,
   }),
 
