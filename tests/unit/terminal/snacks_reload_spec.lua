@@ -398,8 +398,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
         term.id = state.next_snacks_id
         -- Win.new records these. The close event is bound to a window (`win = true`), the resize is not.
         term.events = { { event = "WinClosed", win = true }, { event = "WinResized" } }
-        function term:_on(event, opts)
-          table.insert(state.events_registered, { term = self, event = event, opts = opts })
+        function term:_on(event, event_opts)
+          table.insert(state.events_registered, { term = self, event = event, opts = event_opts })
         end
         function term:fixbuf() end
         function term:map()
