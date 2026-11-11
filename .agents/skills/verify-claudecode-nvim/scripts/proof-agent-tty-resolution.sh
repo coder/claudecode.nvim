@@ -34,9 +34,8 @@
 #   signal-printed    SIGTERM while launch is blocked printing VCN_STATE (stdout is a full pipe): exit 143, no state dir
 #   signal-failed     a launch that fails by itself (initialize answers an error), then SIGTERM to its process group
 #                     while the real `agent-tty snapshot` of the failure screen runs: launch exits 1, screen has text
-#   decoy-state       a symlink /tmp/vcn.* to a directory of this user, whose run.env would touch a marker, sorts after
-#                     the real state dirs: find_state does not pick it and stop_run does not run it
-#   own-dir           own_dir refuses a directory of another user (root's /) and accepts one of this user
+#   decoy-state       a /tmp/vcn.* dir whose run.env would touch a marker: every launch of this proof runs with a
+#                     private TMPDIR, so find_state does not pick the decoy and stop_run does not run it
 #   signal-gap        a launch that fails by itself, with SIGTERM, SIGINT and SIGHUP sent while launch_failed is held
 #                     before its first command: launch tears the run down (exit 143, its failure line, no state dir)
 #   cleanup-no-agent-tty  `vcn.sh cleanup` of a run that stopped before an agent-tty passed doctor, so run.env has no
@@ -48,13 +47,15 @@ set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 root=$PWD
 TMP=$(mktemp -d)
+# Every launch of this proof makes its state dir in priv, which only this user can enter. `vcn.sh cleanup` sources
+# the run.env of a state dir, so find_state and stop_run never look at /tmp/vcn.*, where another user can make or
+# swap dirs.
+priv=$TMP/vcn-state
+mkdir -m 700 "$priv"
 live_state="" live_path="" st="" decoy=""
-# own_dir <dir>: true for a real directory that this user owns. `vcn.sh cleanup` sources the run.env of a state dir, so the
-# proof never acts on one that another user made.
-own_dir() { [[ -d $1 && ! -L $1 && -O $1 ]]; }
 # stop_run <state dir>: stops a run that a case left behind, so no process of it outlives the proof.
 stop_run() {
-  [[ $1 == /tmp/vcn.* ]] && own_dir "$1" || return 0
+  [[ $1 == "$priv"/vcn.* && -e $1 ]] || return 0
   env PATH="$base" VCN_STATE="$1" "$V" cleanup >/dev/null 2>&1 || true
   rm -rf -- "$1"
 }
@@ -63,7 +64,7 @@ cleanup_all() {
     env PATH="$live_path" VCN_STATE="$live_state" "$V" cleanup >/dev/null 2>&1 || true
   fi
   stop_run "$st"
-  [[ -z $decoy || ! -L $decoy ]] || rm -f -- "$decoy"
+  [[ -z $decoy ]] || rm -rf -- "$decoy"
   rm -rf "$TMP"
 }
 trap cleanup_all EXIT
@@ -139,7 +140,7 @@ mkdir "$TMP/gate-bin" "$TMP/gate-mktemp" "$TMP/gate-cp" "$TMP/slow"
 cat >"$TMP/gate-bin/mkdir" <<MKDIR
 #!/bin/sh
 case "\$*" in
-"-p /tmp/vcn."*"/home /tmp/vcn."*"/claude /tmp/vcn."*"/work")
+"-p $priv/vcn."*"/home $priv/vcn."*"/claude $priv/vcn."*"/work")
   if [ ! -f "\$GATE/reached" ]; then
     printf '%s\n' "\$2" | sed 's#/home\$##' >"\$GATE/state"
     : >"\$GATE/reached"
@@ -152,7 +153,7 @@ MKDIR
 cat >"$TMP/gate-bin/rm" <<RM
 #!/bin/sh
 case "\$*" in
-"-rf -- /tmp/vcn."*)
+"-rf -- $priv/vcn."*)
   if [ -f "\$GATE/hold-rm" ]; then
     : >"\$GATE/rm-reached"
     while [ -f "\$GATE/hold-rm" ]; do sleep 0.05; done
@@ -164,7 +165,7 @@ RM
 cat >"$TMP/gate-mktemp/mktemp" <<MKTEMP
 #!/bin/sh
 case "\$*" in
-"-d /tmp/vcn.XXXXXX")
+"-d $priv/vcn.XXXXXX")
   name=\$("$real_mktemp" "\$@") || exit 1
   printf '%s\\n' "\$name" >"\$GATE/state"
   : >"\$GATE/reached"
@@ -179,7 +180,7 @@ MKTEMP
 cat >"$TMP/gate-cp/cp" <<CP
 #!/bin/sh
 case "\$*" in
-/tmp/vcn.*/run.env\ */run.env) kill -TERM \$\$ ;;
+$priv/vcn.*/run.env\ */run.env) kill -TERM \$\$ ;;
 esac
 exec "$real_cp" "\$@"
 CP
@@ -246,11 +247,12 @@ launch() {
   local name=$1 path=$2
   shift 2
   rc=0
-  out=$(cd "${launch_cwd:-.}" && env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" "$V" launch 2>&1) || rc=$?
-  state=$(grep -o 'VCN_STATE=/tmp/vcn\.[A-Za-z0-9]*' <<<"$out" | head -n 1 | cut -d= -f2 || true)
+  out=$(cd "${launch_cwd:-.}" && env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" TMPDIR="$priv" "$@" "$V" launch 2>&1) || rc=$?
+  state=$(grep -o 'VCN_STATE=/[^[:space:])]*' <<<"$out" | head -n 1 | cut -d= -f2 || true)
   if ((rc == 0)); then
     live_state=$state live_path=$path
   fi
+  [[ -z $state || $state == "$priv"/vcn.* ]] || fail "$name" "launch made its state dir $state outside its TMPDIR $priv"
 }
 
 stop() {
@@ -338,7 +340,7 @@ start_launch() {
   local name=$1 path=$2
   shift 2
   # shellcheck disable=SC2016
-  env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" "$@" \
+  env -u VERIFY_OUT -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$path" VERIFY_OUT="$TMP/out-$name" TMPDIR="$priv" "$@" \
     "$perl" -e '$SIG{INT} = $SIG{HUP} = "DEFAULT"; exec @ARGV' "$TMP/tools/setsid" "$V" launch >"${launch_out:-$TMP/$name.txt}" 2>&1 </dev/null &
   pid=$!
 }
@@ -348,8 +350,8 @@ find_state() {
   local f
   st=""
   for _ in $(seq 300); do
-    for f in /tmp/vcn.*/run.env; do
-      if own_dir "${f%/*}" && [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$1" "$f" 2>/dev/null; then st=${f%/*}; fi
+    for f in "$priv"/vcn.*/run.env; do
+      if [[ -f $f ]] && grep -qxF "OUT=$TMP/out-$1" "$f" 2>/dev/null; then st=${f%/*}; fi
     done
     [[ -z $st ]] || return 0
     sleep 0.1
@@ -615,48 +617,34 @@ signal_gap_case() {
   cases=$((cases + 1))
 }
 
-# own_dir must refuse a directory that another user owns. Root owns /, so it stands in for another user. A host whose /
-# this user owns has no stand-in, and the case is skipped.
-own_dir_case() {
-  local name=own-dir
-  if [[ -O / ]]; then
-    echo "skip $name: this user owns /, so no directory stands in for another user"
-    return 0
-  fi
-  ! own_dir / || fail "$name" "own_dir accepted /, which another user owns"
-  own_dir "$TMP" || fail "$name" "own_dir refused $TMP, which this user owns"
-  echo "ok $name: own_dir refused a directory of another user and accepted one of this user"
-  cases=$((cases + 1))
-}
-
-# find_state scans /tmp/vcn.*/run.env, and vcn.sh cleanup sources the run.env of the dir that stop_run gets. A symlink
-# to a directory of this user passes the owner test, so own_dir refuses it too. The decoy sorts after every real dir.
+# A /tmp/vcn.* dir that this proof did not start, with a run.env that names this case's evidence dir and would touch a
+# marker. find_state looks only in priv and stop_run refuses a dir outside it, so the decoy is never read or sourced.
 decoy_case() {
-  local name=decoy-state gate=$TMP/gate-decoy target=$TMP/decoy-target marker=$TMP/decoy-marker why=""
-  mkdir "$gate" "$target"
+  local name=decoy-state gate=$TMP/gate-decoy marker=$TMP/decoy-marker why=""
+  mkdir "$gate"
   decoy=/tmp/vcn.zzzzzzzz$RANDOM$RANDOM
-  printf 'OUT=%s\ntouch %s\n' "$TMP/out-$name" "$marker" >"$target/run.env"
-  ln -s "$target" "$decoy"
+  mkdir -m 700 "$decoy"
+  printf 'OUT=%s\ntouch %s\n' "$TMP/out-$name" "$marker" >"$decoy/run.env"
   start_launch "$name" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
   wait_for "$name" "$gate/reached"
   find_state "$name"
-  [[ $st != "$decoy" ]] || why="find_state picked the decoy"
+  [[ $st == "$priv"/vcn.* ]] || why="find_state picked $st, outside the private dir"
   stop_run "$decoy"
   [[ ! -e $marker ]] || why="${why:+$why, }stop_run sourced the run.env of the decoy"
-  [[ -L $decoy && -f $target/run.env ]] || why="${why:+$why, }stop_run removed the decoy"
+  [[ -f $decoy/run.env ]] || why="${why:+$why, }stop_run removed the decoy"
   kill -TERM -- "-$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
-  rm -f -- "$decoy"
+  rm -rf -- "$decoy"
   decoy=""
   [[ -z $why ]] || fail "$name" "$why"
-  echo "ok $name: a symlink decoy was neither picked by find_state nor run by stop_run"
+  echo "ok $name: a /tmp/vcn.* decoy was neither picked by find_state nor run by stop_run"
   cases=$((cases + 1))
 }
 
 # vcn.sh cleanup on the run.env of a launch that stopped before an agent-tty passed doctor: it has no ATT_BIN.
 cleanup_no_agent_tty_case() {
   local name=cleanup-no-agent-tty dir
-  dir=$(mktemp -d /tmp/vcn.XXXXXX)
+  dir=$(mktemp -d "$priv/vcn.XXXXXX")
   printf '%s=%s\n' VCN_STATE "$dir" OUT "$TMP/out-$name" ATT_HOME "$dir/att" >"$dir/run.env"
   env PATH="$base" VCN_STATE="$dir" "$V" cleanup >"$TMP/$name.txt" 2>&1 || true
   [[ ! -e $dir ]] || {
@@ -671,7 +659,6 @@ signal_case signal-early early
 signal_case signal-doctor doctor
 signal_mktemp_case
 signal_twice_case
-own_dir_case
 decoy_case
 signal_storm_case
 signal_printed_case

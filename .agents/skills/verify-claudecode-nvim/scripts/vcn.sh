@@ -21,6 +21,7 @@
 #                      passes `agent-tty doctor`).
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
 # VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
+# TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -245,7 +246,7 @@ cmd_cleanup() {
     return 0
   fi
   load
-  [[ $VCN_STATE == /tmp/vcn.* ]] || die "refusing to delete unexpected state dir $VCN_STATE"
+  [[ $VCN_STATE =~ ^/(.*/)?vcn\.[A-Za-z0-9]{6}$ ]] || die "refusing to delete unexpected state dir $VCN_STATE"
   local i var pids=()
   # agent-tty still renders a session whose nvim exited, so the evidence step runs for any session.
   if [[ -n ${SID-} ]]; then
@@ -440,6 +441,7 @@ cmd_launch() {
   if [[ -n $out && -e $out && ! -d $out ]]; then
     die "$out is not a directory; pick a fresh VERIFY_OUT"
   fi
+  [[ ${TMPDIR:-/tmp} == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
   # die between making the dir and printing its name.
@@ -447,7 +449,7 @@ cmd_launch() {
   trap 'signaled=1' TERM INT HUP
   state=$(
     trap '' TERM INT HUP
-    exec mktemp -d /tmp/vcn.XXXXXX
+    exec mktemp -d "${TMPDIR:-/tmp}/vcn.XXXXXX"
   )
   trap 'trap "" TERM INT HUP; rm -rf -- "$state"; exit 143' TERM INT HUP
   [[ -z $signaled ]] || {
