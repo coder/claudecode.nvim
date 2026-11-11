@@ -934,11 +934,13 @@ async function testUnreleasedDraftFenceGuard() {
 
   // Prettier formats the code in an `html`, `htm`, `mjml`, `vue`, `angular` or `handlebars` fence, and it joins the
   // lines of the code that it reads. A release heading that a broken fence swallows then stands in the middle of a
-  // line, where no scan of line starts finds it. The real changelog shows it for `html`: Prettier moves `## [0.4.0]`
-  // onto the line of the snippet. `vue`, `angular` and `handlebars` do the same for a short changelog (the content
-  // of the real one does not parse as a template, so Prettier leaves it alone). The rule reads fences, not headings,
-  // so the reflow does not matter. Each case is [name, changelog, the line that opens the fence, the same line after
-  // prettier].
+  // line, where no scan of line starts finds it. The real changelog shows it: Prettier moves `## [0.4.0]` onto the
+  // line of the snippet. A template parser fails on the newest section of the real changelog and Prettier then leaves
+  // the code alone, so `vue` and `angular` run on the older sections (0.3.0 and before), and `handlebars` runs on a
+  // short changelog. The rule reads fences, not headings, so the reflow does not matter. Each case is [name,
+  // changelog, the line that opens the fence, the same line after prettier].
+  const olderReal = real.slice(real.indexOf("## [0.3.0]"));
+  assert.ok(olderReal.startsWith("## [0.3.0]"), "the real changelog has 0.3.0");
   const reflowed = [];
   for (const info of ["html", "htm", "mjml"]) {
     reflowed.push([
@@ -948,14 +950,20 @@ async function testUnreleasedDraftFenceGuard() {
       `\`\`\`${info}`,
     ]);
   }
-  for (const info of ["vue", "angular", "handlebars"]) {
+  for (const info of ["vue", "angular"]) {
     reflowed.push([
-      `${info} fence in a short changelog`,
-      `${head}### Added\n\n- Keys render as keycaps:\n\n~~~${info}\n<kbd>Ctrl</kbd>+<kbd>S</kbd>\n\`\`\`\n\n## [0.3.0] - 2026-10-01\n\n### Fixed\n\n- Fixed the diff view.\n\n## [0.2.0] - 2026-09-01\n\n### Added\n\n- Added the terminal.\n`,
+      `${info} fence over the older sections of the real changelog`,
+      `${realHead}\n### Added\n\n- Keys render as keycaps:\n\n~~~${info}\n<kbd>Ctrl</kbd>+<kbd>S</kbd>\n\`\`\`\n${olderReal}`,
       `~~~${info}`,
       `\`\`\`\`${info}`,
     ]);
   }
+  reflowed.push([
+    "handlebars fence in a short changelog",
+    `${head}### Added\n\n- Keys render as keycaps:\n\n~~~handlebars\n<kbd>Ctrl</kbd>+<kbd>S</kbd>\n\`\`\`\n\n## [0.3.0] - 2026-10-01\n\n### Fixed\n\n- Fixed the diff view.\n\n## [0.2.0] - 2026-09-01\n\n### Added\n\n- Added the terminal.\n`,
+    "~~~handlebars",
+    "````handlebars",
+  ]);
   for (const [name, raw, opener, formattedOpener] of reflowed) {
     const formatted = runner.formatChangelogMarkdown(raw);
     // No release heading stands at the start of a line after the fence opens, yet the headings are still in the text.
