@@ -116,7 +116,7 @@ vim.keymap.set("n", "<leader>dq", exit_diff_mode)
 Pushes a `selection_changed` notification when the selection Claude should see differs from the last one sent. Most updates are debounced, and three events are not:
 
 - **Debounced, 100 ms.** `CursorMoved`, `CursorMovedI`, `BufEnter`, `ModeChanged`, `TextChanged`, `TextChangedI` and `TextChangedP` each restart a one-shot timer. When it fires, `update_selection` reads the mode and sends the selection, or the cursor in normal mode.
-- **At once.** Leaving visual mode sends the selection from the `'<` and `'>` marks (the flush). Editing the held text, or consuming it with an operator, sends the cursor. Moving the cursor away from a held selection sends the cursor.
+- **At once.** Leaving visual mode sends the selection from the `'<` and `'>` marks (the flush). Editing the held text, or consuming it with an operator, sends the cursor. Moving the cursor away from a held selection sends the cursor. When the held text changes while you are in the Claude terminal (Neovim reloads the file, or a plugin edits it), the cursor of its file goes out too: `TextChanged` fires only for the current buffer, so a listener from `nvim_buf_attach` on the file's buffer sees the change.
 - **Entering another file** waits for the debounce.
 - **Claude terminal buffers** are skipped.
 
