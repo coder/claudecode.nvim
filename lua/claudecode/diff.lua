@@ -1014,8 +1014,8 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----Tab names whose setup has created buffers but has not registered its diff yet. A user handler that runs the event loop
----inside a setup lets a second openDiff for the same tab name start before that.
+---Tab names whose setup has started but has not registered its diff yet. A user handler that runs the event loop inside
+---a setup lets a second openDiff for the same tab name start before that.
 local setups_in_flight = {}
 
 ---Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take, and unbind `tab_name` from every
@@ -1402,17 +1402,23 @@ function M._create_diff_view_from_window(
   local choice = choose_original_window(target_window, old_file_path, is_new_file, terminal_win_in_new_tab)
 
   local original_window
-  local split_from
+  local split_window
   if choice.decision == "split" then
     vim.api.nvim_set_current_win(target_window)
-    split_from = { tab = vim.api.nvim_win_get_tabpage(target_window), buffer = vim.api.nvim_win_get_buf(target_window) }
-    split_from.windows = {}
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(split_from.tab)) do
-      split_from.windows[win] = true
+    local tab = vim.api.nvim_win_get_tabpage(target_window)
+    local before = {}
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      before[win] = true
     end
     create_split()
     original_window = vim.api.nvim_get_current_win()
     target_window_created_by_plugin = true
+    -- The split's own window is the first new one. A user's WinNew handler can open and enter more.
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      if not before[win] and (not split_window or win < split_window) then
+        split_window = win
+      end
+    end
   else
     original_window = choice.original_win
   end
@@ -1430,13 +1436,8 @@ function M._create_diff_view_from_window(
     local loaded, loaded_or_error =
       pcall(load_original_buffer, original_window, old_file_path, is_new_file, existing_buffer)
     if not loaded then
-      -- A user handler can open its own window during the split, so close only the new windows that show what the split cloned.
-      if split_from and vim.api.nvim_tabpage_is_valid(split_from.tab) then
-        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(split_from.tab)) do
-          if not split_from.windows[win] and vim.api.nvim_win_get_buf(win) == split_from.buffer then
-            pcall(vim.api.nvim_win_close, win, true)
-          end
-        end
+      if split_window and vim.api.nvim_win_is_valid(split_window) then
+        pcall(vim.api.nvim_win_close, split_window, true)
       end
       error(loaded_or_error, 0)
     end

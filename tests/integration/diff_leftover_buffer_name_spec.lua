@@ -31,9 +31,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
     return require("claudecode.diff"), tools
   end
 
-  local answers = {}
-
-  local function open_diff(tools, file_contents, name, key)
+  local function open_diff(tools, file_contents, name)
     local call = tools.handle_invoke({ id = "reload_proposal_name" }, {
       name = "openDiff",
       arguments = {
@@ -44,9 +42,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
       },
     })
     if call._deferred then
-      _G.claude_deferred_responses[tostring(call.coroutine)] = function()
-        answers[key or "any"] = (answers[key or "any"] or 0) + 1
-      end
+      _G.claude_deferred_responses[tostring(call.coroutine)] = function() end
     end
     return call
   end
@@ -68,7 +64,6 @@ describe("openDiff with a leftover diff buffer under its name", function()
     path = dir .. "/reload.txt"
     vim.fn.writefile({ "alpha" }, path)
     _G.claude_deferred_responses = {}
-    answers = {}
     vim.cmd("edit " .. vim.fn.fnameescape(path))
   end)
 
@@ -408,7 +403,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
         once = true,
         callback = function()
           vim.schedule(function()
-            nested = open_diff(tools, "alpha two\n", tab_name, "second")
+            nested = open_diff(tools, "alpha two\n")
           end)
           vim.wait(200, function()
             return nested ~= nil
@@ -418,7 +413,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
 
       local first
       silence_notify(function()
-        first = open_diff(tools, "alpha one\n", tab_name, "first")
+        first = open_diff(tools, "alpha one\n")
       end)
       vim.api.nvim_del_augroup_by_id(group)
 
@@ -475,6 +470,55 @@ describe("openDiff with a leftover diff buffer under its name", function()
       end
     )
   end
+
+  it("closes the split window when a handler raises after the original buffer loaded into it", function()
+    vim.fn.writefile({ "x" }, dir .. "/other.txt")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    local _, tools = load_plugin()
+    vim.api.nvim_create_autocmd("BufEnter", {
+      pattern = path,
+      once = true,
+      callback = function()
+        error("the user's handler refuses the file")
+      end,
+    })
+    local windows = #vim.api.nvim_tabpage_list_wins(0)
+
+    local call
+    silence_notify(function()
+      call = open_diff(tools, "alpha\n")
+    end)
+
+    assert.is_nil(call._deferred)
+    assert.is_truthy(vim.inspect(call.error):find("refuses the file", 1, true), vim.inspect(call.error))
+    assert.equal(windows, #vim.api.nvim_tabpage_list_wins(0), "the window that the split created closes")
+  end)
+
+  it("keeps a window that a user handler opened on the cloned buffer during the split", function()
+    vim.fn.writefile({ "x" }, dir .. "/other.txt")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    local _, tools = load_plugin()
+    path = dir .. "/missing.txt"
+    vim.api.nvim_buf_set_name(vim.api.nvim_create_buf(true, false), path .. " (NEW FILE)")
+    local plugin_win, user_win
+    vim.api.nvim_create_autocmd("WinNew", {
+      once = true,
+      callback = function()
+        plugin_win = vim.api.nvim_get_current_win()
+        vim.cmd("noautocmd belowright split")
+        user_win = vim.api.nvim_get_current_win()
+      end,
+    })
+
+    local call
+    silence_notify(function()
+      call = open_diff(tools, "proposed\n")
+    end)
+
+    assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+    assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
+    assert.is_false(vim.api.nvim_win_is_valid(plugin_win), "the window that the split created closes")
+  end)
 
   it("closes no window when the original buffer fails to load in a reused window", function()
     local file_buffer = vim.fn.bufnr(path)
