@@ -798,9 +798,10 @@ async function testUnreleasedUpdaterFences() {
 
 // A differential test against commonmark.js. The assertions above hold single examples, but a rule can also go wrong
 // for a multi-character input that no example thought of. This test builds top-level documents from fence, heading,
-// text and blank lines with random suffixes, indents, line endings and code units. A fixed seed makes the documents
-// the same on every run. `findLineOutsideFences` and `normalizeCommuniqueBody` must agree with commonmark.js on each
-// of them. It leaves out list items, block quotes and HTML blocks, which the runner does not track.
+// text and blank lines with random suffixes (code units, escapes and character references), indents, and line
+// endings. A fixed seed makes the documents the same on every run. `findLineOutsideFences` and
+// `normalizeCommuniqueBody` must agree with commonmark.js on each of them. It leaves out list items, block quotes and
+// HTML blocks, which the runner does not track.
 const DIFFERENTIAL_SEED = 466;
 const DIFFERENTIAL_DOCUMENTS = 10000;
 const DIFFERENTIAL_UPDATER_DOCUMENTS = 30;
@@ -821,6 +822,10 @@ const LONG_RUNS = [
   99, 100, 101, 199, 200, 201, 255, 256, 257, 1000, 1001, 4096, 65535, 65536,
   100_000,
 ];
+// Every printable ASCII character: `!` to `~`.
+const PRINTABLE = Array.from({ length: 0x7f - 0x21 }, (_, k) =>
+  String.fromCharCode(0x21 + k),
+).join("");
 // Code units that look like a blank or a line break. A tab is a blank after a fence and in an info string, but not
 // as indent. The rest are neither.
 const LOOKALIKES = [
@@ -838,6 +843,24 @@ const LOOKALIKES = [
   "\u3000",
   "\ufeff",
 ];
+// Sequences that look like an escape or a character reference for a marker or a blank. CommonMark reads an info string
+// and the text after a closer literally, so none of them changes what a fence line is.
+const SEQUENCES = [
+  "\\",
+  "&",
+  "\\`",
+  "\\~",
+  "\\\\`",
+  "&#96;",
+  "&#x60;",
+  "&grave;",
+  "&amp;`",
+  "&#126;",
+  "&#32;",
+  "&#9;",
+  "&nbsp;",
+];
+
 /**
  * commonmark.js 0.31.2 opens a backtick fence for "```x<U+2028>`", but the spec says a backtick info string cannot
  * hold a backtick, and markdown-it 14 agrees with the spec and with the runner. The cause: commonmark.js checks the
@@ -865,7 +888,8 @@ function generateLines(random, coverage) {
     }
     return String.fromCharCode(code);
   };
-  // Up to three spaces, and now and then one more code unit, from the list above or from all of them.
+  // Up to three spaces, and now and then one more code unit: a look-alike, a printable character, or any code unit.
+  // The code unit stands before the spaces or after one to three of them.
   // `>` starts a block quote, and `+`, `-` and `*` start a list item when spaces follow. The runner tracks neither,
   // so those four are left out.
   const indent = () => {
@@ -873,14 +897,19 @@ function generateLines(random, coverage) {
     if (random() >= 0.15) {
       return spaces;
     }
-    let extra = random() < 0.5 ? pick(LOOKALIKES) : codeUnit();
+    let extra = pick([pick(LOOKALIKES), pick(PRINTABLE), codeUnit()]);
     if (">+-*".includes(extra)) {
       extra = "\u3000";
     }
     coverage.oddIndent += 1;
-    return random() < 0.5 ? extra + spaces : spaces + extra;
+    if (random() < 0.5) {
+      return extra + spaces;
+    }
+    coverage.spacedIndent += 1;
+    return pick([" ", "  ", "   "]) + extra;
   };
-  // Up to four pieces: blanks, markers, words and single code units, so a suffix can be "", " ~", "\tjs ~" or "`a ".
+  // Up to four pieces: blanks, markers, words, escapes, character references and single code units, so a suffix can be
+  // "", " ~", "\tjs ~", "`a " or "&#96;\\`".
   // Now and then one piece repeats for a very long run, so that no cap on an info string or on trailing blanks passes.
   const suffix = () => {
     if (random() < 0.04) {
@@ -899,7 +928,7 @@ function generateLines(random, coverage) {
     }
     let text = "";
     for (let count = Math.floor(random() * 5); count > 0; count -= 1) {
-      text += pick([
+      const piece = pick([
         " ",
         "\t",
         "~",
@@ -910,8 +939,14 @@ function generateLines(random, coverage) {
         "\u2028",
         "\u2029",
         pick(LOOKALIKES),
+        pick(SEQUENCES),
+        pick(SEQUENCES),
         codeUnit(),
       ]);
+      if (SEQUENCES.includes(piece)) {
+        coverage.sequences += 1;
+      }
+      text += piece;
     }
     return text;
   };
@@ -1028,10 +1063,39 @@ async function testFenceDifferential() {
     longMarkers: 0,
     longSuffix: 0,
     oddIndent: 0,
+    sequences: 0,
     skippedBodies: 0,
+    spacedIndent: 0,
   };
   const anyLine = () => true;
   const isReal = (line) => line === "## Real";
+
+  // Single code units are checked in `testFenceTracking`, but two together can still break a rule, as in "\\`" or
+  // "&#96;". So every pair of a tab or a printable ASCII character, and each sequence of `SEQUENCES`, goes after the
+  // markers of an opener and of a closer, and commonmark.js says what each line is.
+  const blanksAndPrintable = ["\t", " ", ...PRINTABLE];
+  const sequences = [
+    ...blanksAndPrintable.flatMap((first) =>
+      blanksAndPrintable.map((second) => first + second),
+    ),
+    ...SEQUENCES,
+    ...SEQUENCES.map((sequence) => ` ${sequence}`),
+  ];
+  for (const marker of ["```", "~~~"]) {
+    for (const sequence of sequences) {
+      for (const lines of [
+        [marker + sequence, "## Real", marker, "## Real"],
+        [marker, "## Real", marker + sequence, "## Real", marker, "## Real"],
+      ]) {
+        const { fenced } = readWithCommonmark(lines.join("\n"));
+        assert.equal(
+          runner.findLineOutsideFences(lines, 0, isReal),
+          lines.findIndex((line, i) => isReal(line) && !fenced.has(i)),
+          `the fence lines ${JSON.stringify(lines)}`,
+        );
+      }
+    }
+  }
 
   for (let index = 0; index < DIFFERENTIAL_DOCUMENTS; index += 1) {
     const text = joinWithEndings(random, generateLines(random, coverage));
@@ -1118,6 +1182,14 @@ async function testFenceDifferential() {
   assert.ok(
     coverage.oddIndent >= 1000,
     `lines with an extra code unit as indent: ${coverage.oddIndent}`,
+  );
+  assert.ok(
+    coverage.spacedIndent >= 500,
+    `lines with an extra code unit after spaces: ${coverage.spacedIndent}`,
+  );
+  assert.ok(
+    coverage.sequences >= 1000,
+    `escapes and character references after the markers: ${coverage.sequences}`,
   );
 
   // The existing sections of a changelog stay headings. The formatter prints its input (see `withIdentityFormatter`).
