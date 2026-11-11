@@ -201,7 +201,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     local command = "cd "
       .. quote(dir)
-      .. " && PATH="
+      .. " && TMPDIR="
+      .. quote(dir:match("^(.*)/[^/]+$"))
+      .. " PATH="
       .. quote(dir .. "/bin")
       .. ':"$PATH" STUB_DIR='
       .. quote(dir)
