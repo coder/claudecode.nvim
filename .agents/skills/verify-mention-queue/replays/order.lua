@@ -13,9 +13,9 @@ L.send(L.file("second.txt"))
 L.wait(1500, "the debounce and the 600 ms wait end")
 local got = L.received(c)
 L.log("Claude received, in order: %s", table.concat(got, " | "))
-local in_order = #got == 2 and got[1]:find("first.txt", 1, true) and got[2]:find("second.txt", 1, true)
+local in_order = #got == 2 and got[1]:find("first.txt", 1, true) ~= nil and got[2]:find("second.txt", 1, true) ~= nil
 L.verdict(
-  in_order ~= nil,
+  in_order,
   "SentInOrder",
   string.format(
     "arrival order: %s",

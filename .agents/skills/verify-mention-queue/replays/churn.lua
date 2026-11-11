@@ -13,8 +13,12 @@ local clients, sent_at, cleared_at = {}, nil, nil
 local function now()
   return uv.hrtime() / 1e6
 end
+-- The plugin stamps the deadline with the loop clock (vim.loop.now()), which moves only when the loop turns, and
+-- L.setup() gave it no turn. Refresh the loop clock before the send, and measure the send and the clearing on that
+-- clock: a correct deadline then never reads less than 10600 ms after the send.
+uv.update_time()
+sent_at = uv.now()
 L.send(path)
-sent_at = now()
 L.wait(500, "no client is connected yet")
 for _ = 1, 14 do
   local started = now()
@@ -24,11 +28,11 @@ for _ = 1, 14 do
   L.wait(300 - (now() - started), "this client stays 300 ms")
   L.drop(c)
   if not cleared_at and L.queue_len() == 0 then
-    cleared_at = now()
+    cleared_at = uv.now()
   end
   L.wait(1000 - (now() - started), "the next client connects 1000 ms after this one")
   if not cleared_at and L.queue_len() == 0 then
-    cleared_at = now()
+    cleared_at = uv.now()
   end
 end
 local received = 0
