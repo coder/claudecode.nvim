@@ -25,6 +25,7 @@
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 #   tmp-sticky     a world-writable TMPDIR with the sticky bit, like /tmp: the state dir is made there
 #   tmp-link       TMPDIR is a symlink to that dir: the state dir is made in the dir, not through the symlink
+#   tmp-vcn-entry  a symlink named vcn in a sticky TMPDIR, pointing into a dir that others can write: launch still works
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 #   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700 and
 #                  without an ACL, so every evidence file is 0600
@@ -174,6 +175,17 @@ state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
 VCN_STATE=$state "$vcn" cleanup >/dev/null
 [[ $state == "$TMP/tmp-sticky"/vcn.* ]] || fail "tmp-link: launch made its state dir $state, not in $TMP/tmp-sticky"
 echo "PASS tmp-link: TMPDIR=$TMP/tmp-link gave the state dir $state, with no symlink in its path"
+# Anyone can make an entry named vcn in a sticky TMPDIR. The walk above TMPDIR starts at TMPDIR itself, so a symlink named
+# vcn that points into a dir that others can write does not change the chain that is checked.
+mkdir -m 1777 "$TMP/tmp-vcnentry"
+mkdir -m 777 "$TMP/vcnentry-loose"
+mkdir "$TMP/vcnentry-loose/sub"
+ln -s "$TMP/vcnentry-loose/sub" "$TMP/tmp-vcnentry/vcn"
+err=$(env -u XUM_SCRATCH_DIR TMPDIR="$TMP/tmp-vcnentry" VERIFY_OUT="$TMP/tmp-vcnentry-out" "$vcn" launch 2>&1) || fail "tmp-vcn-entry: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+VCN_STATE=$state "$vcn" cleanup >/dev/null
+[[ $state == "$TMP/tmp-vcnentry"/vcn.* ]] || fail "tmp-vcn-entry: launch made its state dir $state, not in $TMP/tmp-vcnentry"
+echo "PASS tmp-vcn-entry: a symlink named vcn in a sticky TMPDIR did not change the checked chain"
 
 # private <case> <dir>: a run with VERIFY_OUT=dir works, and after cleanup dir is 0700 and holds only 0600 files.
 private() {

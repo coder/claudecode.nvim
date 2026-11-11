@@ -521,7 +521,7 @@ cmd_launch() {
   tmpdir=$(realpath -e -- "$tmpdir" 2>/dev/null) && [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
   # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
-  why=$(unsafe_above "$tmpdir/vcn" "the state dir")
+  why=$(unsafe_walk "$tmpdir" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
