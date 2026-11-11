@@ -14,12 +14,12 @@ The check explores every order of keys, mode changes, buffer switches, timer fir
 ## Rules
 
 | Rule                  | Plain sentence                                                                                                                                      | Harm when broken                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `ReleaseSent`         | Right after you release a selection in a file (Esc), Claude holds it, also when you made it faster than the 100 ms debounce.                        | A quick selection never reaches Claude (issue #246).                                        |
 | `NoPhantomSelection`  | Claude only gets text you selected, never the text at the `'<,'>` marks after an operator such as `d` changed it.                                   | Claude gets a selection the user never made.                                                |
 | `NoTerminalSelection` | Claude never gets a selection in the Claude terminal buffer.                                                                                        | Claude's own prompt text becomes the context.                                               |
-| `HeldUntilMoved`      | Once events settle in a file, a selection you released stays with Claude while the cursor has not moved and its text is unchanged.                  |
-| `HeldInTerminal`      | Once events settle in the Claude terminal, Claude still holds the selection you released while its text is unchanged.                               | The selection is gone when the user goes to the terminal to type the question (issue #246). | The selection the user means to ask about is gone before they type (issue #246). |
+| `HeldUntilMoved`      | Once events settle in a file, a selection you released stays with Claude while the cursor has not moved and its text is unchanged.                  | The selection the user means to ask about is gone before they type (issue #246).            |
+| `HeldInTerminal`      | Once events settle in the Claude terminal, Claude still holds the selection you released while its text is unchanged.                               | The selection is gone when the user goes to the terminal to type the question (issue #246). |
 | `HeldEndsWhenMoved`   | Once events settle in a file, Claude holds a released selection only while the cursor has not moved since you released it.                          | Claude answers about an old selection after the user moved on.                              |
 | `SameFile`            | Once events settle in a file, Claude's selection is in that file.                                                                                   | Claude thinks the user is in another file.                                                  |
 | `ClaudeSeesCursor`    | Once events settle in a file, a cursor-only selection that Claude holds is where the cursor is, and in visual mode Claude holds the live selection. | Claude points at the wrong line or column.                                                  |
@@ -132,18 +132,19 @@ NVIM=~/.local/share/mise/installs/neovim/0.12.3/bin/nvim \
 
 `run.sh` puts this checkout first on `runtimepath` and gives each run a fresh `XDG_*_HOME`, `CLAUDE_CONFIG_DIR` and `TMPDIR` under `$XUM_SCRATCH_DIR` (or `/tmp`), removed afterwards. `DELAY_MS=50` reruns the two long-delay probes (`other_file_after_return.lua`, `cursor_after_return.lua`) with the default delay. They use 1000 ms.
 
-| Probe                                | Keys                                                               | Rule                                 |
-| ------------------------------------ | ------------------------------------------------------------------ | ------------------------------------ |
-| `held_after_operator.lua`            | `vb`, Esc, `gv`, `d`                                               | `HeldEndsWhenMoved`, `NoDeletedText` |
-| `held_after_quick_move.lua`          | `ve`, Esc, `l`, then `h` 30 ms later                               | `HeldEndsWhenMoved`                  |
-| `held_after_edit.lua`                | `viw`, Esc, `x`, `x`                                               | `NoDeletedText`                      |
-| `held_after_plugin_edit.lua`         | `Vj`, Esc, a plugin deletes text of line 1                         | `NoDeletedText`                      |
-| `held_after_reload_in_terminal.lua`  | `ve`, Esc, the Claude terminal, Neovim reloads the rewritten file  | `NoDeletedText`                      |
-| `held_after_edit_in_terminal.lua`    | `ve`, Esc, the Claude terminal, a plugin deletes the selected text | `NoDeletedText`                      |
-| `other_file_after_return.lua`        | `ve`, Esc, `:b b.txt`, `:b a.txt`, a long delay                    | `SameFile`                           |
-| `cursor_after_return.lua`            | `ve`, Esc, `l`, `h` 250 ms later, a long delay                     | `ClaudeSeesCursor`                   |
-| `held_after_line_inserted_above.lua` | `ve`, Esc, a plugin inserts a line above the selection             | none: a limit that the model skips   |
-| `v_escape_selects_one_character.lua` | `ve`, Esc, then `v` and Esc with no motion                         | none: shows a bare `v` Esc selects   |
+| Probe                                           | Keys                                                               | Rule                                 |
+| ----------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------ |
+| `held_after_operator.lua`                       | `vb`, Esc, `gv`, `d`                                               | `HeldEndsWhenMoved`, `NoDeletedText` |
+| `held_after_quick_move.lua`                     | `ve`, Esc, `l`, then `h` 30 ms later                               | `HeldEndsWhenMoved`                  |
+| `held_after_edit.lua`                           | `viw`, Esc, `x`, `x`                                               | `NoDeletedText`                      |
+| `held_after_plugin_edit.lua`                    | `Vj`, Esc, a plugin deletes text of line 1                         | `NoDeletedText`                      |
+| `held_after_reload_in_terminal.lua`             | `ve`, Esc, the Claude terminal, Neovim reloads the rewritten file  | `NoDeletedText`                      |
+| `held_after_edit_in_terminal.lua`               | `ve`, Esc, the Claude terminal, a plugin deletes the selected text | `NoDeletedText`                      |
+| `other_file_after_return.lua`                   | `ve`, Esc, `:b b.txt`, `:b a.txt`, a long delay                    | `SameFile`                           |
+| `cursor_after_return.lua`                       | `ve`, Esc, `l`, `h` 250 ms later, a long delay                     | `ClaudeSeesCursor`                   |
+| `held_after_line_inserted_above.lua`            | `ve`, Esc, a plugin inserts a line above the selection             | none: a limit that the model skips   |
+| `quick_release_after_plugin_edit_in_visual.lua` | `ve`, a plugin edits line 2, Esc within 100 ms                     | none: a limit that the model skips   |
+| `v_escape_selects_one_character.lua`            | `ve`, Esc, then `v` and Esc with no motion                         | none: shows a bare `v` Esc selects   |
 
 ## Bugs this model found
 
@@ -188,6 +189,7 @@ A reviewer of this skill found one more path that no model step could express th
   - `send_current_selection`: no code in `lua/` calls it. A bug there reaches a user only through a mapping the user wrote.
   - `:ClaudeCodeSend` at-mentions: they send a file and range mention, not the tracked selection. A bug there makes Claude get the wrong mention.
   - Insert mode as distinct from normal mode: `TextChangedI` and `TextChangedP` run the same handler as `TextChanged`. If they stopped doing so, Claude would keep a held selection that you typed over in insert mode.
+- A plugin edit while you are in visual mode is not modeled: `YouEditByPlugin` runs in normal mode only, and the model has one text version per buffer, so it cannot tell a change of the selected text from a change elsewhere (the changedtick moves either way). Entering visual mode records the changedtick, and the flush on Esc takes a changed tick for an operator that consumed the selection. A user whose plugin edits another line while they select, and who presses Esc inside the 100 ms debounce, sees Claude get the cursor and not the selection, although its text is untouched (`replays/quick_release_after_plugin_edit_in_visual.lua`). That is a limit of the code, not a rule.
 - Coming back from the Claude terminal to the file of a held selection with the cursor where it was, the model allows Claude to hold either the selection or the cursor (`holdLoose`), and `HeldUntilMoved` and `HeldEndsWhenMoved` make no claim there. A user sees Claude hold either the selection or only the cursor there, and the model allows both.
 - A Claude that connects after the last change gets no `selection_changed` until the selection changes: `on_connect` sends none, and `has_selection_changed` stops a resend of an unchanged selection. PROTOCOL.md promises a notification only when the selection changes, and the tools answer on request, so this is not a rule.
 - A pass covers this model at these bounds, for the facts `check.sh` reads, on the covered files exactly as recorded in `covered.lock`. Any other tree reads STALE.
