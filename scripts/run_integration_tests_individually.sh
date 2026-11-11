@@ -41,16 +41,21 @@ run_test_file() {
   # Parse results from output
   local clean_output
   clean_output=$(sed 's/\x1b\[[0-9;]*m//g' "$temp_output")
-  local success_count
-  success_count=$(echo "$clean_output" | grep -c "Success" || true)
-  local failed_lines
-  failed_lines=$(echo "$clean_output" | grep "Failed :" || echo "Failed : 0")
-  local failed_count
-  failed_count=$(echo "$failed_lines" | tail -1 | awk '{print $3}' || echo "0")
-  local error_lines
-  error_lines=$(echo "$clean_output" | grep "Errors :" || echo "Errors : 0")
-  local error_count
-  error_count=$(echo "$error_lines" | tail -1 | awk '{print $3}' || echo "0")
+  local success_count failed_count error_count
+  success_count=$(echo "$clean_output" | grep "^Success:" | tail -1 | awk '{print $2}' || true)
+  failed_count=$(echo "$clean_output" | grep "^Failed :" | tail -1 | awk '{print $3}' || true)
+  error_count=$(echo "$clean_output" | grep "^Errors :" | tail -1 | awk '{print $3}' || true)
+
+  # Plenary prints its summary only after it has run the whole file. Without all three counts, nvim stopped early,
+  # whatever its exit code says. A count that is not 0 or 1 to 9 digits without a leading zero would stop bash or wrap
+  # in the arithmetic below. The digits are spelled out because [0-9] also matches other digits in some locales.
+  local plain_count='^(0|[123456789][0123456789]{0,8})$'
+  if [[ ! $success_count =~ $plain_count ]] || [[ ! $failed_count =~ $plain_count ]] || [[ ! $error_count =~ $plain_count ]]; then
+    echo "FAILED: $basename: no plenary summary (nvim exit $EXIT_CODE)"
+    success_count=0
+    failed_count=0
+    error_count=1
+  fi
 
   # Update totals
   TOTAL_SUCCESS=$((TOTAL_SUCCESS + success_count))
