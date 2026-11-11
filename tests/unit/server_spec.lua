@@ -286,6 +286,42 @@ describe("WebSocket Server", function()
     assert.same({ 2 }, reports)
   end)
 
+  it("counts a write that libuv refuses at once as failed, and still reports once", function()
+    server.start({ port_range = { min = 10000, max = 65535 } })
+    local function add_client(id, write)
+      server.state.server.clients[id] = {
+        id = id,
+        state = "connected",
+        queued_bytes = 0,
+        tcp_handle = {
+          write = write,
+          is_closing = function()
+            return false
+          end,
+          close = function() end,
+        },
+      }
+    end
+    -- libuv returns nil and the error for a write it refuses, and never runs that write's callback.
+    add_client("refused", function()
+      return nil, "EBADF: bad file descriptor"
+    end)
+    add_client("written", function(_, _, callback)
+      callback()
+      return true
+    end)
+    local reports = {}
+    local took = server.broadcast("m", {}, function(count)
+      table.insert(reports, count)
+    end)
+
+    server.state.server.clients = {}
+    server.stop()
+
+    assert.is_true(took)
+    assert.same({ 1 }, reports)
+  end)
+
   describe("invalid JSON-RPC messages", function()
     local tcp = require("claudecode.server.tcp")
     local original = {}
