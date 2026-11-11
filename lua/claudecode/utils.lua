@@ -52,12 +52,10 @@ function M.win_set_buf_without_bufenter(win, buf)
 end
 
 ---Run `fn` now when Neovim lets the plugin change windows, else every 50 ms until it does. Neovim refuses window
----changes in the command-line window (E11) and under textlock (E565), and a callback can run in both: a timer or a
----scheduled function while the user edits in the command-line window, or during a `vim.wait` that code under textlock
----runs. Neovim has no flag for textlock, so the gate asks it: setting the current window to itself fails in both
----states and changes nothing otherwise. A timer, not CmdwinLeave, because that event runs while the window is still
----open, 'eventignore' can drop it, and textlock has no event. `fn` runs once and reads the editor's state as it is
----then, as nothing keeps several held functions in order.
+---changes in the command-line window (E11) and under textlock (E565), and timers and scheduled functions run in both,
+---for example during a `vim.wait` under textlock. Neovim has no flag for textlock, so the gate asks: setting the current
+---window to itself fails in both states and changes nothing otherwise. Not CmdwinLeave: it runs while the window is
+---still open, and textlock has no event. Held functions run in no fixed order, so `fn` reads state when it runs.
 ---@param fn fun()
 function M.when_windows_allowed(fn)
   assert(type(fn) == "function", "when_windows_allowed expects a function")
