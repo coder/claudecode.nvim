@@ -1415,20 +1415,22 @@ function M._close_proposal_window(diff_data)
 end
 
 ---A diff needs a partner window. A window that is the only one in diff mode in its tab page has nothing to compare, so
----the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner.
+---the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. Neovim refuses
+---`:diffoff` in some states (E11 in the command-line window), and then the window keeps its diff mode.
 ---@param win number
+---@return boolean ended False when Neovim refused `:diffoff`, so that the window still has the leftover
 local function end_diff_mode_if_alone(win)
   if not vim.api.nvim_get_option_value("diff", { win = win }) then
-    return
+    return true
   end
   for _, other in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
     if other ~= win and vim.api.nvim_get_option_value("diff", { win = other }) then
-      return
+      return true
     end
   end
-  vim.api.nvim_win_call(win, function()
+  return (pcall(vim.api.nvim_win_call, win, function()
     vim.cmd("diffoff")
-  end)
+  end))
 end
 
 ---What a window variable records, per file buffer, so that it goes with the window: "left" when the window left the file
@@ -1498,12 +1500,15 @@ local function end_diff_mode_when_file_returns(diff_data)
       set_file_state(win, key, "left")
     end
   end
+  local refused = {}
   local target = diff_data.target_window
   if target and vim.api.nvim_win_is_valid(target) then
     local tabpage = vim.api.nvim_win_get_tabpage(target)
     for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
-      if vim.api.nvim_win_get_tabpage(win) == tabpage then
-        end_diff_mode_if_alone(win)
+      if vim.api.nvim_win_get_tabpage(win) == tabpage and not end_diff_mode_if_alone(win) then
+        -- The window waits like one that left the file: the autocmd tries again when the file enters a window.
+        set_file_state(win, key, "left")
+        refused[win] = true
       end
     end
   end
@@ -1511,7 +1516,9 @@ local function end_diff_mode_when_file_returns(diff_data)
     return
   end
   for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
-    set_file_state(win, key, "shown")
+    if not refused[win] then
+      set_file_state(win, key, "shown")
+    end
   end
   local group = vim.api.nvim_create_augroup("ClaudeCodeDiffFileWait", { clear = false })
   if #vim.api.nvim_get_autocmds({ group = group, buffer = buffer }) > 0 then

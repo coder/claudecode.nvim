@@ -546,6 +546,37 @@ describe("diff mode in a window that left a split diff", function()
       end
     )
 
+    it(
+      "answers close_tab from the command-line window, where Neovim refuses diffoff, and ends the diff mode later",
+      function()
+        local state = open_diff()
+        run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
+        local copy = vim.api.nvim_get_current_win()
+        run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+        local outcome
+        vim.api.nvim_create_autocmd("CmdwinEnter", {
+          once = true,
+          callback = function()
+            outcome = { pcall(close_tab) }
+          end,
+        })
+
+        vim.api.nvim_feedkeys("q:", "x", false)
+
+        assert.is_true(outcome[1], "close_tab did not raise")
+        assert.equal("TAB_CLOSED", outcome[2].result.content[1].text)
+        assert.is_nil(diff._get_active_diffs()[tab], "the diff is closed")
+        assert.is_true(option(copy, "diff"), "Neovim refused diffoff in the command-line window")
+
+        vim.cmd("tabnew " .. vim.fn.fnameescape(file))
+
+        assert.is_false(
+          option(copy, "diff"),
+          "the autocmd ended the diff mode of the copy when the file entered a window"
+        )
+      end
+    )
+
     it("keeps a diff that a ClaudeCodeDiffClosed handler starts, and the options that the handler sets", function()
       local state = open_diff()
       vim.api.nvim_create_autocmd("User", {
