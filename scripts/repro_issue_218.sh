@@ -103,7 +103,7 @@ command -v jq >/dev/null 2>&1 || {
 
 # The warnings of the cleanup go to the stderr that the script started with, kept on fd 8. The
 # cleanup can run inside a call whose stderr is redirected, such as `run_killable ... >/dev/null
-# 2>&1`, and a warning would vanish there. Children that outlive a call get `8>&-`.
+# 2>&1`, and a warning would vanish there.
 exec 8>&2 || exec 8>/dev/null
 # State that the cleanup reads. A signal before the first assignment finds it empty.
 WORK=""
@@ -121,7 +121,7 @@ LAZY_BEFORE="" # the entries of LAZY_DIR before the restore
 # long commands run in the background and the script waits for them. A signal then runs the
 # cleanup at once, and the cleanup stops every job that is still running.
 run_killable() {
-  "$@" 8>&- &
+  "$@" &
   wait $!
 }
 # The live processes among the PIDs in $2... and all the current descendants of PID $1, one `ps`
@@ -205,7 +205,7 @@ atty_cleanup() {
   what=$1
   [[ "$1" != home ]] || what="$1 $2"
   set -m
-  "${ATTY[@]}" "$@" 2>/dev/null </dev/null 8>&- &
+  "${ATTY[@]}" "$@" 2>/dev/null </dev/null &
   pid=$!
   set +m
   while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
@@ -451,7 +451,7 @@ echo "==> Launching Neovim under agent-tty…"
 CREATE_OUT="$WORK/create.json"
 "${ATTY[@]}" create --json --cols 150 --rows 44 -- \
   env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
-  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" >"$CREATE_OUT" 8>&- &
+  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" >"$CREATE_OUT" &
 CREATE_PID=$!
 wait "$CREATE_PID"
 CREATE_PID=""
