@@ -13,22 +13,22 @@
 
 Module map (direct files):
 
-| File                  | Role                                                                                                                  |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `init.lua`            | Entry point: `setup`, `start`/`stop`, user commands, @-mention queue                                                  |
-| `config.lua`          | Defaults, legacy-option mapping, and assert-based validation                                                          |
-| `lockfile.lua`        | `<port>.lock` discovery file and auth token                                                                           |
-| `terminal.lua`        | Provider dispatcher: command, env, cwd, `send_to_terminal`                                                            |
-| `diff.lua`            | Native side-by-side blocking diff and the diff lifecycle                                                              |
-| `diff_inline.lua`     | Unified (`layout = "unified"`) inline diff renderer                                                                   |
-| `selection.lua`       | Visual and cursor selection tracking and the `selection_changed` broadcast                                            |
-| `integrations.lua`    | File-explorer selection readers (nvim-tree, neo-tree, oil, mini.files, netrw, snacks picker)                          |
-| `visual_commands.lua` | Visual-mode command wrapper and tree-explorer line-to-path mapping                                                    |
-| `cwd.lua`             | Terminal working-directory resolution and git root lookup                                                             |
-| `utils.lua`           | Shell-free argv parsing, tilde expansion, the selection type of a mode, UTF-8 repair, and the gate for window changes |
-| `logger.lua`          | Level-filtered logging to `vim.notify` and `nvim_echo`                                                                |
-| `health.lua`          | `:checkhealth claudecode`                                                                                             |
-| `types.lua`           | LuaLS `@class` and `@alias` declarations. Its only runtime code is `return {}`                                        |
+| File                  | Role                                                                                         |
+| --------------------- | -------------------------------------------------------------------------------------------- |
+| `init.lua`            | Entry point: `setup`, `start`/`stop`, user commands, @-mention queue                         |
+| `config.lua`          | Defaults, legacy-option mapping, and assert-based validation                                 |
+| `lockfile.lua`        | `<port>.lock` discovery file and auth token                                                  |
+| `terminal.lua`        | Provider dispatcher: command, env, cwd, `send_to_terminal`                                   |
+| `diff.lua`            | Native side-by-side blocking diff and the diff lifecycle                                     |
+| `diff_inline.lua`     | Unified (`layout = "unified"`) inline diff renderer                                          |
+| `selection.lua`       | Visual and cursor selection tracking and the `selection_changed` broadcast                   |
+| `integrations.lua`    | File-explorer selection readers (nvim-tree, neo-tree, oil, mini.files, netrw, snacks picker) |
+| `visual_commands.lua` | Visual-mode command wrapper and tree-explorer line-to-path mapping                           |
+| `cwd.lua`             | Terminal working-directory resolution and git root lookup                                    |
+| `utils.lua`           | Argv parsing, tilde expansion, a mode's selection type, UTF-8 repair, the window-change gate |
+| `logger.lua`          | Level-filtered logging to `vim.notify` and `nvim_echo`                                       |
+| `health.lua`          | `:checkhealth claudecode`                                                                    |
+| `types.lua`           | LuaLS `@class` and `@alias` declarations. Its only runtime code is `return {}`               |
 
 ## Interface
 
