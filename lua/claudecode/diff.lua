@@ -1014,9 +1014,10 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take. An unlisted buffer of the
----plugin's kind under such a name that no active diff owns is left by a reload, which drops `active_diffs`. It keeps
----its windows and text, but not its tab name, so that `:ClaudeCodeDiffAccept` in its window cannot resolve a new diff.
+---Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take, and unbind `tab_name` from every
+---buffer that no active diff owns. Such buffers are left by a reload, which drops `active_diffs`, or by a setup that
+---failed in the command-line window. They keep their windows and text, but not their tab name, so that
+---`:ClaudeCodeDiffAccept` in their windows cannot resolve a new diff.
 ---Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
 ---@param tab_name string
 ---@param old_file_path string
@@ -1028,6 +1029,11 @@ local function rename_orphaned_diff_buffers(tab_name, old_file_path)
     end
     if diff_data.original_buffer then
       owned[diff_data.original_buffer] = true
+    end
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if not owned[buf] and vim.b[buf].claudecode_diff_tab_name == tab_name then
+      vim.b[buf].claudecode_diff_tab_name = nil
     end
   end
   local orphan_names = {
@@ -1043,7 +1049,6 @@ local function rename_orphaned_diff_buffers(tab_name, old_file_path)
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       local name = vim.api.nvim_buf_get_name(buf)
       if not owned[buf] and stored[name] and vim.bo[buf].buftype == orphan.buftype and not vim.bo[buf].buflisted then
-        vim.b[buf].claudecode_diff_tab_name = nil
         pcall(vim.api.nvim_buf_set_name, buf, name .. " (orphaned " .. buf .. ")")
       end
     end

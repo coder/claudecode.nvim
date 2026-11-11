@@ -5,12 +5,13 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
   return
 end
 
--- No active diff owns a proposal buffer that a reload (:Lazy reload) left loaded, or that a failed setup could not
--- delete in the command-line window. A split-layout openDiff for that tab name must open a diff, and the leftover
--- buffer keeps its windows and text under another name.
+-- No active diff owns a diff buffer that a reload (:Lazy reload) left loaded, or that a failed setup could not delete
+-- in the command-line window. An openDiff for that tab name, in either layout, must open a diff. The leftover buffer
+-- keeps its windows and text under another name, and its tab name no longer resolves the new diff.
 describe("openDiff with a leftover diff buffer under its name", function()
   local dir
   local path
+  local start_dir = vim.fn.getcwd()
   local tab_name = "✻ [Claude Code] reload.txt ⧉"
 
   local function load_plugin(layout)
@@ -67,6 +68,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
   end)
 
   after_each(function()
+    vim.cmd("cd " .. vim.fn.fnameescape(start_dir))
     pcall(function()
       require("claudecode.diff")._cleanup_all_active_diffs("test cleanup")
     end)
@@ -224,6 +226,34 @@ describe("openDiff with a leftover diff buffer under its name", function()
         assert.equal("pending", state.status, "the new diff still waits for its own proposal window")
       end
     )
+  end
+
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it("does not let the old window resolve the new diff after a :cd, with the " .. layout .. " layout", function()
+      local _, tools = load_plugin(layout)
+      assert.is_true(open_diff(tools, "alpha one\n")._deferred)
+      local leftover = buffers_named(suffix_of(layout))[1]
+      local diff
+      diff, tools = load_plugin(layout)
+      require("claudecode.diff_inline")
+      vim.cmd("cd " .. vim.fn.fnameescape(vim.fn.fnamemodify(dir, ":h")))
+      local call = open_diff(tools, "alpha two\n")
+      assert.is_true(call._deferred, vim.inspect(call.error))
+      local state = diff._get_active_diffs()[tab_name]
+
+      local notify = vim.notify
+      local messages = {}
+      vim.notify = function(message)
+        messages[#messages + 1] = message
+      end
+      vim.api.nvim_set_current_win(vim.fn.win_findbuf(leftover)[1])
+      local ok, err = pcall(diff.accept_current_diff)
+      vim.notify = notify
+
+      assert.is_true(ok, err)
+      assert.same({ "No active diff found in current buffer" }, messages)
+      assert.equal("pending", state.status, "the new diff still waits for its own proposal window")
+    end)
   end
 
   it("opens a new-file diff in a folder that a symlink reaches, after a reload with the old windows closed", function()
