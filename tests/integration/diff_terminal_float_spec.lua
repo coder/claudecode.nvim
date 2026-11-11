@@ -24,7 +24,7 @@ describe("openDiff with a floating Claude terminal", function()
   end
 
   local function install_float_terminal(opts)
-    local fake = { hide_calls = 0, ensure_calls = 0 }
+    local fake = { hide_calls = 0, ensure_calls = 0, hide_tab_args = {} }
     fake.buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(fake.buf, 0, -1, false, { "Claude terminal" })
 
@@ -85,8 +85,12 @@ describe("openDiff with a floating Claude terminal", function()
       get_active_bufnr = function()
         return vim.api.nvim_buf_is_valid(fake.buf) and fake.buf or nil
       end,
-      hide_float = function()
+      hide_float = function(tab)
+        fake.hide_tab_args[#fake.hide_tab_args + 1] = tab == nil and "none" or tab
         if not window_is_open() then
+          return false
+        end
+        if tab ~= nil and vim.api.nvim_win_get_tabpage(fake.win) ~= tab then
           return false
         end
         hide_window()
@@ -422,6 +426,33 @@ describe("openDiff with a floating Claude terminal", function()
 
     assert.is_false(second.created_new_tab)
     assert.equal(0, #visible_floats(), "the float does not cover the diff in the second tab")
+  end)
+
+  it("leaves the float the provider tracks in another tab visible when a second float of the terminal is in the diff's tab", function()
+    setup_diff({ layout = "vertical" })
+    local diff_tab = vim.api.nvim_get_current_tabpage()
+    vim.api.nvim_win_close(float.win, true)
+    float.win = nil
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    local tracked_tab = vim.api.nvim_get_current_tabpage()
+    float.user_show()
+    vim.api.nvim_set_current_tabpage(diff_tab)
+    vim.api.nvim_open_win(float.buf, false, {
+      relative = "editor",
+      row = 1,
+      col = 1,
+      width = vim.o.columns - 4,
+      height = vim.o.lines - 6,
+    })
+    assert.equal(1, #visible_floats(tracked_tab), "the float the provider tracks is in the second tab")
+    assert.equal(1, #visible_floats(diff_tab), "a second float of the terminal is in the diff's tab")
+
+    open_diff("proposed.txt")
+
+    assert.same({ diff_tab }, float.hide_tab_args, "the diff asks the provider to hide a float in its own tab")
+    assert.equal(0, float.hide_calls, "the provider tracks no float in the diff's tab")
+    assert.equal(1, #visible_floats(tracked_tab), "the unrelated float in the second tab stays")
+    assert.equal(1, #visible_floats(diff_tab), "the plugin hides only the float it tracks")
   end)
 
   it_parks_floats("puts the cursor in the editor window when the window it was in is a hidden float", function()

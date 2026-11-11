@@ -27,6 +27,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     windows[id] = {
       buf = buf,
       valid = true,
+      tab = 1,
       config = { relative = (opts and opts.relative) or "", hide = false },
     }
     return id
@@ -189,6 +190,9 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         nvim_win_get_buf = function(w)
           return windows[w] and windows[w].buf
         end,
+        nvim_win_get_tabpage = function(w)
+          return windows[w] and windows[w].tab
+        end,
         nvim_win_set_buf = function(w, b)
           if windows[w] then
             windows[w].buf = b
@@ -314,6 +318,24 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
 
       snacks_provider.simple_toggle("claude", {}, float_config())
       assert.is_false(windows[win].config.hide)
+    end)
+
+    it("hides the float when it is in the tab it is asked about", function()
+      local term = open_float()
+
+      assert.is_true(snacks_provider.hide_float(1))
+      assert.is_true(windows[term.win].config.hide)
+    end)
+
+    it("leaves the float alone when it is in another tab", function()
+      local term = open_float()
+      windows[term.win].tab = 2
+
+      assert.is_false(snacks_provider.hide_float(1))
+      assert.is_false(windows[term.win].config.hide, "a float in tab 2 does not cover a diff in tab 1")
+
+      assert.is_true(snacks_provider.hide_float(2))
+      assert.is_true(windows[term.win].config.hide)
     end)
 
     it("leaves a split alone", function()
