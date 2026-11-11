@@ -237,6 +237,38 @@ describe("a held selection with the real plugin", function()
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
     end)
 
+    -- Neovim ignores what on_reload returns and keeps the listener. A listener that forgot its buffer there would let
+    -- the next selection attach a second one, one more after every reload.
+    it("keeps one listener on the file through reloads while Claude holds only a cursor", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      local attached = 0
+      local real_attach = vim.api.nvim_buf_attach
+      vim.api.nvim_buf_attach = function(buf, ...)
+        attached = attached + (buf == file_buf and 1 or 0)
+        return real_attach(buf, ...)
+      end
+
+      local ok, err = pcall(function()
+        for cycle = 1, 3 do
+          vim.api.nvim_win_set_cursor(0, { 1, 0 })
+          select_and_release()
+          vim.cmd("enew") -- another file: the debounce replaces the selection with that buffer's cursor
+          wait(300)
+          assert.is_true(selection.get_latest_selection().selection.isEmpty)
+          rewrite_on_disk_and_reload(file_buf, "alpha beta gamma, cycle " .. cycle) -- on_reload, nothing held
+          wait(200)
+          vim.cmd("buffer " .. file_buf)
+          wait(200)
+        end
+      end)
+      vim.api.nvim_buf_attach = real_attach
+      assert(ok, err)
+
+      assert.are.equal(1, attached)
+    end)
+
     it("keeps the selection when a reload leaves its text in place", function()
       start({ provider = "none" }, 50)
       open_file("alpha beta gamma")
