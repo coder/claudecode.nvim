@@ -47,8 +47,9 @@ run_test_file() {
   error_count=$(echo "$clean_output" | grep "^Errors :" | tail -1 | awk '{print $3}' || true)
 
   # Plenary prints its summary only after it has run the whole file. Without all three counts, nvim stopped early,
-  # whatever its exit code says. A count with a leading zero or text would stop bash in the arithmetic below.
-  local plain_count='^(0|[1-9][0-9]*)$'
+  # whatever its exit code says. A count that is not 0 or 1 to 9 digits without a leading zero would stop bash or wrap
+  # in the arithmetic below.
+  local plain_count='^(0|[1-9][0-9]{0,8})$'
   if [[ ! $success_count =~ $plain_count ]] || [[ ! $failed_count =~ $plain_count ]] || [[ ! $error_count =~ $plain_count ]]; then
     echo "FAILED: $basename: no plenary summary (nvim exit $EXIT_CODE)"
     success_count=0
