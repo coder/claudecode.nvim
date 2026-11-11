@@ -24,7 +24,7 @@
 # TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path to an
 #              existing directory with no . or .. part, and neither it nor a dir above it may be writable by others without
 #              the sticky bit. Launch resolves <dir> once, so VCN_STATE has no symlink in it.
-#              agent-tty never reads it: every agent-tty call runs with TMPDIR=$VCN_STATE/tmp.
+#              No agent-tty call of this script reads it: att() runs every one with TMPDIR=$VCN_STATE/tmp.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077

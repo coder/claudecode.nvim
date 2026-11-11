@@ -27,7 +27,7 @@
 #   state-parent-partial  the same for a dir above the state dir
 #   tmp-multihop      TMPDIR is this user's symlink to a second symlink in a dir that others can write, to a dir only this user
 #                     can write: launch accepts it, and after another user repoints the second symlink, `record` still
-#                     writes no byte of theirs into the evidence dir, because agent-tty never reads the caller's TMPDIR
+#                     writes no byte of theirs into the evidence dir, because no agent-tty call of vcn.sh reads the caller's TMPDIR
 #   tmp-later-tmpdir  a command run with a TMPDIR that does not exist works: agent-tty makes its staging dirs in the state dir
 #   state-count       a stat that answers for one dir fewer than the walk asked for (a shim drops the record of the loose
 #                     dir above the state dir) makes the walk refuse, not pass
