@@ -165,6 +165,9 @@ local schedule_mention_flush
 ---finds no ready client calls it again.
 local function expire_mentions()
   if ms_until_a_client_is_ready() == 0 then
+    -- A flush must be due, so that the drain goes on, or finds the client gone and calls this again. The handshake's
+    -- own flush can come later than this: Neovim runs the scheduled callbacks in order, late when its loop was busy.
+    schedule_mention_flush(inter_message_delay)
     return
   end
   local queue = mention_queue()

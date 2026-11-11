@@ -1004,6 +1004,34 @@ describe("The @ mention queue", function()
     assert_no_lua_error()
   end)
 
+  it("F1: a ready Claude that leaves before its handshake callback ran does not strand the queue", function()
+    send("/project/a.lua")
+    run(10000)
+    -- Neovim runs the scheduled callbacks in order, late when its loop was busy: the handshake's on_open callback runs
+    -- only after the deadline, at which Claude is ready, and after Claude left.
+    local held = {}
+    local schedule = vim.schedule
+    vim.schedule = function(fn)
+      table.insert(held, fn)
+    end
+    local claude = claude_connects()
+    claude.handshake()
+    vim.schedule = schedule
+    run(610)
+    claude.drop()
+    for _, fn in ipairs(held) do
+      fn()
+    end
+    run(1000)
+
+    assert.same({}, claude.received())
+    assert.equals(1, #errors)
+    assert.matches("Connection timeout %- clearing 1 queued", errors[1])
+    assert.same({}, claudecode.state.mention_queue)
+    assert.is_nil(claudecode.state.connection_timer)
+    assert_no_lua_error()
+  end)
+
   it("E: a send while a flush is due does not postpone that flush", function()
     local claude = claude_connects()
     claude.handshake()
