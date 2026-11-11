@@ -317,6 +317,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   local original_tab_number = vim.api.nvim_get_current_tabpage()
   local created_new_tab = false
   local terminal_win_in_new_tab = nil
+  local terminal_buffer_in_new_tab, terminal_enter_handler
   local new_tab_handle = nil
   local had_terminal_in_original = false
 
@@ -349,7 +350,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   end
 
   if config and config.diff_opts and config.diff_opts.open_in_new_tab then
-    original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle = guard_inline_setup(
+    original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle, terminal_buffer_in_new_tab, terminal_enter_handler = guard_inline_setup(
       function()
         return diff._display_terminal_in_new_tab()
       end
@@ -515,6 +516,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
       new_tab_number = new_tab_handle,
       had_terminal_in_original = had_terminal_in_original,
       terminal_win_in_new_tab = terminal_win_in_new_tab,
+      terminal_buffer_in_new_tab = terminal_buffer_in_new_tab,
+      terminal_enter_handler = terminal_enter_handler,
       term_win = term_win,
       term_width = term_width,
     })
