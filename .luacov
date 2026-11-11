@@ -9,11 +9,6 @@ local function first_line_of(command)
   return line
 end
 
-local function temp_folder()
-  local folder = (os.getenv("TMPDIR") or ""):gsub("/+$", "")
-  return folder == "" and "/tmp" or folder
-end
-
 -- luacov matches these Lua patterns against the file's path without the `.lua`.
 local include = { "^lua/claudecode/", "^plugin/" }
 local folder_as_typed = first_line_of("pwd")
@@ -23,23 +18,8 @@ for _, folder in ipairs({ folder_as_typed, folder_without_symlinks }) do
   table.insert(include, "^" .. escape(folder) .. "/plugin/")
 end
 
-local temp_copies = "^" .. escape(temp_folder()) .. "/claudecode%.%w%w%w%w%w%w/"
-local checkout_is_a_temp_folder = (folder_as_typed .. "/"):match(temp_copies)
-  or (folder_without_symlinks .. "/"):match(temp_copies)
-
 return {
   statsfile = "luacov.stats.out",
   reportfile = "luacov.report.out",
   include = include,
-
-  -- luacov adds each `modules` pattern to `include`, so a copy of init.lua that a spec runs from a temp folder would
-  -- count as hits on lua/claudecode/init.lua. A checkout that sits in such a folder keeps its own files instead.
-  exclude = checkout_is_a_temp_folder and {} or { temp_copies },
-
-  -- A spec that puts `./lua/?.lua` first on package.path loads a module under a relative name, so the stats hold one
-  -- module twice. These names make the report merge the two and list each file by its relative path.
-  modules = {
-    ["claudecode.*"] = "lua",
-    ["claudecode.*.*"] = "lua",
-  },
 }
