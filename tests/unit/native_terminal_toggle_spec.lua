@@ -1449,6 +1449,71 @@ describe("claudecode.terminal.native toggle behavior", function()
       end
     end)
 
+    -- A toggle of the start can also show the terminal again, in a window of its own, after another one hid it. That is
+    -- the window of Claude then: the start focuses it, and the exit of the job closes it with auto_close.
+    describe("when autocmds of the start hide the new terminal and show it again", function()
+      local mock_state
+      local auto_close_config = { split_side = "right", split_width_percentage = 0.3, auto_close = true }
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        native_provider.setup(auto_close_config) -- the adoption in the autocmd exits with the module's config
+      end)
+
+      local function hide_and_show()
+        native_provider.simple_toggle("claude", {}, config) -- adopts the terminal that starts
+        native_provider.simple_toggle("claude", {}, config) -- hides it
+        native_provider.simple_toggle("claude", {}, config) -- shows it in another window
+      end
+
+      local function from_bufenter(action)
+        local fired = false
+        mock_state.bufenter_autocmd = function(_, bufnr)
+          if not fired and bufnr ~= 0 then
+            fired = true
+            action()
+          end
+        end
+        return function()
+          return fired
+        end
+      end
+
+      local function from_termopen(action)
+        local fired = false
+        mock_vim.api.nvim_create_autocmd("TermOpen", {
+          callback = function()
+            if not fired then
+              fired = true
+              action()
+            end
+          end,
+        })
+        return function()
+          return fired
+        end
+      end
+
+      local autocmds = { { "a BufEnter autocmd", from_bufenter }, { "a TermOpen autocmd", from_termopen } }
+      for _, autocmd in ipairs(autocmds) do
+        it("should track, focus and close the window that shows it again (" .. autocmd[1] .. ")", function()
+          local fired = autocmd[2](hide_and_show)
+
+          native_provider.open("claude", {}, auto_close_config, true)
+
+          assert.is_true(fired())
+          local active = native_provider.get_active_bufnr()
+          assert.is_not_nil(active)
+          assert.are.equal(1, windows_showing(active))
+          assert.are.equal(active, mock_state.windows[mock_state.current_win].bufnr)
+
+          mock_state.exit_job(active)
+          assert.are.equal(0, windows_showing(active))
+          assert.is_nil(native_provider.get_active_bufnr())
+        end)
+      end
+    end)
+
     it("should keep one exit handler on a terminal it adopts again after each reload", function()
       local mock_state = _G.get_mock_state()
       local term_config = { split_side = "right", split_width_percentage = 0.3, auto_close = true }

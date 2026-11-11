@@ -266,8 +266,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
-  winid = vim.api.nvim_win_is_valid(new_winid) and new_winid or nil
+  winid = new_winid
   bufnr = new_bufnr
+  -- A later autocmd of the start can show the terminal in another window. Look for the window that shows it now.
+  is_valid()
   job_auto_close = effective_config.auto_close
   vim.bo[bufnr].bufhidden = "hide"
   utils.map_terminal_suspend(bufnr)
