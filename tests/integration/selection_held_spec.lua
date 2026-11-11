@@ -237,11 +237,9 @@ describe("a held selection with the real plugin", function()
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
     end)
 
-    -- Neovim ignores what on_reload returns and keeps the listener. A listener that forgot its buffer there would let
-    -- the next selection attach a second one, one more after every reload.
-    -- The plugin can take a buffer for the Claude terminal after a selection was read in it (a custom terminal_cmd
-    -- without "claude", then the provider adopts the buffer). Its text then changes: the check used to call
-    -- update_selection, which called the check again, until "stack overflow".
+    -- A buffer can become the Claude terminal after a selection was read in it: termopen() in it, or a rename to a
+    -- term://...claude name. Its text then changes: the check used to call update_selection, which called the check
+    -- again, until "stack overflow".
     it("does not overflow the stack when the buffer of the held selection is taken for the Claude terminal", function()
       start({ provider = "none" }, 50)
       open_file("alpha beta gamma")
@@ -256,6 +254,8 @@ describe("a held selection with the real plugin", function()
       assert.are.equal("", vim.v.errmsg)
     end)
 
+    -- Neovim ignores what on_reload returns and keeps the listener. A listener that forgot its buffer there would let
+    -- the next selection attach a second one, one more after every reload.
     it("keeps one listener on the file through reloads while Claude holds only a cursor", function()
       start({ provider = "none" }, 50)
       open_file("alpha beta gamma")

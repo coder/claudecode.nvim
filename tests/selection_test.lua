@@ -2730,7 +2730,7 @@ describe("Range Selection Tests", function()
         end)
 
         -- update_selection runs this check in the Claude terminal and does nothing else there. If the held selection was
-        -- read in a buffer that the plugin took for the terminal afterwards, the check used to call update_selection,
+        -- read in a buffer that became the terminal afterwards, the check used to call update_selection,
         -- which called the check again, until the stack overflowed.
         it("does not recurse when the buffer of the held selection became the Claude terminal itself", function()
           ticks = { [1] = 5, [2] = 5 }
