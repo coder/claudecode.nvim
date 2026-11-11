@@ -1359,37 +1359,56 @@ function M._close_proposal_window(diff_data)
   end
 end
 
+---@type table<number, table<number, true>> Windows that wait for a file's buffer, by buffer
+local windows_waiting_for_file = {}
+
 ---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and restores them when the
----buffer enters it again, so diff mode comes back after the diff has ended.
+---buffer enters it again, so diff mode comes back after the diff has ended. Each window that left the file waits for it.
 ---@param diff_data table
 local function end_diff_mode_when_file_returns(diff_data)
+  for buffer in pairs(windows_waiting_for_file) do
+    if not vim.api.nvim_buf_is_valid(buffer) then
+      windows_waiting_for_file[buffer] = nil
+    end
+  end
   local buffer = diff_data.original_buffer
   if not (buffer and vim.api.nvim_buf_is_valid(buffer)) then
     return
   end
-  local waiting = {}
+  local waiting = windows_waiting_for_file[buffer] or {}
+  for win in pairs(waiting) do
+    if not vim.api.nvim_win_is_valid(win) then
+      waiting[win] = nil
+    end
+  end
   for _, win in pairs({ proposal = diff_data.new_window, original = diff_data.target_window }) do
     if vim.api.nvim_win_is_valid(win) and not window_shows(win, buffer) then
       waiting[win] = true
     end
   end
-  if next(waiting) == nil then
+  if windows_waiting_for_file[buffer] or next(waiting) == nil then
     return
   end
+  windows_waiting_for_file[buffer] = waiting
   vim.api.nvim_create_autocmd("BufWinEnter", {
     buffer = buffer,
     callback = function()
+      local entered = vim.api.nvim_get_current_win()
       for win in pairs(waiting) do
         if not vim.api.nvim_win_is_valid(win) then
           waiting[win] = nil
         elseif window_shows(win, buffer) then
           waiting[win] = nil
-          pcall(vim.api.nvim_win_call, win, function()
+          -- Skip a window that got the file without this event: the user may have turned diff mode on there since.
+          if win == entered and vim.api.nvim_get_option_value("diff", { win = win }) then
             vim.cmd("diffoff")
-          end)
+          end
         end
       end
-      return next(waiting) == nil
+      if next(waiting) == nil then
+        windows_waiting_for_file[buffer] = nil
+        return true
+      end
     end,
   })
 end
@@ -2315,6 +2334,12 @@ end
 ---@return table active_diffs The active diffs table
 function M._get_active_diffs()
   return active_diffs
+end
+
+---Test helper function (only for testing)
+---@return table<number, table<number, true>> windows The windows that wait for each file's buffer
+function M._windows_waiting_for_file()
+  return windows_waiting_for_file
 end
 
 ---Manual buffer reload function for testing/debugging

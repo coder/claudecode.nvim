@@ -13,11 +13,12 @@ describe("diff mode in a window that left a split diff", function()
   local tab = "✻ [Claude Code] left_window.txt ⧉"
   local dir, file, answers
 
-  local function open_diff()
+  local function open_diff(path)
+    path = path or file
     diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
     local call = tools.handle_invoke({ id = "left_window_spec" }, {
       name = "openDiff",
-      arguments = { old_file_path = file, new_file_path = file, new_file_contents = "one\nTWO\n", tab_name = tab },
+      arguments = { old_file_path = path, new_file_path = path, new_file_contents = "one\nTWO\n", tab_name = tab },
     })
     assert.is_true(call._deferred, "openDiff waits for the user")
     _G.claude_deferred_responses[tostring(call.coroutine)] = function(response)
@@ -75,6 +76,7 @@ describe("diff mode in a window that left a split diff", function()
     vim.fn.writefile({ "one", "two" }, file)
     vim.fn.writefile({ "other" }, dir .. "/other.txt")
     vim.fn.writefile({ "third" }, dir .. "/third.txt")
+    vim.fn.writefile({ "fourth" }, dir .. "/fourth.txt")
     tools.register_all()
     _G.claude_deferred_responses = {}
     answers = {}
@@ -198,6 +200,139 @@ describe("diff mode in a window that left a split diff", function()
     end)
   end)
 
+  describe("diff mode that the user sets in the window that left the diff", function()
+    local function leave_original_window_on_third()
+      local state = open_diff()
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+      assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
+      return state
+    end
+
+    local function tab_diff_windows(tabpage)
+      local count = 0
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+        if option(win, "diff") then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    it("keeps the options that the user set after ending diff mode in the window themselves", function()
+      local state = open_diff()
+      run_in(state.target_window, "diffoff")
+      run_in(state.target_window, "setlocal foldmethod=indent scrollbind")
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+      close_tab()
+
+      run_in(state.target_window, "edit #")
+
+      assert.equal(file, shows(state.target_window))
+      assert.is_false(option(state.target_window, "diff"))
+      assert.equal("indent", option(state.target_window, "foldmethod"), "the user's 'foldmethod' stays")
+      assert.is_true(option(state.target_window, "scrollbind"), "the user's 'scrollbind' stays")
+    end)
+
+    local entries = {
+      {
+        name = "a :noautocmd command",
+        enter = function(win, buffer)
+          run_in(win, "noautocmd buffer " .. buffer)
+        end,
+      },
+      {
+        name = "an autocmd that does not nest",
+        enter = function(win, buffer)
+          vim.api.nvim_create_autocmd("User", {
+            pattern = "ClaudeCodeSpecShowFile",
+            once = true,
+            callback = function()
+              vim.api.nvim_win_set_buf(win, buffer)
+            end,
+          })
+          vim.cmd("doautocmd User ClaudeCodeSpecShowFile")
+        end,
+      },
+    }
+    for _, entry in ipairs(entries) do
+      it("keeps a diff the user started after " .. entry.name .. " showed the file without a BufWinEnter", function()
+        local state = leave_original_window_on_third()
+        entry.enter(state.target_window, vim.fn.bufnr(file))
+        assert.equal(file, shows(state.target_window), "the file is back in the window")
+        run_in(state.target_window, "diffoff")
+        run_in(state.target_window, "diffthis")
+        vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        vim.cmd("diffthis")
+
+        vim.cmd("tabnew " .. vim.fn.fnameescape(file))
+
+        assert.is_true(option(state.target_window, "diff"), "the user's diff stays")
+      end)
+    end
+
+    it("leaves the diff mode of a window that opened as a copy of the user's diff window", function()
+      local state = leave_original_window_on_third()
+      run_in(state.target_window, "noautocmd buffer " .. vim.fn.bufnr(file))
+      run_in(state.target_window, "diffoff")
+      run_in(state.target_window, "diffthis")
+      vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      vim.cmd("diffthis")
+      run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
+      local copy = vim.api.nvim_get_current_win()
+
+      assert.is_true(option(copy, "diff"), "the new window keeps the diff mode it copied")
+      assert.is_true(option(state.target_window, "diff"), "the user's diff stays")
+    end)
+
+    it("keeps waiting when the file enters a window of another tab, and ends the diff mode there", function()
+      local state = leave_original_window_on_third()
+      local first_tab = vim.api.nvim_get_current_tabpage()
+      vim.cmd("tabnew " .. vim.fn.fnameescape(file))
+      local second_tab = vim.api.nvim_get_current_tabpage()
+      vim.cmd("diffthis")
+      vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      vim.cmd("diffthis")
+      vim.api.nvim_set_current_tabpage(first_tab)
+
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(file))
+
+      assert.is_false(option(state.target_window, "diff"), "diff mode is off in the waiting window")
+      assert.equal(2, tab_diff_windows(second_tab), "the user's diff in the other tab stays")
+    end)
+
+    it("keeps the diff of the other windows in the tab when the file comes back", function()
+      local state = leave_original_window_on_third()
+      vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      local second = vim.api.nvim_get_current_win()
+      vim.cmd("diffthis")
+      vim.cmd("split " .. vim.fn.fnameescape(dir .. "/fourth.txt"))
+      local third = vim.api.nvim_get_current_win()
+      vim.cmd("diffthis")
+
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(file))
+
+      assert.is_false(option(state.target_window, "diff"), "diff mode is off in the returning window")
+      assert.is_true(option(second, "diff"), "the user's diff stays in the first of its windows")
+      assert.is_true(option(third, "diff"), "the user's diff stays in the second of its windows")
+    end)
+
+    it(
+      "ends the diff mode that comes back with the file in a window the user had put in a diff of another buffer",
+      function()
+        local state = leave_original_window_on_third()
+        run_in(state.target_window, "diffthis")
+        vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        local other_window = vim.api.nvim_get_current_win()
+        vim.cmd("diffthis")
+
+        run_in(state.target_window, "edit " .. vim.fn.fnameescape(file))
+
+        assert.is_false(option(state.target_window, "diff"), "the saved diff mode does not come back")
+        assert.is_true(option(other_window, "diff"), "the diff of the other window stays")
+      end
+    )
+  end)
+
   describe("the hook that waits for the file", function()
     local function file_hooks()
       return #vim.api.nvim_get_autocmds({ event = "BufWinEnter", buffer = vim.fn.bufnr(file) })
@@ -231,6 +366,58 @@ describe("diff mode in a window that left a split diff", function()
       vim.cmd("split " .. vim.fn.fnameescape(file))
 
       assert.equal(0, file_hooks(), "the hook saw the closed window")
+    end)
+
+    it("is one hook for the file however many diffs left a closed window behind", function()
+      for round = 1, 5 do
+        local state = open_diff()
+        run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        wait_for_answers(round)
+        close_tab()
+        vim.api.nvim_win_close(state.new_window, true)
+      end
+      assert.equal(1, file_hooks(), "five diffs share one hook")
+      assert.equal(
+        1,
+        vim.tbl_count(diff._windows_waiting_for_file()[vim.fn.bufnr(file)]),
+        "closed windows are forgotten"
+      )
+
+      vim.cmd("vsplit " .. vim.fn.fnameescape(file))
+
+      assert.equal(0, file_hooks(), "the hook went when the file showed up")
+    end)
+
+    it("waits again for a later diff of the file after the first hook has run", function()
+      for _ = 1, 2 do
+        local state = open_diff()
+        run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+        close_tab()
+        assert.equal(1, file_hooks(), "a hook waits for the file")
+
+        run_in(state.target_window, "edit #")
+
+        assert.is_false(option(state.target_window, "diff"), "diff mode is off in the window")
+        assert.equal(0, file_hooks(), "the hook went")
+        answers = {}
+      end
+    end)
+
+    it("forgets the windows that wait for a file once its buffer is wiped", function()
+      local state = open_diff()
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+      close_tab()
+      local wiped = vim.fn.bufnr(file)
+      assert.is_not_nil(diff._windows_waiting_for_file()[wiped])
+      vim.cmd("bwipeout! " .. wiped)
+      answers = {}
+
+      local second = open_diff(dir .. "/other.txt")
+      run_in(second.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+      close_tab()
+
+      assert.is_nil(diff._windows_waiting_for_file()[wiped], "the wiped buffer has no entry")
+      assert.is_not_nil(diff._windows_waiting_for_file()[vim.fn.bufnr(dir .. "/other.txt")])
     end)
   end)
 end)
