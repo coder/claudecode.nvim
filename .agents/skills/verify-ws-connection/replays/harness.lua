@@ -187,6 +187,51 @@ function M.peer(port)
   return p
 end
 
+-- Claude in a process of its own: a second headless Neovim that runs claude-process.lua, connects, and answers every
+-- ping at once, whatever blocks this Neovim. The in-process Claude of M.peer answers only when this Neovim's loop runs,
+-- so it cannot show a plugin that blocks for a few intervals. `mode` is "big:<n>:<bytes>" (at ping n, send a text frame of
+-- that many bytes before the pong) or "late:<n>:<ms>" (sleep that long before the pong of ping n, as a machine that
+-- sleeps with Neovim does). `silence()` makes it stop answering. `kill()` ends it.
+function M.spawn_claude(port, token, mode)
+  local here = vim.fs.dirname(debug.getinfo(1, "S").source:sub(2))
+  local flag = vim.fn.tempname()
+  local env = {}
+  for k, v in pairs(vim.fn.environ()) do
+    table.insert(env, k .. "=" .. v)
+  end
+  vim.list_extend(env, {
+    "VWC_HARNESS=" .. here .. "/harness.lua",
+    "VWC_PEER_PORT=" .. port,
+    "VWC_PEER_TOKEN=" .. token,
+    "VWC_PEER_SILENT_FLAG=" .. flag,
+    "VWC_PEER_MODE=" .. (mode or ""),
+  })
+  local proc = uv.spawn(vim.v.progpath, {
+    args = {
+      "--headless",
+      "-u",
+      "NONE",
+      "-i",
+      "NONE",
+      "--cmd",
+      "lua vim.opt.rtp:prepend(os.getenv('VWC_REPO'))",
+      "-c",
+      "luafile " .. here .. "/claude-process.lua",
+    },
+    env = env,
+  }, function() end)
+  assert(proc, "could not start the Claude process")
+  local claude = {}
+  function claude.silence()
+    io.open(flag, "w"):close()
+  end
+  function claude.kill()
+    proc:kill("sigterm")
+    os.remove(flag)
+  end
+  return claude
+end
+
 -- The kernel's TCP state of the plugin's end of the connection to Claude's local port (from /proc/net/tcp), "gone"
 -- when no such connection is listed, and nil on a host without /proc/net/tcp (macOS, BSD).
 function M.tcp_state(server_port, peer_port)

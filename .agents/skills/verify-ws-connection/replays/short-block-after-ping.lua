@@ -1,13 +1,14 @@
--- Scenario: one main-loop block of 1.3 ping intervals that starts right after a ping was sent. Before #479 the late tick
--- after it found the pong of that ping still unread, and dropped a Claude that answers every ping with 1011: the block
--- is below the wake threshold (interval * 1.5), so last_pong was not reset, and now - last_pong was about 2.3 intervals.
+-- Scenario: one main-loop block of 1.3 ping intervals that starts right after a ping was sent. The late tick after it can
+-- run before the read of Claude's pong. Before #479 that tick dropped a Claude that answers every ping with 1011: the
+-- block is below the wake threshold (interval * 1.5), so last_pong was not reset, and now - last_pong was about 2.3
+-- intervals. Since #488 a tick never drops a client: only the keepalive check does, after the poll that read the pong.
 -- Promise: a Claude that answers every ping is not dropped by such a block, and a Claude that stops answering is still
 -- dropped, with 1006 for on_disconnect and Close 1011 for Claude.
 -- Model path: TimerTicks (a ping), Claude answers, TimerTicks (a ping, Neovim blocks), Claude's pong stays unread,
--- TimerTicksLate (pong_overdue: a ping, no drop), Read (the pong), TimerTicks (alive).
+-- TimerTicks (a ping, the tick stamps nothing new and drops nothing), PollAndCheck (the pong is read, the stamp clears).
 -- The block runs in a libuv check callback, which runs after the poll phase of the loop iteration that ran the timer. So
--- the socket read comes only after the next tick. On Neovim 0.8 any block does that. On newer Neovim a block in
--- vim.schedule reads the socket first, and the tick finds the pong.
+-- the socket read comes only after the next tick. With libuv 1.44 (Neovim 0.8) any block does that. With newer libuv a
+-- block in a check or I/O callback does, and a block in vim.schedule or a timer callback reads the socket first.
 local H = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
 local INTERVAL, BLOCK = 200, 260 -- ms: BLOCK / INTERVAL = 1.3, below the 1.5 wake threshold
 local SETTLE, SILENT = 1500, 3000 -- ms: how long Claude must stay listed, and how long a silent Claude gets to be dropped
@@ -57,7 +58,7 @@ H.check(
     or string.format("no on_disconnect in %d ms, still listed", SETTLE)
 )
 
--- Claude stops answering: it is still dropped, at the second tick that finds no pong.
+-- Claude stops answering: it is still dropped, at the first read after the third tick that follows its first unanswered ping.
 claude.answer_pings = false
 local silent_at = H.ms()
 H.log("claude: stops answering pings")
