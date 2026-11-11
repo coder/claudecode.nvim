@@ -234,6 +234,7 @@ describe("Diff split window cleanup", function()
     assert.is_false(ok)
     assert.are.equal("Diff setup failed", err.message)
     assert.is_nil(diff._get_active_diffs()[tab_name])
+    return err
   end
 
   it("leaves no window and no buffer of the diff when a new file's setup fails", function()
@@ -257,6 +258,23 @@ describe("Diff split window cleanup", function()
     open_diff_that_fails(test_old_file)
 
     assert.are.same({ 1000 }, vim.api.nvim_tabpage_list_wins(1))
+    assert.is_false(vim.api.nvim_win_get_option(1000, "diff"))
+  end)
+
+  it("names a window that stays in the answer and goes on when the window cannot be closed", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(test_old_file))
+    switch_diff_mode_with_diffthis_and_diffoff()
+    fail_when_the_proposal_is_shown()
+    replace(vim.api, "nvim_win_close", function()
+      return function()
+        error("E11: Invalid in command-line window")
+      end
+    end)
+
+    local err = open_diff_that_fails(test_old_file)
+
+    assert.is_truthy(err.data:find("(window 1001 stays: ", 1, true))
+    assert.is_truthy(err.data:find("E11", 1, true))
     assert.is_false(vim.api.nvim_win_get_option(1000, "diff"))
   end)
 end)

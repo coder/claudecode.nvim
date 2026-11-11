@@ -11,6 +11,7 @@ describe("openDiff when the diff setup fails", function()
   local tab = "✻ [Claude Code] proposal ⧉"
   local group = "diff_failed_setup_leftovers_spec"
   local tabnew_group = "diff_failed_setup_leftovers_spec_tabnew"
+  local winclosed_group = "diff_failed_setup_leftovers_spec_winclosed"
   local dir, real_hidden
   local real_set_buf = vim.api.nvim_win_set_buf
 
@@ -44,6 +45,15 @@ describe("openDiff when the diff setup fails", function()
     end
   end
 
+  local function raise_when_a_window_closes()
+    vim.api.nvim_create_autocmd("WinClosed", {
+      group = vim.api.nvim_create_augroup(winclosed_group, { clear = true }),
+      callback = function()
+        error("a handler of the user raised")
+      end,
+    })
+  end
+
   local function open_diff_that_fails(name, contents)
     local call = tools.handle_invoke({ id = "failed_setup_spec" }, {
       name = "openDiff",
@@ -58,6 +68,7 @@ describe("openDiff when the diff setup fails", function()
     assert.equal(-32000, call.error.code)
     assert.equal("Diff setup failed", call.error.message)
     assert.is_nil(diff._get_active_diffs()[tab])
+    return call.error
   end
 
   local function assert_still_there(wins, bufs)
@@ -69,7 +80,7 @@ describe("openDiff when the diff setup fails", function()
     end
   end
 
-  local function add_sidebar_hook_to_new_tab()
+  local function add_sidebar_hook_to_new_tab(opts)
     local hook = {}
     vim.api.nvim_create_autocmd("TabNewEntered", {
       group = vim.api.nvim_create_augroup(tabnew_group, { clear = true }),
@@ -77,8 +88,10 @@ describe("openDiff when the diff setup fails", function()
       callback = function()
         hook.win = vim.api.nvim_get_current_win()
         vim.bo.filetype = "neo-tree"
-        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unsaved sidebar text" })
-        vim.o.hidden = false
+        if opts and opts.unclosable then
+          vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unsaved sidebar text" })
+          vim.o.hidden = false
+        end
       end,
     })
     return hook
@@ -98,6 +111,7 @@ describe("openDiff when the diff setup fails", function()
   after_each(function()
     pcall(vim.api.nvim_del_augroup_by_name, group)
     pcall(vim.api.nvim_del_augroup_by_name, tabnew_group)
+    pcall(vim.api.nvim_del_augroup_by_name, winclosed_group)
     vim.o.hidden = real_hidden
     vim.api.nvim_win_set_buf = real_set_buf
     diff._cleanup_all_active_diffs("test cleanup")
@@ -144,6 +158,23 @@ describe("openDiff when the diff setup fails", function()
     assert_still_there(wins, bufs)
   end)
 
+  it("goes on with the cleanup and answers Diff setup failed when a WinClosed handler raises", function()
+    use()
+    vim.cmd("edit " .. vim.fn.fnameescape(path("a.txt")))
+    local user_win = vim.api.nvim_get_current_win()
+    local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
+    fail_when_the_proposal_is_shown()
+    raise_when_a_window_closes()
+
+    local answer = open_diff_that_fails("a.txt", "alpha\nBETA\n")
+
+    assert.same(wins, vim.api.nvim_list_wins())
+    assert_still_there(wins, bufs)
+    assert.is_false(vim.wo[user_win].diff, "the window is still in diff mode")
+    assert.is_nil(answer.data:find("stays", 1, true), "the window closed")
+    assert.is_truthy(answer.data:find("the proposal cannot be shown", 1, true), "the answer names the cause")
+  end)
+
   it("deletes the (NEW FILE) buffer that a new file's setup made", function()
     use()
     vim.cmd("edit " .. vim.fn.fnameescape(path("b.txt")))
@@ -176,7 +207,7 @@ describe("openDiff when the diff setup fails", function()
     use({ open_in_new_tab = true })
     vim.cmd("edit " .. vim.fn.fnameescape(path("a.txt")))
     local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
-    local hook = add_sidebar_hook_to_new_tab()
+    local hook = add_sidebar_hook_to_new_tab({ unclosable = true })
     wipe_the_proposal_when_shown()
 
     open_diff_that_fails("a.txt", "alpha\nBETA\n")
@@ -184,5 +215,20 @@ describe("openDiff when the diff setup fails", function()
     assert_still_there(wins, bufs)
     assert.equal(2, #vim.api.nvim_list_tabpages(), "the new tab could not be closed")
     assert.same({ hook.win }, vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2]))
+  end)
+
+  it("closes the new tab and goes back to the tab it left when a WinClosed handler raises", function()
+    use({ open_in_new_tab = true })
+    vim.cmd("edit " .. vim.fn.fnameescape(path("a.txt")))
+    local tabs, tab_before = vim.api.nvim_list_tabpages(), vim.api.nvim_get_current_tabpage()
+    add_sidebar_hook_to_new_tab()
+    wipe_the_proposal_when_shown()
+    raise_when_a_window_closes()
+
+    local answer = open_diff_that_fails("a.txt", "alpha\nBETA\n")
+
+    assert.same(tabs, vim.api.nvim_list_tabpages())
+    assert.equal(tab_before, vim.api.nvim_get_current_tabpage())
+    assert.is_truthy(answer.data:find("Invalid buffer id", 1, true), "the answer names the cause")
   end)
 end)
