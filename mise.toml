@@ -30,9 +30,9 @@ lockfile = true
 [tools]
 # LuaJIT is the runtime Neovim embeds, and the test suite *requires* it: the
 # blocking-diff tools yield coroutines across pcall/C-call boundaries, which
-# PUC Lua 5.1 cannot do. busted/luacheck/luacov all run under LuaJIT.
+# stock PUC Lua 5.1 cannot do. busted/luacheck/luacov all run under LuaJIT.
 luajit = "2.1.1744318430"
-# PUC Lua 5.1 is installed only for its bundled LuaRocks, which `mise run
+# PUC Lua 5.5.0 is installed only for its bundled LuaRocks, which `mise run
 # setup` uses to build the test rocks *targeting LuaJIT* (luarocks --lua-dir).
 # (The LuaJIT plugin does not ship a LuaRocks.)
 lua = "5.5.0"
