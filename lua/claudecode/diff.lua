@@ -782,14 +782,15 @@ local function setup_new_buffer(
   return new_win
 end
 
----The buffer that has this name, if there is one. Both names are normalized, because Neovim can write a path with
----other separators than the one the plugin built.
+---The buffer that has this name, if there is one. Neovim can write a path with other separators than the one the
+---plugin built (backslashes on Windows), so the separators are made the same on both sides.
 ---@param name string
 ---@return integer? buf
 local function buffer_named(name)
-  local wanted = vim.fs.normalize(name)
+  local wanted = name:gsub("\\", "/")
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.fs.normalize(vim.api.nvim_buf_get_name(buf)) == wanted then
+    local buffer_name = vim.api.nvim_buf_get_name(buf):gsub("\\", "/")
+    if buffer_name == wanted then
       return buf
     end
   end
