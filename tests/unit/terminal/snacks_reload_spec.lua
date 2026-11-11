@@ -69,11 +69,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
         width = win_opts.width,
         relative = win_opts.relative,
         win = win_opts.win,
-        -- What Snacks resolves too: the keys, the callbacks and the buffer options. A buffer variable cannot keep them.
-        bo = win_opts.bo or { filetype = "snacks_terminal" },
+        -- What Snacks resolves too: the keys. A buffer variable cannot keep them.
         keys = win_opts.keys,
-        on_buf = win_opts.on_buf,
-        on_win = function() end,
       },
     }
     state.keyed[key] = term
@@ -592,25 +589,20 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.is_false(wrapped.config.show)
       assert.are.equal("right", wrapped.config.position)
       assert.are.equal(0.3, wrapped.config.width)
-      assert.is_nil(wrapped.config.bo)
       assert.are.equal(claude.buf, wrapped.buf)
     end)
 
-    -- A buffer variable cannot keep a function, nor a table that mixes list and map keys (a key of Snacks does), and the
-    -- wrapper takes its keys and its buffer options from the style and the config. So the first start stores none.
-    it("stores the window options without the keys, the callbacks and the buffer options", function()
+    -- A buffer variable cannot keep a table that mixes list and map keys (a key of Snacks does, E5100), and the wrapper
+    -- builds its own keys. So the first start stores the window options without them.
+    it("stores the window options without the keys", function()
       snacks_provider.open("claude", {}, config, true)
       local claude = started[1]
       assert.is_not_nil(claude.opts.keys, "the instance has keys")
-      assert.is_not_nil(claude.opts.bo, "the instance has buffer options")
 
       local stored = state.buffers[claude.buf].vars.claudecode_snacks_window
 
       assert.are.equal("right", stored.position)
       assert.is_nil(stored.keys)
-      assert.is_nil(stored.bo)
-      assert.is_nil(stored.on_buf)
-      assert.is_nil(stored.on_win)
     end)
 
     it("is wiped when the wrapped instance closes", function()
@@ -718,7 +710,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     describe("when the variable names a window that is no backdrop of the float", function()
       local claude, other
 
-      -- A float with a backdrop that the first start named, a reload, and a hide through an entry.
+      -- A terminal window with a backdrop that the first start named, a reload, and a hide through an entry.
       local function hide_after_reload(float_config, other_config, other_filetype)
         snacks_provider.open("claude", {}, config, true)
         claude = started[1]
@@ -731,8 +723,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
         state.buffers[claude.buf].vars.claudecode_snacks_backdrop = other
         reload_snacks()
 
-        snacks_provider.simple_toggle("claude", {}, config) -- adopts and hides the float
-        assert.is_true(state.windows[claude.win].config.hide, "the float is hidden")
+        snacks_provider.simple_toggle("claude", {}, config) -- adopts and hides it
       end
 
       it("leaves a window alone that sits at another z-index", function()
@@ -742,6 +733,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
           "snacks_win_backdrop"
         )
 
+        assert.is_true(state.windows[claude.win].config.hide, "the float is hidden")
         assert.is_false(state.windows[other].config.hide)
       end)
 
@@ -752,17 +744,19 @@ describe("claudecode.terminal.snacks after a module reload", function()
           "markdown"
         )
 
+        assert.is_true(state.windows[claude.win].config.hide, "the float is hidden")
         assert.is_false(state.windows[other].config.hide)
       end)
 
-      -- A split has no z-index, so it has no backdrop to find.
+      -- A split has no z-index (its config has relative = "" and none), so it has no backdrop to find.
       it("leaves a window alone when the terminal's window has no z-index", function()
         hide_after_reload(
-          { relative = "editor", hide = false },
+          { relative = "", hide = false },
           { relative = "editor", zindex = 49, hide = false },
           "snacks_win_backdrop"
         )
 
+        assert.is_nil(state.windows[claude.win], "the split is closed")
         assert.is_false(state.windows[other].config.hide)
       end)
     end)

@@ -607,8 +607,8 @@ end
 local function wrap_terminal(buf, config)
   local instance = Snacks.win(wrapper_options(buf, config))
   -- The style sets a filetype, and the window options that the terminal started with (an older version's, built from
-  -- the config) can hold `bo` too. The buffer has its own filetype already, and setting it again would fire FileType
-  -- again. Snacks.win reads `bo` only when it shows a window, so this resets it before that.
+  -- the config) can hold `bo` too. The buffer has its own filetype already, and Snacks sets `bo` on the buffer again on
+  -- every VimResized, which would fire FileType again. So the reset runs right after the constructor.
   instance.opts.bo = {}
   -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
   -- buffer of a scratch instance when it closes, and this terminal buffer was started by Snacks.terminal.
@@ -751,7 +751,9 @@ function M.open(cmd_string, env_table, config, focus)
     vim.b[term_instance.buf][AUTO_CLOSE_VAR] = config.auto_close and true or false
     -- The resolved options of the instance (the terminal style, position, size, window options), not the ones passed.
     local window = plain(term_instance.opts or opts.win)
-    window.keys, window.on_buf, window.on_win, window.bo = nil, nil, nil, nil
+    -- `keys` holds a table that mixes list and map keys, which a buffer variable cannot keep (E5100), and the wrapper
+    -- builds its own keys. `plain` has dropped the functions already, and the wrapper resets `bo` after its constructor.
+    window.keys = nil
     -- Only a float that is relative to a window has an anchor. The wrapper keeps it while that window exists.
     if window.relative ~= "win" then
       window.win = nil
