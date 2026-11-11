@@ -12,11 +12,15 @@
 #   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
 #                     reaches every call site, which the two cases above do not)
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
-#   state-symlink     a VCN_STATE that is a symlink (to a dir this user owns, with a run.env) is refused, not sourced
+#   state-resolved    a VCN_STATE with a . or .. part, a symlink in its path, or a symlink as its last part is refused, not
+#                     sourced: after the check another user could repoint the symlink
 #   state-mode        a VCN_STATE that is group-writable is refused, not sourced
 #   state-parent      a VCN_STATE under a dir that others can write without the sticky bit is refused, not sourced
-#   state-owner       a VCN_STATE that another user owns, with a run.env in it, is refused, not sourced (a user namespace
-#                     with a read-only overlay stands in for the other user; SKIP where it is not available)
+#   state-names       the same, when the name of that dir ends in a space, a tab or a newline, and a symlink with the
+#                     shorter name sits next to it
+#   state-env         a state_checked in the caller's environment does not skip the check
+#   state-owner       a VCN_STATE that another user owns, with a run.env in it, is refused, not sourced (a bwrap user
+#                     namespace with a read-only overlay stands in for the other user; SKIP where bwrap is missing)
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
@@ -740,15 +744,23 @@ marker_state_dir() {
   printf '%s' "$dir"
 }
 
-state_symlink_case() {
-  local name=state-symlink real link
-  real=$(marker_state_dir "$priv")
-  link=$priv/vcn.Lnk123
-  ln -s "$real" "$link"
-  refuses_state "$name" "$link" "refusing state dir $link: it is not a directory (symbolic link)"
-  rm -f -- "$link"
-  [[ $real == "$priv"/vcn.?????? ]] && rm -rf -- "$real"
-  echo "ok $name: a symlinked state dir was refused and its run.env not sourced"
+# After the check of $VCN_STATE another user could repoint a symlink in its path, and source and rm -rf would follow it,
+# so a VCN_STATE must be its own resolved path. Each of the three has a run.env that touches the marker.
+state_resolved_case() {
+  local name=state-resolved rdir=$TMP/res-case real dotted linked final
+  mkdir -m 700 "$rdir" "$rdir/y" "$rdir/real"
+  ln -s "$rdir/real" "$rdir/L"
+  ln -s "$rdir/y" "$rdir/lnk"
+  real=$(marker_state_dir "$rdir/y")
+  dotted=$rdir/L/../y/${real##*/}
+  linked=$rdir/lnk/${real##*/}
+  final=$rdir/vcn.Lnk123
+  ln -s "$real" "$final"
+  refuses_state "$name" "$dotted" "refusing state dir $dotted: it is not its own resolved path ($real)"
+  refuses_state "$name" "$linked" "refusing state dir $linked: it is not its own resolved path ($real)"
+  refuses_state "$name" "$final" "refusing state dir $final: it is not its own resolved path ($real)"
+  rm -rf -- "$rdir"
+  echo "ok $name: a state dir named through a . or .. part or a symlink was refused and its run.env not sourced"
   cases=$((cases + 1))
 }
 
@@ -772,18 +784,53 @@ state_parent_case() {
   cases=$((cases + 1))
 }
 
-# A user namespace that this user owns (unshare -rm, no sudo, no second account) maps this user to uid 0 and every
-# host-root-owned inode to nobody. A read-only overlay whose top layer is a host-root-owned dir and whose lower layer holds
-# the run.env shows a dir that nobody owns, with a run.env in it: what another user's planted state dir looks like. In the
-# namespace every host-root-owned dir above it looks foreign too, so a vcn.sh that skips the owner test is still refused by
-# unsafe_above, with another text: the case matches the text of the owner test.
+# A dir above the state dir that others can write is refused whatever its name ends in. stat prints the mode of such a dir
+# in a line, and a name read back from the line loses a trailing space or tab and splits at a newline: the walk then
+# tested the symlink with the shorter name, which sits next to the dir, and passed it.
+state_names_case() {
+  local name=state-names ndir=$TMP/names stem suffix loose dir
+  mkdir -m 700 "$ndir"
+  for stem in a b c; do
+    case $stem in
+    a) suffix=' ' ;;
+    b) suffix=$'\t' ;;
+    c) suffix=$'\n' ;;
+    esac
+    loose=$ndir/$stem$suffix
+    mkdir -m 777 "$loose"
+    ln -s "$ndir" "$ndir/$stem"
+    dir=$(marker_state_dir "$loose")
+    refuses_state "$name" "$dir" "refusing state dir $dir: $loose, above the state dir, is writable by others and not sticky"
+  done
+  rm -rf -- "$ndir"
+  echo "ok $name: a dir above the state dir that others can write was refused when its name ends in a space, a tab or a newline"
+  cases=$((cases + 1))
+}
+
+# load records that its check passed, in a variable that a caller's environment must not be able to preset.
+state_env_case() {
+  local name=state-env dir
+  dir=$(marker_state_dir "$priv")
+  chmod 770 "$dir"
+  refuses_state "$name" "$dir" "refusing state dir $dir: it is group- or world-writable" env state_checked="$dir"
+  [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  echo "ok $name: a state_checked in the environment did not skip the check"
+  cases=$((cases + 1))
+}
+
+# bwrap makes a user namespace that this user owns (no sudo, no second account). It maps this user to uid 0 and every
+# host-root-owned inode to nobody. Its /tmp is a root-owned sticky tmpfs, like a host /tmp, and every dir above the planted
+# state dir belongs to root there, so the walk above passes and only the owner test stands between a planted dir and
+# `source`. The planted dir is a read-only overlay: its top layer is a host-root-owned dir, so its owner shows as nobody,
+# and its lower layer holds a run.env that touches a marker.
 state_owner_case() {
-  local name=state-owner top="" cand mnt=$TMP/owner-mnt lower=$TMP/owner-lower
-  if ! unshare -rm true 2>/dev/null; then
-    echo "SKIP $name: user namespaces are not available"
+  local name=state-owner top="" cand lower=$TMP/owner-lower out skill
+  local args=()
+  command -v bwrap >/dev/null || {
+    echo "SKIP $name: bwrap is not installed"
     return 0
-  fi
-  for cand in /usr /etc /opt; do
+  }
+  for cand in /srv /opt /usr /etc; do
     [[ $(stat -c '%u %a' -- "$cand" 2>/dev/null) == "0 755" ]] && {
       top=$cand
       break
@@ -793,22 +840,32 @@ state_owner_case() {
     echo "SKIP $name: no host-root-owned 0755 dir for the top layer"
     return 0
   }
-  mkdir "$mnt" "$lower"
-  printf 'touch %s\n' "$TMP/marker-$name" >"$lower/run.env"
-  if ! unshare -rm mount -t overlay overlay -o "lowerdir=$top:$lower" "$mnt" 2>/dev/null; then
-    echo "SKIP $name: overlay mounts are not available in a user namespace"
+  skill=$(cd "$(dirname "$V")/.." && pwd)
+  mkdir "$lower"
+  printf 'touch /tmp/marker-state-owner\n' >"$lower/run.env"
+  args=(--unshare-user --uid 0 --gid 0 --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib
+    --symlink usr/lib64 /lib64 --unshare-pid --dev /dev --proc /proc --perms 01777 --tmpfs /tmp
+    --overlay-src "$lower" --overlay-src "$top" --ro-overlay /tmp/vcn.Abc123 --ro-bind "$skill" /v
+    --setenv PATH /usr/bin:/bin --setenv VCN_STATE /tmp/vcn.Abc123)
+  bwrap "${args[@]}" /usr/bin/true 2>/dev/null || {
+    echo "SKIP $name: bwrap cannot make a user namespace with an overlay here"
     return 0
-  fi
-  # The overlay exists only inside the namespace, so the mount, the check of the owner and vcn.sh run in one command.
-  refuses_state "$name" "$mnt" "refusing state dir $mnt: it is owned by another user" \
-    unshare -rm bash -c 'mount -t overlay overlay -o "lowerdir=$1:$2" "$3" && [[ $(stat -c %u "$3") != "$EUID" ]] && exec "${@:4}"' _ \
-    "$top" "$lower" "$mnt"
+  }
+  out=$(bwrap "${args[@]}" /usr/bin/bash -c '
+    [[ $(stat -c %u /tmp/vcn.Abc123) != "$EUID" ]] || echo SETUP-OWNER-IS-ME
+    /v/scripts/vcn.sh cleanup 2>&1
+    echo "rc=$?"
+    [[ ! -e /tmp/marker-state-owner ]] || echo MARKER-SOURCED' 2>&1) || true
+  [[ $out != *SETUP-OWNER-IS-ME* ]] || fail "$name" "the planted dir shows this user as its owner, so the case proves nothing: $out"
+  [[ $out != *MARKER-SOURCED* ]] || fail "$name" "vcn.sh sourced the run.env of a state dir that another user owns: $out"
+  [[ $out == *"refusing state dir /tmp/vcn.Abc123: it is owned by another user"* && $out == *"rc=1"* ]] ||
+    fail "$name" "cleanup did not refuse the dir with the owner text and exit 1: $out"
   echo "ok $name: a state dir that another user owns, with a run.env, was refused and its run.env not sourced"
   cases=$((cases + 1))
 }
 
-# TMPDIR holds a symlink. agent-tty names its socket directory after the real path of the home, so a signal before
-# `inspect` leaves that directory unless the cleanup hashes the real path too.
+# TMPDIR holds a symlink. Launch resolves it, so the agent-tty home has no symlink in its path, and the socket directory
+# that agent-tty names after the real path of the home is the one the cleanup removes.
 signal_symlink_case() {
   local name=signal-symlink gate=$TMP/gate-signal-symlink sockdir
   ln -s "$priv" "$TMP/priv-link"
@@ -855,9 +912,11 @@ cleanup_no_agent_tty_case
 setsid_resolved_case
 bare_tools_case
 jq_old_run_case
-state_symlink_case
+state_resolved_case
 state_mode_case
 state_parent_case
+state_names_case
+state_env_case
 state_owner_case
 signal_symlink_case
 sigterm_case

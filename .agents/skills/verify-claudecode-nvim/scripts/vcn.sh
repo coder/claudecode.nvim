@@ -27,6 +27,8 @@
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
+# load records that the check of $VCN_STATE passed. A caller's environment must not be able to preset that.
+unset state_checked
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$SKILL_DIR/../../.." && pwd)"
@@ -49,14 +51,21 @@ env_line() { printf '%s=%q\n' "$1" "$2"; }
 # it. After that one check nothing in it can change under another user's hand. A stale VCN_STATE can name a dir or
 # symlink that another user made at a freed name. stat without -L describes a symlink itself.
 unsafe_state() {
-  local uid mode type
-  read -r uid mode type < <(stat -c '%u %a %F' -- "$1" 2>/dev/null) || {
+  local uid mode real
+  # A trailing newline of a path would be cut from the substitution, so the x guards it. A path with a symlink or a . or ..
+  # part could be pointed elsewhere by another user after the check, and source and rm -rf would follow it.
+  real=$(realpath -e -- "$1" 2>/dev/null; printf x)
+  real=${real%x}
+  real=${real%$'\n'}
+  if [[ $real != "$1" ]]; then
+    echo "it is not its own resolved path (${real:-it does not exist})"
+    return
+  fi
+  read -r uid mode < <(stat -c '%u %a' -- "$1" 2>/dev/null) || {
     echo "it does not exist"
     return
   }
-  if [[ $type != directory ]]; then
-    echo "it is not a directory ($type)"
-  elif ((uid != EUID)); then
+  if ((uid != EUID)); then
     echo "it is owned by another user"
   elif (((8#$mode & 8#022) != 0)); then
     echo "it is group- or world-writable"
@@ -304,9 +313,9 @@ cmd_cleanup() {
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
   [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
   # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the real path of the home) at its first
-  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. A symlink in TMPDIR makes the
-  # real path differ from ATT_HOME.
-  rmdir "/tmp/agent-tty/$(printf %s "$(realpath -m -- "$ATT_HOME")" | sha256sum | cut -c1-8)" 2>/dev/null || true
+  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. ATT_HOME is its own real path,
+  # because launch resolves TMPDIR and load refuses a VCN_STATE that is not its own realpath.
+  rmdir "/tmp/agent-tty/$(printf %s "$ATT_HOME" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
   echo "vcn: cleanup ok, no processes left; evidence kept in $OUT"
@@ -359,35 +368,55 @@ unsafe_dir() {
   fi
 }
 
-# Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the
-# dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the
-# message (default: the evidence dir).
+# Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the dirs above it as given
+# and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the message (default: the
+# evidence dir). The x after each realpath keeps a trailing newline of a name.
 unsafe_above() {
-  local dir mode uid name what=${2-the evidence dir} logical resolved chains dirs
-  logical=$(realpath -sm -- "$1/..")
-  resolved=$(realpath -m -- "$1/..")
-  chains=("$logical")
-  [[ $resolved == "$logical" ]] || chains+=("$resolved")
-  for dir in "${chains[@]}"; do
-    dirs=()
-    while :; do
-      dirs+=("$dir")
-      [[ $dir != / ]] || break
-      dir=${dir%/*}
-      dir=${dir:-/}
-    done
-    # stat prints nothing for a dir that does not exist and goes on with the rest.
-    while read -r mode uid name; do
-      if ((uid != 0 && uid != EUID)); then
-        echo "$name, above $what, is owned by another user"
-        return
-      fi
-      if [[ ! -L $name ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
-        echo "$name, above $what, is writable by others and not sticky"
-        return
-      fi
-    done < <(stat -c '%a %u %n' -- "${dirs[@]}" 2>/dev/null)
+  local logical resolved why
+  logical=$(realpath -sm -- "$1/.."; printf x)
+  logical=${logical%x}
+  logical=${logical%$'\n'}
+  resolved=$(realpath -m -- "$1/.."; printf x)
+  resolved=${resolved%x}
+  resolved=${resolved%$'\n'}
+  why=$(unsafe_walk "$logical" "${2-the evidence dir}")
+  if [[ -z $why && $resolved != "$logical" ]]; then
+    why=$(unsafe_walk "$resolved" "${2-the evidence dir}")
+  fi
+  [[ -z $why ]] || echo "$why"
+}
+
+# Prints why <start> or a dir above it is unsafe, or nothing: owned by another user (root is fine), or writable by others
+# without the sticky bit. The dirs are the entries of a list that this function builds from <start>. stat prints one record
+# per dir, mode, owner and type and no name, so no path is ever read back from a line of text: a name with a trailing space,
+# a tab or a newline would be cut, and a twin symlink with the shorter name tested in its place.
+unsafe_walk() {
+  local dir=$1 what=$2 mode uid type rec i=0 dirs=() existing=()
+  while :; do
+    dirs+=("$dir")
+    [[ $dir != / ]] || break
+    dir=${dir%/*}
+    dir=${dir:-/}
   done
+  for dir in "${dirs[@]}"; do
+    if [[ -e $dir || -L $dir ]]; then existing+=("$dir"); fi
+  done
+  while IFS= read -r rec; do
+    read -r mode uid type <<<"$rec"
+    dir=${existing[i]-}
+    i=$((i + 1))
+    if ((uid != 0 && uid != EUID)); then
+      echo "$dir, above $what, is owned by another user"
+      return
+    fi
+    if [[ $type != "symbolic link" ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
+      echo "$dir, above $what, is writable by others and not sticky"
+      return
+    fi
+  done < <(stat -c '%a %u %F' -- "${existing[@]}" 2>/dev/null)
+  if ((i != ${#existing[@]})); then
+    echo "$1, above $what, could not be read in full"
+  fi
 }
 
 # The fast cleanup runs for $signaled, not for status 143: a child that someone else killed with SIGTERM also gives 143.
