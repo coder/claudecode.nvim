@@ -1099,6 +1099,84 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         mock_native_provider.open:was_called()
       end)
 
+      -- Snacks is available in these tests. An invalid value must leave the provider as it was, and the warning must
+      -- name that provider: the default, "auto", picks Snacks when it is installed.
+      describe("with Snacks available", function()
+        ---The one warning that `setup` raised about the provider value.
+        local function provider_warning()
+          local warnings = {}
+          for _, call in ipairs(vim.notify.calls) do
+            local message = call.refs[1]
+            if message and message:match("Invalid value for provider") then
+              table.insert(warnings, message)
+            end
+          end
+          assert.are.equal(1, #warnings, "expected one warning about the provider value")
+          return warnings[1]
+        end
+
+        it("keeps the default provider, and the warning names it", function()
+          terminal_wrapper.setup({ provider = "bogus" })
+          terminal_wrapper.open()
+
+          mock_snacks_provider.open:was_called(1) -- "auto" picks Snacks
+          mock_native_provider.open:was_not_called()
+          assert.are.equal(
+            "claudecode.terminal.setup: Invalid value for provider: bogus. Keeping 'auto'.",
+            provider_warning()
+          )
+        end)
+
+        it("keeps the provider that an earlier setup chose, and the warning names it", function()
+          local mock_none_provider = {
+            setup = spy.new(function() end),
+            open = spy.new(function() end),
+          }
+          package.loaded["claudecode.terminal.none"] = mock_none_provider
+          finally(function()
+            package.loaded["claudecode.terminal.none"] = nil
+          end)
+
+          terminal_wrapper.setup({ provider = "none" })
+          terminal_wrapper.setup({ provider = "bogus" })
+          terminal_wrapper.open()
+
+          mock_none_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+          mock_native_provider.open:was_not_called()
+          assert.are.equal(
+            "claudecode.terminal.setup: Invalid value for provider: bogus. Keeping 'none'.",
+            provider_warning()
+          )
+        end)
+
+        it("keeps a custom provider table that an earlier setup chose, and the warning says so", function()
+          local custom_provider = {
+            setup = spy.new(function() end),
+            open = spy.new(function() end),
+            close = spy.new(function() end),
+            simple_toggle = spy.new(function() end),
+            focus_toggle = spy.new(function() end),
+            get_active_bufnr = spy.new(function()
+              return nil
+            end),
+            is_available = spy.new(function()
+              return true
+            end),
+          }
+          terminal_wrapper.setup({ provider = custom_provider })
+          terminal_wrapper.setup({ provider = 42 })
+          terminal_wrapper.open()
+
+          custom_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+          assert.are.equal(
+            "claudecode.terminal.setup: Invalid value for provider: 42. Keeping the custom provider table.",
+            provider_warning()
+          )
+        end)
+      end)
+
       -- `setup` rejects these values, but `terminal.defaults` is public, so a caller can store one. `get_provider` then
       -- warns that it defaults to the native provider, and it must.
       describe("when terminal.defaults.provider holds a value that setup rejects", function()
