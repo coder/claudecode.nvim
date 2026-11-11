@@ -15,12 +15,16 @@ SERVER=lua/claudecode/server/init.lua
 CURRENT_TOOL=lua/claudecode/tools/get_current_selection.lua
 LATEST_TOOL=lua/claudecode/tools/get_latest_selection.lua
 COVERED=("$SEL" "$MAIN" "$SERVER" "$CURRENT_TOOL" "$LATEST_TOOL")
-SITE_RE='(latest_selection|last_active_visual_selection|cursor_at_flush|visual_entry|debounce_timer|demotion_timer|send_selection_update|flush_visual_selection|update_selection|handle_selection_demotion|selection_tick|reconcile_held_selection|clear_held_state|selection_changed|selection\.(enable|disable))'
+SITE_RE='(latest_selection|last_active_visual_selection|cursor_at_flush|visual_entry|debounce_timer|demotion_timer|send_selection_update|flush_visual_selection|update_selection|handle_selection_demotion|selection_tick|watched_buffers|watch_selection_buffer|record_selection_read|reconcile_held_selection|clear_held_state|selection_changed|selection\.(enable|disable))'
 
 covered_block unmoved "$SEL" '^local function cursor_unmoved_since_flush\('
 covered_block clear_held "$SEL" '^local function clear_held_state\('
 covered_block text_there "$SEL" '^local function selection_text_is_there\('
+covered_block cursor_other "$SEL" '^local function cursor_in_other_buffer\('
 covered_block demote_text "$SEL" '^local function demote_if_selection_text_changed\('
+covered_block holds_selection "$SEL" '^local function holds_selection_of\('
+covered_block watch_buffer "$SEL" '^local function watch_selection_buffer\('
+covered_block record_read "$SEL" '^local function record_selection_read\('
 covered_block reconcile "$SEL" '^local function reconcile_held_selection\('
 covered_block enable "$SEL" '^function M\.enable\('
 covered_block disable "$SEL" '^function M\.disable\('
@@ -49,7 +53,8 @@ covered_block latest_tool "$LATEST_TOOL" '^local function handler\('
 FACTS=(FlushOnVisualExit FlushSkipsOperator FlushSkipsTerminal FlushRecordsCursor UpdateSkipsTerminal
   PendingKeepsHeld ElseClearsHeldState DemotionWaitsForMove DemotionClearsHeldState DebounceIgnoresStale
   DemotionIgnoresStale ClearsBeforeClose EntryClearsHeld FlushSkipReports PendingClearsHeld ReconcileOnCursorMoved
-  ReconcileOnTextChanged TextChangeReports MoveReports LeaveNoted ReadRecordsTick)
+  ReconcileOnTextChanged TextChangeReports MoveReports LeaveNoted ReadRecordsTick ListensToSelectionBuffer
+  TerminalReportsHeldBuffer UpdateChecksHeldText)
 
 # ModeChanged runs on_mode_changed, which flushes when visual mode ends.
 flush_on_visual_exit() {
@@ -167,9 +172,8 @@ fact[ReconcileOnTextChanged]=$(as_bool reconcile_on_text_changed)
 text_change_reports() {
   clear_held_clears_both &&
     in_order '^  if demote_if_selection_text_changed\(\) then$' '^    return$' <<<"$reconcile" &&
-    in_order 'read\.bufnr ~= current_buf or vim\.api\.nvim_buf_get_changedtick\(current_buf\) == read\.tick then' \
-      '^  if selection_text_is_there\(held, current_buf\) then$' '^    return false$' '^  clear_held_state\(\)$' \
-      '^  M\.update_selection\(\)$' '^  return true$' <<<"$demote_text"
+    in_order '^  if vim\.api\.nvim_buf_get_changedtick\(read\.bufnr\) == read\.tick or selection_text_is_there\(held, read\.bufnr\) then$' \
+      '^    return false$' '^  clear_held_state\(\)$' '^    M\.update_selection\(\)$' '^  return true$' <<<"$demote_text"
 }
 fact[TextChangeReports]=$(as_bool text_change_reports)
 # A cursor that left the flushed position is reported at once.
@@ -187,28 +191,55 @@ leave_noted() {
       '^      caf\.left = true$' '^  elseif caf\.bufnr ~= current_buf then$' '^    caf\.away = current_buf$' <<<"$reconcile"
 }
 fact[LeaveNoted]=$(as_bool leave_noted)
-# The flush and the in-visual update record the buffer and changedtick of the selection they read.
+# The flush and the in-visual update call record_selection_read, which records the buffer and changedtick of the
+# selection they read.
 read_records_tick() {
-  in_order '^  M\.state\.cursor_at_flush = \{' \
-    '^  M\.state\.selection_tick = \{ bufnr = current_buf, tick = vim\.api\.nvim_buf_get_changedtick\(current_buf\) \}$' \
+  in_order '^  M\.state\.cursor_at_flush = \{' '^  record_selection_read\(current_buf\)$' \
     'M\.send_selection_update\(selection\)' <<<"$flush" &&
-    in_order 'M\.state\.last_active_visual_selection = \{' \
-      '^      M\.state\.selection_tick = \{ bufnr = current_buf, tick = vim\.api\.nvim_buf_get_changedtick\(current_buf\) \}$' \
-      '^    else$' <<<"$update_selection"
+    in_order 'M\.state\.last_active_visual_selection = \{' '^      record_selection_read\(current_buf\)$' \
+      '^    else$' <<<"$update_selection" &&
+    in_order '^  M\.state\.selection_tick = \{ bufnr = bufnr, tick = vim\.api\.nvim_buf_get_changedtick\(bufnr\) \}$' <<<"$record_read"
 }
 fact[ReadRecordsTick]=$(as_bool read_records_tick)
+# record_selection_read listens to the buffer it records, and the listener schedules the check when the buffer changes
+# (a reload or a plugin's edit: TextChanged fires only for the current buffer).
+listens_to_selection_buffer() {
+  in_order '^  M\.state\.selection_tick = ' '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
+    in_order '^  local function check_soon\(\)$' 'vim\.schedule\(function\(\)' '^        demote_if_selection_text_changed\(\)$' \
+      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' '^      check_soon\(\)$' \
+      '^    on_reload = function\(_, buf\)$' '^        check_soon\(\)$' <<<"$watch_buffer"
+}
+fact[ListensToSelectionBuffer]=$(as_bool listens_to_selection_buffer)
+# The check runs in the Claude terminal for a selection of another buffer, clears the held state and sends the cursor of
+# that buffer: update_selection does nothing in the terminal.
+terminal_reports_held_buffer() {
+  clear_held_clears_both &&
+    in_order '^  local from_terminal = read\.bufnr ~= current_buf and M\.is_claude_terminal_buffer\(current_buf\)$' \
+      '^  if read\.bufnr ~= current_buf and not from_terminal then$' '^    return false$' \
+      '^  local cursor = from_terminal and cursor_in_other_buffer\(read\.bufnr\)$' '^  clear_held_state\(\)$' '^  if cursor then$' \
+      '^      M\.state\.latest_selection = cursor$' '^        M\.send_selection_update\(cursor\)$' <<<"$demote_text"
+}
+fact[TerminalReportsHeldBuffer]=$(as_bool terminal_reports_held_buffer)
+# update_selection in the Claude terminal also runs that check: a new terminal is not registered when BufEnter fires.
+update_checks_held_text() {
+  in_order 'if M\.is_claude_terminal_buffer\(current_buf\) then' 'M\._cancel_demotion_timer\(\)' \
+    '^    demote_if_selection_text_changed\(\)$' '^    return$' <<<"$update_selection"
+}
+fact[UpdateChecksHeldText]=$(as_bool update_checks_held_text)
 
 RULES=(ReleaseSent NoPhantomSelection NoTerminalSelection HeldUntilMoved HeldEndsWhenMoved SameFile ClaudeSeesCursor
   NoDeletedText TimerClosedOnce)
 LIVE=()
-# Four guards break no rule alone, because another guard in the code covers for them. EXPECT lists each with a guard
+# Five guards break no rule alone, because another guard in the code covers for them. EXPECT lists each with a guard
 # that covers for it (a "+" key sets both FALSE) and the rule that breaks when both go.
 EXPECT=(
   [FlushOnVisualExit]=ReleaseSent [FlushSkipsOperator]=NoPhantomSelection
   [FlushSkipsTerminal]=NoTerminalSelection [UpdateSkipsTerminal]=NoTerminalSelection
   [FlushRecordsCursor]=HeldUntilMoved [PendingKeepsHeld]=HeldUntilMoved [DemotionWaitsForMove]=HeldUntilMoved
   [DebounceIgnoresStale]=TimerClosedOnce [DemotionIgnoresStale]=TimerClosedOnce [ClearsBeforeClose]=TimerClosedOnce
-  [FlushSkipReports]=NoDeletedText [ReadRecordsTick]=NoDeletedText [TextChangeReports]=NoDeletedText
+  [ReadRecordsTick]=NoDeletedText [TextChangeReports]=NoDeletedText
+  [ListensToSelectionBuffer]=NoDeletedText [TerminalReportsHeldBuffer]=NoDeletedText
+  [UpdateChecksHeldText]=NoDeletedText
   [ReconcileOnTextChanged]=NoDeletedText [ReconcileOnCursorMoved]=HeldEndsWhenMoved [MoveReports]=HeldEndsWhenMoved
   [LeaveNoted]=HeldEndsWhenMoved
   ["DemotionClearsHeldState+MoveReports"]=ClaudeSeesCursor
@@ -217,12 +248,13 @@ EXPECT=(
   ["EntryClearsHeld+FlushSkipReports"]=HeldEndsWhenMoved
 )
 
-# The main run explores any visual_demotion_delay_ms with two files. Two rules need a second file in their mutant runs:
-# SameFile, and HeldEndsWhenMoved (LeaveNoted breaks it only when the user can visit another file).
+# The main run explores any visual_demotion_delay_ms with two files. Three rules need a second file in their mutant runs:
+# SameFile, HeldEndsWhenMoved (LeaveNoted breaks it only when the user can visit another file), and NoDeletedText
+# (UpdateChecksHeldText breaks it only when a file changes while the user is in another file).
 # DelayBelowDebounce stays FALSE: TRUE would drop every order in which a demotion timer fires after a later debounce.
 tla_constants() {
   local rule=${1##*-} files="f1"
-  [[ $1 != main && $rule != SameFile && $rule != HeldEndsWhenMoved ]] || files="f1, f2"
+  [[ $1 != main && $rule != SameFile && $rule != HeldEndsWhenMoved && $rule != NoDeletedText ]] || files="f1, f2"
   echo "  Files = {$files}"
   echo "  Term = term"
   echo "  Pos = {p1, p2}"

@@ -71,7 +71,12 @@ CONSTANTS
   MoveReports,           \* reconcile reports the cursor when it left the flushed position
   LeaveNoted,            \* reconcile notes another buffer entered (away) and ends the hold for one that is
                          \* not the Claude terminal (left)
-  ReadRecordsTick        \* the flush and the in-visual update record selection_tick
+  ReadRecordsTick,       \* the flush and the in-visual update record selection_tick
+  ListensToSelectionBuffer, \* record_selection_read listens to the buffer of the selection it read, and a change of
+                            \* that buffer schedules the check
+  TerminalReportsHeldBuffer, \* the check, in the Claude terminal, sends the cursor of the selection's buffer when the
+                             \* held text changed
+  UpdateChecksHeldText      \* update_selection runs that check in the Claude terminal too
 
 Bufs == Files \cup {Term}
 Modes == {"n", "v"}         \* "n" is every mode without a selection (normal, insert, terminal)
@@ -189,9 +194,16 @@ Unmoved(s, e) == s.cafBuf = e.buf /\ s.cafPos = e.cur /\ ~s.cafLeft
 \* clear_held_state()
 ClearHeld(s) == [s EXCEPT !.lastVis = None, !.cafBuf = None]
 
-\* demote_if_selection_text_changed: the visual text in latest_selection was read in this buffer at another
-\* text version than it has now.
-TextChanged(s, e) == s.rdBuf = e.buf /\ s.latest \in VisValues /\ s.rdVer # e.ver[e.buf]
+\* demote_if_selection_text_changed: the visual text in latest_selection was read in a buffer at another text version
+\* than it has now. TextChanged is the check for the buffer you are in, HeldTextGone the check for the buffer of the
+\* selection, whichever it is.
+HeldTextGone(s, e) == s.rdBuf \in Bufs /\ s.latest \in VisValues /\ s.rdVer # e.ver[s.rdBuf]
+TextChanged(s, e) == s.rdBuf = e.buf /\ HeldTextGone(s, e)
+
+\* In the Claude terminal, which keeps a held selection of another buffer and does not update it, the check sends the
+\* cursor of the selection's buffer: where its window has the cursor, else where the selection was released.
+TerminalChanged(s, e) == e.buf = Term /\ s.rdBuf \in Files /\ HeldTextGone(s, e)
+ReportHeldBuffer(s) == Publish(ClearHeld(s), Cur(s.rdBuf, IF s.cafBuf = s.rdBuf THEN s.cafPos ELSE P0))
 
 \* timer:stop(); timer:close() on the handle in state t. Closing a closed handle is an error.
 CloseErr(t) == t \in {"closed", "closedQueued"}
@@ -223,7 +235,10 @@ Update(s, e) ==
   LET here == e.buf
       orCursor(sel) == IF sel = None THEN Cur(here, e.cur) ELSE sel
   IN
-  CASE here = Term /\ UpdateSkipsTerminal -> CancelDemotion(s)
+  CASE here = Term /\ UpdateSkipsTerminal ->
+         IF UpdateChecksHeldText /\ TerminalReportsHeldBuffer /\ TerminalChanged(s, e)
+         THEN ReportHeldBuffer(CancelDemotion(s))
+         ELSE CancelDemotion(s)
     [] e.mode = "v" ->
          Publish([CancelDemotion(s) EXCEPT !.lastVis = here, !.rdBuf = IF ReadRecordsTick THEN here ELSE @,
                                            !.rdVer = IF ReadRecordsTick THEN e.ver[here] ELSE @],
@@ -288,6 +303,7 @@ E2(b, m, c, v, mk, vr) == [buf |-> b, mode |-> m, cur |-> c, vsel |-> v, marks |
 \* BufEnter fires, so then it may be FALSE: the buffer is noted in cafAway and decided at the next event.
 Reconcile(s, e, compareCursor, termKnown) ==
   IF TextChangeReports /\ TextChanged(s, e) THEN Update(ClearHeld(s), e)
+  ELSE IF TerminalReportsHeldBuffer /\ termKnown /\ TerminalChanged(s, e) THEN ReportHeldBuffer(s)
   ELSE IF s.cafBuf = None \/ s.cafLeft THEN s
   ELSE LET awayGone == LeaveNoted /\ s.cafAway # None /\ s.cafAway # e.buf
        IN IF awayGone /\ s.cafAway # Term THEN [s EXCEPT !.cafLeft = TRUE]
@@ -296,6 +312,14 @@ Reconcile(s, e, compareCursor, termKnown) ==
                   ELSE IF LeaveNoted /\ s1.cafBuf # e.buf THEN [s1 EXCEPT !.cafAway = e.buf]
                   ELSE IF MoveReports /\ compareCursor /\ ~Unmoved(s1, e) THEN Update(ClearHeld(s1), e)
                   ELSE s1
+
+\* The listener on the buffer b of the selection Claude holds (watch_selection_buffer), after b changed while it is not
+\* current. demote_if_selection_text_changed sends the cursor of b: where its window has the cursor, else where the
+\* selection was released.
+OnOtherBufferChanged(s, e, b) ==
+  IF ListensToSelectionBuffer /\ TerminalReportsHeldBuffer /\ s.rdBuf = b /\ TerminalChanged(s, e)
+  THEN ReportHeldBuffer(s)
+  ELSE s
 
 \* The two handlers that call it. A key that edits the cursor line (x) fires CursorMoved, then TextChanged.
 OnCursor(s, e, compareCursor, termKnown) == IF ReconcileOnCursorMoved THEN Reconcile(s, e, compareCursor, termKnown) ELSE s
@@ -370,6 +394,17 @@ YouEditByPlugin ==
   /\ buf \in Files /\ mode = "n" /\ ver[buf] < MaxEdits
   /\ ver' = [ver EXCEPT ![buf] = @ + 1]
   /\ SetS(DebounceUpdate(OnText(S, E2(buf, "n", cur, None, None, ver'))))
+  /\ UNCHANGED <<buf, mode, cur, vsel>>
+  /\ NoSpecChange
+
+(* A plugin edits, or Neovim reloads, a file that is not the current buffer, and the held *)
+(* text with it: no TextChanged and no BufEnter fire. The listener on that buffer checks the *)
+(* held text. In the Claude terminal, which does not update the selection, it sends the *)
+(* cursor of the file. In another file the debounce replaces the selection. *)
+YouEditOtherBuffer(b) ==
+  /\ mode = "n" /\ b \in Files /\ b # buf /\ ver[b] < MaxEdits
+  /\ ver' = [ver EXCEPT ![b] = @ + 1]
+  /\ SetS(OnOtherBufferChanged(S, E2(buf, "n", cur, None, None, ver'), b))
   /\ UNCHANGED <<buf, mode, cur, vsel>>
   /\ NoSpecChange
 
@@ -488,6 +523,7 @@ Next ==
   \/ \E p \in Pos : YouMoveCursor(p)
   \/ YouEditAtCursor
   \/ YouEditByPlugin
+  \/ \E b \in Files : YouEditOtherBuffer(b)
   \/ YouEditElsewhere
   \/ \E b \in Bufs, p \in Pos : YouSwitchBuffer(b, p)
   \/ DebounceTimerFires
