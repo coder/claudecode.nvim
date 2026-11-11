@@ -36,7 +36,11 @@ VCN_STATE=/tmp/vcn.AbC123
 OUT=/home/coder/.xum/sessions/<ws>/scratch/verify-claudecode-nvim/20261031T120000Z-AbC123
 ```
 
-Every bash call is a fresh shell. Start each later call with the `VCN_STATE` value launch printed. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used: `export VCN_STATE=/tmp/vcn.AbC123; source "$VCN_STATE/run.env"`. That also sets `OUT`, `WORK`, `PORT`, `SID` (the agent-tty session), and `NVIM_PID`.
+Every bash call is a fresh shell. Start each later call with the two values launch printed, each in single quotes because a path can hold a space or an apostrophe (`TMPDIR` and `VERIFY_OUT` allow both): `export VCN_STATE='/tmp/vcn.AbC123' OUT='<the OUT value>'`. Inside the quotes, write each `'` of the path as `'\''`. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used. Do not `source` `$VCN_STATE/run.env` or `$OUT/run.env` in your own calls: bash runs every line of a file it sources, as you. `launch` appends version lines such as `agent-tty 0.5.0` to `$OUT/run.env`, and bash would run those as commands. The five `journey-*.sh` scripts and the dashboard command below still `source` `$VCN_STATE/run.env`. `vcn.sh` refuses a `run.env` that is a symlink or that another user owns, but only in its own commands, and those scripts and that command do not make the check. Export a `VCN_STATE` that your own `launch` printed, never one from an earlier or another session. Get the other values from the run:
+
+- `WORK` is `$VCN_STATE/work`, where `hello.txt` and `other.txt` live.
+- `$V doctor` prints the agent-tty session id (`SID`) in its `agent-tty session <SID> is running` line and the port of the plugin server (`PORT`) in its `plugin server is running on lock port <PORT>` line. The port is also the name of the lock file, `$VCN_STATE/claude/ide/<port>.lock`, so `PORT=$(basename "$VCN_STATE"/claude/ide/*.lock .lock)` gives it while the server runs.
+- `$V expr 'getpid()'` prints the nvim pid (`NVIM_PID`).
 
 Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. Launch keeps the first agent-tty that passes (see `VCN_AGENT_TTY`). When none passes, it stops and names each candidate and its failed check, such as the Node version, `pty.node`, or the Chromium launch. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, the client finished the handshake, and the MCP `initialize` call answered with a result. If a step misses its 10 s deadline, or `initialize` answers without a string `result.protocolVersion`, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1. Once launch has made its state dir, SIGTERM, SIGINT or SIGHUP tears the run down too, and launch exits 143. That teardown saves no evidence (no final screen, PNG or WebM), because those take long on a loaded host. Launch picks it by whether a signal reached launch, not by the status 143. A launch that fails by itself takes the full teardown and saves its evidence, and so does a launch whose child someone else killed with SIGTERM, because no signal reached launch. Its exit status is 143 when launch ran the killed command itself (the `cp` of `run.env`), and 1 when the killed command is an agent-tty call that launch checks, such as `create`. A signal that reaches launch after the teardown of a failure of its own has started changes nothing: launch exits 1 and keeps the evidence, the saved failure screen included. A signal that reaches launch before that teardown has started, even in the microseconds after the failure, counts as a signal: the signal trap runs the fast teardown itself, and launch exits 143 with its `vcn: launch failed` line. A teardown ignores a second signal until it ends. Launch's own shell ignores it, but Node resets an ignored signal when it starts, so a signal sent to launch's process group would kill `agent-tty home forget` and leave the home in `~/.local/state/agent-tty/homes.json`. The teardown therefore starts every agent-tty call it makes (the evidence steps, `destroy` and `home forget`) in its own session (`setsid`), where that signal does not reach it. It also removes the socket directory `/tmp/agent-tty/<8 hex digits of the sha256 of the real path of $VCN_STATE/att>` that agent-tty makes at its first call, even when the signal came before `inspect` named it. agent-tty hashes the real path of its home, so a symlink in `TMPDIR` changes the name, and the cleanup resolves it the same way. A signal before launch sets its first trap ends launch with the default status (130 for SIGINT, 129 for SIGHUP, 143 for SIGTERM) and leaves nothing behind. A signal from then until the state dir exists is recorded: launch removes the dir and exits 143 for all three. Launch prints `VCN_STATE=` before it stops handling signals, so a signal never leaves a running run whose name was not printed.
 
@@ -146,7 +150,7 @@ A full run, with the `VCN_STATE` value from launch:
 ```bash
 V=.agents/skills/verify-claudecode-nvim/scripts/vcn.sh
 $V launch
-export VCN_STATE=/tmp/vcn.AbC123
+export VCN_STATE='/tmp/vcn.AbC123' OUT='<the OUT value>'
 $V doctor
 .agents/skills/verify-claudecode-nvim/scripts/journey-opendiff-accept.sh
 $V cleanup
@@ -157,8 +161,8 @@ $V cleanup
 This checks that the real Claude Code CLI accepts the plugin's WebSocket server. It registers the run's server in a scratch CLI config and asks the CLI for its status. Run it in any shell, with the `VCN_STATE` value launch printed in the first line:
 
 ```bash
-export VCN_STATE=/tmp/vcn.AbC123
-source "$VCN_STATE/run.env"
+export VCN_STATE='/tmp/vcn.AbC123'
+PORT=$(basename "$VCN_STATE"/claude/ide/*.lock .lock)
 cfg=$(mktemp -d)
 helper="jq -c '{\"x-claude-code-ide-authorization\": .authToken}' \"$VCN_STATE/claude/ide/$PORT.lock\""
 json=$(jq -nc --arg u "ws://127.0.0.1:$PORT" --arg h "$helper" '{type: "ws", url: $u, headersHelper: $h}')
