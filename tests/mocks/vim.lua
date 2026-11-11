@@ -927,11 +927,13 @@ local vim = {
 
   -- Additional missing vim functions
   wait = function(timeout, condition, interval, fast_only)
-    assert(timeout == nil or tonumber(timeout), "vim.wait: timeout must be a number")
+    assert(tonumber(timeout), "vim.wait: timeout must be a number")
     assert(condition == nil or is_callable(condition), "vim.wait: condition must be callable")
     assert(interval == nil or tonumber(interval), "vim.wait: interval must be a number")
-    timeout = tonumber(timeout) or 1000
+    timeout = tonumber(timeout)
     interval = tonumber(interval) or 10
+    assert(timeout >= 0, "vim.wait: timeout must be >= 0")
+    assert(interval >= 0, "vim.wait: interval must be >= 0")
 
     local polls = math.floor(timeout / math.max(interval, 1)) + 1
     for _ = 1, polls do

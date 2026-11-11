@@ -1,5 +1,5 @@
 == lua/claudecode/config.lua
-file lua/claudecode/config.lua 2e4a9339c6c649a5
+file lua/claudecode/config.lua b4eaec92b6d04b40
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
