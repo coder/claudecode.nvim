@@ -2,17 +2,19 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { execFile, execFileSync } = require("node:child_process");
+const { execFile, execFileSync, spawnSync } = require("node:child_process");
 const {
   copyFileSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } = require("node:fs");
 const http = require("node:http");
 const { tmpdir } = require("node:os");
-const { join } = require("node:path");
+const { delimiter, join } = require("node:path");
 const { promisify } = require("node:util");
 const commonmark = require("commonmark");
 
@@ -1106,7 +1108,7 @@ async function testUnreleasedDraftFenceGuard() {
     ],
     [
       "a draft with a line that has backticks and no fence",
-      `${head}\`\`\`code\`\`\` is inline code.\n\n    indented code\n${previous}`,
+      `${head}\`\`\`code\`\`\` is inline code.\n${previous}`,
       released,
     ],
     [
@@ -1144,10 +1146,14 @@ async function testUnreleasedDraftFenceGuard() {
   ]) {
     assert.equal(updateWith(newEntry, text), expected, name);
   }
-  // A code line that is indented by four spaces is not a fence.
-  assert.equal(
-    update(`${head}Example:\n\n    \`\`\`js\n    x\n${previous}`),
-    released,
+  // A code line that is indented by four spaces is not a fence. It is an indented code block, and the update refuses
+  // it as one (see `testUnreleasedDraftStructure`).
+  assert.throws(
+    () =>
+      withMissingFormatter(() =>
+        update(`${head}Example:\n\n    \`\`\`js\n    x\n${previous}`),
+      ),
+    { message: nodeRefusal(7, "    ```js", "code_block (indented)") },
     "an indented code block is not a fence",
   );
   // A first release has a draft with no fence and no older release below it. The draft is the rest of the text.
@@ -1189,6 +1195,710 @@ async function testUnreleasedDraftFenceGuard() {
   );
 }
 
+/**
+ * What the update wrote before it read the draft with a parser, for a text that it handled without loss: the draft is
+ * everything after the Unreleased heading up to the first `# ` or `## ` line outside a fence, and the entry replaces it.
+ * `written` is the text before the formatter runs (an identity formatter gives it), and `rest` the lines that stay.
+ */
+function textThatMainWrites(text, entry) {
+  const lines = text.split(/\r\n|\r|\n/);
+  const unreleased = runner.findLineOutsideFences(lines, 0, (line) =>
+    /^#{2,3} \[?Unreleased\]?[ \t]*$/.test(line),
+  );
+  const next = runner.findLineOutsideFences(lines, unreleased + 1, (line) =>
+    /^##? /.test(line),
+  );
+  const rest = next === -1 ? "" : lines.slice(next).join("\n");
+  const sections = [
+    lines
+      .slice(0, unreleased + 1)
+      .join("\n")
+      .trimEnd(),
+    entry.trim(),
+  ];
+  if (rest.trim() !== "") {
+    sections.push(rest.trim());
+  }
+  return { written: `${sections.join("\n\n")}\n`, rest };
+}
+
+/**
+ * The error of `updateContent` for a draft that holds a node that it does not read (see `assertDraftIsPlain`). `kind`
+ * is the commonmark.js node type, and `level` the level of the headings that the draft can hold.
+ */
+function nodeRefusal(lineNumber, line, kind, level = 3) {
+  return (
+    `The Unreleased draft has a node that the update does not read: ${kind}. Line ${lineNumber} starts it: ${JSON.stringify(line.slice(0, 80))}. ` +
+    `The update drops the draft, so it reads only paragraphs, lists and level ${level} headings there. ` +
+    "Move it out of the Unreleased draft."
+  );
+}
+
+/** The error of `updateContent` for a line that no paragraph, list item or heading holds (a link definition). */
+function uncoveredRefusal(lineNumber, line) {
+  return (
+    `The Unreleased draft has a line that no paragraph, list item or heading holds. Line ${lineNumber}: ${JSON.stringify(line.slice(0, 80))}. ` +
+    "A link reference definition is one. The update drops the draft, so it refuses a line that it cannot read. " +
+    "Move it out of the Unreleased draft."
+  );
+}
+
+/** The error of `updateContent` when the formatter changes the headings of the older releases. */
+function changedRefusal(expected, found) {
+  return (
+    "The update would change the older releases. After the formatter runs, the headings below the new entry are not the headings that were there: " +
+    `expected ${JSON.stringify(expected)} but found ${JSON.stringify(found)}. ` +
+    "The new entry or the older releases hold Markdown that the formatter rewrites, such as a code fence that never closes, so the update refuses to write it."
+  );
+}
+
+/** The line of a text that equals `line`, numbered from 1, or 0. */
+function lineNumberOf(text, line) {
+  return text.split(/\r\n|\r|\n/).indexOf(line) + 1;
+}
+
+/**
+ * Runs `check` on every case and fails once, with the name of each case that failed, so one run shows every broken
+ * case. A case is an object with a `name`.
+ */
+function checkCases(cases, check) {
+  const failures = [];
+  for (const testCase of cases) {
+    try {
+      check(testCase);
+    } catch (error) {
+      failures.push(
+        `${testCase.name}: ${String(error.message).split("\n")[0]}`,
+      );
+    }
+  }
+  assert.deepEqual(
+    failures,
+    [],
+    `${failures.length} of ${cases.length} cases fail`,
+  );
+}
+
+/** The `level text` of each top-level heading of a text, as commonmark.js reads it. It is the judge of the tests below. */
+function topLevelHeadingsOf(text) {
+  const headings = [];
+  for (
+    let block = new commonmark.Parser().parse(text).firstChild;
+    block;
+    block = block.next
+  ) {
+    if (block.type !== "heading") {
+      continue;
+    }
+    let literal = "";
+    for (let child = block.firstChild; child; child = child.next) {
+      literal += child.literal ?? "";
+    }
+    headings.push(`${block.level} ${literal.replace(/\s+/g, " ").trim()}`);
+  }
+  return headings;
+}
+
+/**
+ * Runs `fn` with a formatter that is the shell script `body`. The runner calls it with the text on its standard input,
+ * as it calls prettier.
+ */
+function withFormatterScript(body, fn) {
+  const directory = mkdtempSync(join(tmpdir(), "stub-formatter-"));
+  const formatter = join(directory, "format.sh");
+  writeFileSync(formatter, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  const previousFormatter = process.env.PRETTIER_BIN;
+  process.env.PRETTIER_BIN = formatter;
+  try {
+    return fn();
+  } finally {
+    if (previousFormatter === undefined) {
+      delete process.env.PRETTIER_BIN;
+    } else {
+      process.env.PRETTIER_BIN = previousFormatter;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A frozen copy of the Unreleased draft of every state of the real CHANGELOG.md that has an Unreleased heading, from
+ * the first commit to the 0.4.0 release (`fixtures/changelog-drafts.json`). Each state is [commit, text]. The text is
+ * the file as it was, and the test never reads the live CHANGELOG.md. `rest` is the part of the file after the draft:
+ * the string itself, or "older" for the sections of the frozen released changelog from 0.3.0 on, or "released" for all
+ * of it.
+ */
+function readHistoricalChangelogs(releasedSections) {
+  const older = releasedSections.slice(releasedSections.indexOf("## [0.3.0]"));
+  return JSON.parse(
+    readFileSync(join(__dirname, "fixtures", "changelog-drafts.json"), "utf8"),
+  ).map(({ commit, head, draft, rest }) => {
+    const tail =
+      rest === "older" ? older : rest === "released" ? releasedSections : rest;
+    return [commit, `${head}\n${draft}\n${tail}`];
+  });
+}
+
+/**
+ * The structure of the Unreleased draft. `updateContent` reads the changelog with commonmark.js. It drops a draft that
+ * holds only paragraphs, lists and H3 headings, it refuses any other node before it formats, and it refuses a formatter
+ * that changes the headings of the older releases. A release heading that a reader of lines misses (an H3 or deeper
+ * heading is the exception) is a section heading to the parser. Each case that main loses is here, and it fails on main.
+ */
+async function testUnreleasedDraftStructure() {
+  const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
+  const update = (content, newEntry = entry) =>
+    new runner.UnreleasedAwareChangelog({
+      changelogEntry: newEntry,
+    }).updateContent(content);
+  const head = "# Changelog\n\n## [Unreleased]\n\n";
+  const release = "## [0.3.0] - 2025-09-15";
+  const previous = `\n\n${release}\n\n- Previous\n`;
+  const released =
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
+  const entryOnly =
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n";
+  const releasedSections = readFileSync(
+    join(__dirname, "fixtures", "changelog-released.md"),
+    "utf8",
+  );
+  const realHead = "# Changelog\n\n## [Unreleased]\n";
+  // A run with the identity formatter must give the text that the update wrote before this check.
+  const mainText = (text, newEntry = entry) =>
+    textThatMainWrites(text, newEntry).written;
+
+  // 1. Refusals, before the formatter runs, raw and after the real prettier. The error names the line and the node.
+  // Each case is { name, draft, error, line, formattedLine }: `error` builds the error from the line number and the
+  // line that starts the node, and `formattedLine` is that line after prettier when prettier changes it.
+  const node = (kind, level) => (number, line) =>
+    nodeRefusal(number, line, kind, level);
+  const refusedCases = [
+    ...["####", "#####", "######"].map((marks) => ({
+      name: `an H${marks.length} release heading under Unreleased`,
+      draft: `${marks} [0.3.0] - 2025-09-15\n\n- Older`,
+      line: `${marks} [0.3.0] - 2025-09-15`,
+      error: node(`heading (level ${marks.length})`),
+    })),
+    {
+      name: "an H4 heading after a subsection",
+      draft: "### Added\n\n- Thing\n\n#### Detail\n\n- Older",
+      line: "#### Detail",
+      error: node("heading (level 4)"),
+    },
+    {
+      name: "a div that holds a heading line and a fence line",
+      draft: "<div>\n## Notes\n```js\n</div>",
+      line: "<div>",
+      error: node("html_block"),
+    },
+    {
+      name: "details that hold a heading line and a fence line",
+      draft: "<details>\n# Notes\n```\n</details>",
+      line: "<details>",
+      error: node("html_block"),
+    },
+    {
+      name: "a comment that never closes",
+      draft: "<!--\n# x",
+      line: "<!--",
+      error: node("html_block"),
+    },
+    {
+      name: "a pre element",
+      draft: "<pre>\n## x\n",
+      line: "<pre>",
+      error: node("html_block"),
+    },
+    {
+      name: "an H2 heading in a list item",
+      draft: "- ## [0.3.0] - 2025-09-15\n\n  - Older",
+      line: "- ## [0.3.0] - 2025-09-15",
+      error: node("heading (level 2)"),
+    },
+    {
+      name: "an H1 heading in a list item",
+      draft: "1. # Title\n\n   - Older",
+      line: "1. # Title",
+      error: node("heading (level 1)"),
+    },
+    {
+      name: "an H2 heading in a block quote",
+      draft: "> ## [0.3.0] - 2025-09-15\n>\n> - Older",
+      line: "> ## [0.3.0] - 2025-09-15",
+      error: node("block_quote"),
+    },
+    {
+      name: "a block quote",
+      draft: "> A note.",
+      line: "> A note.",
+      error: node("block_quote"),
+    },
+    ...[
+      ["***", "---"],
+      ["___", "---"],
+      ["- - -", "---"],
+      ["---", "---"],
+    ].map(([rule, formatted]) => ({
+      name: `a thematic break ${rule}`,
+      draft: `Draft text.\n\n${rule}\n\n- Older`,
+      line: rule,
+      formattedLine: formatted,
+      error: node("thematic_break"),
+    })),
+    {
+      name: "a link definition",
+      draft: "Draft text.\n\n[docs]: https://example.com/docs\n\n- Older",
+      line: "[docs]: https://example.com/docs",
+      error: uncoveredRefusal,
+    },
+    {
+      name: "a link definition right before the next release",
+      draft: "Draft text.\n\n[docs]: https://example.com/docs",
+      line: "[docs]: https://example.com/docs",
+      error: uncoveredRefusal,
+      directly: true,
+    },
+    {
+      name: "a link definition in a list item",
+      draft: "- [docs]: https://example.com/docs",
+      line: "- [docs]: https://example.com/docs",
+      error: uncoveredRefusal,
+    },
+    {
+      name: "an indented code block",
+      draft: 'Example:\n\n    require("x").setup()\n\n- Older',
+      line: '    require("x").setup()',
+      error: node("code_block (indented)"),
+    },
+    {
+      name: "a fence in a list item",
+      draft: "- Example:\n\n  ```lua\n  x()\n  ```",
+      line: "  ```lua",
+      error: refusal,
+    },
+  ];
+  const refusedTexts = refusedCases.map(
+    (testCase) =>
+      `${head}${testCase.draft}${testCase.directly ? `\n${previous.trimStart()}` : previous}`,
+  );
+  const refusedFormatted = formatDocuments(refusedTexts);
+  checkCases(refusedCases, (testCase) => {
+    const index = refusedCases.indexOf(testCase);
+    for (const [label, text, line] of [
+      ["raw", refusedTexts[index], testCase.line],
+      [
+        "after prettier",
+        refusedFormatted[index],
+        testCase.formattedLine ?? testCase.line,
+      ],
+    ]) {
+      const number = lineNumberOf(text, line);
+      assert.ok(number > 0, `${label}: the text holds ${JSON.stringify(line)}`);
+      assert.throws(
+        () => withMissingFormatter(() => update(text)),
+        { message: testCase.error(number, line) },
+        label,
+      );
+    }
+  });
+
+  // The first and the last line of the draft, and a draft that runs to the end of the text, are read as well.
+  for (const [name, text, number, line] of [
+    [
+      "a link definition on the first line",
+      "# Changelog\n\n## [Unreleased]\n[docs]: https://example.com/x\n\n## [0.3.0] - 2025-09-15\n",
+      4,
+      "[docs]: https://example.com/x",
+    ],
+    [
+      "a link definition at the end of the text",
+      `${head}[docs]: https://example.com/x`,
+      5,
+      "[docs]: https://example.com/x",
+    ],
+    [
+      "a link definition on the last line, after a final line ending",
+      `${head}[docs]: https://example.com/x\n`,
+      5,
+      "[docs]: https://example.com/x",
+    ],
+  ]) {
+    assert.throws(
+      () => withMissingFormatter(() => update(text)),
+      { message: uncoveredRefusal(number, line) },
+      name,
+    );
+  }
+
+  // 2. Release headings that a reader of lines misses stay in the changelog. The parser reads them as headings, so the
+  // draft ends before them. Main read a heading only at the start of a line, with one space after its marks.
+  const keptCases = [
+    [
+      "an H2 heading that is indented by one space",
+      "Draft text.\n\n ## [0.3.0] - 2025-09-15",
+    ],
+    [
+      "an H2 heading that is indented by three spaces",
+      "Draft text.\n\n   ## [0.3.0] - 2025-09-15",
+    ],
+    // One space of indent ends the list item before it. Three spaces would put the heading inside the item.
+    [
+      "an H2 heading that is indented by one space, after a list",
+      "- Draft\n\n ## [0.3.0] - 2025-09-15",
+    ],
+    [
+      "an H2 heading with a tab after the marks",
+      "Draft text.\n\n##\t[0.3.0] - 2025-09-15",
+    ],
+    [
+      "an H2 heading with two spaces after the marks",
+      "Draft text.\n\n##  [0.3.0] - 2025-09-15",
+    ],
+    [
+      "an H2 heading with runs of blanks in its text",
+      "Draft text.\n\n## [0.3.0]   -   2025-09-15   ",
+    ],
+    [
+      "an H2 heading that has a closing sequence",
+      "Draft text.\n\n## [0.3.0] - 2025-09-15 ##",
+    ],
+  ].map(([name, draft]) => ({
+    name,
+    raw: `${head}${draft}\n\n- Previous\n`,
+  }));
+  const keptFormatted = formatDocuments(keptCases.map(({ raw }) => raw));
+  checkCases(keptCases, (testCase) => {
+    const formatted = keptFormatted[keptCases.indexOf(testCase)];
+    assert.equal(update(testCase.raw), released, "raw");
+    assert.equal(update(formatted), released, "after prettier");
+  });
+  // A heading with no text is still a section heading. Prettier keeps it.
+  assert.deepEqual(
+    topLevelHeadingsOf(update(`${head}Draft text.\n\n##\n\n- Previous\n`)),
+    ["1 Changelog", "2 [Unreleased]", "2 [0.4.0] - 2026-06-15", "2 "],
+    "a heading with no text keeps the older release",
+  );
+
+  // 3. A setext heading is a heading. After a list item, prettier moves it into the item and writes a thematic
+  // break, so the update refuses the text before the formatter (when it is already formatted) or after it (when it is
+  // raw). Nothing is written, and the older release is not lost.
+  const setext = "- Draft\n\n0.3.0\n-----\n\n- Previous\n";
+  assert.throws(
+    () => update(`${head}${setext}`),
+    { message: changedRefusal("2 0.3.0", "2 [0.4.0] - 2026-06-15") },
+    "a raw setext older release below the list of the new entry",
+  );
+  const formattedSetext = runner.formatChangelogMarkdown(`${head}${setext}`);
+  assert.equal(
+    formattedSetext,
+    `${head}- Draft\n\n  0.3.0\n\n---\n\n- Previous\n`,
+    "prettier moves the setext heading into the list item",
+  );
+  assert.throws(
+    () => withMissingFormatter(() => update(formattedSetext)),
+    { message: nodeRefusal(9, "---", "thematic_break") },
+    "the formatted text holds a thematic break and no release heading",
+  );
+  for (const underline of ["=====", "-----"]) {
+    // Not after a list item: prettier writes an ATX heading, and the text is kept as written by prettier.
+    const text = `${head}Draft text.\n\n0.3.0\n${underline}\n\n- Previous\n`;
+    const formatted = runner.formatChangelogMarkdown(text);
+    assert.ok(formatted.includes("0.3.0\n\n- Previous"), "prettier writes ATX");
+    assert.equal(
+      update(formatted),
+      `${entryOnly}\n${formatted.slice(formatted.indexOf("#", head.length))}`.replace(
+        "\n\n\n",
+        "\n\n",
+      ),
+      `the setext ${underline} release after prettier`,
+    );
+  }
+
+  // 4. The contract: an H3 heading directly under `## [Unreleased]` is a subsection of the draft, whatever it says,
+  // so it is dropped with the draft. The next H2 heading ends the draft.
+  assert.equal(
+    update(
+      `${head}### [0.3.0] - 2025-09-15\n\n- Dropped\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
+    ),
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+    "an H3 release heading under Unreleased is part of the draft",
+  );
+  // The draft of an H3 anchor ends at the next heading of level 3 or less, so the H3 releases stay. Its subsections
+  // are H4 headings.
+  assert.equal(
+    update(
+      "# Changelog\n\n### [Unreleased]\n\n- Draft\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n### [0.2.0] - 2025-06-18\n\n- Older\n",
+    ),
+    "# Changelog\n\n### [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n### [0.2.0] - 2025-06-18\n\n- Older\n",
+    "an H3 anchor keeps every H3 release",
+  );
+  assert.equal(
+    update(
+      `# Changelog\n\n### [Unreleased]\n\n#### Added\n\n- Draft${previous}`,
+    ),
+    released.replace("## [Unreleased]", "### [Unreleased]"),
+    "an H3 anchor holds H4 subsections",
+  );
+  assert.throws(
+    () =>
+      withMissingFormatter(() =>
+        update(
+          `# Changelog\n\n### [Unreleased]\n\n###### Deep\n\n- Draft${previous}`,
+        ),
+      ),
+    { message: nodeRefusal(5, "###### Deep", "heading (level 6)", 4) },
+    "an H3 anchor holds H4 subsections only",
+  );
+
+  // 5. What stays out of the draft cannot hide a release. A fence that is indented by four or more spaces is code, and
+  // a fence in a block quote or a list item ends with its container, so a release heading after it is a heading. The
+  // constructs stand in an older release here. Main and the update write the same text, and every release stays a
+  // top-level heading.
+  const hiding = [
+    ["a fence indented by four spaces", "    ```js\n    x\n"],
+    ["a fence indented by five spaces", "     ```js\n     x\n"],
+    ["a fence indented by a tab", "\t```js\n\tx\n"],
+    ["a fence in a block quote", "> ```js\n> x\n"],
+    ["a fence in a block quote without a closing blank line", "> ```js\n> x"],
+    ["a fence in a list item", "- Example:\n\n  ```js\n  x\n"],
+    ["a fence in a list item that the next release ends", "- ```js\n  x"],
+    [
+      "a closed fence that holds a release heading",
+      "```md\n## [0.2.0] - 2025-06-18\n```\n",
+    ],
+  ].map(([name, code]) => ({ name, code }));
+  checkCases(hiding, ({ code }) => {
+    const text = `${head}- Draft\n\n${release}\n\n${code}\n## [0.2.0] - 2025-06-18\n\n- Older\n`;
+    assert.equal(
+      withIdentityFormatter(() => update(text)),
+      mainText(text),
+      "main's text",
+    );
+    assert.deepEqual(
+      topLevelHeadingsOf(update(text)),
+      [
+        "1 Changelog",
+        "2 [Unreleased]",
+        "2 [0.4.0] - 2026-06-15",
+        "2 [0.3.0] - 2025-09-15",
+        "2 [0.2.0] - 2025-06-18",
+      ],
+      "every release stays a top-level heading",
+    );
+  });
+  // The same constructs in the draft are refused: it is code, a quote or an open fence, and the update does not read them.
+  for (const [name, code, error] of [
+    [
+      "a fence indented by four spaces",
+      "    ```js\n    x",
+      nodeRefusal(5, "    ```js", "code_block (indented)"),
+    ],
+    [
+      "a fence in a block quote",
+      "> ```js\n> x",
+      nodeRefusal(5, "> ```js", "block_quote"),
+    ],
+  ].map(([name, code, message]) => [name, code, message])) {
+    assert.throws(
+      () => withMissingFormatter(() => update(`${head}${code}${previous}`)),
+      { message: error },
+      name,
+    );
+  }
+
+  // 6. Drafts that the update reads give the text that main wrote, byte for byte: paragraphs, nested lists, H3
+  // subsections, inline code, HTML and links, a wrapped line that starts with `#123`, and an empty draft.
+  const ordinary = [
+    [
+      "the draft of #252",
+      "### Bug Fixes\n\n- Work around a Neovim core bug (< 0.12.2) that fragmented large pastes. ([#161](https://github.com/coder/claudecode.nvim/issues/161))\n",
+    ],
+    ["a flat list", "- One\n- Two\n- Three\n"],
+    [
+      "a nested list",
+      "- One\n  - Two\n    - Three\n- Four\n\n1. Five\n   - Six\n2. Seven\n",
+    ],
+    [
+      "subsections",
+      "### Added\n\n- Thing\n\n### Fixed\n\n- Other\n\n### Changed\n\n- Third\n",
+    ],
+    [
+      "a paragraph and a list",
+      "Draft notes.\n\nMore notes\nwrapped here.\n\n- Item\n",
+    ],
+    [
+      "inline code, HTML and links",
+      "- Use `vim.paste` and <kbd>Ctrl</kbd>+<kbd>S</kbd> with [docs](https://example.com/a_b) and ![img](x.png)\n- <b>Bold</b> text and a bare https://example.com/x link\n",
+    ],
+    [
+      "emphasis, strong text and a hard break",
+      "- **Bold** and *emphasis* and _more_\\\n  after a hard break\n- Line one  \n  line two\n",
+    ],
+    [
+      "a wrapped line that starts with an issue number",
+      "- Fixed the crash\n#123 and the hang\n- Other\n",
+    ],
+    ["a loose list", "- One\n\n- Two\n\n  More about two.\n"],
+    ["an H3 inside a list item", "- ### Heading in an item\n\n  - Item\n"],
+    ["an empty draft", ""],
+  ].map(([name, draft]) => ({ name, draft }));
+  const ordinaryTexts = ordinary.map(
+    (testCase) => `${head}${testCase.draft}${previous}`,
+  );
+  const ordinaryFormatted = formatDocuments(ordinaryTexts);
+  checkCases(ordinary, (testCase) => {
+    const index = ordinary.indexOf(testCase);
+    withIdentityFormatter(() => {
+      for (const [label, text] of [
+        ["raw", ordinaryTexts[index]],
+        ["after prettier", ordinaryFormatted[index]],
+      ]) {
+        assert.equal(update(text), mainText(text), label);
+        for (const ending of ["\r\n", "\r"]) {
+          assert.equal(
+            update(text.replace(/\n/g, ending)),
+            mainText(text),
+            `${label}, ${JSON.stringify(ending)} endings`,
+          );
+        }
+      }
+    });
+  });
+  assert.equal(
+    update(`${head}### Added\n\n- Added x\n`),
+    entryOnly,
+    "a draft at the end of the text",
+  );
+  assert.equal(
+    update("# Changelog\n\n## [Unreleased]\n### Added\n\n- Added x"),
+    entryOnly,
+    "a draft right after the heading",
+  );
+
+  // 7. All 20 states of the real changelog that have an Unreleased heading are read, and each gives main's text. The
+  // draft of the 0.4.0 release (the last state with a draft) gives the released changelog with the real entry.
+  const history = readHistoricalChangelogs(releasedSections);
+  assert.equal(history.length, 20, "the states of the real changelog");
+  withIdentityFormatter(() => {
+    for (const [commit, text] of history) {
+      const lines = text.split("\n");
+      const unreleased = lines.findIndex((line) => line === "## [Unreleased]");
+      const next = lines.findIndex(
+        (line, i) => i > unreleased && /^##? /.test(line),
+      );
+      const rest = next === -1 ? "" : lines.slice(next).join("\n");
+      const expected = `${[
+        lines
+          .slice(0, unreleased + 1)
+          .join("\n")
+          .trimEnd(),
+        entry.trim(),
+        ...(rest.trim() === "" ? [] : [rest.trim()]),
+      ].join("\n\n")}\n`;
+      assert.equal(update(text), expected, `the changelog at ${commit}`);
+    }
+  });
+  const sections040 = releasedSections.slice(
+    0,
+    releasedSections.indexOf("## [0.3.0]"),
+  );
+  const draft040 = history.find(([commit]) => commit === "17f53b3a")[1];
+  assert.ok(
+    draft040.includes("### Features") && draft040.includes("### Bug Fixes"),
+    "the last draft holds the staged subsections",
+  );
+  assert.equal(
+    update(draft040, sections040),
+    `${realHead}\n${releasedSections}`,
+    "the 0.4.0 draft and the real entry give the released changelog",
+  );
+
+  // 8. After the formatter runs, the top-level headings of the older releases must be the headings that were there.
+  // Each stub stands for a formatter that rewrites the older releases. Release headings are `## [0.3.0]` and
+  // `## [0.2.0]`.
+  const twoReleases = `${head}- Draft\n\n${release}\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`;
+  const refusedByFormatter = [
+    {
+      name: "a formatter that indents the first older release by four spaces",
+      body: "sed 's/^## \\[0.3.0\\]/    ## [0.3.0]/'",
+      expected: "2 [0.3.0] - 2025-09-15",
+      found: "2 [0.4.0] - 2026-06-15",
+    },
+    {
+      name: "a formatter that changes the level of an older release",
+      body: "sed 's/^## \\[0.3.0\\]/### [0.3.0]/'",
+      expected: "2 [0.3.0] - 2025-09-15",
+      found: "3 [0.3.0] - 2025-09-15",
+    },
+    {
+      name: "a formatter that changes the text of an older release",
+      body: "sed 's/^## \\[0.2.0\\]/## [0.2.1]/'",
+      expected: "2 [0.2.0] - 2025-06-18",
+      found: "2 [0.2.1] - 2025-06-18",
+    },
+    {
+      name: "a formatter that drops an older release heading",
+      body: "grep -v '^## \\[0.2.0\\]'",
+      expected: "2 [0.3.0] - 2025-09-15",
+      found: "2 [0.4.0] - 2026-06-15",
+    },
+  ];
+  checkCases(refusedByFormatter, ({ body, expected, found }) => {
+    withFormatterScript(body, () =>
+      assert.throws(() => update(twoReleases), {
+        message: changedRefusal(expected, found),
+      }),
+    );
+  });
+  // A formatter that closes an open fence at the end of the text. A new entry with a fence that never closes swallows
+  // the older release, and the formatter writes it as code. The same holds for the real prettier.
+  const oneRelease = `${head}- Draft${previous}`;
+  const openEntry = "## [0.4.0] - 2026-06-15\n\n```md\nExample";
+  const swallowed = changedRefusal(
+    "2 [0.3.0] - 2025-09-15",
+    "2 [0.4.0] - 2026-06-15",
+  );
+  withFormatterScript("cat\nprintf '```\\n'", () =>
+    assert.throws(() => update(oneRelease, openEntry), { message: swallowed }),
+  );
+  assert.throws(
+    () => update(oneRelease, openEntry),
+    { message: swallowed },
+    "a new entry with an open fence, with the real prettier",
+  );
+  // A heading that stands in a list item or a block quote is not a section, so a formatter that changes it is no
+  // reason to refuse. The older releases here hold a nested heading, and the stub changes it.
+  const nested = `${head}- Draft\n\n${release}\n\n1. Step\n\n   ### Nested\n\n- Previous\n`;
+  withFormatterScript("sed 's/### Nested/#### Nested/'", () =>
+    assert.equal(
+      update(nested),
+      "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n* Added x\n\n## [0.3.0] - 2025-09-15\n\n1. Step\n\n   #### Nested\n\n- Previous\n",
+      "a nested heading is not a section",
+    ),
+  );
+  withFormatterScript("cat", () => {
+    assert.equal(
+      update(twoReleases),
+      "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n* Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+      "a formatter that keeps the headings",
+    );
+    // With no older release below the draft there is nothing to check.
+    assert.equal(
+      update(`${head}- Draft\n`, openEntry),
+      "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n```md\nExample\n",
+      "no older release, no check",
+    );
+  });
+  // The self-healing paths keep their older releases the same way.
+  for (const text of [`# Changelog${previous}`, previous.trimStart()]) {
+    assert.throws(
+      () => update(text, openEntry),
+      { message: swallowed },
+      `a new entry with an open fence, without an Unreleased heading: ${JSON.stringify(text)}`,
+    );
+  }
+}
+
 // A differential test against commonmark.js. The assertions above hold single examples, but a rule can also go wrong
 // for a multi-character input that no example thought of. This test builds top-level documents from fence, heading,
 // text and blank lines with random suffixes (code units, escapes and character references), indents, and line
@@ -1197,7 +1907,6 @@ async function testUnreleasedDraftFenceGuard() {
 // HTML blocks, which the runner does not track.
 const DIFFERENTIAL_SEED = 466;
 const DIFFERENTIAL_DOCUMENTS = 10000;
-const DIFFERENTIAL_UPDATER_DOCUMENTS = 30;
 
 /** A small seeded generator (mulberry32): the same seed gives the same numbers. */
 function createRandom(seed) {
@@ -1584,73 +2293,6 @@ async function testFenceDifferential() {
     coverage.sequences >= 1000,
     `escapes and character references after the markers: ${coverage.sequences}`,
   );
-
-  // The updater documents hold a title, the Unreleased heading, generated lines and an older release. They run raw
-  // and after the real prettier, which the repo's format check applies to a changelog on main. The formatter prints
-  // its input in the updater runs (see `withIdentityFormatter`), and the real formatter runs in the updater tests
-  // above.
-  const documents = generateUpdaterDocuments(random, coverage);
-  for (const [name, texts] of [
-    ["raw", documents],
-    ["formatted", formatDocuments(documents)],
-  ]) {
-    const results = withIdentityFormatter(() =>
-      texts.map((text, index) =>
-        checkUpdaterDocument(
-          text,
-          `${name} updater document ${index} of seed ${DIFFERENTIAL_SEED}: ${describeDocument(text)}`,
-        ),
-      ),
-    );
-    // Both outcomes must occur, or the check would stop testing one of them.
-    const refused = results.filter((result) => result === "refused").length;
-    const written = results.filter((result) => result === "written").length;
-    assert.ok(
-      refused > 0 && written > 0,
-      `${name} updater documents that updateContent refused: ${refused}, and wrote: ${written}, of ${texts.length}`,
-    );
-    assert.ok(
-      results.length - refused - written <= texts.length / 10,
-      `${name} updater documents left out of the check: ${results.length - refused - written} of ${texts.length}`,
-    );
-  }
-}
-
-/**
- * Documents for the updater: a title, the Unreleased heading, generated lines, and an older release (some with a code
- * block). Half of the drafts lose their fence markers, so that the update goes through for many of them.
- */
-function generateUpdaterDocuments(random, coverage) {
-  const releases = [
-    "## [0.3.0] - 2025-09-15",
-    "## **0.3.0** - 2025-09-15",
-    "## [ 0.3.0 ]",
-    "##  [0.3.0]",
-    "## [0.3.0-rc.1]",
-  ];
-  const documents = [];
-  for (let index = 0; index < DIFFERENTIAL_UPDATER_DOCUMENTS; index += 1) {
-    let middle = generateLines(random, coverage);
-    if (random() < 0.5) {
-      middle = middle.map((line) => (/`{3}|~{3}/.test(line) ? "text" : line));
-    }
-    documents.push(
-      joinWithEndings(random, [
-        "# Changelog",
-        "",
-        "## [Unreleased]",
-        "",
-        ...middle,
-        "",
-        releases[Math.floor(random() * releases.length)],
-        "",
-        "- Previous",
-        ...(random() < 0.3 ? ["", "```js", "console.log(1);", "```"] : []),
-        "",
-      ]),
-    );
-  }
-  return documents;
 }
 
 /** The texts after one run of the real prettier, as `mise run format` writes them. */
@@ -1672,122 +2314,317 @@ function formatDocuments(texts) {
   }
 }
 
+// A property test of `updateContent`. The documents hold a title, an Unreleased heading, a draft that is made of random
+// fragments, and two older releases that the generator places itself. So the judge does not use the reader of the
+// update: whatever the draft holds, the update must refuse, or write a changelog in which the two older releases are
+// still the last top-level headings, with their lines. A draft of paragraphs, lists and H3 headings only must be
+// written, and it must give main's text byte for byte. A fixed seed makes the documents the same on every run.
+const UPDATER_SEED = 522;
+const UPDATER_DOCUMENTS = 200;
+const UPDATER_FORMATTED_DOCUMENTS = 60;
+const UPDATER_PRETTIER_DOCUMENTS = 12;
+const OLDER_RELEASES =
+  "## [0.3.0] - 2025-09-15\n\n- Previous three\n\n## [0.2.0] - 2025-06-18\n\n- Previous two\n";
+const OLDER_HEADINGS = ["2 [0.3.0] - 2025-09-15", "2 [0.2.0] - 2025-06-18"];
+
 /**
- * The text that b477362 writes for a text with an Unreleased heading and a formatter that prints its input: the
- * draft is replaced by the entry, and the lines from the next section on are kept. It is the reference for what an
- * accepted document must give.
+ * One fragment of a draft: [lines, plain]. A plain fragment is a paragraph, a list or an H3 heading with inline text.
+ * The other fragments hold a block that the update does not read, or a heading that ends the draft where a reader of
+ * lines sees none. `fragments` counts the fragments by name.
  */
-function textThatMainWrites(lines, entry) {
-  const unreleased = runner.findLineOutsideFences(lines, 0, (line) =>
-    /^#{2,3} \[?Unreleased\]?[ \t]*$/.test(line),
-  );
-  const next = runner.findLineOutsideFences(lines, unreleased + 1, (line) =>
-    /^##? /.test(line),
-  );
-  const rest = next === -1 ? "" : lines.slice(next).join("\n");
-  const sections = [
-    lines
-      .slice(0, unreleased + 1)
-      .join("\n")
-      .trimEnd(),
-    entry.trim(),
+function generateDraftFragment(random, fragments) {
+  const pick = (list) => list[Math.floor(random() * list.length)];
+  const words = (count) =>
+    Array.from({ length: count }, () =>
+      pick([
+        "alpha",
+        "beta",
+        "fix",
+        "add",
+        "use",
+        "the",
+        "plugin",
+        "diff",
+        "now",
+      ]),
+    ).join(" ");
+  const bullet = () => pick(["-", "*", "+"]);
+  const plain = [
+    [
+      "a paragraph",
+      () => [`${words(5)}.`, ...(random() < 0.5 ? [`${words(3)}.`] : [])],
+    ],
+    [
+      "a flat list",
+      () => [`${bullet()} ${words(2)}`, `${bullet()} ${words(3)}`],
+    ],
+    ["a nested list", () => ["- a", "  - b", "    - c", "- d"]],
+    ["an ordered list", () => ["1. one", "   - nested", "2. two"]],
+    [
+      "a subsection",
+      () => [
+        `### ${pick(["Added", "Fixed", "Changed", "Bug Fixes"])}`,
+        "",
+        "- thing",
+      ],
+    ],
+    [
+      "inline markup",
+      () => [
+        "- Use `code`, <kbd>K</kbd> and [link](https://x.y/z) ![i](a.png)",
+      ],
+    ],
+    ["an issue line", () => ["- Fixed the crash", "#123 and the hang"]],
+    ["a loose list", () => ["- one", "", "- two", "", "  more"]],
   ];
-  if (rest.trim() !== "") {
-    sections.push(rest.trim());
+  const other = [
+    ["an H4 heading", () => ["#### Detail", "", "- thing"]],
+    [
+      "an H6 release heading",
+      () => ["###### [0.9.0] - 2025-12-01", "", "- Old nine"],
+    ],
+    ["a setext H1", () => ["Title", "====="]],
+    ["a setext H2", () => ["Title", "-----"]],
+    ["an indented H2", () => [" ## Notes", "", "- note"]],
+    ["an H2 with a tab", () => ["##\tNotes", "", "- note"]],
+    ["an H2", () => ["## Upgrade notes", "", "- note"]],
+    ["an H1", () => ["# Top"]],
+    ["a div", () => ["<div>", "## inner", "</div>"]],
+    [
+      "details with a fence",
+      () => ["<details>", "# inner", "```text", "</details>"],
+    ],
+    ["an open comment", () => ["<!-- open"]],
+    ["a pre element", () => ["<pre>", "## inner"]],
+    ["a block quote", () => ["> note"]],
+    ["a fence in a block quote", () => ["> ```", "> ## inner", "> ```"]],
+    ["an H2 in a block quote", () => ["> ## inner"]],
+    ["an indented code block", () => ["    code"]],
+    ["an indented fence", () => ["    ```", "    code"]],
+    ["a tab-indented list", () => ["\t- item"]],
+    ["an open fence", () => ["```text", "code", "## inner"]],
+    ["a closed fence", () => ["```text", "code", "```"]],
+    ["a long fence", () => ["````md", "```", "````"]],
+    ["a tilde fence", () => ["~~~", "code"]],
+    ["a thematic break", () => [pick(["---", "***", "___", "- - -"])]],
+    ["a link definition", () => ["[x]: https://example.com"]],
+    ["an H2 in a list item", () => ["- ## inner", "", "  - thing"]],
+    ["a fence in a list item", () => ["- item", "", "  ```js", "  x", "  ```"]],
+    ["a plus list that holds an equals line", () => ["+ item", "=", "+ item"]],
+  ];
+  const kind = random() < 0.55 ? plain : other;
+  const [name, build] = pick(kind);
+  fragments[name] = (fragments[name] ?? 0) + 1;
+  return [build(), kind === plain];
+}
+
+/** Makes one document: [text, plain]. The lines end with LF, CR LF or CR. */
+function generateUpdaterDocument(random, fragments, lineCoverage) {
+  const lines = ["# Changelog", "", "## [Unreleased]", ""];
+  let plain = true;
+  for (let count = Math.floor(random() * 4); count > 0; count -= 1) {
+    const [fragment, isPlain] = generateDraftFragment(random, fragments);
+    lines.push(...fragment, ...(random() < 0.6 ? [""] : []));
+    plain = plain && isPlain;
   }
-  return `${sections.join("\n\n")}\n`;
+  // The lines of the line-reader differential, with some of the fences left in.
+  if (random() < 0.2) {
+    lines.push(...generateLines(random, lineCoverage), "");
+    plain = false;
+  }
+  lines.push(...OLDER_RELEASES.split("\n"));
+  return [joinWithEndings(random, lines), plain];
 }
 
 /**
- * The properties of `updateContent` for one document, with commonmark.js as the judge of what a fence is. A fence in
- * the draft is refused, and the error names the line that opens it. A draft without one is dropped and nothing else
- * is: the output is the text that b477362 writes, every line from the first `# ` or `## ` line after the heading on
- * is in it, and every dropped line stands outside every fenced code block. Returns "refused", "written", or
- * "skipped" for a document that commonmark.js reads wrongly.
+ * The properties of `updateContent` for one document of `generateUpdaterDocument`, run with the formatter that the
+ * caller chose. Returns "refused", "swallowed" (the text has no older release as a heading to begin with), "same" (main's
+ * text), or "kept more" (main's kept lines are the end of the text, and more lines stay). `expectedFormat` turns the text that main builds into the text that the formatter gives.
  */
-function checkUpdaterDocument(text, where) {
+function checkUpdaterDocument(text, plain, where, expectedFormat) {
   const entry = "## [0.4.0] - 2026-06-15\n\n- Added x";
-  const updater = new runner.UnreleasedAwareChangelog({
-    changelogEntry: entry,
-  });
-  const { fenced, headings, lines } = readWithCommonmark(text);
-  // Prettier can write the line shape that commonmark.js reads wrongly (an opener whose info string holds a
-  // backtick), and the judge is no judge of it.
-  if (lines.some(hitsCommonmarkJsBug)) {
-    return "skipped";
-  }
-  const unreleased = headings.findIndex(
-    (heading) => heading.level === 2 && heading.text === "[Unreleased]",
-  );
-  assert.notEqual(
-    unreleased,
-    -1,
-    `the Unreleased heading stays a heading in ${where}`,
-  );
-  const unreleasedLine = headings[unreleased].line;
-  // The updater looks for the end of the draft at the start of a line, so an indented heading does not end it.
-  const next = headings.findIndex(
-    (heading, i) =>
-      i > unreleased && heading.level <= 2 && /^##? /.test(lines[heading.line]),
-  );
-  const draftEnd = next === -1 ? lines.length : headings[next].line;
-  let fenceLine = -1;
-  for (let line = unreleasedLine + 1; line < draftEnd; line += 1) {
-    if (fenced.has(line)) {
-      fenceLine = line;
-      break;
-    }
-  }
-  if (fenceLine !== -1) {
-    assert.throws(
-      () => updater.updateContent(text),
-      { message: refusal(fenceLine + 1, lines[fenceLine]) },
-      `refusal in ${where}`,
+  let updated;
+  try {
+    updated = new runner.UnreleasedAwareChangelog({
+      changelogEntry: entry,
+    }).updateContent(text);
+  } catch (error) {
+    assert.match(
+      error.message,
+      /^(The Unreleased draft has (a code fence|a node that the update does not read|a line that no paragraph)|The update would change the older releases)/,
+      `the refusal in ${where}`,
+    );
+    assert.ok(
+      !plain,
+      `a draft of paragraphs, lists and H3 headings is read in ${where}`,
     );
     return "refused";
   }
-
-  const updated = updater.updateContent(text);
-  // The formatter reads and writes UTF-8, so a lone surrogate in a generated line comes back as U+FFFD.
-  const piped = (value) => Buffer.from(value, "utf8").toString("utf8");
-  assert.equal(
-    updated,
-    piped(textThatMainWrites(lines, entry)),
-    `the text that b477362 writes, in ${where}`,
-  );
-  const first = lines.findIndex(
-    (line, i) => i > unreleasedLine && /^##? /.test(line),
-  );
-  if (first !== -1) {
-    assert.ok(
-      updated.endsWith(piped(`${lines.slice(first).join("\n").trim()}\n`)),
-      `every line from the first section on is kept in ${where}`,
-    );
-  }
-  for (
-    let line = unreleasedLine + 1;
-    line < (first === -1 ? lines.length : first);
-    line += 1
+  // A fence that the draft leaves open, and that is in the part that the update keeps, swallows the older releases in the
+  // text itself. The update keeps that text as it was, and no property holds for it.
+  if (
+    topLevelHeadingsOf(text).slice(-2).join("|") !== OLDER_HEADINGS.join("|")
   ) {
+    return "swallowed";
+  }
+  // Whatever the draft holds, the two older releases stay the last top-level headings, with their lines.
+  assert.deepEqual(
+    topLevelHeadingsOf(updated).slice(-2),
+    OLDER_HEADINGS,
+    `the older releases stay headings in ${where}`,
+  );
+  assert.ok(
+    updated.includes("\n- Previous three\n") &&
+      updated.includes("\n- Previous two\n"),
+    `the older releases keep their lines in ${where}`,
+  );
+  // What the update wrote before this check.
+  const { written, rest } = textThatMainWrites(text, entry);
+  const main = expectedFormat(written);
+  if (updated === main) {
+    return "same";
+  }
+  assert.ok(
+    !plain,
+    `a draft of paragraphs, lists and H3 headings gives main's text in ${where}`,
+  );
+  assert.ok(
+    updated.endsWith(expectedFormat(`${rest.trim()}\n`)) &&
+      updated.length > main.length,
+    `main's kept lines stay, and more with them, in ${where}`,
+  );
+  return "kept more";
+}
+
+async function testUnreleasedUpdaterProperty() {
+  const random = createRandom(UPDATER_SEED);
+  const fragments = {};
+  const lineCoverage = {
+    longMarkers: 0,
+    longSuffix: 0,
+    oddIndent: 0,
+    sequences: 0,
+    spacedIndent: 0,
+  };
+  const documents = [];
+  while (documents.length < UPDATER_DOCUMENTS) {
+    const [text, plain] = generateUpdaterDocument(
+      random,
+      fragments,
+      lineCoverage,
+    );
+    // commonmark.js opens a backtick fence that the spec does not (see `hitsCommonmarkJsBug`).
+    if (!text.split(/\r\n|\r|\n/).some(hitsCommonmarkJsBug)) {
+      documents.push([text, plain]);
+    }
+  }
+  const texts = documents.map(([text]) => text);
+
+  // Raw, and after the real prettier, which the repo's format check applies to a changelog on main. The identity
+  // formatter prints the text that the update builds. Prettier writes an indented heading at the start of a line, so
+  // the formatted texts never keep more than main does.
+  for (const [name, inputs, minimum] of [
+    ["raw", texts, { refused: 20, same: 20, keptMore: 3, plainSame: 20 }],
+    [
+      "formatted",
+      formatDocuments(texts.slice(0, UPDATER_FORMATTED_DOCUMENTS)),
+      { refused: 5, same: 5, keptMore: 0, plainSame: 5 },
+    ],
+  ]) {
+    const results = withIdentityFormatter(() =>
+      inputs.map((text, index) =>
+        checkUpdaterDocument(
+          text,
+          documents[index][1],
+          `${name} updater document ${index} of seed ${UPDATER_SEED}: ${describeDocument(text)}`,
+          (built) => built,
+        ),
+      ),
+    );
+    const count = (result, plainOnly = false) =>
+      results.filter(
+        (value, index) =>
+          value === result && (!plainOnly || documents[index][1]),
+      ).length;
+    // Each outcome must occur, or the check would stop testing it.
     assert.ok(
-      !fenced.has(line),
-      `a dropped line ${line + 1} stands outside every fence in ${where}`,
+      count("refused") > minimum.refused &&
+        count("same") > minimum.same &&
+        count("kept more") >= minimum.keptMore &&
+        count("same", true) > minimum.plainSame &&
+        count("swallowed") <= inputs.length / 5,
+      `${name} updater documents: refused ${count("refused")}, same ${count("same")}, kept more ${count("kept more")}, plain and same ${count("same", true)}, swallowed ${count("swallowed")}, of ${inputs.length}`,
     );
   }
-  const expected = [
-    ...headings.slice(0, unreleased + 1),
-    { level: 2, text: "[0.4.0] - 2026-06-15" },
-    ...(next === -1 ? [] : headings.slice(next)),
-  ].map((heading) => `${heading.level} ${heading.text}`);
-  const updatedHeadings = readWithCommonmark(updated).headings.map(
-    (heading) => `${heading.level} ${heading.text}`,
+  // A generator that stops making a fragment would silently stop testing it.
+  assert.ok(
+    Object.keys(fragments).length >= 35,
+    `fragments of the updater documents: ${JSON.stringify(fragments)}`,
   );
-  assert.deepEqual(
-    updatedHeadings,
-    expected,
-    `headings after updateContent in ${where}`,
-  );
-  return "written";
+
+  // The real prettier on the first documents, raw. A refusal is a result, and so is a text that prettier changes.
+  texts.slice(0, UPDATER_PRETTIER_DOCUMENTS).forEach((text, index) => {
+    checkUpdaterDocument(
+      text,
+      documents[index][1],
+      `real prettier, document ${index} of seed ${UPDATER_SEED}: ${describeDocument(text)}`,
+      runner.formatChangelogMarkdown,
+    );
+  });
+}
+
+/**
+ * `run-release-please.sh` can run the runner with a global `release-please` that it finds through `NODE_PATH`, and the
+ * runner reads the changelog with `commonmark`. Without `commonmark` on that path the runner must fail at start-up,
+ * before it reads the GitHub environment, so that it creates no release and no pull request. With it, the runner starts
+ * and asks for the GitHub environment.
+ */
+async function testRunnerNeedsCommonmark() {
+  const root = mkdtempSync(join(tmpdir(), "runner-fallback-"));
+  try {
+    const scriptDirectory = join(root, "scripts");
+    const globalModules = join(root, "global", "node_modules");
+    mkdirSync(scriptDirectory);
+    mkdirSync(globalModules, { recursive: true });
+    copyFileSync(
+      join(__dirname, "release-please-runner.js"),
+      join(scriptDirectory, "release-please-runner.js"),
+    );
+    symlinkSync(
+      join(__dirname, "node_modules", "release-please"),
+      join(globalModules, "release-please"),
+    );
+    const start = (nodePath) =>
+      spawnSync(
+        process.execPath,
+        [join(scriptDirectory, "release-please-runner.js"), "--dry-run"],
+        {
+          encoding: "utf8",
+          env: { NODE_PATH: nodePath, PATH: process.env.PATH },
+        },
+      );
+
+    const without = start(globalModules);
+    assert.equal(
+      without.status,
+      1,
+      "the runner exits with 1 without commonmark",
+    );
+    assert.match(without.stderr, /Cannot find module 'commonmark'/);
+    assert.doesNotMatch(
+      without.stderr,
+      /GITHUB_TOKEN must be set/,
+      "the runner stops before it reads the GitHub environment",
+    );
+
+    const withCommonmark = start(
+      `${globalModules}${delimiter}${join(__dirname, "node_modules")}`,
+    );
+    assert.equal(withCommonmark.status, 1);
+    assert.match(withCommonmark.stderr, /GITHUB_TOKEN must be set/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function testPullRequestOutputs() {
@@ -2004,7 +2841,10 @@ async function main() {
   await testFenceTracking();
   await testUnreleasedUpdaterFences();
   await testUnreleasedDraftFenceGuard();
+  await testUnreleasedDraftStructure();
   await testFenceDifferential();
+  await testUnreleasedUpdaterProperty();
+  await testRunnerNeedsCommonmark();
   testPullRequestOutputs();
   await testInternalCommitSkipsCommunique();
   await testReleasableCommitRunsCommunique();

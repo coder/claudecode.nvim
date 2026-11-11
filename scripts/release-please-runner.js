@@ -24,6 +24,7 @@ const { join } = require("node:path");
 const process = require("node:process");
 const { promisify } = require("node:util");
 
+const commonmark = require("commonmark");
 const {
   GitHub,
   Manifest,
@@ -45,11 +46,25 @@ const LOCAL_PRETTIER_BIN = join(
 
 const execFileAsync = promisify(execFile);
 
-const UNRELEASED_HEADING_PATTERN = /^#{2,3} \[?Unreleased\]?[ \t]*$/;
-// An H1 or H2 heading ends the Unreleased section; H3 stays inside it because
-// hand-staged drafts use Keep-a-Changelog `### Added`-style subsections.
-const NEXT_SECTION_PATTERN = /^##? /;
+// The text of an Unreleased heading, as `headingText` reads it (`## [Unreleased]` and `## Unreleased`).
+const UNRELEASED_TEXT_PATTERN = /^\[?Unreleased\]?$/;
 const TITLE_PATTERN = /^# .+$/;
+// The nodes that an Unreleased draft can hold. A heading is not one of them: only a subsection heading is allowed
+// (see `assertDraftIsPlain`). The update drops the draft, so it drops only what it reads.
+const DRAFT_NODE_TYPES = new Set([
+  "paragraph",
+  "list",
+  "item",
+  "text",
+  "softbreak",
+  "linebreak",
+  "code",
+  "emph",
+  "strong",
+  "link",
+  "image",
+  "html_inline",
+]);
 // CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
 // one rule (see `splitLines`), so a fence pattern never sees a bare CR inside a
 // line.
@@ -305,33 +320,147 @@ function findLineOutsideFences(lines, start, predicate) {
 }
 
 /**
- * Throws when a code fence opens in the Unreleased draft. `updateContent` drops the draft: the lines after the
- * Unreleased heading up to the next section outside a fence (or to the end of the text). The reader that finds that
- * next section is `nextOpenFence`, and a fence that does not close where the maintainer meant (it has no closer, or a
- * closer that CommonMark rejects, or Prettier closed it at the end of the file) hides every older release below it. So
- * the draft is read with the same reader, and a fence in it is refused, whatever the fence holds and whether it
- * closes. With no fence in the draft, the first `# ` or `## ` line after the Unreleased heading ends the draft, and
- * nothing at or after that line is dropped. `start` is the first draft line and `end` is the line after the last one
- * (both 0-based). The cost: a harmless code block in the draft is refused too.
+ * The top-level blocks of `text`, read by commonmark.js. The Unreleased update reads the changelog with a real
+ * Markdown parser, because a reader of single lines cannot tell an HTML block, a setext heading, a list item, a block
+ * quote or an indented code block from a section heading. Nested blocks are the children of these.
  */
-function assertDraftHasNoFence(lines, start, end) {
-  assert.ok(Array.isArray(lines), "lines must be an array");
-  assert.ok(
-    Number.isInteger(start) &&
-      Number.isInteger(end) &&
-      start >= 0 &&
-      start <= end &&
-      end <= lines.length,
-    "start and end must bound lines",
-  );
+function parseBlocks(text) {
+  assert.equal(typeof text, "string", "text must be a string");
+  const blocks = [];
+  for (
+    let block = new commonmark.Parser().parse(text).firstChild;
+    block;
+    block = block.next
+  ) {
+    blocks.push(block);
+  }
+  return blocks;
+}
 
-  // The first fence line of the draft is an opener, because no fence is open before it.
-  for (let i = start; i < end; i += 1) {
-    if (nextOpenFence(null, lines[i]) !== null) {
+/** The text of a heading: its inline literals, with every run of blanks as one space. */
+function headingText(heading) {
+  assert.equal(heading.type, "heading", "node must be a heading");
+  let text = "";
+  const walker = heading.walker();
+  for (let event = walker.next(); event; event = walker.next()) {
+    if (event.entering && event.node.literal !== null) {
+      text += event.node.literal;
+    }
+  }
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * `"<level> <text>"` for each heading that is a direct child of the document. A heading inside a list item or a block
+ * quote is not one: it is not a section of the changelog.
+ */
+function topLevelHeadings(text) {
+  return parseBlocks(text)
+    .filter((block) => block.type === "heading")
+    .map((block) => `${block.level} ${headingText(block)}`);
+}
+
+/**
+ * Where the Unreleased draft is in `text`, or null when there is no Unreleased heading. The anchor is the first
+ * top-level heading of level 2 or 3 that reads `Unreleased` or `[Unreleased]`. The draft is the blocks after it, up to
+ * the next top-level heading of the anchor's level or a higher one (an H1 or H2 after an H2 anchor), or to the end of
+ * the text. An H3 under an H2 anchor is a subsection of the draft, whatever it says. `headEnd` is the last line of the
+ * anchor and `restStart` the first line after the draft, both numbered from 1. `restStart` is null when the draft
+ * runs to the end of the text.
+ */
+function findUnreleasedDraft(text) {
+  const blocks = parseBlocks(text);
+  const anchor = blocks.findIndex(
+    (block) =>
+      block.type === "heading" &&
+      (block.level === 2 || block.level === 3) &&
+      UNRELEASED_TEXT_PATTERN.test(headingText(block)),
+  );
+  if (anchor === -1) {
+    return null;
+  }
+  const { level } = blocks[anchor];
+  const next = blocks.findIndex(
+    (block, i) =>
+      i > anchor && block.type === "heading" && block.level <= level,
+  );
+  return {
+    level,
+    blocks: blocks.slice(anchor + 1, next === -1 ? blocks.length : next),
+    headEnd: blocks[anchor].sourcepos[1][0],
+    restStart: next === -1 ? null : blocks[next].sourcepos[0][0],
+  };
+}
+
+/**
+ * Throws unless the Unreleased draft holds only paragraphs, lists, and headings one level below the anchor (H3 under an
+ * H2 anchor), with their inline text. `updateContent` drops the draft, so it drops only what it reads. A code block, an
+ * HTML block, a block quote, a thematic break or a heading of another level is refused, and so is a line that no
+ * paragraph or heading holds (a link reference definition leaves no node). Each of these can end a section where a
+ * reader of lines sees none, hide the lines after it, or hold an older release. The error names the line and the node
+ * type, and it comes before anything is formatted. A code fence keeps the error of the fence check that came first.
+ * `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it read. The cost: a draft with a
+ * code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a maintainer edits it.
+ */
+function assertDraftIsPlain(lines, draft) {
+  assert.ok(Array.isArray(lines), "lines must be an array");
+  assert.ok(Array.isArray(draft.blocks), "draft must hold blocks");
+  const shownLine = (line) =>
+    JSON.stringify((lines[line - 1] ?? "").slice(0, 80));
+  const covered = new Set();
+  for (const block of draft.blocks) {
+    const walker = block.walker();
+    for (let event = walker.next(); event; event = walker.next()) {
+      const { entering, node } = event;
+      if (!entering) {
+        continue;
+      }
+      const isSubsection =
+        node.type === "heading" && node.level === draft.level + 1;
+      if (!isSubsection && !DRAFT_NODE_TYPES.has(node.type)) {
+        // An inline node has no position: its block does.
+        let positioned = node;
+        while (positioned.sourcepos === undefined) {
+          positioned = positioned.parent;
+        }
+        const line = positioned.sourcepos[0][0];
+        if (node.type === "code_block" && node.info !== null) {
+          throw new Error(
+            `The Unreleased draft has a code fence. Line ${line} opens it: ${shownLine(line)}. ` +
+              "The update drops the draft, and a fence that does not close where you meant would drop the older releases below it too. " +
+              "Move the code block out of the Unreleased draft.",
+          );
+        }
+        const kind =
+          node.type === "heading"
+            ? `heading (level ${node.level})`
+            : node.type === "code_block"
+              ? "code_block (indented)"
+              : node.type;
+        throw new Error(
+          `The Unreleased draft has a node that the update does not read: ${kind}. Line ${line} starts it: ${shownLine(line)}. ` +
+            `The update drops the draft, so it reads only paragraphs, lists and level ${draft.level + 1} headings there. ` +
+            "Move it out of the Unreleased draft.",
+        );
+      }
+      if (node.type === "paragraph" || node.type === "heading") {
+        for (
+          let line = node.sourcepos[0][0];
+          line <= node.sourcepos[1][0];
+          line += 1
+        ) {
+          covered.add(line);
+        }
+      }
+    }
+  }
+  const last = draft.restStart === null ? lines.length : draft.restStart - 1;
+  for (let line = draft.headEnd + 1; line <= last; line += 1) {
+    if (!/^[ \t]*$/.test(lines[line - 1] ?? "") && !covered.has(line)) {
       throw new Error(
-        `The Unreleased draft has a code fence. Line ${i + 1} opens it: ${JSON.stringify(lines[i].slice(0, 80))}. ` +
-          "The update drops the draft, and a fence that does not close where you meant would drop the older releases below it too. " +
-          "Move the code block out of the Unreleased draft.",
+        `The Unreleased draft has a line that no paragraph, list item or heading holds. Line ${line}: ${shownLine(line)}. ` +
+          "A link reference definition is one. The update drops the draft, so it refuses a line that it cannot read. " +
+          "Move it out of the Unreleased draft.",
       );
     }
   }
@@ -361,9 +490,41 @@ function formatChangelogMarkdown(content) {
 }
 
 /**
+ * Formats `markdown` and checks that the formatter kept the older releases. `kept` is the text of the changelog that
+ * the update keeps below the new entry. Its top-level headings must be the last top-level headings of the formatted
+ * text, with the same levels and text. A new entry with a code fence that never closes, for example, swallows the older
+ * releases below it, and the formatter then closes the fence at the end of the text and writes them as code. A
+ * formatter that moves a setext heading into a list item has the same result. The check refuses these before anything
+ * is written. A heading inside a list item or a block quote is not a section, so it does not count.
+ */
+function formatKeepingHeadings(markdown, kept) {
+  assert.equal(typeof markdown, "string", "markdown must be a string");
+  assert.equal(typeof kept, "string", "kept must be a string");
+  const formatted = formatChangelogMarkdown(markdown);
+  const expected = topLevelHeadings(kept);
+  const found = topLevelHeadings(formatted);
+  const tail = found.slice(Math.max(0, found.length - expected.length));
+  const changed = expected.findIndex((heading, i) => heading !== tail[i]);
+  if (changed !== -1) {
+    throw new Error(
+      "The update would change the older releases. After the formatter runs, the headings below the new entry are not the headings that were there: " +
+        `expected ${JSON.stringify(expected[changed])} but found ${JSON.stringify(tail[changed] ?? null)}. ` +
+        "The new entry or the older releases hold Markdown that the formatter rewrites, such as a code fence that never closes, so the update refuses to write it.",
+    );
+  }
+  return formatted;
+}
+
+/**
  * Replaces release-please's stock CHANGELOG updater. It keeps `## [Unreleased]`
  * at the top, clears its draft body after Communique reconciles it into the
  * release entry, and inserts the new release directly below the anchor.
+ *
+ * The draft is read with commonmark.js. It is the blocks from the Unreleased heading to the next top-level heading of
+ * the same level or a higher one, or to the end of the text. It can hold only paragraphs, lists and H3 headings (see
+ * `assertDraftIsPlain`), and the update refuses anything else before it formats. An H3 heading directly under
+ * `## [Unreleased]` is a subsection of the draft whatever it says, so `### [0.3.0]` there is dropped with the draft.
+ * After the formatter runs, the headings of the older releases must be unchanged (see `formatKeepingHeadings`).
  */
 class UnreleasedAwareChangelog {
   constructor(options) {
@@ -387,25 +548,15 @@ class UnreleasedAwareChangelog {
     const existing = lines.join("\n");
     const entry = this.changelogEntry.trim();
 
-    const unreleasedIndex = findLineOutsideFences(lines, 0, (line) =>
-      UNRELEASED_HEADING_PATTERN.test(line),
-    );
-    if (unreleasedIndex !== -1) {
-      const head = lines.slice(0, unreleasedIndex + 1).join("\n");
-      const nextIndex = findLineOutsideFences(
-        lines,
-        unreleasedIndex + 1,
-        (line) => NEXT_SECTION_PATTERN.test(line),
-      );
-      // The draft is the lines between the heading and the next section, or to the end of the text. They go, so no
-      // fence may open among them.
-      assertDraftHasNoFence(
-        lines,
-        unreleasedIndex + 1,
-        nextIndex === -1 ? lines.length : nextIndex,
-      );
-      const rest = nextIndex === -1 ? "" : lines.slice(nextIndex).join("\n");
-      return formatChangelogMarkdown(joinSections(head, entry, rest));
+    const draft = findUnreleasedDraft(existing);
+    if (draft !== null) {
+      assertDraftIsPlain(lines, draft);
+      const head = lines.slice(0, draft.headEnd).join("\n");
+      const rest =
+        draft.restStart === null
+          ? ""
+          : lines.slice(draft.restStart - 1).join("\n");
+      return formatKeepingHeadings(joinSections(head, entry, rest), rest);
     }
 
     // Self-heal a missing Unreleased anchor so Communique has draft space on
@@ -415,12 +566,12 @@ class UnreleasedAwareChangelog {
     );
     if (titleIndex !== -1) {
       const head = `${lines.slice(0, titleIndex + 1).join("\n")}\n\n## [Unreleased]`;
-      return formatChangelogMarkdown(
-        joinSections(head, entry, lines.slice(titleIndex + 1).join("\n")),
-      );
+      const rest = lines.slice(titleIndex + 1).join("\n");
+      return formatKeepingHeadings(joinSections(head, entry, rest), rest);
     }
-    return formatChangelogMarkdown(
+    return formatKeepingHeadings(
       joinSections("# Changelog\n\n## [Unreleased]", entry, existing),
+      existing,
     );
   }
 }
