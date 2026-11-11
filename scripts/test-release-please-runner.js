@@ -1416,6 +1416,13 @@ async function testUnreleasedDraftStructure() {
       error: node("heading (level 2)"),
     },
     {
+      name: "a setext heading in a list item",
+      draft: "- Draft\n\n  0.3.0\n  -----\n\n  - Older",
+      line: "  0.3.0",
+      formattedLine: "  ## 0.3.0",
+      error: node("heading (level 2)"),
+    },
+    {
       name: "an H1 heading in a list item",
       draft: "1. # Title\n\n   - Older",
       line: "1. # Title",
