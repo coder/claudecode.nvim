@@ -13,13 +13,18 @@ describe("openDiff with a leftover diff buffer under its name", function()
   local path
   local tab_name = "✻ [Claude Code] reload.txt ⧉"
 
-  local function load_plugin()
+  local function load_plugin(layout)
     for name in pairs(package.loaded) do
       if name == "claudecode" or name:match("^claudecode%.") then
         package.loaded[name] = nil
       end
     end
-    require("claudecode").setup({ auto_start = false, log_level = "error", terminal = { provider = "none" } })
+    require("claudecode").setup({
+      auto_start = false,
+      log_level = "error",
+      terminal = { provider = "none" },
+      diff_opts = { layout = layout or "vertical" },
+    })
     local tools = require("claudecode.tools.init")
     tools.register_all()
     return require("claudecode.diff"), tools
@@ -178,30 +183,93 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.same({ "alpha two" }, vim.api.nvim_buf_get_lines(state.new_buffer, 0, -1, false))
   end)
 
-  it("does not let the old proposal window resolve the new diff", function()
+  local layout_pairs = {
+    { old = "vertical", new = "vertical" },
+    { old = "vertical", new = "unified" },
+    { old = "unified", new = "vertical" },
+    { old = "unified", new = "unified" },
+  }
+
+  local function suffix_of(layout)
+    return layout == "unified" and "(unified diff)" or "(proposed)"
+  end
+
+  for _, pair in ipairs(layout_pairs) do
+    it(
+      "names the new buffer and does not let the old window resolve it: " .. pair.old .. " then " .. pair.new,
+      function()
+        local _, tools = load_plugin(pair.old)
+        assert.is_true(open_diff(tools, "alpha one\n")._deferred)
+        local leftover = buffers_named(suffix_of(pair.old))[1]
+        local diff
+        diff, tools = load_plugin(pair.new)
+        assert.is_true(open_diff(tools, "alpha two\n")._deferred)
+        local state = diff._get_active_diffs()[tab_name]
+        assert.same({ state.new_buffer }, buffers_named(suffix_of(pair.new)), "the new buffer carries the name")
+
+        local notify = vim.notify
+        local messages = {}
+        vim.notify = function(message)
+          messages[#messages + 1] = message
+        end
+        vim.api.nvim_set_current_win(vim.fn.win_findbuf(leftover)[1])
+        local ok, err = pcall(function()
+          diff.accept_current_diff()
+          diff.deny_current_diff()
+        end)
+        vim.notify = notify
+
+        assert.is_true(ok, err)
+        assert.same({ "No active diff found in current buffer", "No active diff found in current buffer" }, messages)
+        assert.equal("pending", state.status, "the new diff still waits for its own proposal window")
+      end
+    )
+  end
+
+  it("opens a new-file diff in a folder that a symlink reaches, after a reload with the old windows closed", function()
+    vim.fn.mkdir(dir .. "/real", "p")
+    assert(vim.loop.fs_symlink(dir .. "/real", dir .. "/link"))
+    path = dir .. "/link/missing.txt"
     local _, tools = load_plugin()
-    assert.is_true(open_diff(tools, "alpha one\n")._deferred)
-    local leftover = buffers_named("(proposed)")[1]
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    close_old_diff_windows()
+
     local diff
     diff, tools = load_plugin()
-    assert.is_true(open_diff(tools, "alpha two\n")._deferred)
-    local state = diff._get_active_diffs()[tab_name]
+    local call = open_diff(tools, "second\n")
 
-    local notify = vim.notify
-    local messages = {}
-    vim.notify = function(message)
-      messages[#messages + 1] = message
-    end
-    vim.api.nvim_set_current_win(vim.fn.win_findbuf(leftover)[1])
-    local ok, err = pcall(function()
-      diff.accept_current_diff()
-      diff.deny_current_diff()
-    end)
-    vim.notify = notify
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    assert.is_not_nil(diff._get_active_diffs()[tab_name])
+  end)
 
-    assert.is_true(ok, err)
-    assert.same({ "No active diff found in current buffer", "No active diff found in current buffer" }, messages)
-    assert.equal("pending", state.status, "the new diff still waits for its own proposal window")
+  it("leaves no extra window when the original buffer of a new file cannot take its name", function()
+    path = dir .. "/missing.txt"
+    local _, tools = load_plugin()
+    local foreign = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(foreign, path .. " (NEW FILE)")
+    local windows = #vim.api.nvim_tabpage_list_wins(0)
+    local tabs = #vim.api.nvim_list_tabpages()
+
+    local call = open_diff(tools, "alpha\n")
+
+    assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+    assert.equal(tabs, #vim.api.nvim_list_tabpages())
+    assert.equal(windows, #vim.api.nvim_tabpage_list_wins(0), "the failed setup closes the windows it made")
+  end)
+
+  it("does not take the name from the proposal buffer of an active diff", function()
+    local diff, tools = load_plugin()
+    assert.is_true(open_diff(tools, "alpha one\n")._deferred)
+
+    local ok, err = pcall(diff._setup_blocking_diff, {
+      old_file_path = path,
+      new_file_path = path,
+      new_file_contents = "alpha two\n",
+      tab_name = tab_name,
+    }, function() end)
+
+    assert.is_false(ok)
+    assert.is_truthy(vim.inspect(err):find("E95", 1, true), vim.inspect(err))
   end)
 
   it("keeps the original buffer of a live new-file diff when a second diff opens the same new file", function()

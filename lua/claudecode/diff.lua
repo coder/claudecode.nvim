@@ -1014,9 +1014,10 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----Free the buffer names that a split diff of `tab_name` for `old_file_path` is about to take. An unlisted buffer of the
+---Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take. An unlisted buffer of the
 ---plugin's kind under such a name that no active diff owns is left by a reload, which drops `active_diffs`. It keeps
 ---its windows and text, but not its tab name, so that `:ClaudeCodeDiffAccept` in its window cannot resolve a new diff.
+---Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
 ---@param tab_name string
 ---@param old_file_path string
 local function rename_orphaned_diff_buffers(tab_name, old_file_path)
@@ -1032,19 +1033,18 @@ local function rename_orphaned_diff_buffers(tab_name, old_file_path)
   local orphan_names = {
     { name = tab_name .. " (proposed)", buftype = "acwrite" },
     { name = tab_name .. " (NEW FILE - proposed)", buftype = "acwrite" },
+    { name = tab_name .. " (unified diff)", buftype = "acwrite" },
     { name = old_file_path .. " (NEW FILE)", buftype = "nofile" },
   }
   for _, orphan in ipairs(orphan_names) do
-    local wanted = vim.fn.fnamemodify(orphan.name, ":p")
+    local full = vim.fn.fnamemodify(orphan.name, ":p")
+    local folder = vim.fn.resolve(vim.fn.fnamemodify(full, ":h"))
+    local stored = { [full] = true, [(folder == "/" and "" or folder) .. "/" .. vim.fn.fnamemodify(full, ":t")] = true }
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-      if
-        not owned[buf]
-        and vim.api.nvim_buf_get_name(buf) == wanted
-        and vim.bo[buf].buftype == orphan.buftype
-        and not vim.bo[buf].buflisted
-      then
+      local name = vim.api.nvim_buf_get_name(buf)
+      if not owned[buf] and stored[name] and vim.bo[buf].buftype == orphan.buftype and not vim.bo[buf].buflisted then
         vim.b[buf].claudecode_diff_tab_name = nil
-        pcall(vim.api.nvim_buf_set_name, buf, wanted .. " (orphaned " .. buf .. ")")
+        pcall(vim.api.nvim_buf_set_name, buf, name .. " (orphaned " .. buf .. ")")
       end
     end
   end
@@ -1411,7 +1411,15 @@ function M._create_diff_view_from_window(
       original_buffer_created_by_plugin = true
     end
     -- Load the original-side buffer into the chosen window
-    original_buffer = load_original_buffer(original_window, old_file_path, is_new_file, existing_buffer)
+    local loaded, loaded_or_error =
+      pcall(load_original_buffer, original_window, old_file_path, is_new_file, existing_buffer)
+    if not loaded then
+      if target_window_created_by_plugin and vim.api.nvim_win_is_valid(original_window) then
+        pcall(vim.api.nvim_win_close, original_window, true)
+      end
+      error(loaded_or_error, 0)
+    end
+    original_buffer = loaded_or_error
   end
 
   -- Set up the proposed buffer and finalize the diff layout
@@ -1626,6 +1634,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
+    rename_orphaned_diff_buffers(tab_name, params.old_file_path)
+
     -- Dispatch to unified diff if configured
     if config and config.diff_opts and config.diff_opts.layout == "unified" then
       local inline = require("claudecode.diff_inline")
@@ -1647,8 +1657,6 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
       return
     end
-
-    rename_orphaned_diff_buffers(tab_name, params.old_file_path)
 
     local original_tab_number = vim.api.nvim_get_current_tabpage()
     local created_new_tab = false
