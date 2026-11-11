@@ -12,6 +12,12 @@ set -o pipefail
 # selection_held_spec.lua sleeps 21.6s in 77 vim.wait calls, so 30s left each of them 0.1s of slack under load.
 FILE_TIMEOUT=40s
 
+# The temp files and folders of the file that runs. Bash runs the EXIT trap when the runner gets SIGTERM too, just
+# before it dies with 143 as it did without the trap, so they do not stay behind. The file's Neovim runs on until its
+# timeout, as before.
+CURRENT_TEMP=()
+trap 'rm -rf "${CURRENT_TEMP[@]}"' EXIT
+
 echo "=== Running Integration Tests Individually ==="
 
 # Track overall results
@@ -34,6 +40,7 @@ run_test_file() {
   group_file=$(mktemp)
   state_dir=$(mktemp -d)
   config_dir=$(mktemp -d)
+  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir")
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
   # plenary's test_file takes no options, so the Neovim it starts for a spec gets no -u and would read the developer's
@@ -41,12 +48,13 @@ run_test_file() {
   # in a variable so a path with a space or % needs no escaping. VIMINIT and the variable reach every process the spec
   # starts, and a Neovim there without -u runs minimal_init.lua too. The Neovim started here has -u.
   # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
-  # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays.
+  # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
+  # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
   if VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
     CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
     XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
     bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
-    nvim --headless -u tests/minimal_init.lua \
+    nvim --headless -i NONE -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file')" \
     2>&1 | tee "$temp_output"; then
     EXIT_CODE=0
@@ -92,6 +100,7 @@ run_test_file() {
 
   # Cleanup
   rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir"
+  CURRENT_TEMP=()
 }
 
 for test_file in tests/integration/*_spec.lua; do

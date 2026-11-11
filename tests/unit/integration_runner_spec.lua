@@ -42,6 +42,8 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
 })
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
+  'echo "$*" >> "$STUB_DIR/nvim_args"',
+  'if [ -f "$STUB_DIR/$name.sleep" ]; then : > "$STUB_DIR/$name.started"; sleep 2; fi',
   "folders=missing",
   'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
   'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
@@ -378,6 +380,51 @@ describe("scripts/run_integration_tests_individually.sh", function()
       assert.are.equal("present", entry.folders, "both folders exist while the Neovim runs")
       shell("test ! -e " .. quote(entry.state_home) .. " && test ! -e " .. quote(entry.config_home))
     end
+  end)
+
+  it("starts its own Neovim without a ShaDa file, because the Neovim of plenary shares its folders", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local log = assert(io.open(dir .. "/nvim_args"))
+    local args = log:read("*a")
+    log:close()
+    assert.is_truthy(args:find("--headless -i NONE -u tests/minimal_init.lua", 1, true), args)
+  end)
+
+  it("removes the temp files and folders of the running file when it gets SIGTERM, and exits 143", function()
+    write(dir .. "/tests/integration/slow_spec.lua", {})
+    write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
+    write(dir .. "/slow_spec.lua.exit", { "0" })
+    write(dir .. "/slow_spec.lua.sleep", {})
+    local temp = dir .. "/tmp"
+    shell("mkdir -p " .. quote(temp))
+    local command = "cd "
+      .. quote(dir)
+      .. " && TMPDIR="
+      .. quote(temp)
+      .. " PATH="
+      .. quote(dir .. "/bin")
+      .. ':"$PATH" STUB_DIR='
+      .. quote(dir)
+      .. " REAL_TIMEOUT="
+      .. quote(real_timeout)
+      .. " "
+      .. quote(script)
+      .. " > /dev/null 2>&1 & pid=$!; for _ in $(seq 100); do [ -e "
+      .. quote(dir .. "/slow_spec.lua.started")
+      .. " ] && break; sleep 0.1; done; kill -TERM $pid; wait $pid; echo status=$?"
+    local pipe = assert(io.popen(command))
+    local output = pipe:read("*a")
+    pipe:close()
+
+    assert.are.equal("143", output:match("status=(%d+)"), output)
+    local left = assert(io.popen("ls -A " .. quote(temp)))
+    local names = left:read("*a")
+    left:close()
+    assert.are.equal("", names, "the runner left temp files or folders behind")
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
