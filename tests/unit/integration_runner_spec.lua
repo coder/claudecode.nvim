@@ -72,6 +72,16 @@ local function hung_output(spec)
   return { "Testing: \t/repo/tests/integration/" .. spec, "\27[32mSuccess\27[0m\t||\tfirst test" }
 end
 
+local ROW_COLOR = { Success = 32, Fail = 31, Error = 31, Pending = 33 }
+
+-- Plenary prints one of these, in colour, for each test it ran.
+---@param kind "Success"|"Fail"|"Error"|"Pending"
+---@param description string
+---@return string
+local function row(kind, description)
+  return "\27[" .. ROW_COLOR[kind] .. "m" .. kind .. "\27[0m\t||\t" .. description
+end
+
 ---@param command string
 local function shell(command)
   local status = os.execute(command)
@@ -297,6 +307,97 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     assert.is_truthy(output:find("Failed test files:\n  - crash_spec.lua", 1, true), output)
     assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("fails a file whose nvim exited 0 after passing tests without printing a summary", function()
+    local status, output = run_script({
+      { name = "stopped_spec.lua", exit = 0, output = { row("Success", "first"), row("Success", "second") } },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: stopped_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - stopped_spec.lua", 1, true), output)
+    assert.is_nil(output:find("All integration tests passed!", 1, true), output)
+    assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("fails and counts a file that printed a Fail row, then stopped with exit 0 and no summary", function()
+    local status, output = run_script({
+      {
+        name = "assert_spec.lua",
+        exit = 0,
+        output = {
+          row("Fail", "a test that failed"),
+          "            ...:69: Expected objects to be equal.",
+          row("Success", "a test that passed"),
+          "LuaJIT ASSERT lj_api.c:40: index2adr: bad stack slot -1",
+        },
+      },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: assert_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("FAILED: assert_spec.lua: 1 failing test row", 1, true), output)
+    assert.is_truthy(output:find("Total Failed: 1\n", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - assert_spec.lua", 1, true), output)
+  end)
+
+  it("fails a file with a Fail row whose summary and exit code say it passed", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = concat({ row("Success", "one") }, summary(1, 0, 0)) },
+      {
+        name = "liar_spec.lua",
+        exit = 0,
+        output = concat({ row("Success", "one"), row("Fail", "two") }, summary(2, 0, 0)),
+      },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: liar_spec.lua: 1 failing test row", 1, true), output)
+    assert.is_nil(output:find("no plenary summary", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - liar_spec.lua\n\n", 1, true), output)
+  end)
+
+  it("fails a file with an Error row whose summary and exit code say it passed", function()
+    local status, output = run_script({
+      {
+        name = "error_spec.lua",
+        exit = 0,
+        output = concat({ row("Success", "one"), row("Error", "two") }, summary(1, 0, 0)),
+      },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: error_spec.lua: 1 failing test row", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - error_spec.lua", 1, true), output)
+  end)
+
+  it("counts only the tests that passed in Total Success", function()
+    local status, output = run_script({
+      {
+        name = "a_spec.lua",
+        exit = 0,
+        output = concat({ row("Success", "one"), row("Pending", "two"), row("Success", "three") }, summary(2, 0, 0)),
+      },
+      { name = "b_spec.lua", exit = 0, output = concat({ row("Success", "four") }, summary(1, 0, 0)) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.is_truthy(output:find("Total Success: 3\n", 1, true), output)
+  end)
+
+  it("passes a file whose tests are all pending", function()
+    local status, output = run_script({
+      {
+        name = "pending_spec.lua",
+        exit = 0,
+        output = concat({ row("Pending", "needs Neovim 0.9") }, summary(0, 0, 0)),
+      },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.is_truthy(output:find("All integration tests passed!", 1, true), output)
+    assert.is_truthy(output:find("Total Success: 0\n", 1, true), output)
   end)
 
   it("kills an nvim that ignores SIGTERM", function()
