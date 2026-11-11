@@ -880,28 +880,38 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
-  it("renames a leftover buffer without setting an option", function()
+  -- OptionSet does not fire while Neovim is starting, and the specs run then. A raising OptionSet handler fails a write
+  -- of 'eventignore' and leaves the events ignored, so the test watches the writes themselves.
+  it("renames a leftover buffer without writing 'eventignore'", function()
     local _, tools = load_plugin()
     assert.is_true(open_diff(tools, "first\n")._deferred)
     close_old_diff_windows()
     local diff
     diff, tools = load_plugin()
-    local group = vim.api.nvim_create_augroup("LeftoverRenameOptions", { clear = true })
-    local sets = 0
-    vim.api.nvim_create_autocmd("OptionSet", {
-      group = group,
-      pattern = "eventignore",
-      callback = function()
-        sets = sets + 1
-        error("the user's OptionSet handler raises")
+    local writes = 0
+    local set_option_value, cmd, options = vim.api.nvim_set_option_value, vim.cmd, vim.o
+    vim.api.nvim_set_option_value = function(name, ...)
+      writes = writes + (name == "eventignore" and 1 or 0)
+      return set_option_value(name, ...)
+    end
+    vim.cmd = function(command, ...)
+      writes = writes + ((type(command) == "string" and command:find("eventignore", 1, true)) and 1 or 0)
+      return cmd(command, ...)
+    end
+    vim.o = setmetatable({}, {
+      __index = options,
+      __newindex = function(_, name, value)
+        writes = writes + (name == "eventignore" and 1 or 0)
+        options[name] = value
       end,
     })
 
-    local call = open_diff(tools, "second\n")
-    vim.api.nvim_del_augroup_by_id(group)
+    local ok, call = pcall(open_diff, tools, "second\n")
+    vim.api.nvim_set_option_value, vim.cmd, vim.o = set_option_value, cmd, options
 
+    assert(ok, call)
     assert.is_true(call._deferred, vim.inspect(call.error))
-    assert.equal(0, sets, "the rename does not write 'eventignore'")
+    assert.equal(0, writes)
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
