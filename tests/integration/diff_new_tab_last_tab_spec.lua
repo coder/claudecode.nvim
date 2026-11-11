@@ -91,6 +91,7 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
             child.state()
 
             assert.equal(0, child.leftovers().handlers)
+            assert.equal(1, child.leftovers().windows)
             assert.is_true(child.leftovers().job_running)
           end
         )

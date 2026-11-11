@@ -57,8 +57,9 @@ function M.new()
         get_active_terminal_bufnr = function()
           return _G.terminal_buf
         end,
+        -- Like the native and Snacks providers: opens the terminal only when no window shows it.
         ensure_visible = function()
-          if opts.show_terminal_again then
+          if opts.show_terminal_again and #vim.fn.win_findbuf(_G.terminal_buf) == 0 then
             local current = vim.api.nvim_get_current_win()
             vim.cmd("botright vsplit")
             vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), _G.terminal_buf)
