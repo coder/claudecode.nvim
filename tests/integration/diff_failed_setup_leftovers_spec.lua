@@ -12,6 +12,7 @@ describe("openDiff when the diff setup fails", function()
   local group = "diff_failed_setup_leftovers_spec"
   local tabnew_group = "diff_failed_setup_leftovers_spec_tabnew"
   local dir, real_hidden
+  local real_set_buf = vim.api.nvim_win_set_buf
 
   local function path(name)
     return dir .. "/" .. name
@@ -32,6 +33,15 @@ describe("openDiff when the diff setup fails", function()
         end
       end,
     })
+  end
+
+  local function fail_when_the_proposal_is_shown()
+    vim.api.nvim_win_set_buf = function(win, buf)
+      if vim.api.nvim_buf_get_name(buf):find(tab, 1, true) then
+        error("the proposal cannot be shown")
+      end
+      return real_set_buf(win, buf)
+    end
   end
 
   local function open_diff_that_fails(name, contents)
@@ -89,6 +99,7 @@ describe("openDiff when the diff setup fails", function()
     pcall(vim.api.nvim_del_augroup_by_name, group)
     pcall(vim.api.nvim_del_augroup_by_name, tabnew_group)
     vim.o.hidden = real_hidden
+    vim.api.nvim_win_set_buf = real_set_buf
     diff._cleanup_all_active_diffs("test cleanup")
     vim.cmd("silent! tabonly!")
     vim.cmd("silent! only!")
@@ -102,6 +113,18 @@ describe("openDiff when the diff setup fails", function()
     vim.cmd("edit " .. vim.fn.fnameescape(path("b.txt")))
     local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
     wipe_the_proposal_when_shown()
+
+    open_diff_that_fails("a.txt", "alpha\nBETA\n")
+
+    assert.same(wins, vim.api.nvim_list_wins())
+    assert_still_there(wins, bufs)
+  end)
+
+  it("closes the proposal window when the proposed buffer cannot be shown in it", function()
+    use()
+    vim.cmd("edit " .. vim.fn.fnameescape(path("a.txt")))
+    local wins, bufs = vim.api.nvim_list_wins(), vim.api.nvim_list_bufs()
+    fail_when_the_proposal_is_shown()
 
     open_diff_that_fails("a.txt", "alpha\nBETA\n")
 
