@@ -23,11 +23,11 @@ Claude Code talks to the plugin over one WebSocket connection. The plugin must n
 ## Run
 
 ```bash
-.agents/skills/verify-ws-connection/check.sh            # 2 to 5 min, 5 min at a host load average of 35
+.agents/skills/verify-ws-connection/check.sh            # 2 to 6 min, 4 min at a host load average of 16
 .agents/skills/verify-ws-connection/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
-.agents/skills/verify-ws-connection/check.sh --mutants  # about 77 min at that load, after you edit the model or a fact
+.agents/skills/verify-ws-connection/check.sh --mutants  # about 80 min at a load average of 14, after you edit the model or a fact
 .agents/skills/verify-ws-connection/check.sh --record   # rewrite covered.lock, only after "Update after an intended change" (refused together with --mutants)
-.agents/skills/verify-ws-connection/check.sh --hash-only  # about 6 s (30 s at that load), no TLC: only compares covered.lock with the code (exit 0 fresh, 2 error, 3 stale)
+.agents/skills/verify-ws-connection/check.sh --hash-only  # 2 to 30 s, no TLC: only compares covered.lock with the code (exit 0 fresh, 2 error, 3 stale)
 ```
 
 The shared harness `scripts/tla/check-lib.sh` does the work. Its header lists what `check.sh` sets. CI's `covered-lock` job runs every `.agents/skills/verify-*/check.sh` on each pull request, with the TLC jar cached. `Required` does not need that job. On the code as written this check passes, so a broken rule or `STALE` in that job's log for this check is news.
