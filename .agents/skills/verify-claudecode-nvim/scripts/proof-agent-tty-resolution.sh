@@ -13,8 +13,9 @@
 #                     reaches every call site, which the two cases above do not)
 #   no-caller-source  no doc or script of the skill except vcn.sh (and this proof) tells a caller to source a
 #                     run.env
-#   doc-vars          a doc of the skill that expands PORT, SID, NVIM_PID or NODE_DIR sets it in the same file, because
-#                     a fresh shell has none of them
+#   doc-vars          a code block, or the inline code of a doc, that expands PORT, SID, NVIM_PID or NODE_DIR sets it in
+#                     the same block (or the same doc, for inline code), because a fresh shell has none of them. Prose
+#                     that names an assignment sets nothing.
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
 #   load-symlink      a run.env that is a symlink (to a file this user owns) is refused, not sourced
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
@@ -731,12 +732,40 @@ callers_case() {
   cases=$((cases + 1))
 }
 
-# A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A doc that expands one of them must set it
-# in the same file with `VAR=$(`, because a fresh shell has none. The patterns are checked first on lines that must and
-# must not match, among them `$CLAUDE_CODE_SSE_PORT`, which is not `$PORT`.
+# A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A recipe that expands one of them must set
+# it with `VAR=$(`, because a fresh shell has none. A recipe is a fenced code block (checked on its own) or an inline code
+# span (all of them in a doc are checked together, because a bullet cites one assignment for the steps below it). Prose
+# outside the backticks is not a recipe: it can name an assignment that no recipe runs.
+# code_units <file>: prints each fenced block, then the inline code spans outside the blocks, each unit ended by a line
+# that holds only %%unit%%.
+code_units() {
+  awk '/^```/ { if (fenced) print "%%unit%%"; fenced = !fenced; next }
+    fenced { print; next }
+    { line = $0
+      while (match(line, /`[^`]+`/)) { spans = spans substr(line, RSTART + 1, RLENGTH - 2) "\n"; line = substr(line, RSTART + RLENGTH) } }
+    END { if (fenced) print "%%unit%%"; printf "%s%%%%unit%%%%\n", spans }' "$1"
+}
+
+# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it.
+units_missing() {
+  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\('
+  while IFS= read -r line; do
+    if [[ $line != "%%unit%%" ]]; then
+      unit+=$line$'\n'
+      continue
+    fi
+    if grep -qE "$uses_re" <<<"$unit" && ! grep -qE "$sets_re" <<<"$unit"; then
+      return 0
+    fi
+    unit=""
+  done < <(code_units "$1")
+  return 1
+}
+
 doc_vars_case() {
-  local name=doc-vars skill file var uses_re sets_re missing=""
+  local name=doc-vars skill file var uses_re sets_re sample missing=""
   skill=$(dirname "$V")/..
+  sample=$TMP/doc-vars-sample.md
   for var in PORT SID NVIM_PID NODE_DIR; do
     uses_re='\$\{?'$var'([^A-Za-z0-9_]|$)'
     sets_re='(^|[^A-Za-z0-9_$])'$var'=\$\('
@@ -744,14 +773,20 @@ doc_vars_case() {
     ! grep -qE "$uses_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the use pattern matches a longer name"
     grep -qE "$sets_re" <<<"$var=\$(basename \"\$L\"/*.lock .lock)" || fail "$name" "the set pattern misses an assignment of $var"
     ! grep -qE "$sets_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the set pattern matches text that sets nothing"
+    # Prose that names the assignment must not satisfy a block that uses the variable, and a block that sets it must.
+    printf 'Set it with %s=$(x) before.\n\n```bash\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a block that expands $var and sets it only in prose passed"
+    printf 'Prose.\n\n```bash\n%s=$(x)\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "a block that sets $var before it expands it was flagged"
+    printf 'Set `%s=$(x)` first, then `echo "$%s"`.\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "inline code that sets $var for inline code that expands it was flagged"
     for file in "$skill"/SKILL.md "$skill"/features/*.md; do
-      if grep -qE "$uses_re" "$file" && ! grep -qE "$sets_re" "$file"; then
-        missing+=" ${file#"$skill"/}:$var"
-      fi
+      ! units_missing "$file" "$var" || missing+=" ${file#"$skill"/}:$var"
     done
   done
-  [[ -z $missing ]] || fail "$name" "a doc expands a variable that it does not set:$missing"
-  echo "ok $name: every doc that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
+  rm -f -- "$sample"
+  [[ -z $missing ]] || fail "$name" "a recipe expands a variable that it does not set:$missing"
+  echo "ok $name: every recipe that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
   cases=$((cases + 1))
 }
 
