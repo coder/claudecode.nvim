@@ -14,7 +14,7 @@
 - `M.register(tool_module)`: requires `name` and `handler`. Otherwise it calls `vim.notify` at ERROR level and returns. It sends no MCP notification [tools/init.lua:M.register]
 - `M.register_all()`: registers 10 exposed tools and the internal `close_tab` [tools/init.lua:M.register_all]
 - `M.get_tool_list()`: returns `{ name, description, inputSchema }` only for tools that have a `schema` [tools/init.lua:M.get_tool_list]
-- `M.handle_invoke(client, params)`: looks up `params.name` and runs the tool with `params.arguments` [tools/init.lua:M.handle_invoke]
+- `M.handle_invoke(client, params)`: looks up `params.name` and runs the tool with `params.arguments`, or with `{}` when the call has none. It expects the params shape that the server's `tools/call` handler checked [tools/init.lua:M.handle_invoke]
 - `M.build_response(ok, value, err)`: maps a handler outcome, as `pcall` or `coroutine.resume` returns it, to `{ result }` or `{ error }`. `handle_invoke` uses it, and so does `diff.open_diff_blocking` when it resumes a deferred tool [tools/init.lua:M.build_response]
 
 ### Registered tools
@@ -37,7 +37,7 @@ Sources: [tools/init.lua:M.register_all], [tools/close_tab.lua:schema], [tools/o
 
 ## Invariants
 
-- An unknown tool returns `{ error = { code = -32601, message = "Tool not found: <name>" } }`. A `name` that is missing or not a string returns `-32602` "Invalid params" [tools/init.lua:M.handle_invoke]
+- An unknown tool, an empty `name` included, returns `{ error = { code = -32601, message = "Tool not found: <name>" } }` [tools/init.lua:M.handle_invoke]
 - An error that is a `{ code, message }` table keeps its code, whether the handler raises it or returns `false, err`. This holds for tools with `requires_coroutine` too, also when the reply is sent after a deferred resume. Any other error maps to `-32000` [tools/init.lua:M.build_response] [diff.lua:M.open_diff_blocking]
 - A successful handler returns `{ result = <value> }` [tools/init.lua:M.handle_invoke]. Each tool handler builds the MCP shape `{ content = { { type = "text", text = ... } } }` itself [tools/open_file.lua:handler]
 - Tools with `requires_coroutine` run in `coroutine.create`. If the coroutine yields, `handle_invoke` returns `{ _deferred = true, coroutine, client, params }` and sends no response yet. Only `openDiff` sets `requires_coroutine = true` [tools/init.lua:M.handle_invoke]
