@@ -412,6 +412,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   end)
 
   -- Configure window for sign column display
+  local got_signcolumn, previous_signcolumn = pcall(vim.api.nvim_get_option_value, "signcolumn", { win = diff_win })
   pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { win = diff_win })
 
   -- Equalize window widths
@@ -468,8 +469,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
       group = aug,
       buffer = buf,
       callback = function()
-        diff._resolve_diff_as_saved(tab_name, buf)
-        return true -- prevent actual write
+        diff._write_proposal(tab_name, buf)
       end,
     })
 
@@ -491,6 +491,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
       new_file_contents = params.new_file_contents,
       new_buffer = buf,
       new_window = diff_win,
+      signcolumn = got_signcolumn and previous_signcolumn or nil,
       target_window = editor_win,
       fallback_window = fallback_window,
       window_sizes = window_sizes,
@@ -614,9 +615,7 @@ function M.cleanup_inline_diff(tab_name, diff_data)
   else
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close the diff split window
-    if diff_data.new_window and vim.api.nvim_win_is_valid(diff_data.new_window) then
-      pcall(vim.api.nvim_win_close, diff_data.new_window, true)
-    end
+    diff._close_proposal_window(diff_data)
 
     if diff_data.fallback_window and vim.api.nvim_win_is_valid(diff_data.fallback_window) then
       pcall(vim.api.nvim_win_close, diff_data.fallback_window, false)
