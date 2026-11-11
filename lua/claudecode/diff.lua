@@ -1364,17 +1364,23 @@ end
 
 ---`:tabclose` can leave the tab of a diff open: it refuses the last tab page (E784), and with 'nohidden' it stops at a
 ---modified buffer of the user's in that tab (E37). Remove what the diff put in the tab, as closing it would: the Claude
----terminal window, which takes its `BufEnter` handler along and keeps the cursor out of the terminal, and the diff mode
----of the windows that show the file. A window of the diff, the proposal or the terminal, is only touched while it still
----shows the buffer the diff put there: a window that the user switched to a file of their own stays as it is, and the
----terminal handler goes either way. A cursor in a window that closes goes to the file window, or to the window of a
----unified diff, which gets an empty buffer. The caller deletes the proposal buffer.
----Creating a buffer, changing a window's buffer and moving the cursor can each run an autocmd of the user's, which can
----switch a window of the diff to a file of their own. So each window is looked up again right before the step that
----uses it.
+---terminal window, which takes its `BufEnter` handler along and keeps the cursor out of the terminal, the proposal window
+---of a split diff, and the diff mode of the windows that show the file. A window of the diff, the proposal or the
+---terminal, is only touched while it still shows the buffer the diff put there: a window that the user switched to a file
+---of their own stays as it is, and the terminal handler goes either way. A cursor in a window that closes goes to the
+---window the diff stored for the file, which a unified diff gives an empty buffer. The caller deletes the proposal buffer.
+---An autocmd of the user's can run inside any call that changes a window or a buffer, after the check that made the call
+---safe, and switch a window of the diff to a file of their own, enter the terminal, or close the tab. So the whole release
+---runs with every autocmd blocked (`utils.without_autocmds`), after a check that the tab page is still there. Afterwards,
+---with no window of the diff left, it fires `WinEnter` and `BufEnter` for the window and the buffer the cursor ends in, if
+---they changed.
 ---@param diff_data table
 local function release_surviving_diff_tab(diff_data)
   local tab = diff_data.new_tab_number
+  if not vim.api.nvim_tabpage_is_valid(tab) then
+    return
+  end
+
   local function in_tab(win)
     return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_tabpage(win) == tab
   end
@@ -1392,46 +1398,61 @@ local function release_surviving_diff_tab(diff_data)
   local function file_window()
     return in_tab(diff_data.target_window) and diff_data.target_window or nil
   end
-  local function proposal_window_that_gets_an_empty_buffer()
-    local proposal_win = proposal_window()
-    local file_win = file_window()
-    if proposal_win and (file_win == nil or file_win == proposal_win) then
-      return proposal_win
-    end
-  end
 
   if diff_data.terminal_enter_handler then
     pcall(vim.api.nvim_del_autocmd, diff_data.terminal_enter_handler)
   end
 
-  local emptied_win, empty_buffer
-  if proposal_window_that_gets_an_empty_buffer() then
-    local new_empty_buffer = vim.api.nvim_create_buf(true, false)
-    local proposal_win = proposal_window_that_gets_an_empty_buffer()
-    if proposal_win and pcall(vim.api.nvim_win_set_buf, proposal_win, new_empty_buffer) then
-      emptied_win, empty_buffer = proposal_win, new_empty_buffer
-    else
-      pcall(vim.api.nvim_buf_delete, new_empty_buffer, { force = true })
+  local start_win = vim.api.nvim_get_current_win()
+  local start_buf = vim.api.nvim_get_current_buf()
+
+  utils.without_autocmds(function()
+    local emptied_win, empty_buffer
+    local proposal_win = proposal_window()
+    local file_win = file_window()
+    if proposal_win and (file_win == nil or file_win == proposal_win) then
+      local buffer = vim.api.nvim_create_buf(true, false)
+      if pcall(vim.api.nvim_win_set_buf, proposal_win, buffer) then
+        emptied_win, empty_buffer = proposal_win, buffer
+      else
+        pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+      end
     end
-  end
 
-  local destination = file_window() or (shows(emptied_win, empty_buffer) and emptied_win or nil)
-  local cursor_win = vim.api.nvim_get_current_win()
-  if destination and (cursor_win == terminal_window() or cursor_win == proposal_window()) then
-    pcall(vim.api.nvim_set_current_win, destination)
-  end
-
-  local terminal_win = terminal_window()
-  if terminal_win then
-    pcall(vim.api.nvim_win_close, terminal_win, false)
-  end
-
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if shows(win, diff_data.original_buffer) and vim.api.nvim_get_option_value("diff", { win = win }) then
-      pcall(vim.api.nvim_win_call, win, function()
-        vim.cmd("diffoff")
-      end)
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      if
+        vim.api.nvim_win_get_buf(win) == diff_data.original_buffer
+        and vim.api.nvim_get_option_value("diff", { win = win })
+      then
+        pcall(vim.api.nvim_win_call, win, function()
+          vim.cmd("diffoff")
+        end)
+      end
     end
+
+    local cursor_win = vim.api.nvim_get_current_win()
+    if cursor_win == terminal_window() or cursor_win == proposal_window() then
+      local destination = file_window() or (shows(emptied_win, empty_buffer) and emptied_win or nil)
+      if destination then
+        pcall(vim.api.nvim_set_current_win, destination)
+      end
+    end
+
+    local terminal_win = terminal_window()
+    if terminal_win then
+      pcall(vim.api.nvim_win_close, terminal_win, false)
+    end
+    local remaining_proposal_win = proposal_window()
+    if remaining_proposal_win then
+      pcall(vim.api.nvim_win_close, remaining_proposal_win, true)
+    end
+  end)
+
+  local end_win = vim.api.nvim_get_current_win()
+  local end_buf = vim.api.nvim_get_current_buf()
+  if end_win ~= start_win or end_buf ~= start_buf then
+    local events = end_win ~= start_win and { "WinEnter", "BufEnter" } or { "BufEnter" }
+    vim.api.nvim_exec_autocmds(events, { buffer = end_buf, modeline = false })
   end
 end
 
