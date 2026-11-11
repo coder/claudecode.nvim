@@ -635,24 +635,26 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.spy(callbacks.on_disconnect).was_not_called()
     end)
 
-    it("measures the gap to the poll from the ping, not from the loop time that a block left behind", function()
+    -- libuv runs the timers of a pass with the loop time of the start of the pass. A timer callback that runs before the
+    -- ping timer can block for longer than 1.5 intervals, or the machine can sleep in it. The cached time then hides the
+    -- wake, and the pings that went unanswered before it would look old at the check, which has no gap to skip.
+    it("takes a tick for a wake when a callback before it in the pass blocked, though the loop time is old", function()
       local refresh = cache_loop_time()
       local tick, raw_tick = start_ping_timer()
       local client = connect_and_upgrade()
 
-      for _ = 1, 3 do
+      for _ = 1, 2 do
         clock = clock + interval
         refresh()
         tick()
       end
       clock = clock + interval
       refresh()
-      clock = clock + 1.2 * interval -- a callback that runs before the timers of this pass blocks: the loop time is old
-      raw_tick()
-      clock = clock + 0.5 * interval -- the poll comes 0.5 intervals after the ping, but 1.7 after the old loop time
-      poll(refresh)
+      clock = clock + 2 * interval -- a timer callback that runs before the ping timer blocks, or the machine sleeps
+      raw_tick() -- the cached loop time shows one interval since the last tick, the clock three
+      poll() -- Claude has had no time to answer
 
-      assert.is_nil(server.clients[client.id], "the gap was measured from the loop time of the start of the pass")
+      assert.is_not_nil(server.clients[client.id], "the tick did not see the wake, and the check judged an old ping")
     end)
 
     it(

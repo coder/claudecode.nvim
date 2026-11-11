@@ -531,6 +531,10 @@ function M.start_ping_timer(server, interval)
   server.keepalive_timeout = timeout
 
   timer:start(interval, interval, function()
+    -- libuv caches the loop time when a pass starts and runs the timers of the pass with it. A callback that ran before
+    -- this tick in the pass can have blocked since, or the machine can have slept in it. Read the clock again: a stale
+    -- `now` hides a wake, and a ping stamped with it looks older than it is.
+    vim.loop.update_time()
     local now = vim.loop.now()
     local elapsed = now - last_run
 
@@ -578,11 +582,7 @@ function M.start_ping_timer(server, interval)
         local since = client.ping_unanswered_since
         local answered = since == nil or now - since < timeout
         client_manager.send_ping(client, "ping")
-        -- libuv caches the loop time when a pass starts, and a callback that ran before this tick in the pass can have
-        -- blocked since. A ping stamped with that old time would look older than it is, and the check could drop a
-        -- Claude that had no time to answer it.
-        vim.loop.update_time()
-        client.ping_unanswered_since = since or vim.loop.now()
+        client.ping_unanswered_since = since or now
         table.insert(pinged, client)
         -- Only a client that answered is dropped for a stall, and only after the next poll confirms it. A client that
         -- did not answer is dropped by the keepalive judgement, whatever its write queue shows.
@@ -595,7 +595,7 @@ function M.start_ping_timer(server, interval)
     last_run = now
 
     if #pinged > 0 then
-      local tick_time = vim.loop.now()
+      local tick_time = now
       -- Neither judgement happens at the tick: see `judge_silence` and `judge_stall`. If libuv cannot create the handles,
       -- the clients wait for the next tick.
       after_next_poll(server, function()
