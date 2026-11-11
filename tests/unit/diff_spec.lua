@@ -310,6 +310,72 @@ describe("Diff Module", function()
     end)
   end)
 
+  -- No buffer has the temp file's name in these cases: an autocmd wiped the proposal, or Neovim spells the name
+  -- another way than the plugin built it. The diff decides by the files, and stops when the current buffer is not the
+  -- temp file.
+  describe("The proposal's buffer (via Native Diff)", function()
+    local old_io_open, old_loop, old_uv, old_get_name
+
+    -- The temp file is inode 7. The current buffer is named `shown` and has `shown_inode`.
+    local function stub_files(shown, shown_inode)
+      _G.vim.uv = nil
+      _G.vim.loop = {
+        fs_stat = function(path)
+          if path:find("new.lua.new", 1, true) then
+            return { dev = 1, ino = 7 }
+          end
+          if path == shown then
+            return { dev = 1, ino = shown_inode }
+          end
+        end,
+        fs_realpath = function(path)
+          return path
+        end,
+      }
+      _G.vim.api.nvim_buf_get_name = function()
+        return shown
+      end
+    end
+
+    before_each(function()
+      old_io_open, old_loop, old_uv, old_get_name = io.open, _G.vim.loop, _G.vim.uv, _G.vim.api.nvim_buf_get_name
+      rawset(io, "open", function()
+        return { write = function() end, close = function() end }
+      end)
+    end)
+
+    after_each(function()
+      rawset(io, "open", old_io_open)
+      _G.vim.loop, _G.vim.uv, _G.vim.api.nvim_buf_get_name = old_loop, old_uv, old_get_name
+    end)
+
+    it("stops when the current buffer shows another file than the temp file", function()
+      stub_files("/path/to/shown.lua", 8)
+
+      local ok, err = pcall(diff.open_diff, "/path/to/old.lua", "/path/to/new.lua", "content", "another file")
+
+      expect(ok).to_be_false()
+      expect(tostring(err):find("another buffer current", 1, true)).not_to_be_nil()
+    end)
+
+    it("stops when the current buffer has no name", function()
+      stub_files("", 8)
+
+      local ok, err = pcall(diff.open_diff, "/path/to/old.lua", "/path/to/new.lua", "content", "no name")
+
+      expect(ok).to_be_false()
+      expect(tostring(err):find("another buffer current", 1, true)).not_to_be_nil()
+    end)
+
+    it("goes on when the current buffer shows the temp file under another name", function()
+      stub_files("/path/to/shown.lua", 7)
+
+      local result = diff.open_diff("/path/to/old.lua", "/path/to/new.lua", "content", "another name")
+
+      expect(result.success).to_be_true()
+    end)
+  end)
+
   describe("Native Diff Implementation", function()
     it("should create diff with correct parameters", function()
       diff.setup({

@@ -782,17 +782,49 @@ local function setup_new_buffer(
   return new_win
 end
 
----The buffer that has this name, if there is one. Neovim can write a path with other separators than the one the
----plugin built (backslashes on Windows), so the separators are made the same on both sides.
+---The buffer that has this name, if there is one. Neovim resolves symbolic links in the name of a buffer, so a path
+---through a linked folder (a cache folder that is a link) is found by its real path too. A path can also have other
+---separators than the one the plugin built (backslashes on Windows), and Windows ignores case.
 ---@param name string
 ---@return integer? buf
 local function buffer_named(name)
-  local wanted = name:gsub("\\", "/")
+  local function plain(path)
+    path = path:gsub("\\", "/")
+    return vim.fn.has("win32") == 1 and path:lower() or path
+  end
+  local wanted = { [plain(name)] = true }
+  local ok, real = pcall(function()
+    return (vim.uv or vim.loop).fs_realpath(name)
+  end)
+  if ok and real then
+    wanted[plain(real)] = true
+  end
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    local buffer_name = vim.api.nvim_buf_get_name(buf):gsub("\\", "/")
-    if buffer_name == wanted then
+    if wanted[plain(vim.api.nvim_buf_get_name(buf))] then
       return buf
     end
+  end
+end
+
+---Whether the buffer shows the file at `path`: true or false when the two files can be compared (same device and
+---inode), nil when they cannot, for instance when `path` is gone. The name of the buffer can be spelled otherwise than
+---`path`, so a name is not enough to say that a buffer is not the file.
+---@param buf integer
+---@param path string
+---@return boolean?
+local function buffer_is_file(buf, path)
+  local ok, result = pcall(function()
+    local uv = vim.uv or vim.loop
+    local wanted = uv.fs_stat(path)
+    if not wanted then
+      return nil
+    end
+    local name = vim.api.nvim_buf_get_name(buf)
+    local actual = name ~= "" and uv.fs_stat(name) or nil
+    return actual ~= nil and actual.dev == wanted.dev and actual.ino == wanted.ino
+  end)
+  if ok then
+    return result
   end
 end
 
@@ -815,6 +847,10 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
 
   -- Split off a window, and remember it: a rollback closes these windows and no other.
   local function split()
+    -- create_split() leaves the preview window first, and a WinEnter handler can open a window while it does. That
+    -- window is made before the split, so the focus moves first and the windows are listed after. Neovim 0.8 raises
+    -- when a handler moved the focus during the switch, and the diff goes on from the window that is current then.
+    pcall(leave_preview_window)
     -- A handler can switch to another tab, so the windows of the tab that was current are listed by its handle.
     local tab = vim.api.nvim_get_current_tabpage()
     local before = {}
@@ -872,17 +908,22 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
   -- The steps below work on the current buffer. A BufEnter or FileType handler can leave another one current without
-  -- raising, so the proposal is found by its name, and the diff stops when it is not current: the rename and the
-  -- options must not reach a buffer of the user's, and the rollback must wipe the proposal and nothing else.
+  -- raising, or wipe the proposal and leave a buffer of the user's. So the proposal is found by its name. When no
+  -- buffer has that name, the current buffer is the proposal only if it shows the temp file, or if Neovim cannot compare
+  -- the two files. The diff stops when the proposal is not current: the rename and the options must not reach a buffer
+  -- of the user's, and the rollback must wipe the proposal and nothing else.
   local current_buf = vim.api.nvim_get_current_buf()
-  progress.proposed_buf = buffer_named(tmp_file) or current_buf
-  if progress.proposed_buf ~= current_buf then
+  local proposed_buf = buffer_named(tmp_file)
+  if not proposed_buf and buffer_is_file(current_buf, tmp_file) ~= false then
+    proposed_buf = current_buf
+  end
+  progress.proposed_buf = proposed_buf
+  if proposed_buf ~= current_buf then
     error("ClaudeCode: an autocmd left another buffer current while the proposal was opened", 0)
   end
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
-  local proposed_buf = progress.proposed_buf
   local old_filetype = detect_filetype(old_file_path)
   if old_filetype and old_filetype ~= "" then
     vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })

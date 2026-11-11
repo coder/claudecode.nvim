@@ -130,6 +130,7 @@ describe("legacy open_diff when a step fails after the temp file was written", f
       fterr_group = nil
     end
     vim.cmd("silent! diffoff!")
+    vim.cmd("silent! tabonly!")
     vim.cmd("silent! only")
     vim.cmd("silent! %bwipeout!")
     vim.o.directory = saved_directory
@@ -598,5 +599,112 @@ describe("legacy open_diff when a step fails after the temp file was written", f
     assert.are.same(files, temp_files())
     assert.are.equal(windows, window_count())
     assert.are.equal(0, diff_windows())
+  end)
+
+  -- The editor window is the preview window, so the diff leaves it for the Claude terminal's window before it splits.
+  -- A WinEnter handler opens a window then, which exists before the split does. It is not the diff's: the diff's own
+  -- split is made after it.
+  it("closes its own split and not the window that a handler opened when it left the preview window", function()
+    local terminal = require("claudecode.terminal")
+    local real_get_active_terminal_bufnr = terminal.get_active_terminal_bufnr
+    local ok_run, run_error = pcall(function()
+      vim.cmd("terminal sh -c 'sleep 60'")
+      local terminal_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("rightbelow vsplit")
+      vim.cmd("edit " .. vim.fn.fnameescape(path))
+      vim.cmd("setlocal previewwindow")
+      vim.cmd("wincmd h") -- the call starts in the terminal's window, and the diff walks to the preview window
+      assert.are.equal(terminal_buf, vim.api.nvim_get_current_buf())
+      terminal.get_active_terminal_bufnr = function()
+        return terminal_buf
+      end
+      plant_proposal_name()
+      local files, windows = temp_files(), window_count()
+      local handler_win
+      fterr_group = vim.api.nvim_create_augroup("ClaudeCodeDiffLegacyCleanupSpec", { clear = true })
+      vim.api.nvim_create_autocmd("WinEnter", {
+        group = fterr_group,
+        callback = function()
+          -- Entering the terminal's window is what leave_preview_window does.
+          if
+            not handler_win
+            and vim.api.nvim_get_current_buf() == terminal_buf
+            and vim.wo[vim.fn.win_getid(vim.fn.winnr("#"))].previewwindow
+          then
+            vim.cmd("botright new")
+            handler_win = vim.api.nvim_get_current_win()
+          end
+        end,
+      })
+
+      local ok, err = pcall(diff.open_diff, path, path, "local a = 2\n", "preview window")
+
+      assert.is_false(ok)
+      assert.is_truthy(tostring(err):find("E95", 1, true), tostring(err))
+      assert.is_true(handler_win ~= nil, "the handler ran when the diff left the preview window")
+      assert.is_true(vim.api.nvim_win_is_valid(handler_win), "the window of the handler is open")
+      assert.are.same(files, temp_files())
+      assert.are.equal(windows + 1, window_count(), "only the window of the handler is left")
+      assert.are.equal(0, diff_windows())
+    end)
+    terminal.get_active_terminal_bufnr = real_get_active_terminal_bufnr
+    assert(ok_run, run_error)
+  end)
+
+  -- A BufEnter handler for the temp file gives the user a new buffer with text in it and wipes the proposal. The
+  -- diff has no proposal and must stop: it must not take the buffer of the user for the proposal, rename it, or wipe
+  -- it in the rollback.
+  it("does not take a buffer of the user's for the proposal when an autocmd wipes the proposal", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    plant_proposal_name()
+    local files, windows = temp_files(), window_count()
+    local user_buffer
+    fterr_group = vim.api.nvim_create_augroup("ClaudeCodeDiffLegacyCleanupSpec", { clear = true })
+    vim.api.nvim_create_autocmd("BufEnter", {
+      group = fterr_group,
+      pattern = "*.new",
+      once = true,
+      callback = function(args)
+        vim.cmd("enew")
+        user_buffer = vim.api.nvim_get_current_buf()
+        vim.api.nvim_buf_set_lines(user_buffer, 0, -1, false, { "user text in a new buffer" })
+        vim.api.nvim_buf_delete(args.buf, { force = true })
+      end,
+    })
+
+    local ok = pcall(diff.open_diff, path, path, "local a = 2\n", "proposal wiped")
+
+    assert.is_false(ok)
+    assert.is_true(user_buffer ~= nil and vim.api.nvim_buf_is_valid(user_buffer), "the buffer of the user is there")
+    assert.are.same({ "user text in a new buffer" }, vim.api.nvim_buf_get_lines(user_buffer, 0, -1, false))
+    assert.are.same(files, temp_files())
+    assert.are.equal(0, diff_windows())
+    assert.is_true(window_count() >= windows, "no window of the user's was closed")
+  end)
+
+  -- Neovim resolves a link in the name of a buffer, so the proposal is not under the name that the plugin built when
+  -- the cache folder is a link. It is found by its real path, on the way through and on the way back.
+  it("finds the proposal when the cache folder is a link", function()
+    local real_cache = dir .. "/real_cache"
+    vim.fn.mkdir(real_cache, "p")
+    assert.is_true((vim.uv or vim.loop).fs_symlink(real_cache, dir .. "/cache_link"))
+    vim.env.XDG_CACHE_HOME = dir .. "/cache_link"
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.cmd("enew") -- the original stays loaded, so the FileType autocmd fires for the proposal
+    local files, windows = temp_files(), window_count()
+    raise_in_file_type()
+
+    local ok = pcall(diff.open_diff, path, path, "local a = 2\n", "link, failing")
+
+    assert.is_false(ok)
+    assert.are.same(files, temp_files())
+    assert.are.equal(windows, window_count())
+    assert.are.same({}, proposal_buffers(), "the buffer of the proposal is wiped by its real path")
+
+    vim.api.nvim_clear_autocmds({ group = fterr_group })
+    local result = diff.open_diff(path, path, "local a = 2\n", "link, working")
+    assert.is_true(result.success, "the diff opens")
+    assert.are.equal(1, vim.fn.filereadable(result.temp_file))
   end)
 end)
