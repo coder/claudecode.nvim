@@ -15,6 +15,7 @@ Needs:
 - `agent-tty` 0.5.0 (`npm install -g agent-tty`). It needs Node 24 to 26, so the harness runs it on the repo's mise Node. Launch keeps the first agent-tty that passes `agent-tty doctor` (see `VCN_AGENT_TTY`).
 - Playwright Chromium for PNG and WebM: `npx playwright install chromium`.
 - `setsid` from util-linux.
+- `perl`, for `scripts/proof-agent-tty-resolution.sh`. It resets SIGINT and SIGHUP before it starts launch, because bash cannot trap a signal that was ignored at entry.
 
 Run every command from the repo root. Read [features/README.md](features/README.md) before driving: it is the map of what to verify and how.
 
@@ -37,7 +38,7 @@ OUT=/home/coder/.xum/sessions/<ws>/scratch/verify-claudecode-nvim/20261031T12000
 
 Every bash call is a fresh shell. Start each later call with the `VCN_STATE` value launch printed. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used: `export VCN_STATE=/tmp/vcn.AbC123; source "$VCN_STATE/run.env"`. That also sets `OUT`, `WORK`, `PORT`, `SID` (the agent-tty session), and `NVIM_PID`.
 
-Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. Launch keeps the first agent-tty that passes (see `VCN_AGENT_TTY`). When none passes, it stops and names each candidate and its failed check, such as the Node version, `pty.node`, or the Chromium launch. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, the client finished the handshake, and the MCP `initialize` call answered with a result. If a step misses its 10 s deadline, or `initialize` answers without a string `result.protocolVersion`, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1. SIGTERM, SIGINT or SIGHUP while launch runs tears the run down too, and launch exits 143.
+Launch first runs `agent-tty doctor` and saves it to `$OUT/agent-tty-doctor.json`. Launch keeps the first agent-tty that passes (see `VCN_AGENT_TTY`). When none passes, it stops and names each candidate and its failed check, such as the Node version, `pty.node`, or the Chromium launch. Launch then returns only when the run is usable: nvim answers RPC, the plugin wrote `<port>.lock` naming the nvim pid, the client finished the handshake, and the MCP `initialize` call answered with a result. If a step misses its 10 s deadline, or `initialize` answers without a string `result.protocolVersion`, launch saves `$OUT/launch-failure.screen.txt`, tears the run down, and exits 1. Once launch has made its state dir, SIGTERM, SIGINT or SIGHUP tears the run down too, and launch exits 143. That teardown saves no evidence (no final screen, PNG or WebM), because those take long on a loaded host, and it ignores a second signal until it ends. A signal before the state dir exists ends launch with the default status (130 for SIGINT, 129 for SIGHUP, 143 for SIGTERM) and leaves nothing behind. Launch prints `VCN_STATE=` before it stops handling signals, so a signal never leaves a running run whose name was not printed.
 
 - Seed files in `$WORK` (nvim's cwd and the workspace folder): `hello.txt` is `alpha`, `beta`, `gamma`. `other.txt` is `one`, `two`, `three`, `four`.
 - The terminal is 160 columns by 40 rows.
