@@ -559,4 +559,34 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       assert.are.equal("CursorHold", eventignore_during_set_buf)
     end)
   end)
+
+  describe("an OptionSet autocmd of the user's for 'eventignore' that enters another window", function()
+    -- The mock runs it on every write of 'eventignore'.
+    local function arm_option_set_autocmd()
+      local values = vim.o
+      vim.o = setmetatable({}, {
+        __index = values,
+        __newindex = function(_, key, value)
+          values[key] = value
+          if key == "eventignore" then
+            current_win = source_win
+          end
+        end,
+      })
+    end
+
+    it(
+      "has no write of 'eventignore' to run for, so a focused show starts the insert in the terminal window",
+      function()
+        local cfg = config()
+        local term = open_then_hide(cfg)
+        arm_option_set_autocmd()
+
+        snacks_provider.open("claude", {}, cfg, true)
+
+        assert.are.equal(term.win, current_win)
+        assert.are.equal(term.win, insert_win)
+      end
+    )
+  end)
 end)
