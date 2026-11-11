@@ -112,7 +112,8 @@ end
 ---not where, so the range is read again.
 ---The selection's buffer is not the current one when you are in the Claude terminal, which keeps a held selection
 ---(issue #246). A reload (`:checktime`, autoread) or a plugin's edit changes that buffer then, and neither fires
----TextChanged. The terminal does not update the selection, so the cursor of the selection's buffer is sent here.
+---TextChanged. The terminal does not update the selection, so the cursor of the selection's buffer is sent here,
+---unless that buffer is a Claude terminal too: nothing in a terminal reaches Claude.
 ---@return boolean demoted
 local function demote_if_selection_text_changed()
   local read = M.state.selection_tick
@@ -121,11 +122,13 @@ local function demote_if_selection_text_changed()
     return false
   end
   local current_buf = vim.api.nvim_get_current_buf()
-  local from_terminal = read.bufnr ~= current_buf and M.is_claude_terminal_buffer(current_buf)
-  if read.bufnr ~= current_buf and not from_terminal then
+  local in_terminal = M.is_claude_terminal_buffer(current_buf)
+  if read.bufnr ~= current_buf and not in_terminal then
     return false
   end
-  if from_terminal and not vim.api.nvim_buf_is_loaded(read.bufnr) then
+  -- The selection's buffer can be a Claude terminal itself: it became one after the selection was read.
+  local from_terminal = read.bufnr ~= current_buf and not M.is_claude_terminal_buffer(read.bufnr)
+  if read.bufnr ~= current_buf and not vim.api.nvim_buf_is_loaded(read.bufnr) then
     return false
   end
   if vim.api.nvim_buf_get_changedtick(read.bufnr) == read.tick or selection_text_is_there(held, read.bufnr) then
@@ -141,6 +144,14 @@ local function demote_if_selection_text_changed()
         M.send_selection_update(cursor)
       end
     end
+  elseif in_terminal then
+    -- The selection's buffer is a Claude terminal: it became one after the selection was read (termopen() in it, or a
+    -- rename to a term://...claude name), and you are in it or in another one. update_selection does nothing in the
+    -- terminal except cancel the demotion and call this function, so it must not come back here from it. Nothing in
+    -- a terminal reaches Claude, so no cursor of it is sent. Forget the read: nothing checks it again. A pending
+    -- demotion must not fire here either: it would take this buffer for an ordinary one and send its cursor.
+    M._cancel_demotion_timer()
+    M.state.selection_tick = nil
   else
     M.update_selection()
   end

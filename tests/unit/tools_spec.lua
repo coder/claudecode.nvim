@@ -304,6 +304,31 @@ describe("Tools Module", function()
       expect(result_obj.result).to_be_nil()
     end)
 
+    it("answers -32601 for an empty tool name", function()
+      local result_obj = tools.handle_invoke(nil, { name = "", arguments = {} })
+
+      expect(result_obj.result).to_be_nil()
+      expect(result_obj.error.code).to_be(-32601)
+      expect(result_obj.error.message).to_be("Tool not found: ")
+    end)
+
+    for _, case in ipairs({
+      { label = "no name", params = { arguments = {} } },
+      { label = "a number as the name", params = { name = 5, arguments = {} } },
+      { label = "a list as the name", params = { name = { "getOpenEditors" }, arguments = {} } },
+      { label = "a boolean as the name", params = { name = true, arguments = {} } },
+    }) do
+      it("answers -32602 with a plain data string for " .. case.label, function()
+        local result_obj = tools.handle_invoke(nil, case.params)
+
+        expect(result_obj.result).to_be_nil()
+        expect(result_obj.error).to_be_table()
+        expect(result_obj.error.code).to_be(-32602)
+        expect(result_obj.error.message).to_be("Invalid params")
+        expect(result_obj.error.data).to_be("Missing or invalid parameter: name (a string is required)")
+      end)
+    end
+
     it("should handle tool execution errors (structured error from handler) with JSON-RPC error", function()
       local erroring_tool_handler = spy.new(function()
         error({ code = -32001, message = "Specific tool error from handler", data = { detail = "some detail" } })
