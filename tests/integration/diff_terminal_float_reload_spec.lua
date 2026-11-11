@@ -5,9 +5,9 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
   return
 end
 
--- :Lazy reload clears every claudecode module and runs setup again. Snacks keeps its terminal instances, so the new
--- copy of the snacks provider adopts the instance that the old copy started, and the old copy's patched show, hide and
--- toggle stay on it. These cases run the real provider and the real diff module against a stub of Snacks with real
+-- :Lazy reload clears every claudecode module and runs setup again. The new copy of the snacks provider finds the Claude
+-- that the old copy started by the mark on its buffer and wraps it in a new Snacks window, and the old copy's patched
+-- show, hide and toggle stay on the instance that it started. These cases run the real provider and the real diff module against a stub of Snacks with real
 -- windows and a real terminal job (`sleep`, never the claude CLI). A float that a diff hid, or that the user hid or
 -- closed, must stay that way when the diff closes.
 describe("a floating Claude terminal after the plugin reloaded", function()
@@ -20,11 +20,13 @@ describe("a floating Claude terminal after the plugin reloaded", function()
     function snacks.terminal.list()
       return instances
     end
-    function snacks.terminal.open(_, opts)
-      local buf = vim.api.nvim_create_buf(false, true)
-      local term = { buf = buf, opts = { wo = {}, w = {}, position = "float" } }
+    local next_id = 0
+    -- An instance as Snacks makes it, with real windows. `buf` is nil for an instance that wraps a buffer later.
+    local function new_instance(buf, position)
+      next_id = next_id + 1
+      local term = { buf = buf, id = next_id, events = {}, opts = { wo = {}, w = {}, position = position } }
       local function open_window()
-        term.win = vim.api.nvim_open_win(buf, false, {
+        term.win = vim.api.nvim_open_win(term.buf, false, {
           relative = "editor",
           row = 1,
           col = 1,
@@ -39,6 +41,9 @@ describe("a floating Claude terminal after the plugin reloaded", function()
         return self.win ~= nil and vim.api.nvim_win_is_valid(self.win)
       end
       function term:on() end
+      function term:_on() end
+      function term:fixbuf() end
+      function term:map() end
       function term:focus()
         if self:win_valid() then
           vim.api.nvim_set_current_win(self.win)
@@ -73,6 +78,16 @@ describe("a floating Claude terminal after the plugin reloaded", function()
         end
         return self:show()
       end
+      return term, open_window
+    end
+    -- Snacks.win: an instance for an existing buffer that shows no window yet. The provider wraps the Claude that an
+    -- earlier copy of itself started in one, since it finds that Claude by its mark and not through the list.
+    function snacks.win(opts)
+      return (new_instance(opts.buf, opts.position))
+    end
+    function snacks.terminal.open(_, opts)
+      local buf = vim.api.nvim_create_buf(false, true)
+      local term, open_window = new_instance(buf, "float")
       open_window()
       if opts.win and opts.win.on_buf then
         opts.win.on_buf(term)
