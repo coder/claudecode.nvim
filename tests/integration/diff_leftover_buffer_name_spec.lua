@@ -288,6 +288,22 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
+  it("opens a new-file diff in a folder that does not exist yet under a symlinked parent, after a reload", function()
+    vim.fn.mkdir(dir .. "/real", "p")
+    assert(vim.loop.fs_symlink(dir .. "/real", dir .. "/link"))
+    path = dir .. "/link/newdir/missing.txt"
+    local _, tools = load_plugin()
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    close_old_diff_windows()
+
+    local diff
+    diff, tools = load_plugin()
+    local call = open_diff(tools, "second\n")
+
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    assert.is_not_nil(diff._get_active_diffs()[tab_name])
+  end)
+
   it(
     "answers E95 and keeps a user's listed buffer when the original buffer of a new file cannot take its name",
     function()
@@ -789,6 +805,189 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.equal(original_name, vim.api.nvim_buf_get_name(first.original_buffer))
     assert.equal(first, diff._get_active_diffs()[tab_name], "the live diff stays registered")
   end)
+
+  -- A reload inside a setup gives the new module no memory of the running setup. Its rename must not take the buffer
+  -- that the old setup named, or the old setup binds that buffer to the tab name again and answers the new diff.
+  for _, case in ipairs(reloads) do
+    it(
+      "does not let the window of a setup that a reload interrupted answer the second openDiff: " .. case.name,
+      function()
+        local _, tools = load_plugin("vertical")
+        local nested, new_diff
+        local fired = false
+        local group = vim.api.nvim_create_augroup("LeftoverReloadInSetup", { clear = true })
+        vim.api.nvim_create_autocmd("BufEnter", {
+          group = group,
+          callback = function(event)
+            if fired or not vim.api.nvim_buf_get_name(event.buf):find("(proposed)", 1, true) then
+              return
+            end
+            fired = true
+            vim.schedule(function()
+              local new_tools
+              new_diff, new_tools = case.reload()
+              nested = open_diff(new_tools, "B NEW PROPOSAL\n")
+            end)
+            vim.wait(1000, function()
+              return nested ~= nil
+            end, 10)
+          end,
+        })
+        local first
+        silence_notify(function()
+          first = open_diff(tools, "A OLD PROPOSAL\n")
+        end)
+        vim.api.nvim_del_augroup_by_id(group)
+
+        assert.is_not_nil(nested, "the second openDiff ran inside the first setup")
+        assert.is_true(first._deferred, vim.inspect(first.error))
+        assert.is_nil(nested._deferred)
+        assert.is_truthy(vim.inspect(nested.error):find("E95", 1, true), vim.inspect(nested.error))
+        local old_window = vim.fn.win_findbuf(buffers_named("(proposed)")[1])[1]
+        vim.api.nvim_set_current_win(old_window)
+        silence_notify(function()
+          new_diff.accept_current_diff()
+        end)
+        assert.same({}, vim.tbl_keys(new_diff._get_active_diffs()), "the old window answers no diff of the new module")
+      end
+    )
+  end
+
+  it("renames a leftover buffer without BufFilePre and BufFilePost", function()
+    local _, tools = load_plugin()
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    local old = buffers_named("(proposed)")[1]
+    close_old_diff_windows()
+    local diff
+    diff, tools = load_plugin()
+    local events = 0
+    local group = vim.api.nvim_create_augroup("LeftoverRenameEvents", { clear = true })
+    vim.api.nvim_create_autocmd({ "BufFilePre", "BufFilePost" }, {
+      group = group,
+      callback = function(event)
+        if event.buf == old then
+          events = events + 1
+        end
+      end,
+    })
+
+    local call = open_diff(tools, "second\n")
+    vim.api.nvim_del_augroup_by_id(group)
+
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    assert.is_truthy(vim.api.nvim_buf_get_name(old):find("(orphaned " .. old .. ")", 1, true))
+    assert.equal(0, events, "the rename fires no BufFilePre or BufFilePost for the leftover buffer")
+    assert.is_not_nil(diff._get_active_diffs()[tab_name])
+  end)
+
+  it("renames a leftover buffer without setting an option", function()
+    local _, tools = load_plugin()
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    close_old_diff_windows()
+    local diff
+    diff, tools = load_plugin()
+    local group = vim.api.nvim_create_augroup("LeftoverRenameOptions", { clear = true })
+    local sets = 0
+    vim.api.nvim_create_autocmd("OptionSet", {
+      group = group,
+      pattern = "eventignore",
+      callback = function()
+        sets = sets + 1
+        error("the user's OptionSet handler raises")
+      end,
+    })
+
+    local call = open_diff(tools, "second\n")
+    vim.api.nvim_del_augroup_by_id(group)
+
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    assert.equal(0, sets, "the rename does not write 'eventignore'")
+    assert.is_not_nil(diff._get_active_diffs()[tab_name])
+  end)
+
+  -- The rename is not a nesting point: a handler that runs a second openDiff from a BufFilePre or BufFilePost event
+  -- leaves the same outcome with a leftover buffer as without one.
+  local function run_in_event_order(event, layout, new_file, with_leftover)
+    local other = dir .. "/B.txt"
+    vim.fn.writefile({ "beta" }, other)
+    path = new_file and (dir .. "/missing.txt") or (dir .. "/reload.txt")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/B.txt"))
+    local _, tools = load_plugin(layout)
+    if with_leftover then
+      assert.is_true(open_diff(tools, "alpha zero\n")._deferred)
+      close_old_diff_windows()
+      _, tools = load_plugin(layout)
+    end
+    local diff = require("claudecode.diff")
+    local nested
+    local fired = false
+    local group = vim.api.nvim_create_augroup("LeftoverEventOrder", { clear = true })
+    vim.api.nvim_create_autocmd(event, {
+      group = group,
+      callback = function()
+        if fired then
+          return
+        end
+        fired = true
+        vim.schedule(function()
+          nested = open_diff(tools, "beta two\n", nil, other)
+        end)
+        vim.wait(300, function()
+          return nested ~= nil
+        end, 10)
+      end,
+    })
+    local first
+    silence_notify(function()
+      first = open_diff(tools, "alpha one\n")
+    end)
+    vim.api.nvim_del_augroup_by_id(group)
+    local function kind(call)
+      if call == nil then
+        return "not run"
+      end
+      return call._deferred and "deferred" or (vim.inspect(call.error):match("E%d+") or "error")
+    end
+    local active = diff._get_active_diffs()[tab_name]
+    local summary = table.concat({
+      "first " .. kind(first),
+      "second " .. kind(nested),
+      "tabs " .. #vim.api.nvim_list_tabpages(),
+      "active " .. (active and active.new_file_contents or "none"),
+    }, ", ")
+    return summary
+  end
+
+  local function reset_editor()
+    pcall(function()
+      require("claudecode.diff")._cleanup_all_active_diffs("test reset")
+    end)
+    vim.cmd("silent! tabonly!")
+    vim.cmd("silent! only!")
+    vim.cmd("silent! %bwipeout!")
+    _G.claude_deferred_responses = {}
+  end
+
+  for _, event in ipairs({ "BufFilePost", "BufFilePre" }) do
+    for _, layout in ipairs({ "vertical", "unified" }) do
+      for _, new_file in ipairs({ false, true }) do
+        it(
+          "makes the second openDiff of a "
+            .. event
+            .. " handler end as it does without a leftover buffer: "
+            .. layout
+            .. (new_file and ", new file" or ", existing file"),
+          function()
+            local control = run_in_event_order(event, layout, new_file, false)
+            reset_editor()
+            local leftover = run_in_event_order(event, layout, new_file, true)
+
+            assert.equal(control, leftover)
+          end
+        )
+      end
+    end
+  end
 
   local foreign_buffers = {
     { name = "a listed buffer", listed = true, buftype = "" },

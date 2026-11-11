@@ -1015,10 +1015,20 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----A user handler that runs the event loop (vim.wait) inside a setup can start a second openDiff before the first one
----registers its diff. Until then no active diff owns the buffers that the first setup named, so the second one skips
----the rename and runs as it did without it.
-local setup_running = false
+---Global that is set while a setup runs. A user handler that runs the event loop (vim.wait) inside a setup can start a
+---second openDiff before the first one registers its diff, and the first setup can have named buffers by then that no
+---active diff owns. The second one skips the rename and runs as it did without it. It is a global and not a module
+---local because a plugin reload inside the setup gives the new module no memory of the running one.
+local SETUP_RUNNING = "claudecode_diff_setup_running"
+
+---Rename a buffer without BufFilePre and BufFilePost. A handler that runs the event loop in either one can start a
+---second openDiff in the middle of the setup that renames. `noautocmd` sets no option, so no OptionSet fires either.
+---@param buf integer
+---@param name string
+---@return boolean ok
+local function rename_without_events(buf, name)
+  return (pcall(vim.cmd, "noautocmd call nvim_buf_set_name(" .. buf .. ", " .. vim.fn.string(name) .. ")"))
+end
 
 ---Rename the leftover buffers that hold the names a diff of `tab_name` is about to take, and unbind `tab_name` from
 ---every buffer that no active diff owns. A reload drops `active_diffs`, and Neovim refuses to delete a buffer from the
@@ -1054,7 +1064,7 @@ local function rename_orphaned_diff_buffers(tab_name, old_file_path)
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
       local name = vim.api.nvim_buf_get_name(buf)
       if not owned[buf] and stored[name] and vim.bo[buf].buftype == orphan.buftype and not vim.bo[buf].buflisted then
-        pcall(vim.api.nvim_buf_set_name, buf, name .. " (orphaned " .. buf .. ")")
+        rename_without_events(buf, name .. " (orphaned " .. buf .. ")")
       end
     end
   end
@@ -1620,8 +1630,8 @@ function M._setup_blocking_diff(params, resolution_callback)
   local new_tab_handle = nil
   local original_tab_handle = nil
 
-  local nested_setup = setup_running
-  setup_running = true
+  local nested_setup = vim.g[SETUP_RUNNING] == true
+  vim.g[SETUP_RUNNING] = true
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
@@ -1862,7 +1872,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     })
   end) -- End of pcall
   if not nested_setup then
-    setup_running = false
+    vim.g[SETUP_RUNNING] = nil
   end
 
   -- Handle setup errors
