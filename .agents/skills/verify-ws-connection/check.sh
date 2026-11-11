@@ -20,7 +20,7 @@ MAIN=lua/claudecode/init.lua
 COVERED=("$CLIENT" "$TCP" "$HANDSHAKE" "$SERVER" "$MAIN")
 # A site is a line that changes a client's state, writes to or closes its socket, or adds, drops, stops or
 # times out a client.
-SITE_RE='(close_client|_disconnect_client|_remove_client|stop_server|start_ping_timer|send_ping|is_client_alive|tcp_handle:(write|close|read_start)|client\.state = |handshake_complete = |last_pong = |server\.clients\[|server\.stop\(\)|ping_timer:)'
+SITE_RE='(close_client|_disconnect_client|_remove_client|stop_server|start_ping_timer|send_ping|drop_unanswered_after_read|tcp_handle:(write|close|read_start)|client\.state = |handshake_complete = |last_pong = |ping_unanswered_since = |server\.clients\[|server\.stop\(\)|ping_timer:)'
 
 covered_block create_client "$CLIENT" '^function M\.create_client\('
 covered_block add_data_frame "$CLIENT" '^local function add_data_frame\('
@@ -29,12 +29,12 @@ covered_block send_message "$CLIENT" '^function M\.send_message\('
 covered_block send_ping "$CLIENT" '^function M\.send_ping\('
 covered_block fail_connection "$CLIENT" '^local function fail_connection\('
 covered_block close_client "$CLIENT" '^function M\.close_client\('
-covered_block is_alive "$CLIENT" '^function M\.is_client_alive\('
 covered_block new_connection "$TCP" '^function M\._handle_new_connection\('
 covered_block release_socket "$TCP" '^local function release_socket\('
 covered_block disconnect "$TCP" '^function M\._disconnect_client\('
 covered_block remove_client "$TCP" '^function M\._remove_client\('
 covered_block stop_server "$TCP" '^function M\.stop_server\('
+covered_block drop_check "$TCP" '^local function drop_unanswered_after_read\('
 covered_block ping_timer "$TCP" '^function M\.start_ping_timer\('
 covered_block process_handshake "$HANDSHAKE" '^function M\.process_handshake\('
 covered_block extract_request "$HANDSHAKE" '^function M\.extract_http_request\('
@@ -43,10 +43,10 @@ covered_block server_stop "$SERVER" '^function M\.stop\(\)'
 covered_block main_start "$MAIN" '^function M\.start\('
 covered_block main_stop "$MAIN" '^function M\.stop\(\)'
 
-FACTS=(UpgradeInWriteCallback UpgradeRechecksState UpgradeStartsKeepalive DispatchGuard PeerCloseMarksClosing
+FACTS=(UpgradeInWriteCallback UpgradeRechecksState DispatchGuard PeerCloseMarksClosing
   DisconnectOnce DisconnectClosesSocket UnlistedDisconnectReleases CloseWriteOwnsSocket RejectClosesSocket
-  ProtocolReportsAtOnce StopWaitsForCloseWrite KeepaliveReaps DropsOnSecondOverdueTick AliveTickClearsOverdue
-  PongResetsAge WakeResetsPong)
+  ProtocolReportsAtOnce StopWaitsForCloseWrite KeepaliveReaps JudgesAfterRead StampsRealTime StampKeepsOldestPing
+  BytesClearStamp GapSkip WakeClearsStamp)
 
 # The handshake completes in the 101 write callback, after its error check, and nowhere before.
 upgrade_in_write_callback() {
@@ -59,10 +59,6 @@ fact[UpgradeInWriteCallback]=$(as_bool upgrade_in_write_callback)
 fact[UpgradeRechecksState]=$(as_bool in_order 'client\.tcp_handle:write\(response_from_handshake, function\(err\)$' \
   '^ *if client\.state ~= "upgrading" or client\.tcp_handle:is_closing\(\) then$' '^ *return$' \
   '^ *client\.handshake_complete = true$' <<<"$process_data")
-# The 101 write callback starts the keepalive window: the ping timer ignores a client that is not connected, so
-# last_pong from the accept can be older than the timeout when the client becomes connected.
-fact[UpgradeStartsKeepalive]=$(as_bool in_order '^ *client\.handshake_complete = true$' '^ *client\.state = "connected"$' \
-  '^ *client\.last_pong = vim\.loop\.now\(\)$' '^ *logger\.debug\("client", "WebSocket connection established' <<<"$process_data")
 fact[DispatchGuard]=$(as_bool in_order '^ *vim\.schedule\(function\(\)$' \
   '^ *if client\.state == "connected" and not client\.tcp_handle:is_closing\(\) then$' \
   '^ *on_message\(client, message\)$' <<<"$process_data")
@@ -82,7 +78,7 @@ fact[DisconnectClosesSocket]=$(as_bool disconnect_closes_socket)
 fact[UnlistedDisconnectReleases]=$(as_bool in_order '^  if not server\.clients\[client\.id\] then$' \
   '^    release_socket\(client\)$' '^    return$' <<<"$disconnect")
 # release_socket leaves a handle alone while the Close write callback will close it. close_client sets close_pending
-# before it writes the frame, and its write callback clears it and closes the handle. The ping timer clears it too,
+# before it writes the frame, and its write callback clears it and closes the handle. The keepalive check clears it too,
 # so that a timed-out client does not wait for the write.
 close_write_owns_socket() {
   in_order '^local function release_socket\(client\)$' \
@@ -91,9 +87,9 @@ close_write_owns_socket() {
     in_order '^    client\.close_pending = true$' '^    client\.tcp_handle:write\(close_frame, function\(\)$' \
       '^      client\.close_pending = nil$' '^      client\.state = "closed"$' '^        client\.tcp_handle:close\(\)$' \
       <<<"$close_client" &&
-    in_order '^          client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' \
-      '^          client\.close_pending = nil$' '^          M\._disconnect_client\(server, client, 1006, "Connection timeout"\)$' \
-      <<<"$ping_timer"
+    in_order '^        client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' \
+      '^        client\.close_pending = nil$' '^        M\._disconnect_client\(server, client, 1006, "Connection timeout"\)$' \
+      <<<"$drop_check"
 }
 fact[CloseWriteOwnsSocket]=$(as_bool close_write_owns_socket)
 fact[RejectClosesSocket]=$(as_bool in_order '^ *if err or not success then$' '^ *on_error\(client, ' \
@@ -118,26 +114,43 @@ stop_waits_for_close_write() {
       <<<"$close_client"
 }
 fact[StopWaitsForCloseWrite]=$(as_bool stop_waits_for_close_write)
-fact[KeepaliveReaps]=$(as_bool in_order '^    for _, client in pairs\(server\.clients\) do$' \
-  '^      if client\.state == "connected" then$' '^        if client_manager\.is_client_alive\(client, interval \* 2\) then$' \
-  '^          client_manager\.send_ping\(client, "ping"\)$' '^        else$' \
-  '^          client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' \
-  '^          M\._disconnect_client\(server, client, 1006, "Connection timeout"\)$' <<<"$ping_timer")
-# The first tick that finds no pong for two intervals pings again and sets pong_overdue. Only the second one drops the
-# client, after a pong that was unread at a late tick had its chance to be read.
-fact[DropsOnSecondOverdueTick]=$(as_bool in_order '^        if client_manager\.is_client_alive\(client, interval \* 2\) then$' \
-  '^        elseif not client\.pong_overdue then$' '^          client\.pong_overdue = true$' \
-  '^          client_manager\.send_ping\(client, "ping"\)$' '^        else$' \
-  '^          client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' <<<"$ping_timer")
-fact[AliveTickClearsOverdue]=$(as_bool in_order '^        if client_manager\.is_client_alive\(client, interval \* 2\) then$' \
-  '^          client\.pong_overdue = nil$' '^          client_manager\.send_ping\(client, "ping"\)$' '^        elseif not client\.pong_overdue then$' \
-  <<<"$ping_timer")
-fact[PongResetsAge]=$(as_bool in_order 'elseif opcode == frame\.OPCODE\.PONG then$' \
-  '^ *client\.last_pong = vim\.loop\.now\(\)$' <<<"$process_data")
-fact[WakeResetsPong]=$(as_bool in_order '^    local is_wake_from_sleep = elapsed > \(interval \* 1\.5\)$' \
+# The ping timer calls drop_unanswered_after_read with a limit of interval * 2.5 (the third tick after the stamp, the
+# model's Limit), the loop time of the tick, and a gap of interval * 1.5. The check closes a client that is still listed
+# and connected and whose stamp is that old, with close_client(1011) and then _disconnect_client(1006).
+keepalive_reaps() {
+  in_order '^    if #pinged > 0 then$' \
+    '^      drop_unanswered_after_read\(server, pinged, interval \* 2\.5, vim\.loop\.now\(\), interval \* 1\.5\)$' <<<"$ping_timer" &&
+    in_order '^    for _, client in ipairs\(clients\) do$' '^      local since = client\.ping_unanswered_since$' \
+      '^      if server\.clients\[client\.id\] == client and client\.state == "connected" and since and now - since >= limit then$' \
+      '^        client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' \
+      '^        M\._disconnect_client\(server, client, 1006, "Connection timeout"\)$' <<<"$drop_check"
+}
+fact[KeepaliveReaps]=$(as_bool keepalive_reaps)
+# Only the callback of a libuv check handle drops a client: libuv runs it after the poll phase that reads the sockets.
+# The timer callback closes and disconnects nothing, and starts the check handle for the clients it pinged.
+judges_after_read() {
+  ! grep -qE 'close_client|_disconnect_client' <<<"$ping_timer" &&
+    in_order '^  local check = vim\.loop\.new_check\(\)$' '^  check:start\(function\(\)$' '^    check:stop\(\)$' '^    check:close\(\)$' \
+      '^        client_manager\.close_client\(client, 1011, "Keepalive timeout"\)$' <<<"$drop_check"
+}
+fact[JudgesAfterRead]=$(as_bool judges_after_read)
+# The tick stamps the ping after update_time: libuv caches the loop time when a pass of the main loop starts, and a
+# callback that ran earlier in the pass can have blocked since.
+fact[StampsRealTime]=$(as_bool in_order '^        client_manager\.send_ping\(client, "ping"\)$' '^        vim\.loop\.update_time\(\)$' \
+  '^        client\.ping_unanswered_since = .*vim\.loop\.now\(\)$' <<<"$ping_timer")
+# A ping that finds a stamp leaves it, so the stamp is the oldest ping that no pong has answered.
+fact[StampKeepsOldestPing]=$(as_bool grep -qE '^        client\.ping_unanswered_since = client\.ping_unanswered_since or vim\.loop\.now\(\)$' <<<"$ping_timer")
+# Any bytes that the read callback gets clear the stamp, before process_data runs: a pong can wait behind more unread data
+# than the socket holds, and one poll does not reach it.
+fact[BytesClearStamp]=$(as_bool in_order '^  client_tcp:read_start\(function\(err, data\)$' '^    if not data then$' \
+  '^    client\.ping_unanswered_since = nil$' '^    client_manager\.process_data\(client, data, ' <<<"$new_connection")
+# The check judges nothing when its loop time is more than gap after its tick: the machine can have slept between the
+# tick and the poll, and Claude with it.
+fact[GapSkip]=$(as_bool in_order '^    local now = vim\.loop\.now\(\)$' '^    if now - tick_time > gap then$' '^      return$' \
+  '^    for _, client in ipairs\(clients\) do$' <<<"$drop_check")
+fact[WakeClearsStamp]=$(as_bool in_order '^    local is_wake_from_sleep = elapsed > \(interval \* 1\.5\)$' \
   '^    if is_wake_from_sleep then$' '^      for _, client in pairs\(server\.clients\) do$' \
-  '^        if client\.state == "connected" then$' '^          client\.last_pong = now$' \
-  '^    last_run = now$' <<<"$ping_timer")
+  '^        client\.ping_unanswered_since = nil$' '^    last_run = now$' <<<"$ping_timer")
 
 # NoFalseTimeout is a safety rule, but it runs alone (as [](~falseTimeout)): TLC stops at the first broken invariant
 # of a run, and its known finding is shorter than any break of the other three.
@@ -148,19 +161,22 @@ EXPECT=(
   [DispatchGuard]=NoRequestAfterEnd [PeerCloseMarksClosing]=NoRequestAfterEnd
   [DisconnectOnce]=DisconnectReportedOnce
   [CloseWriteOwnsSocket]=StatusCloseDelivered [StopWaitsForCloseWrite]=StatusCloseDelivered
-  [UpgradeStartsKeepalive]=NoFalseTimeout [PongResetsAge]=NoFalseTimeout [WakeResetsPong]=NoFalseTimeout
+  [BytesClearStamp]=NoFalseTimeout [GapSkip]=NoFalseTimeout [WakeClearsStamp]=NoFalseTimeout [StampsRealTime]=NoFalseTimeout
+  [JudgesAfterRead]=NoFalseTimeout [StampKeepsOldestPing]=DeadClientDropped
   [KeepaliveReaps]=DeadClientDropped [ProtocolReportsAtOnce]=DeadClientDropped
-  [DropsOnSecondOverdueTick]=NoFalseTimeout [AliveTickClearsOverdue]=NoFalseTimeout
   [DisconnectClosesSocket]=DroppedSocketCloses [UnlistedDisconnectReleases]=DroppedSocketCloses
   ["RejectClosesSocket+UnlistedDisconnectReleases"]=DroppedSocketCloses
 )
 MUTANT_NOTES=("  RejectClosesSocket alone is caught by no rule: _disconnect_client also closes the socket of a client that left the server.")
 
 # Safety rules: one connection, Claude sends 3 frames (its upgrade request included), two delayed ticks (a gap above
-# 1.5 intervals, or a late tick). Liveness rules: 2 frames and no delayed tick, which keeps each run under 10 s. DroppedSocketCloses alone assumes that Claude reads again.
+# 1.5 intervals, a tick in a pass that an earlier callback blocked, or a sleep between a tick and its poll). Liveness rules: 2 frames and no delayed tick,
+# which keeps each run under 10 s. DroppedSocketCloses alone assumes that Claude reads again. NoFalseTimeout alone
+# assumes that a Claude that reads answers a ping before the next tick.
 tla_constants() {
-  local reads=FALSE
+  local reads=FALSE answers=FALSE
   [[ $1 != *DroppedSocketCloses ]] || reads=TRUE
+  [[ $1 != *NoFalseTimeout ]] || answers=TRUE
   echo "  Conns = {c1}"
   case $1 in
   *DeadClientDropped | *DroppedSocketCloses)
@@ -173,12 +189,13 @@ tla_constants() {
     ;;
   esac
   echo "  PeerEventuallyReads = $reads"
-  # The environment steps of the three bugs this model found. Every run allows them, so that a removed guard breaks a rule.
-  echo "  GapDuringHandshake = TRUE"
+  echo "  PeerAnswersBeforeTick = $answers"
+  # The environment steps of the bugs this model found. Every run allows them, so that a removed guard breaks a rule.
   echo "  WindowFullOnProtocolClose = TRUE"
   echo "  StopBeforeOnClose = TRUE"
-  echo "  LateTickAfterPing = TRUE"
-  echo "  ExactBoundaryTick = TRUE"
+  echo "  StaleLoopTime = TRUE"
+  echo "  PollMissesPong = TRUE"
+  echo "  SleepInWindow = TRUE"
 }
 
 tla_main "$@"

@@ -25,6 +25,7 @@ const claude = (v: any, c: string) =>
   ({
     idle: "not started",
     live: "reading",
+    resumed: "reading again",
     silent: "not reading",
     stuck: "not reading, window full",
     gone: "hung up",
@@ -56,10 +57,16 @@ const labels: Record<string, string> = {
   ScheduledRuns: "the main loop runs a scheduled step",
   TimerTicks: "the ping timer ticks",
   TimerTicksAfterGap: "the ping timer ticks after Neovim was blocked",
-  TimerTicksLate:
-    "the ping timer ticks late, before the plugin reads Claude's pong",
-  TimerTicksExact:
-    "the ping timer ticks with the last pong exactly two intervals old",
+  TimerTicksStale:
+    "the ping timer ticks in a pass whose earlier callback blocked, with the loop time cached before the block",
+  MachineSleeps:
+    "the machine sleeps between a tick and the poll before its check",
+  PollAndCheck:
+    "libuv reads the sockets, then the keepalive check judges the pinged clients",
+  PollAndCheckPartial:
+    "libuv reads only the first frame of each client, then the keepalive check judges",
+  PollStep:
+    "libuv reads the sockets, then the keepalive check judges the pinged clients",
   ServerStops: "you stop the server",
   PluginSendsLarge: "the plugin sends Claude a large message",
   ClaudeSends: "Claude sends a frame",
@@ -105,8 +112,10 @@ export const step = (name: string, from: any, to: any) => {
   if (
     action === "TimerTicks" ||
     action === "TimerTicksAfterGap" ||
-    action === "TimerTicksLate" ||
-    action === "TimerTicksExact"
+    action === "TimerTicksStale" ||
+    action === "PollAndCheck" ||
+    action === "PollAndCheckPartial" ||
+    action === "PollStep"
   ) {
     if (from.listed[c] && !to.listed[c])
       return "the ping timer drops Claude for no reply";
