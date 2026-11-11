@@ -15,6 +15,14 @@
 #   tmp-missing    TMPDIR does not exist, under a sticky dir where another user could make it after the checks
 #   tmp-dotdot     TMPDIR has a .. part after a symlink (G/L/../y)
 #   tmp-dot        TMPDIR has a . part
+#   tmp-link-loose   TMPDIR is a symlink in a dir that others can write and that is not sticky, to a dir only this user can
+#                  write: agent-tty reads TMPDIR as given, so the dir that holds the symlink counts
+#   tmp-link-foreign TMPDIR is a symlink that another user owns, to a dir of this user (a bwrap user namespace, where
+#                  /var/run is root's; SKIP where it cannot be built)
+#   tmp-newline-loose  TMPDIR is a symlink to a loose dir whose name ends in a newline, and a twin symlink without the newline
+#                  leads to a safe dir: the resolved path is read with its newline
+#   tmp-load-refused  mktemp answers with a path that is not its own resolved path (a // in it): load refuses the new state dir,
+#                  and launch leaves no state dir and no evidence dir
 #   tmp-root       TMPDIR is /: launch gives mktemp /vcn.XXXXXX, not //vcn.XXXXXX (a mktemp shim stops launch and prints it)
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
 #   out-space      the same above VERIFY_OUT
@@ -32,6 +40,8 @@
 #   tmp-sticky     a world-writable TMPDIR with the sticky bit, like /tmp: the state dir is made there
 #   tmp-link       TMPDIR is a symlink to that dir: the state dir is made in the dir, not through the symlink
 #   tmp-vcn-entry  a symlink named vcn in a sticky TMPDIR, pointing into a dir that others can write: launch still works
+#   tmp-newline-ok  TMPDIR is a symlink whose name ends in a newline, to a safe dir whose name ends in a newline, and loose twins
+#                  without the newline exist: launch reaches mktemp with the whole resolved path (a mktemp shim stops it)
 #   out-link-locale  VERIFY_OUT under a symlink, with a stat that prints translated file types: launch still works
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 #   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700 and
@@ -134,6 +144,76 @@ mkdir "$TMP/mktemp-bin"
 printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-bin/mktemp"
 chmod +x "$TMP/mktemp-bin/mktemp"
 refused tmp-root "mktemp shim: template=/vcn.XXXXXX" PATH="$TMP/mktemp-bin:$PATH" TMPDIR=/ VERIFY_OUT="$TMP/tmp-out"
+# mktemp gets the resolved path, but agent-tty reads TMPDIR as it was given and makes its staging dirs there. Another user who
+# can write the dir that holds a symlink, or who owns the symlink, can repoint it after launch, so the path as given must
+# pass the same walk: the symlink itself, its owner and the dirs above it.
+mkdir -m 777 "$TMP/lnk-loose"
+mkdir -m 700 "$TMP/lnk-safe"
+ln -s "$TMP/lnk-safe" "$TMP/lnk-loose/t"
+refused tmp-link-loose "refusing TMPDIR: $TMP/lnk-loose, above the state dir, is writable by others and not sticky" \
+  TMPDIR="$TMP/lnk-loose/t" VERIFY_OUT="$TMP/tmp-out"
+# bwrap makes a user namespace that this user owns (no sudo, no second account). Root's inodes show as another user there:
+# /var/run is a root-owned symlink to /run, and `--dir /run` makes the target this user's, so only the owner of the symlink
+# can refuse it. The tools that launch resolves before the TMPDIR check are bound read-only under their own paths.
+tmp_link_foreign_case() {
+  local name=tmp-link-foreign tool exe root repo out rc=0 paths="" binds=()
+  command -v bwrap >/dev/null || {
+    echo "SKIP $name: bwrap is not installed"
+    return 0
+  }
+  [[ -L /var/run && $(stat -c %u /var/run) == 0 && $(realpath /var/run) == /run ]] || {
+    echo "SKIP $name: /var/run is not a root-owned symlink to /run"
+    return 0
+  }
+  for tool in nvim node jq; do
+    exe=$(mise which "$tool" 2>/dev/null || command -v "$tool") || {
+      echo "SKIP $name: $tool not found"
+      return 0
+    }
+    exe=$(realpath -- "$exe")
+    # nvim needs the runtime beside its bin dir.
+    if [[ $tool == nvim ]]; then root=$(dirname -- "$(dirname -- "$exe")"); else root=$(dirname -- "$exe"); fi
+    binds+=(--ro-bind "$root" "$root")
+    paths+=$(dirname -- "$exe"):
+  done
+  repo=$(cd "$(dirname "$V")/../../../.." && pwd)
+  local args=(--unshare-user --uid 0 --gid 0 --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib
+    --symlink usr/lib64 /lib64 --unshare-pid --dev /dev --proc /proc --perms 01777 --tmpfs /tmp "${binds[@]}"
+    --ro-bind /var /var --dir /run --ro-bind "$repo" /w --setenv PATH "$paths/usr/bin:/bin" --setenv HOME /tmp
+    --setenv VCN_AGENT_TTY /usr/bin/true --setenv VERIFY_OUT /tmp/out --setenv TMPDIR /var/run)
+  bwrap "${args[@]}" /usr/bin/true 2>/dev/null || {
+    echo "SKIP $name: bwrap cannot make a user namespace here"
+    return 0
+  }
+  out=$(bwrap "${args[@]}" /usr/bin/bash -c '[[ $(stat -c %u /var/run) != "$EUID" && $(stat -c %u /run) == "$EUID" ]] || echo SETUP-WRONG-OWNERS
+    /w/.agents/skills/verify-claudecode-nvim/scripts/vcn.sh launch; echo "rc=$?"' 2>&1) || rc=$?
+  [[ $out != *SETUP-WRONG-OWNERS* ]] || fail "$name: the symlink is not another user's or its target is not this user's, so the case proves nothing: $out"
+  [[ $out == *"refusing TMPDIR: /var/run, above the state dir, is owned by another user"* && $out == *"rc=1"* && $out != *VCN_STATE=* ]] ||
+    fail "$name: launch did not refuse /var/run with the owner text and exit 1: $out"
+  echo "PASS $name: TMPDIR=/var/run, a symlink that another user owns, was refused before launch made anything"
+}
+tmp_link_foreign_case
+# A newline at the end of a name is cut by a command substitution. The resolved TMPDIR is a dir with a newline at the end of its
+# name and mode 777, and a twin symlink without the newline leads to a safe dir: a launch that cuts the newline would take the twin.
+mkdir -m 700 "$TMP/nl" "$TMP/nl/safe"
+mkdir -m 777 "$TMP/nl/q"$'\n'
+ln -s "$TMP/nl/safe" "$TMP/nl/q"
+ln -s "$TMP/nl/q"$'\n' "$TMP/nl/ln"
+refused tmp-newline-loose "refusing TMPDIR: $TMP/nl/q"$'\n'", above the state dir, is writable by others and not sticky" \
+  TMPDIR="$TMP/nl/ln" VERIFY_OUT="$TMP/tmp-out"
+# The same names the other way round: this user's symlink and safe dir end in a newline, and the twins without it are loose.
+# launch must reach mktemp with the whole resolved path, so it read both the path as given and the resolved path whole.
+mkdir -m 700 "$TMP/nk" "$TMP/nk/t"$'\n'
+mkdir -m 777 "$TMP/nk/t" "$TMP/nk/ln"
+ln -s "$TMP/nk/t"$'\n' "$TMP/nk/ln"$'\n'
+refused tmp-newline-ok "mktemp shim: template=$TMP/nk/t"$'\n'"/vcn.XXXXXX" PATH="$TMP/mktemp-bin:$PATH" \
+  TMPDIR="$TMP/nk/ln"$'\n' VERIFY_OUT="$TMP/tmp-out"
+# load refuses a state dir that is not its own resolved path. mktemp answers with a // here, so it refuses the new one at its
+# first call, before launch has any teardown. Launch must remove the state dir and the evidence dir it made.
+mkdir -m 700 "$TMP/tmp-slash" "$TMP/mktemp-slash"
+printf '#!/bin/sh\nd=$("%s" "$@") || exit 1\nprintf "%%s//%%s\\n" "$(dirname "$d")" "$(basename "$d")"\n' "$(command -v mktemp)" >"$TMP/mktemp-slash/mktemp"
+chmod +x "$TMP/mktemp-slash/mktemp"
+refused tmp-load-refused "it is not its own resolved path (" PATH="$TMP/mktemp-slash:$PATH" TMPDIR="$TMP/tmp-slash" VERIFY_OUT="$TMP/tmp-out"
 # A twin symlink with the name cut at the trailing space sits next to it: a walk that read the name back from a line of
 # stat output tested the twin and passed it.
 mkdir -m 700 "$TMP/sp"

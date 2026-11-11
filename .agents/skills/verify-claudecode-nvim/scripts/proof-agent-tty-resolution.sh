@@ -20,6 +20,9 @@
 #   state-names       the same, when the name of that dir ends in a space, a tab or a newline, and a symlink with the
 #                     shorter name sits next to it
 #   state-env         a state_checked in the caller's environment does not skip the check
+#   state-count       a stat that answers for one dir fewer than the walk asked for (a shim drops the record of the loose
+#                     dir above the state dir) makes the walk refuse, not pass
+#   state-newline     a state dir whose name ends in a newline is accepted: the check reads its resolved path whole
 #   state-owner       a VCN_STATE that another user owns, with a run.env in it, is refused, not sourced (a bwrap user
 #                     namespace with a read-only overlay stands in for the other user; SKIP where bwrap cannot make it)
 #   state-ancestor    the same when only a dir above the state dir is another user's, and the state dir is this user's
@@ -832,6 +835,40 @@ state_env_case() {
   cases=$((cases + 1))
 }
 
+# unsafe_walk reads one stat record per dir that exists, and refuses when it gets fewer: a missing record would shift the
+# owner and mode of every dir after it. The stat shim drops the loose dir from its arguments, so the one dir that the walk
+# must refuse is the one that gets no record.
+state_count_case() {
+  local name=state-count loose=$TMP/count-loose dir out rc=0
+  mkdir -m 777 "$loose"
+  mkdir "$TMP/stat-drop"
+  printf '#!/bin/bash\nargs=()\nfor a in "$@"; do [[ $a == "$DROP" ]] || args+=("$a"); done\nexec "%s" "${args[@]}"\n' "$(command -v stat)" >"$TMP/stat-drop/stat"
+  chmod +x "$TMP/stat-drop/stat"
+  dir=$(marker_state_dir "$loose")
+  out=$(env PATH="$TMP/stat-drop:$base" DROP="$loose" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+  [[ ! -e $TMP/marker-$name ]] || fail "$name" "vcn.sh sourced the run.env of $dir while stat answered for one dir fewer"
+  ((rc == 1)) && [[ $out == *"refusing state dir $dir: $loose, above the state dir, could not be read in full"* ]] ||
+    fail "$name" "cleanup exited $rc, wanted 1 with 'could not be read in full': $out"
+  rm -rf -- "$loose" "$TMP/stat-drop"
+  echo "ok $name: a walk that got one stat record too few refused the state dir and did not source its run.env"
+  cases=$((cases + 1))
+}
+
+# A command substitution cuts the newlines at the end of a name. The check compares VCN_STATE with its resolved path, which
+# it reads with a NUL end so that the newline stays: a dir named so is the dir it names, and it is accepted.
+state_newline_case() {
+  local name=state-newline dir out rc=0
+  dir=$priv/vcn.Nl$'\n'
+  mkdir -m 700 "$dir"
+  printf 'touch %s\n' "$TMP/marker-$name" >"$dir/run.env"
+  out=$(env PATH="$base" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+  [[ -e $TMP/marker-$name ]] || fail "$name" "vcn.sh refused a state dir whose name ends in a newline: $out"
+  [[ $out != *"refusing state dir"* ]] || fail "$name" "vcn.sh refused a state dir whose name ends in a newline: $out"
+  [[ $dir == "$priv"/vcn.* ]] && rm -rf -- "$dir"
+  echo "ok $name: a state dir whose name ends in a newline was accepted and its run.env sourced"
+  cases=$((cases + 1))
+}
+
 # bwrap makes a user namespace that this user owns (no sudo, no second account). It maps this user to uid 0 and every
 # host-root-owned inode to nobody. Its /tmp is a root-owned sticky tmpfs, like a host /tmp, so every dir in the chain
 # above the planted one belongs to root there, and the walk above passes.
@@ -947,6 +984,8 @@ state_mode_case
 state_parent_case
 state_names_case
 state_env_case
+state_count_case
+state_newline_case
 state_owner_case
 state_ancestor_case
 signal_symlink_case

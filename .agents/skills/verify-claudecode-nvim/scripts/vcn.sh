@@ -471,7 +471,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_cands node_exe tmpdir state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
+  local nvim_exe att_cands node_exe tmpdir given state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
   if [[ -n ${VCN_NVIM-} ]]; then
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
@@ -508,13 +508,19 @@ cmd_launch() {
   [[ $tmpdir == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
   # As for VERIFY_OUT, a path that has a . or .. part is refused, not resolved: TMPDIR must already be the dir it names.
   [[ /$tmpdir/ != */./* && /$tmpdir/ != */../* ]] || die "TMPDIR=$tmpdir has a . or .. part"
-  # Resolve once and use only the result, so the check below and mktemp see the same path. A dir that is missing now could
-  # be made by another user after the check and before mktemp.
+  # mktemp gets the resolved path, so the check below and mktemp see the same path. A dir that is missing now could be made by
+  # another user after the check and before mktemp.
+  given=""
+  IFS= read -r -d "" given < <(realpath -smz -- "$tmpdir" 2>/dev/null) || given=""
   IFS= read -r -d "" tmpdir < <(realpath -ez -- "$tmpdir" 2>/dev/null) || tmpdir=""
   [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
   # cleanup and every other command source.
   why=$(unsafe_walk "$tmpdir" "the state dir")
+  [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
+  # agent-tty reads TMPDIR as it was given and makes its staging dirs there, so another user who can repoint a symlink in the
+  # path as given (who owns it, or can write the dir that holds it) could redirect them. The walk covers that path as well.
+  why=$(unsafe_walk "$given" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
@@ -598,6 +604,15 @@ cmd_launch() {
     env_line JQ_BIN "$JQ_BIN"
   } >"$state/run.env"
   export VCN_STATE=$state
+  # load refuses a state dir that is not its own resolved path or that others can reach, before launch has a teardown to run,
+  # and launch_failed would only call load again. A refusal here removes what this launch made.
+  why=$(unsafe_state "$state")
+  if [[ -n $why ]]; then
+    rm -f -- "$out/ws-in.jsonl" "$out/ws-out.jsonl"
+    rm -rf -- "$state"
+    ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
+    die "refusing state dir $state: $why"
+  fi
   load
   trap launch_failed EXIT
   # A signal ends bash with $? still 0 in the EXIT trap, so this trap acts on it: it ignores the signals, drops the
