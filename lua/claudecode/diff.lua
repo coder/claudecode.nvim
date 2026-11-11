@@ -813,7 +813,8 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
   vim.cmd("diffthis")
   create_split()
-  vim.cmd("edit " .. vim.fn.fnameescape(tmp_file))
+  -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
+  vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)

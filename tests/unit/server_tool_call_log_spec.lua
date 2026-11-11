@@ -65,7 +65,7 @@ describe("tools/call debug log", function()
       end,
     })
 
-    local result = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "readEnvFile", arguments = {} })
+    local result = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "readEnvFile" })
 
     assert.same({ content = { { type = "text", text = secret } } }, result)
     local log = message_history()
@@ -81,7 +81,7 @@ describe("tools/call debug log", function()
       end,
     })
 
-    local _, err = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "failsWithData", arguments = {} })
+    local _, err = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "failsWithData" })
 
     assert.same({ code = -32000, message = "File operation error", data = secret }, err)
     local log = message_history()
@@ -109,5 +109,20 @@ describe("tools/call debug log", function()
     assert.is_nil(log:find(secret, 1, true), "an argument value reached :messages:\n" .. log)
     assert_contains(log, "Response - tools/call close_tab")
     assert_contains(log, "Response - tools/call getDiagnostics")
+  end)
+
+  it("names the rejected field of a tools/call with the wrong shape, and never its value", function()
+    for _, params in ipairs({ { name = { secret } }, { name = "getOpenEditors", arguments = secret }, secret }) do
+      local result, err = server.state.handlers["tools/call"]({ id = "client-1" }, params)
+
+      assert.is_nil(result)
+      assert.equals(-32602, err.code)
+    end
+
+    local log = message_history()
+    assert.is_nil(log:find(secret, 1, true), "a rejected value reached :messages:\n" .. log)
+    assert_contains(log, "Rejected tools/call: name (a string is required)")
+    assert_contains(log, "Rejected tools/call: arguments (an object is required)")
+    assert_contains(log, "Rejected tools/call: params (an object is required)")
   end)
 end)
