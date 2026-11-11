@@ -46,9 +46,8 @@ bin() {
 env_line() { printf '%s=%q\n' "$1" "$2"; }
 
 # load sources run.env, so $VCN_STATE must be a dir that only this user can write, in a place where no other user can swap
-# it. After that one check nothing in it can change under another user's hand, and source reads the file that was checked.
-# A stale VCN_STATE can name a dir or symlink that another user made at a freed name. stat without -L describes a symlink
-# itself. Prints why $1 is unsafe, or nothing.
+# it. After that one check nothing in it can change under another user's hand. A stale VCN_STATE can name a dir or
+# symlink that another user made at a freed name. stat without -L describes a symlink itself.
 unsafe_state() {
   local uid mode type
   read -r uid mode type < <(stat -c '%u %a %F' -- "$1" 2>/dev/null) || {
@@ -70,7 +69,7 @@ load() {
   local why
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
   [[ -f $VCN_STATE/run.env ]] || die "no run at $VCN_STATE (already cleaned up?)"
-  # launch calls load many times: once the check has passed, nothing changes under another user's hand, so it runs once.
+  # launch calls load many times, and a passed check stays true, so it runs once per VCN_STATE.
   if [[ ${state_checked-} != "$VCN_STATE" ]]; then
     why=$(unsafe_state "$VCN_STATE")
     [[ -z $why ]] || die "refusing state dir $VCN_STATE: $why"
@@ -377,7 +376,7 @@ unsafe_above() {
       dir=${dir%/*}
       dir=${dir:-/}
     done
-    # One stat for the whole chain: a dir that does not exist prints nothing.
+    # stat prints nothing for a dir that does not exist and goes on with the rest.
     while read -r mode uid name; do
       if ((uid != 0 && uid != EUID)); then
         echo "$name, above $what, is owned by another user"

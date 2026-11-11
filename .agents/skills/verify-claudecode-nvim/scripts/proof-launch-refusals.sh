@@ -116,7 +116,6 @@ mkdir "$TMP/tmp-shared"
 chmod 1777 "$TMP/tmp-shared"
 refused tmp-missing "TMPDIR=$TMP/tmp-shared/later is not an existing directory" \
   TMPDIR="$TMP/tmp-shared/later" VERIFY_OUT="$TMP/tmp-out"
-# A . or .. part after a symlink would hide the symlink from the walk above TMPDIR. L is a symlink to a dir under G.
 mkdir -m 700 "$TMP/dd" "$TMP/dd/y" "$TMP/dd/real"
 ln -s "$TMP/dd/real" "$TMP/dd/L"
 refused tmp-dotdot "TMPDIR=$TMP/dd/L/../y has a . or .. part" TMPDIR="$TMP/dd/L/../y" VERIFY_OUT="$TMP/tmp-out"
@@ -169,7 +168,6 @@ state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
 VCN_STATE=$state "$vcn" cleanup >/dev/null
 [[ $state == "$TMP/tmp-sticky"/vcn.* ]] || fail "tmp-sticky: launch made its state dir $state outside TMPDIR"
 echo "PASS tmp-sticky: launch made its state dir in the sticky $TMP/tmp-sticky"
-# Launch resolves TMPDIR once, so a symlink to the sticky dir gives the same state dir path, with no symlink in it.
 ln -s "$TMP/tmp-sticky" "$TMP/tmp-link"
 err=$(env -u XUM_SCRATCH_DIR TMPDIR="$TMP/tmp-link" VERIFY_OUT="$TMP/tmp-link-out" "$vcn" launch 2>&1) || fail "tmp-link: launch failed: $err"
 state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")

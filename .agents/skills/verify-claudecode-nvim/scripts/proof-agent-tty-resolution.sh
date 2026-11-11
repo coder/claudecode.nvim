@@ -722,9 +722,8 @@ jq_old_run_case() {
   cases=$((cases + 1))
 }
 
-# load sources run.env, so it checks the state dir first: a dir this user owns that others cannot write, under dirs that
-# others cannot rename. refuses_state <case> <state dir> <text> [wrapper...] runs `vcn.sh cleanup` on a dir whose run.env
-# would touch a marker: cleanup must exit 1 with the text, and the marker must not exist. A wrapper runs vcn.sh.
+# refuses_state <case> <state dir> <text> [wrapper...]: `vcn.sh cleanup`, run through the wrapper, must exit 1 with <text>
+# and must not source the run.env in <state dir>, which touches $TMP/marker-<case>.
 refuses_state() {
   local name=$1 dir=$2 want=$3 marker=$TMP/marker-$1 out rc=0
   shift 3
@@ -733,7 +732,7 @@ refuses_state() {
   ((rc == 1)) && [[ $out == *"$want"* ]] || fail "$name" "cleanup exited $rc, wanted 1 with '$want': $out"
 }
 
-# marker_state_dir <parent>: makes a state dir under <parent> (0700) with a run.env that touches this case's marker.
+# marker_state_dir <parent>: a new 0700 state dir under <parent> whose run.env touches the marker of the caller's $name.
 marker_state_dir() {
   local dir
   dir=$(mktemp -d "$1/vcn.XXXXXX")
@@ -777,7 +776,7 @@ state_parent_case() {
 # host-root-owned inode to nobody. A read-only overlay whose top layer is a host-root-owned dir and whose lower layer holds
 # the run.env shows a dir that nobody owns, with a run.env in it: what another user's planted state dir looks like. In the
 # namespace every host-root-owned dir above it looks foreign too, so a vcn.sh that skips the owner test is still refused by
-# the walk above, with another text: the case matches the text of the owner test.
+# unsafe_above, with another text: the case matches the text of the owner test.
 state_owner_case() {
   local name=state-owner top="" cand mnt=$TMP/owner-mnt lower=$TMP/owner-lower
   if ! unshare -rm true 2>/dev/null; then
