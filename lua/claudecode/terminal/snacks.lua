@@ -14,11 +14,13 @@ local starting = false
 -- module, so the next module instance can find the terminal again.
 local OWNED_MARK = owned.SNACKS_MARK
 
--- Written on each terminal buffer this provider starts: whether it started with auto_close, and its window options (as
--- plain data: position, size, border and so on). A buffer variable survives a reload of this module, like the mark, so
--- the next module instance knows both without the Snacks instance.
+-- Written on each terminal buffer this provider starts: whether it started with auto_close, its window options (as
+-- plain data: position, size, border and so on), and the window of its float's backdrop (another Snacks float can have
+-- a backdrop at the same z-index, so the id decides). A buffer variable survives a reload of this module, like the
+-- mark, so the next module instance knows them without the Snacks instance.
 local AUTO_CLOSE_VAR = "claudecode_snacks_auto_close"
 local WINDOW_VAR = "claudecode_snacks_window"
+local BACKDROP_VAR = "claudecode_snacks_backdrop"
 
 --- @return boolean
 local function is_available()
@@ -460,39 +462,38 @@ local function adopted_config(buf, config)
   return merged
 end
 
----The backdrop of a float, as Snacks made it: a window one z-index below the float, with a buffer of filetype
----snacks_win_backdrop. The returned table has what the cc_* functions use of a Snacks backdrop (`win`) and what Snacks'
----own close calls (`close`).
+---The backdrop of a float, as Snacks made it for the first start: the window that the buffer variable names, if it is
+---still one window below the float, with a buffer of filetype snacks_win_backdrop. Another Snacks float can have a
+---backdrop at the same z-index, so the variable decides. The returned table has what the cc_* functions use of a Snacks
+---backdrop (`win`) and what Snacks' own close calls (`close`).
 ---@param win number|nil The float
+---@param buf number The terminal buffer
 ---@return table|nil backdrop
-local function find_backdrop(win)
-  if not (win and vim.api.nvim_win_is_valid(win)) then
+local function find_backdrop(win, buf)
+  local backdrop = vim.b[buf][BACKDROP_VAR]
+  if not (win and backdrop and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_is_valid(backdrop)) then
     return nil
   end
   local zindex = vim.api.nvim_win_get_config(win).zindex
-  if not zindex then
+  if
+    not zindex
+    or vim.api.nvim_win_get_config(backdrop).zindex ~= zindex - 1
+    or vim.bo[vim.api.nvim_win_get_buf(backdrop)].filetype ~= "snacks_win_backdrop"
+  then
     return nil
   end
-  for _, other in ipairs(vim.api.nvim_list_wins()) do
-    if
-      vim.api.nvim_win_get_config(other).zindex == zindex - 1
-      and vim.bo[vim.api.nvim_win_get_buf(other)].filetype == "snacks_win_backdrop"
-    then
-      return {
-        win = other,
-        close = function(self)
-          local closing = self.win
-          self.win = nil
-          if closing and vim.api.nvim_win_is_valid(closing) then
-            local buf = vim.api.nvim_win_get_buf(closing)
-            pcall(vim.api.nvim_win_close, closing, true)
-            pcall(vim.api.nvim_buf_delete, buf, { force = true })
-          end
-        end,
-      }
-    end
-  end
-  return nil
+  return {
+    win = backdrop,
+    close = function(self)
+      local closing = self.win
+      self.win = nil
+      if closing and vim.api.nvim_win_is_valid(closing) then
+        local closing_buf = vim.api.nvim_win_get_buf(closing)
+        pcall(vim.api.nvim_win_close, closing, true)
+        pcall(vim.api.nvim_buf_delete, closing_buf, { force = true })
+      end
+    end,
+  }
 end
 
 ---Brings an adopted instance up to date with what has happened since the last entry: the window that shows its
@@ -503,7 +504,7 @@ end
 local function sync_adopted(instance, config)
   instance.win = vim.fn.win_findbuf(instance.buf)[1]
   if not (instance.backdrop and instance.backdrop.win and vim.api.nvim_win_is_valid(instance.backdrop.win)) then
-    instance.backdrop = find_backdrop(instance.win)
+    instance.backdrop = find_backdrop(instance.win, instance.buf)
   end
   if config then
     instance._cc.config = adopted_config(instance.buf, config)
@@ -532,7 +533,12 @@ local function wrap_terminal(buf, config)
   end
   win_opts.keys, win_opts.bo = nil, nil
   win_opts.buf, win_opts.show = buf, false
+  -- The terminal style gives the keys of a Snacks terminal (q hides it). Without it, the generic `q = "close"` would
+  -- wipe the buffer and stop Claude.
+  win_opts.style = "terminal"
   local instance = Snacks.win(win_opts)
+  -- The style sets a filetype. The buffer has its own already, and setting it again would fire FileType again.
+  instance.opts.bo = {}
   -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
   -- buffer of a scratch instance when it closes, and this terminal buffer was started by Snacks.terminal.
   instance.buf, instance.scratch_buf = buf, buf
@@ -656,6 +662,10 @@ function M.open(cmd_string, env_table, config, focus)
     pcall(function()
       vim.b[term_instance.buf][WINDOW_VAR] = window
     end)
+    local backdrop = term_instance.backdrop
+    if backdrop and backdrop.win then
+      vim.b[term_instance.buf][BACKDROP_VAR] = backdrop.win
+    end
     if not focus then
       -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter

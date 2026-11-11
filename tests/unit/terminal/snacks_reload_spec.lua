@@ -316,7 +316,15 @@ describe("claudecode.terminal.snacks after a module reload", function()
       -- Snacks.win: an instance for an existing buffer (opts.buf), with no window of its own yet. Snacks sets `buf` only
       -- when it shows the instance, and its close wipes the buffer only when it is the instance's scratch buffer.
       win = function(opts)
-        local term = { opts = { wo = opts.wo or {}, w = opts.w or {}, position = opts.position }, config = opts }
+        local term = {
+          opts = {
+            wo = opts.wo or {},
+            w = opts.w or {},
+            position = opts.position,
+            bo = { filetype = "snacks_terminal" },
+          },
+          config = opts,
+        }
         function term:buf_valid()
           return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
         end
@@ -568,6 +576,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
           local backdrop = new_window(backdrop_buf)
           state.windows[backdrop].config = { relative = "editor", zindex = 49, hide = false }
           claude.backdrop = { win = backdrop }
+          state.buffers[claude.buf].vars.claudecode_snacks_backdrop = backdrop
           if hidden_first then
             snacks_provider.simple_toggle("claude", {}, config)
             assert.is_true(state.windows[backdrop].config.hide)
@@ -585,6 +594,41 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end
       )
     end
+
+    -- Another Snacks float with the default z-index has a backdrop one below it too. Only the one that the first start
+    -- named is the terminal's.
+    it("does not take the backdrop of another Snacks float", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      state.windows[claude.win].config = { relative = "editor", zindex = 50, hide = false }
+      local function backdrop_window()
+        local buf = state.next_bufnr
+        state.next_bufnr = state.next_bufnr + 1
+        state.buffers[buf] = { jobid = 0, vars = {}, filetype = "snacks_win_backdrop" }
+        local win = new_window(buf)
+        state.windows[win].config = { relative = "editor", zindex = 49, hide = false }
+        return win
+      end
+      local other = backdrop_window() -- another float's, listed first
+      local own = backdrop_window()
+      state.buffers[claude.buf].vars.claudecode_snacks_backdrop = own
+      reload_snacks()
+
+      snacks_provider.simple_toggle("claude", {}, config) -- adopts and hides the float
+
+      assert.is_true(state.windows[own].config.hide)
+      assert.is_false(state.windows[other].config.hide)
+    end)
+
+    it("is wrapped in the terminal style, so that q hides it and does not close it", function()
+      snacks_provider.open("claude", {}, config, true)
+      reload_snacks()
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal("terminal", state.wrapped[1].config.style)
+      assert.are.same({}, state.wrapped[1].opts.bo)
+    end)
 
     -- A configless entry (get_active_bufnr) can adopt an older terminal first. The next entry's config must apply before the
     -- check for an ended job.
