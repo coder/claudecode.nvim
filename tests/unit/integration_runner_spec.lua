@@ -390,6 +390,30 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
   end)
 
+  it("fails a file whose failure count has more than 9 digits and still runs the next file", function()
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(3, "18446744073709551615", 0) },
+      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
+    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
+  end)
+
+  it("fails a file whose error count has more than 9 digits and still runs the next file", function()
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(3, 0, "9223372036854775808") },
+      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
+    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
+  end)
+
   it("fails a file whose summary counts a failure although nvim exited 0", function()
     local status, output = run_script({
       { name = "failing_spec.lua", exit = 0, output = summary(2, 1, 0) },
