@@ -986,10 +986,11 @@ swap_watch() {
   done
 }
 
-# agent-tty reads TMPDIR as it is given and follows every symlink in it each time it makes a staging dir. TMPDIR is a symlink of
-# this user's (hop1) to a symlink in a dir that others can write (hop2), to the private dir. Both walks of launch pass it: hop1
-# is this user's, and the resolved dir is private. After launch, hop2 is pointed at a dir of another user, whom swap_watch
-# plays while `record` runs. The evidence dir must not get the planted bytes.
+# Before att() gave agent-tty a TMPDIR of its own, agent-tty read TMPDIR as given and followed every symlink in it each time it
+# made a staging dir. TMPDIR is a symlink of this user's (hop1) to a symlink in a dir that others can write (hop2), to the
+# private dir. Both walks of launch pass it: hop1 is this user's, and the resolved dir is private. After launch, hop2 is
+# pointed at a dir of another user, whom swap_watch plays while `record` runs. The evidence dir must not get the planted
+# bytes.
 tmp_multihop_case() {
   local name=tmp-multihop loose=$TMP/mh-loose own=$TMP/mh-own other r=0 wpid wcmd
   other=$loose/other

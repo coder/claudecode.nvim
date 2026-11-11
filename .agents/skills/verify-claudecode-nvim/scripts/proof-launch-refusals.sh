@@ -16,7 +16,7 @@
 #   tmp-dotdot     TMPDIR has a .. part after a symlink (G/L/../y)
 #   tmp-dot        TMPDIR has a . part
 #   tmp-link-loose   TMPDIR is a symlink in a dir that others can write and that is not sticky, to a dir only this user can
-#                  write: agent-tty reads TMPDIR as given, so the dir that holds the symlink counts
+#                  write: main refused it, so the dir that holds the symlink counts
 #   tmp-link-foreign TMPDIR is a symlink that another user owns, to a dir of this user (a bwrap user namespace, where
 #                  /var/run is root's; SKIP where it cannot be built)
 #   tmp-newline-loose  TMPDIR is a symlink to a loose dir whose name ends in a newline, and a twin symlink without the newline
@@ -144,9 +144,8 @@ mkdir "$TMP/mktemp-bin"
 printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-bin/mktemp"
 chmod +x "$TMP/mktemp-bin/mktemp"
 refused tmp-root "mktemp shim: template=/vcn.XXXXXX" PATH="$TMP/mktemp-bin:$PATH" TMPDIR=/ VERIFY_OUT="$TMP/tmp-out"
-# mktemp gets the resolved path, but agent-tty reads TMPDIR as it was given and makes its staging dirs there. Another user who
-# can write the dir that holds a symlink, or who owns the symlink, can repoint it after launch, so the path as given must
-# pass the same walk: the symlink itself, its owner and the dirs above it.
+# mktemp gets the resolved path. The path as given must pass the same walk, which is main's rule: the symlink itself, its
+# owner and the dirs above it.
 mkdir -m 777 "$TMP/lnk-loose"
 mkdir -m 700 "$TMP/lnk-safe"
 ln -s "$TMP/lnk-safe" "$TMP/lnk-loose/t"

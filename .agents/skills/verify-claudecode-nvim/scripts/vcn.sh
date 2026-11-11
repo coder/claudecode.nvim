@@ -524,8 +524,8 @@ cmd_launch() {
   # cleanup and every other command source.
   why=$(unsafe_walk "$tmpdir" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
-  # agent-tty reads TMPDIR as it was given and makes its staging dirs there, so another user who can repoint a symlink in the
-  # path as given (who owns it, or can write the dir that holds it) could redirect them. The walk covers that path as well.
+  # The walk of the path as given is the rule that main applied, so a TMPDIR that main refused stays refused. Nothing reads the
+  # symlinks of that path after launch has resolved them (agent-tty gets $VCN_STATE/tmp), so it no longer guards a later call.
   why=$(unsafe_walk "$given" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
