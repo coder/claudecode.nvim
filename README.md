@@ -389,7 +389,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
       --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
       open_in_new_tab = false,
-      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (a floating terminal then stays on screen)
       hide_terminal_in_new_tab = false,
       auto_resize_terminal = true, -- Let the plugin manage the terminal width across the diff lifecycle; set false to own it via the User autocmds below
       -- on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
@@ -777,6 +777,8 @@ snacks_win_opts = {
 
 </details>
 
+When a diff opens in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. A float that the user shows while the diff is open stays visible until another diff opens in that tab. The float stays hidden when the diff closes, and `:ClaudeCodeFocus` brings it back. A diff in its own tab leaves a visible float in the original tab alone while it is open. A diff is in its own tab with `open_in_new_tab`, and a split diff also opens in a new tab on its own when its tab already shows a diff. When a diff in its own tab closes, the plugin shows the terminal again if a window of it was visible in any tab when the diff opened, and none is visible then. A terminal split that another diff's new tab shows counts. The close does not look at other open diffs, so it can show the float over a diff that is still open: diff A hides the float, diff B opens in a new tab, diff C opens in another new tab while B's tab shows the terminal, and the close of C after the close of B shows the float over A. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
+
 For complete configuration options, see:
 
 - [Snacks.nvim Terminal Documentation](https://github.com/folke/snacks.nvim/blob/main/docs/terminal.md)
@@ -960,6 +962,8 @@ require("claudecode").setup({
 ```
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
+
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float(tab)` hides the terminal when it is a visible floating window, and when `tab` is not nil only when that window is in `tab`. It returns `true` when it did. The plugin calls it with the diff's tab when a diff opens in the tab of a floating terminal, so the float does not cover the diff, unless `diff_opts.keep_terminal_focus` is set. A provider that ignores `tab` hides its float in any tab. A diff does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes (in the current tab when the original tab is gone), if a window of the terminal was visible in any tab when the diff opened. `:ClaudeCodeSend`, `:ClaudeCodeAdd` and `:ClaudeCodeTreeAdd` also call `ensure_visible()` after a send to a connected Claude (they call `open` instead with `focus_after_send`, or when Claude is not connected).
 
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 

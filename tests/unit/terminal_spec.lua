@@ -1172,6 +1172,62 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         assert.are.equal(456, bufnr)
       end)
 
+      describe("hide_float", function()
+        local function provider_with(overrides)
+          return vim.tbl_extend("force", {
+            setup = spy.new(function() end),
+            open = spy.new(function() end),
+            close = spy.new(function() end),
+            simple_toggle = spy.new(function() end),
+            focus_toggle = spy.new(function() end),
+            get_active_bufnr = spy.new(function()
+              return 456
+            end),
+            is_available = spy.new(function()
+              return true
+            end),
+          }, overrides)
+        end
+
+        it("returns what the provider's hide_float returns", function()
+          local hide_float = spy.new(function()
+            return true
+          end)
+          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
+
+          assert.is_true(terminal_wrapper.hide_float())
+          hide_float:was_called(1)
+        end)
+
+        it("passes the tab to the provider", function()
+          local hide_float = spy.new(function()
+            return true
+          end)
+          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
+
+          assert.is_true(terminal_wrapper.hide_float(3))
+          hide_float:was_called_with(3)
+        end)
+
+        it("returns false when the provider hid nothing", function()
+          terminal_wrapper.setup({
+            provider = provider_with({
+              hide_float = function()
+                return false
+              end,
+            }),
+          })
+
+          assert.is_false(terminal_wrapper.hide_float())
+        end)
+
+        it("returns false for a provider that has no hide_float", function()
+          terminal_wrapper.setup({ provider = provider_with({}) })
+
+          assert.is_false(terminal_wrapper.hide_float())
+        end)
+      end)
+
       it("should handle toggle function (legacy) correctly", function()
         local simple_toggle_spy = spy.new(function() end)
         local custom_provider = {
