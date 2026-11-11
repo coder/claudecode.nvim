@@ -28,8 +28,9 @@ run_test_file() {
   temp_output=$(mktemp)
   group_file=$(mktemp)
 
+  # 60s: selection_held_spec.lua sleeps 21.6s in 77 vim.wait calls, so 30s left each 0.1s of slack under load.
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
-  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s 30s "$@"' _ "$group_file" \
+  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s 60s "$@"' _ "$group_file" \
     nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
     2>&1 | tee "$temp_output"; then
@@ -59,7 +60,7 @@ run_test_file() {
 
   # Exit 124 is timeout's, 137 is its SIGKILL after 5 more seconds, and 143 is SIGTERM.
   if [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 137 ]] || [[ $EXIT_CODE -eq 143 ]]; then
-    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within 30s"
+    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within 60s"
     # nvim busy in a Lua loop ignores SIGTERM and outlives timeout.
     kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
   fi
