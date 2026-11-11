@@ -74,7 +74,8 @@ end
 
 local ROW_COLOR = { Success = 32, Fail = 31, Error = 31, Pending = 33 }
 
--- Plenary prints one of these, in colour, for each test it ran.
+-- Plenary prints a Success, Fail or Pending row, in colour, for each test it ran. The pinned plenary prints no Error row,
+-- and the runner fails on one all the same.
 ---@param kind "Success"|"Fail"|"Error"|"Pending"
 ---@param description string
 ---@return string
