@@ -289,7 +289,13 @@ describe("claudecode.terminal.native toggle behavior", function()
         columns = 120,
         lines = 40,
       },
+      keymap = {
+        set = function() end,
+      },
       fn = {
+        maparg = function()
+          return {}
+        end,
         termopen = function(cmd, opts)
           local jobid = mock_state.next_jobid
           mock_state.next_jobid = mock_state.next_jobid + 1
@@ -464,6 +470,77 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       local mock_state = _G.get_mock_state()
       assert.are.equal("claudecode", mock_state.buffers[bufnr].options.filetype)
+    end)
+  end)
+
+  describe("Ctrl-Z in terminal mode (#194)", function()
+    local keymap_calls
+
+    before_each(function()
+      keymap_calls = {}
+      local mock_state = _G.get_mock_state()
+      mock_vim.keymap.set = function(mode, lhs, rhs, opts)
+        table.insert(keymap_calls, {
+          mode = mode,
+          lhs = lhs,
+          rhs = rhs,
+          opts = opts,
+          filetype_then = mock_state.buffers[opts.buffer].options.filetype,
+        })
+      end
+      mock_vim.fn.termopen = function()
+        return 12345
+      end
+    end)
+
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+
+    it("maps <C-z> to :suspend on the Claude terminal buffer and on no other buffer", function()
+      native_provider.open("claude", {}, config, true)
+
+      local bufnr = native_provider.get_active_bufnr()
+      assert.are.equal(1, #keymap_calls)
+      assert.are.equal("t", keymap_calls[1].mode)
+      assert.are.equal("<C-z>", keymap_calls[1].lhs)
+      assert.are.equal("<Cmd>suspend<CR>", keymap_calls[1].rhs)
+      assert.are.equal(bufnr, keymap_calls[1].opts.buffer)
+    end)
+
+    it("maps it before the filetype is set, so a FileType claudecode autocmd sees the mapping", function()
+      native_provider.open("claude", {}, config, true)
+
+      assert.are.equal(1, #keymap_calls)
+      assert.is_nil(keymap_calls[1].filetype_then)
+      local mock_state = _G.get_mock_state()
+      assert.are.equal("claudecode", mock_state.buffers[native_provider.get_active_bufnr()].options.filetype)
+    end)
+
+    it("maps the buffer once: opening again, hiding and showing it add no mapping", function()
+      native_provider.open("claude", {}, config, true)
+      native_provider.open("claude", {}, config, true)
+      native_provider.simple_toggle("claude", {}, config)
+      native_provider.simple_toggle("claude", {}, config)
+      native_provider.focus_toggle("claude", {}, config)
+
+      assert.are.equal(1, #keymap_calls)
+    end)
+
+    it("maps no buffer when termopen fails", function()
+      local mock_state = _G.get_mock_state()
+      mock_state.windows[1] = { bufnr = 0 }
+      mock_state.current_win = 1
+      mock_vim.api.nvim_buf_delete = function(bufnr)
+        mock_state.buffers[bufnr] = nil
+      end
+      mock_vim.notify = function() end
+      mock_vim.log = { levels = { ERROR = 4 } }
+      mock_vim.fn.termopen = function()
+        return -1
+      end
+
+      native_provider.open("claude", {}, config, true)
+
+      assert.are.equal(0, #keymap_calls)
     end)
   end)
 
@@ -1552,6 +1629,341 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.is_not_nil(mock_state.windows[claude_winid])
       assert.are.equal(notes_bufnr, mock_state.windows[claude_winid].bufnr)
       assert.is_nil(native_provider.get_active_bufnr())
+    end)
+  end)
+
+  describe("after a module reload", function()
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+
+    local function windows_showing(bufnr)
+      local count = 0
+      for _, win in pairs(_G.get_mock_state().windows) do
+        if win.bufnr == bufnr then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    local function running_count()
+      local count = 0
+      for _ in pairs(_G.get_mock_state().running_jobs) do
+        count = count + 1
+      end
+      return count
+    end
+
+    -- :Lazy reload clears the plugin's modules and runs setup again. The new copy tracks nothing.
+    local function reload_native()
+      package.loaded["claudecode.terminal.native"] = nil
+      native_provider = require("claudecode.terminal.native")
+      native_provider.setup({})
+    end
+
+    local entries = {
+      {
+        "open",
+        function()
+          native_provider.open("claude", {}, config)
+        end,
+      },
+      {
+        "simple_toggle",
+        function()
+          native_provider.simple_toggle("claude", {}, config)
+        end,
+      },
+      {
+        "focus_toggle",
+        function()
+          native_provider.focus_toggle("claude", {}, config)
+        end,
+      },
+    }
+
+    for _, entry in ipairs(entries) do
+      local entry_name, start = entry[1], entry[2]
+      it("should show the hidden terminal instead of starting a second one when " .. entry_name .. " runs", function()
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        native_provider.simple_toggle("claude", {}, config)
+        assert.are.equal(0, windows_showing(claude_bufnr))
+        reload_native()
+
+        start()
+
+        assert.are.equal(1, running_count())
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+        assert.are.equal(1, windows_showing(claude_bufnr))
+      end)
+    end
+
+    for _, hidden in ipairs({ false, true }) do
+      it("should report the terminal as active before any command runs (hidden=" .. tostring(hidden) .. ")", function()
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        if hidden then
+          native_provider.simple_toggle("claude", {}, config)
+        end
+        reload_native()
+
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+      end)
+    end
+
+    it("should look for a terminal to adopt once when none runs", function()
+      local scans = 0
+      local list_bufs = mock_vim.api.nvim_list_bufs
+      mock_vim.api.nvim_list_bufs = function()
+        scans = scans + 1
+        return list_bufs()
+      end
+
+      assert.is_nil(native_provider.get_active_bufnr())
+      assert.is_nil(native_provider.get_active_bufnr())
+
+      assert.are.equal(1, scans)
+    end)
+
+    for _, hidden in ipairs({ false, true }) do
+      it("should stop the job and delete the buffer when close runs (hidden=" .. tostring(hidden) .. ")", function()
+        local mock_state = _G.get_mock_state()
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        local claude_jobid = mock_state.buffers[claude_bufnr].jobid
+        if hidden then
+          native_provider.simple_toggle("claude", {}, config)
+        end
+        reload_native()
+
+        native_provider.close()
+
+        assert.is_nil(mock_state.running_jobs[claude_jobid])
+        assert.is_nil(mock_state.buffers[claude_bufnr])
+        assert.is_nil(native_provider.get_active_bufnr())
+      end)
+    end
+
+    describe("a Claude that the snacks provider started", function()
+      local snacks_bufnr, snacks_winid, snacks_jobid = 50, 500, 5000
+      local snacks_closed, notices, snacks_available
+
+      before_each(function()
+        local mock_state = _G.get_mock_state()
+        snacks_closed = 0
+        snacks_available = true
+        notices = {}
+        mock_vim.log = { levels = { WARN = 3, ERROR = 4 } }
+        mock_vim.notify = function(message, level)
+          table.insert(notices, { message = message, level = level })
+        end
+        mock_state.buffers[snacks_bufnr] = {
+          name = "term://claude",
+          options = { buftype = "terminal", channel = snacks_jobid },
+          vars = { claudecode_snacks_terminal = true },
+          jobid = snacks_jobid,
+        }
+        mock_state.windows[snacks_winid] = { bufnr = snacks_bufnr }
+        mock_state.running_jobs[snacks_jobid] = true
+        -- The snacks provider stops its own Claude and wipes the buffer.
+        package.loaded["claudecode.terminal.snacks"] = {
+          is_available = function()
+            return snacks_available
+          end,
+          close = function()
+            snacks_closed = snacks_closed + 1
+            mock_state.running_jobs[snacks_jobid] = nil
+            mock_state.buffers[snacks_bufnr] = nil
+            mock_state.windows[snacks_winid] = nil
+          end,
+        }
+      end)
+
+      after_each(function()
+        package.loaded["claudecode.terminal.snacks"] = nil
+        package.preload["claudecode.terminal.snacks"] = nil
+      end)
+
+      for _, entry in ipairs(entries) do
+        local entry_name, start = entry[1], entry[2]
+        it("should be stopped before the native provider starts its own when " .. entry_name .. " runs", function()
+          local mock_state = _G.get_mock_state()
+
+          start()
+
+          assert.are.equal(1, snacks_closed)
+          assert.are.equal(1, #notices)
+          assert.are.equal(mock_vim.log.levels.WARN, notices[1].level)
+          assert.is_nil(mock_state.running_jobs[snacks_jobid])
+          assert.are.equal(1, running_count())
+          assert.is_not_nil(native_provider.get_active_bufnr())
+        end)
+      end
+
+      -- The snacks provider cannot stop a Claude that it cannot find or load. The native provider stops the marked
+      -- buffer itself.
+      local function assert_stopped_directly()
+        local mock_state = _G.get_mock_state()
+        assert.is_nil(mock_state.running_jobs[snacks_jobid])
+        assert.is_nil(mock_state.buffers[snacks_bufnr])
+        assert.are.equal(1, #notices)
+        assert.are.equal(mock_vim.log.levels.WARN, notices[1].level)
+        assert.are.equal(1, running_count())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+      end
+
+      it("should be stopped directly when the snacks provider is not available", function()
+        snacks_available = false
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(0, snacks_closed)
+        assert_stopped_directly()
+      end)
+
+      it("should be stopped directly when the snacks provider cannot load", function()
+        package.loaded["claudecode.terminal.snacks"] = nil
+        package.preload["claudecode.terminal.snacks"] = function()
+          error("module 'claudecode.terminal.snacks' cannot load")
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert_stopped_directly()
+      end)
+
+      it("should be stopped directly when the snacks provider finds no terminal to stop", function()
+        package.loaded["claudecode.terminal.snacks"].close = function()
+          snacks_closed = snacks_closed + 1
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(1, snacks_closed)
+        assert_stopped_directly()
+      end)
+
+      it("should not be reported as stopped when its buffer survives the stop", function()
+        local mock_state = _G.get_mock_state()
+        snacks_available = false
+        local delete = mock_vim.api.nvim_buf_delete
+        mock_vim.api.nvim_buf_delete = function(bufnr, opts)
+          if bufnr ~= snacks_bufnr then
+            delete(bufnr, opts)
+          end
+        end
+        local logged_errors = {}
+        package.loaded["claudecode.logger"].error = function(_, message)
+          table.insert(logged_errors, message)
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert.is_not_nil(mock_state.buffers[snacks_bufnr])
+        assert.are.same({}, notices)
+        assert.are.same({ "Could not stop the Claude that the snacks provider started." }, logged_errors)
+      end)
+
+      -- Stopping a Claude waits for its job to exit, which runs scheduled callbacks and TermClose autocmds. An open()
+      -- among them starts Claude, and the open that started the stop must not start another.
+      it("should not start a second terminal when an open runs while the snacks provider stops its Claude", function()
+        local mock_state = _G.get_mock_state()
+        local close = package.loaded["claudecode.terminal.snacks"].close
+        package.loaded["claudecode.terminal.snacks"].close = function()
+          close()
+          native_provider.open("claude", {}, config)
+        end
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(1, running_count())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+        assert.is_nil(mock_state.running_jobs[snacks_jobid])
+      end)
+
+      it("should not start a second terminal when a TermClose autocmd opens while the stop waits", function()
+        snacks_available = false
+        local opened = false
+        mock_vim.api.nvim_create_autocmd("TermClose", {
+          callback = function()
+            if not opened then
+              opened = true
+              native_provider.open("claude", {}, config)
+            end
+          end,
+        })
+
+        native_provider.open("claude", {}, config)
+
+        assert.is_true(opened)
+        assert.are.equal(1, running_count())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+      end)
+
+      -- With focus the terminal window is current afterwards. Without focus (ensure_visible) the user's window stays.
+      for _, focus in ipairs({ true, false }) do
+        it(
+          "should show the terminal that an open created and a toggle hid while the stop waited (focus="
+            .. tostring(focus)
+            .. ")",
+          function()
+            local mock_state = _G.get_mock_state()
+            snacks_available = false
+            local user_winid = mock_state.current_win
+            local opened = false
+            mock_vim.api.nvim_create_autocmd("TermClose", {
+              callback = function()
+                if not opened then
+                  opened = true
+                  native_provider.open("claude", {}, config)
+                  native_provider.simple_toggle("claude", {}, config)
+                  -- Neovim moves the focus back to the user's window when the terminal window closes.
+                  mock_state.current_win = user_winid
+                end
+              end,
+            })
+
+            assert.has_no.errors(function()
+              native_provider.open("claude", {}, config, focus)
+            end)
+
+            local active = native_provider.get_active_bufnr()
+            assert.is_true(opened)
+            assert.is_not_nil(active)
+            assert.are.equal(1, running_count())
+            assert.are.equal(1, windows_showing(active))
+            local current_bufnr = mock_state.windows[mock_state.current_win].bufnr
+            assert.are.equal(focus, current_bufnr == active)
+            assert.are.equal(not focus, mock_state.current_win == user_winid)
+          end
+        )
+      end
+
+      it("should be stopped when close runs and the native provider tracks no terminal", function()
+        local mock_state = _G.get_mock_state()
+
+        native_provider.close()
+
+        assert.are.equal(1, snacks_closed)
+        assert.are.equal(1, #notices)
+        assert.is_nil(mock_state.running_jobs[snacks_jobid])
+      end)
+
+      it("should be left alone when the native provider adopts its own terminal", function()
+        local mock_state = _G.get_mock_state()
+        -- The native Claude starts while no snacks Claude runs. The snacks Claude appears after the reload.
+        mock_state.buffers[snacks_bufnr].vars.claudecode_snacks_terminal = nil
+        native_provider.open("claude", {}, config)
+        local claude_bufnr = native_provider.get_active_bufnr()
+        reload_native()
+        mock_state.buffers[snacks_bufnr].vars.claudecode_snacks_terminal = true
+
+        native_provider.open("claude", {}, config)
+
+        assert.are.equal(0, snacks_closed)
+        assert.are.equal(claude_bufnr, native_provider.get_active_bufnr())
+        assert.are.equal(2, running_count())
+      end)
     end)
   end)
 

@@ -68,7 +68,24 @@ describe("claudecode.terminal.snacks command handling", function()
         end
         return res
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
+      fn = {
+        maparg = function()
+          return {}
+        end,
+      },
+      keymap = { set = function() end },
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
+        nvim_buf_call = function(_, fn)
+          return fn()
+        end,
         nvim_buf_is_valid = function()
           return true
         end,
@@ -154,6 +171,58 @@ describe("claudecode.terminal.snacks command handling", function()
 
     assert.is_table(captured.cmd)
     assert.are.same({ home .. "/.claude/local/claude" }, captured.cmd)
+  end)
+
+  describe("Ctrl-Z in terminal mode (#194)", function()
+    local keymap_calls
+    local VISIBLE_WIN = 2
+
+    before_each(function()
+      keymap_calls = {}
+      _G.vim.keymap.set = function(mode, lhs, rhs, opts)
+        table.insert(keymap_calls, { mode = mode, lhs = lhs, rhs = rhs, opts = opts })
+      end
+    end)
+
+    it("maps <C-z> to :suspend on the Claude terminal buffer and on no other buffer", function()
+      snacks_provider.open("claude", {}, base_config(), true)
+
+      assert.are.equal(1, #keymap_calls)
+      assert.are.equal("t", keymap_calls[1].mode)
+      assert.are.equal("<C-z>", keymap_calls[1].lhs)
+      assert.are.equal("<Cmd>suspend<CR>", keymap_calls[1].rhs)
+      assert.are.equal(1, keymap_calls[1].opts.buffer)
+    end)
+
+    it("maps the buffer once: opening the existing terminal again adds no mapping", function()
+      mock_snacks.terminal.open = spy.new(function()
+        local instance = make_term_instance()
+        instance.win = VISIBLE_WIN
+        return instance
+      end)
+      _G.vim.api.nvim_win_get_config = function()
+        return {}
+      end
+      _G.vim.api.nvim_win_get_buf = function()
+        return 1
+      end
+
+      snacks_provider.open("claude", {}, base_config(), true)
+      snacks_provider.open("claude", {}, base_config(), true)
+
+      assert.spy(mock_snacks.terminal.open).was_called(1)
+      assert.are.equal(1, #keymap_calls)
+    end)
+
+    it("keeps a <C-z> mapping that a FileType or on_buf handler already set on the buffer", function()
+      _G.vim.fn.maparg = function()
+        return { lhs = "<C-Z>", rhs = "<C-z>", buffer = 1 }
+      end
+
+      snacks_provider.open("claude", {}, base_config(), true)
+
+      assert.are.equal(0, #keymap_calls)
+    end)
   end)
 
   -- The buffer filetype goes through the Snacks window options (`bo`), not a later vim.bo write: Snacks applies

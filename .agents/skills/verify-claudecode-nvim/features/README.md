@@ -48,6 +48,7 @@ Keep implementation details out of the map. Name only user paths, stable handles
 - [Open a file for the user](./open-file.md) covers openFile with text and line selections, the background (`makeFrontmost: false`) form, the target window, the preview window, and reloads of files changed on disk.
 - [Share the selection](./selection.md) covers `selection_changed` notifications, `getCurrentSelection`, `getLatestSelection`, and `track_selection = false`.
 - [Send context with an at-mention](./send-at-mention.md) covers `:ClaudeCodeSend` from Visual and Select mode, `:ClaudeCodeAdd`, `:ClaudeCodeTreeAdd`, and mentions queued while Claude is disconnected.
-- [Run Claude in a terminal split](./terminal.md) covers `:ClaudeCode`, `:ClaudeCodeFocus`, `:ClaudeCodeOpen`, `:ClaudeCodeClose`, `:ClaudeCodeSendText`, `:ClaudeCodeSelectModel`, the `claudecode` filetype, and the `none` and `external` providers.
+- [Run Claude in a terminal split](./terminal.md) covers `:ClaudeCode`, `:ClaudeCodeFocus`, `:ClaudeCodeOpen`, `:ClaudeCodeClose`, `:ClaudeCodeSendText`, `:ClaudeCodeSelectModel`, the `claudecode` filetype, the README's terminal-mode key mappings, and the `none` and `external` providers.
 - [Report editor state](./editor-state.md) covers the `getWorkspaceFolders`, `getOpenEditors`, `getDiagnostics`, `checkDocumentDirty`, and `saveDocument` tools.
 - [Start and stop the Claude server](./server.md) covers `:ClaudeCodeStart`, `:ClaudeCodeStop`, `:ClaudeCodeStatus`, the lock file, token refusal, and diffs closed on disconnect.
+- [Suspend Neovim with Ctrl-Z in the Claude terminal](./terminal-ctrl-z.md) covers the terminal-mode `<C-z>` mapping of the `native` and `snacks` providers: Ctrl-Z runs `:suspend` and never reaches the Claude job.

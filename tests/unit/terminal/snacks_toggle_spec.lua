@@ -102,7 +102,11 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
           return rawget(t, win)
         end,
       }),
+      keymap = { set = function() end },
       fn = {
+        maparg = function()
+          return {}
+        end,
         has = function(feature)
           return feature == "nvim-0.10" and 1 or 0
         end,
@@ -142,7 +146,18 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end
         return result
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
+        nvim_buf_call = function(_, fn)
+          return fn()
+        end,
         nvim_buf_is_valid = function(b)
           return b ~= nil and b >= 1
         end,

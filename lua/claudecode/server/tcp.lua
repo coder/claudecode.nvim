@@ -10,6 +10,7 @@ local M = {}
 ---@field clients table<string, WebSocketClient> Table of connected clients
 ---@field on_message function Callback for WebSocket messages
 ---@field on_connect function Callback for new connections
+---@field on_open function Callback for a client whose WebSocket handshake completed
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
 
@@ -148,6 +149,7 @@ function M.create_server(config, callbacks, auth_token)
     clients = {},
     on_message = callbacks.on_message or function() end,
     on_connect = callbacks.on_connect or function() end,
+    on_open = callbacks.on_open or function() end,
     on_disconnect = callbacks.on_disconnect or function() end,
     on_error = callbacks.on_error or function() end,
   }
@@ -220,10 +222,10 @@ function M._handle_new_connection(server)
       M._disconnect_client(server, cl, code, reason)
     end, function(cl, error_msg)
       M._disconnect_client(server, cl, 1006, "Client error: " .. error_msg)
-    end, server.auth_token)
+    end, server.auth_token, server.on_open)
   end)
 
-  -- Notify about new connection
+  -- Notify about the TCP connection. on_open follows once its WebSocket handshake completes.
   server.on_connect(client)
 end
 
@@ -305,10 +307,39 @@ end
 ---Broadcast a message to all connected clients
 ---@param server TCPServer The server object
 ---@param message string The message to broadcast
-function M.broadcast(server, message)
-  for _, client in pairs(server.clients) do
-    client_manager.send_message(client, message)
+---@param on_written fun(written: integer)|nil When a client took the message: called once, after the last write
+---  finished, with how many writes succeeded. A socket that fails during the write reports it only here.
+---@return integer sent How many clients took the message: those whose state is "connected"
+function M.broadcast(server, message, on_written)
+  local sent, pending, written, dispatched, reported = 0, 0, 0, false, false
+  local function finish()
+    if dispatched and not reported and pending == 0 and sent > 0 then
+      reported = true
+      on_written(written)
+    end
   end
+  for _, client in pairs(server.clients) do
+    if client.state == "connected" then
+      sent = sent + 1
+      if on_written then
+        pending = pending + 1
+        client_manager.send_message(client, message, function(err)
+          pending = pending - 1
+          if not err then
+            written = written + 1
+          end
+          finish()
+        end)
+      else
+        client_manager.send_message(client, message)
+      end
+    end
+  end
+  if on_written then
+    dispatched = true
+    finish()
+  end
+  return sent
 end
 
 ---Get the number of connected clients
@@ -393,6 +424,13 @@ function M.start_ping_timer(server, interval)
       if client.state == "connected" then
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, interval * 2) then
+          client.pong_overdue = nil
+          client_manager.send_ping(client, "ping")
+        elseif not client.pong_overdue then
+          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
+          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
+          -- finds the pong that was read in between, or drops the client.
+          client.pong_overdue = true
           client_manager.send_ping(client, "ping")
         else
           -- Client connection timed out - log at INFO level (this is expected behavior)

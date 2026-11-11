@@ -30,6 +30,7 @@ local CLOSE_REASONS = {
 ---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
+---@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -114,7 +115,8 @@ end
 ---@param on_close function Callback for client close: function(client, code, reason)
 ---@param on_error function Callback for errors: function(client, error_msg)
 ---@param auth_token string|nil Expected authentication token for validation
-function M.process_data(client, data, on_message, on_close, on_error, auth_token)
+---@param on_open function|nil Callback once the WebSocket handshake completed: function(client)
+function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
   -- Nothing more is parsed from a client that is closing, so none of its bytes are kept either.
   if client.state == "closing" or client.state == "closed" then
     client.buffer, client.pending = "", nil
@@ -195,9 +197,12 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
         client.last_pong = vim.loop.now()
         logger.debug("client", "WebSocket connection established for client:", client.id)
+        if on_open then
+          on_open(client)
+        end
 
         if #client.buffer > 0 then
-          M.process_data(client, "", on_message, on_close, on_error, auth_token)
+          M.process_data(client, "", on_message, on_close, on_error, auth_token, on_open)
         end
       end)
     end

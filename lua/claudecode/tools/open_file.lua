@@ -287,19 +287,30 @@ end
 ---Runs `fn` while Neovim does not check the file of `buf`: it checks only a buffer whose 'buftype' is empty. The
 ---BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "acwrite". Not "nowrite": Neovim reads
 ---'modified' as off for a nowrite buffer, so an autocommand that loads an unmodified buffer again would drop unsaved
----changes.
+---changes. A write of an "acwrite" buffer skips the check that refuses `:w` of a buffer opened before its file
+---existed (E13), so such a buffer is also 'readonly' during `fn`. With default options, 'readonly' refuses a write
+---without `!`, or asks with 'confirm', as E13 does.
 ---@param buf integer
 ---@param fn fun()
 local function without_neovim_file_check(buf, fn)
-  local function set_buftype(value)
+  local function setlocal(option)
     vim.api.nvim_buf_call(buf, function()
-      vim.cmd("noautocmd setlocal buftype=" .. value)
+      vim.cmd("noautocmd setlocal " .. option)
     end)
   end
-  set_buftype("acwrite")
+  local set_readonly = new_file_buffers[buf] and not vim.api.nvim_buf_get_option(buf, "readonly")
+  if set_readonly then
+    setlocal("readonly")
+  end
+  setlocal("buftype=acwrite")
   local ok, err = pcall(fn)
-  if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "acwrite" then
-    set_buftype("")
+  if vim.api.nvim_buf_is_valid(buf) then
+    if vim.api.nvim_buf_get_option(buf, "buftype") == "acwrite" then
+      setlocal("buftype=")
+    end
+    if set_readonly and vim.api.nvim_buf_get_option(buf, "readonly") then
+      setlocal("noreadonly")
+    end
   end
   if not ok then
     error(err, 0)

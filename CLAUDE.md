@@ -250,19 +250,11 @@ The plugin implements authentication using 128-bit tokens (32-char lowercase hex
 
 ### Manual Authentication Testing
 
-**Test Script Authentication Support**:
-
-```bash
-# Test scripts automatically detect and use authentication tokens
-cd scripts/
-./claude_interactive.sh  # Automatically reads auth token from lock file
-```
-
 **Authentication Flow Testing**:
 
 1. Start the plugin: `:ClaudeCodeStart`
 2. Check lock file contains `authToken`: `cat ~/.claude/ide/*.lock | jq .authToken`
-3. Test WebSocket connection with auth: Use test scripts in `scripts/` directory
+3. Test WebSocket connection with auth: create an empty out file, then run `mise exec -- node .agents/skills/verify-claudecode-nvim/scripts/ws-client.mjs <lock file> <out file> <in file>` from the repo root (it reads the token from the lock file, sends each line you append to the out file, and appends each reply to the in file), or use the `websocat` commands below
 4. Verify authentication in logs: Set `log_level = "debug"` in config
 
 **Testing Authentication Failures**:
@@ -358,7 +350,7 @@ Log levels for authentication events:
 
 ### Performance Optimizations
 
-- Selection tracking is debounced to reduce overhead
+- Selection tracking is debounced (100 ms) to reduce overhead. Leaving visual mode, editing or consuming the held text, and moving the cursor away from a held selection report at once. So does a change to the held text while you are in the Claude terminal (a reload, a plugin's edit): a listener from `nvim_buf_attach` on its buffer sees it, because `TextChanged` fires only for the current buffer
 - WebSocket frame processing optimized for JSON-RPC payload sizes
 - Connection pooling and cleanup to prevent resource leaks
 
@@ -374,7 +366,7 @@ release-please runs releases (`.github/workflows/release-please.yaml`). Each pus
 
 - Do not edit the version by hand. `lua/claudecode/init.lua` reads `M.version` from `VERSION` when it loads, so a release changes no Lua file and `covered.lock` stays current. The numbers in `init.lua` are only the `0.0.0-unknown` fallback.
 - Give each PR a Conventional Commits title. The merge queue squashes with the title, and release-please picks the next version from those subjects.
-- The `"version"` strings in `scripts/claude_interactive.sh` and `scripts/lib_claude.sh` are the test client's own `clientInfo`, not the plugin version.
+- The `"version"` strings in `scripts/repro_issue_238.sh` and `scripts/repro_issue_248.sh` are the repro client's own `clientInfo`, not the plugin version.
 
 ## Development Workflow
 

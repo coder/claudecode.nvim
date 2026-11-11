@@ -59,7 +59,6 @@
 ---@field file_path string The absolute file path to mention
 ---@field start_line number? Optional start line (0-indexed for Claude compatibility)
 ---@field end_line number? Optional end line (0-indexed for Claude compatibility)
----@field timestamp number Creation timestamp from vim.loop.now() for expiry tracking
 
 -- Payload delivered as `data` to a `User ClaudeCodeSendComplete` autocmd. Fired
 -- once per file, synchronously, when a send is accepted while Claude is connected.
@@ -95,7 +94,7 @@
 ---@field terminal_cmd string?
 ---@field provider_opts ClaudeCodeTerminalProviderOptions?
 ---@field auto_close boolean
----@field auto_insert boolean -- auto-enter insert/terminal mode when the Claude terminal gains focus (#232); false keeps Normal mode + scroll position
+---@field auto_insert boolean -- auto-enter terminal mode when the plugin opens/focuses the Claude terminal; snacks also on any window focus, native not on <C-w>l, except after a new-tab diff put the terminal in its tab and until that window closes (#232); false keeps Normal mode + scroll position
 ---@field env table<string, string>
 ---@field snacks_win_opts snacks.win.Config
 ---@field cwd string|nil                 -- static working directory for Claude terminal
@@ -127,7 +126,7 @@
 ---@field visual_demotion_delay_ms number
 ---@field connection_wait_delay number
 ---@field connection_timeout number
----@field queue_timeout number
+---@field queue_timeout number Unused: accepted so that configs that set it stay valid
 ---@field diff_opts ClaudeCodeDiffOptions
 ---@field models ClaudeCodeModelOption[]
 ---@field disable_broadcast_debouncing? boolean
@@ -151,8 +150,8 @@
 ---@field auth_token string|nil
 ---@field initialized boolean
 ---@field mention_queue ClaudeCodeMention[]
----@field mention_timer uv.uv_timer_t?  -- (compatible with vim.loop timer)
----@field connection_timer uv.uv_timer_t?  -- (compatible with vim.loop timer)
+---@field mention_timer uv.uv_timer_t?  -- the next flush of the mention queue (compatible with vim.loop timer)
+---@field connection_timer uv.uv_timer_t?  -- the timeout of the mentions that wait for Claude to connect
 
 -- This module only defines types, no runtime functionality
 return {}
