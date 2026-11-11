@@ -130,6 +130,9 @@ if not _G.vim then
       end,
 
       nvim_buf_attach = function(bufnr, _send_buffer, callbacks)
+        if not _G.vim._buffers[bufnr] then
+          return false -- Neovim cannot attach to an unloaded buffer, and does not raise
+        end
         _G.vim._buf_listeners[bufnr] = _G.vim._buf_listeners[bufnr] or {}
         table.insert(_G.vim._buf_listeners[bufnr], callbacks)
         return true
@@ -2763,6 +2766,23 @@ describe("Range Selection Tests", function()
           change_buffer_1({ "beta gamma" })
 
           assert.are.equal(0, #_G.vim._buf_listeners[1])
+        end)
+
+        -- nvim_buf_attach returns false for an unloaded buffer. A watched flag set before that would stay set, and the
+        -- next read of the buffer, after it is loaded again, would attach no listener.
+        it("listens again after the buffer was unloaded and loaded again", function()
+          hold_alpha_and_enter_the_terminal()
+          local lines = _G.vim._buffers[1].lines
+          _G.vim._buffers[1] = nil -- :bunload!
+
+          fire_buffer_listeners(1, "on_detach")
+
+          assert.is_nil(selection.state.watched_buffers[1])
+          _G.vim.test.add_buffer(1, "/path/to/a.txt", lines) -- :buffer 1 loads it again
+          go_to_buffer(1, 0)
+          start_selecting(6)
+          release_selection(1, 5, 4)
+          assert.are.equal(1, #_G.vim._buf_listeners[1])
         end)
 
         it("does not read a buffer that was unloaded", function()

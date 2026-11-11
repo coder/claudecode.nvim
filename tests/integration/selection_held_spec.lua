@@ -204,6 +204,39 @@ describe("a held selection with the real plugin", function()
       assert.are.equal(4, held.selection.start.character)
     end)
 
+    -- :bunload! detaches the listener, and nvim_buf_attach cannot attach to an unloaded buffer. When the file is loaded
+    -- again and selected from, a new listener must be attached.
+    it("listens again when the file was unloaded and a new selection is read after it loads again", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("terminal sh -c 'sleep 60' claude")
+      local term_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("buffer " .. file_buf)
+      wait(200)
+      select_and_release()
+
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+      vim.cmd("bunload! " .. file_buf)
+      wait(200)
+      vim.cmd("buffer " .. file_buf)
+      vim.api.nvim_win_set_cursor(0, { 1, 0 }) -- Neovim put the cursor back where it was
+      wait(200)
+      select_and_release()
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
+
     it("keeps the selection when a reload leaves its text in place", function()
       start({ provider = "none" }, 50)
       open_file("alpha beta gamma")
