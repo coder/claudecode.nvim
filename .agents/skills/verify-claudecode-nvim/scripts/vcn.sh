@@ -24,6 +24,7 @@
 # TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path to an
 #              existing directory with no . or .. part, and neither it nor a dir above it may be writable by others without
 #              the sticky bit. Launch resolves <dir> once, so VCN_STATE has no symlink in it.
+#              agent-tty never reads it: every agent-tty call runs with TMPDIR=$VCN_STATE/tmp.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -94,10 +95,15 @@ load() {
 # its own: Node resets the signals that its parent ignores, so `trap ''` does not reach it, and a signal sent to launch's
 # process group would end the call. A process in another session never gets that signal. It runs the setsid that launch
 # resolved (SETSID_BIN): a bare setsid could be another one on PATH, or none.
+#
+# agent-tty makes its staging dirs (a WebM export, a screenshot, the browser profile) under TMPDIR and follows every symlink in
+# it each time. A caller's TMPDIR can hold a symlink that another user repoints after launch, and a command can run with
+# any TMPDIR, so agent-tty gets one of its own: $VCN_STATE/tmp, in the dir that load has checked.
 att() {
   local own=()
   [[ -z ${own_session-} ]] || own=("$SETSID_BIN" -w)
-  PATH="$NODE_DIR:$PATH" ${own[@]+"${own[@]}"} "$ATT_BIN" --home "$ATT_HOME" "$@"
+  [[ -d $VCN_STATE/tmp ]] || mkdir -m 700 -- "$VCN_STATE/tmp"
+  PATH="$NODE_DIR:$PATH" TMPDIR="$VCN_STATE/tmp" ${own[@]+"${own[@]}"} "$ATT_BIN" --home "$ATT_HOME" "$@"
 }
 
 # Callers pass --json. A failed command answers ok:false.
@@ -588,7 +594,7 @@ cmd_launch() {
     ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
     die "a new file in $out gets mode $mode, not 600; remove its default ACL (setfacl -k) or set VERIFY_OUT to another dir"
   fi
-  mkdir -p "$state"/{home,claude,work}
+  mkdir -p "$state"/{home,claude,work,tmp}
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"
   : >"$out/ws-out.jsonl"

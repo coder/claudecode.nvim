@@ -20,6 +20,12 @@
 #   state-names       the same, when the name of that dir ends in a space, a tab or a newline, and a symlink with the
 #                     shorter name sits next to it
 #   state-env         a state_checked in the caller's environment does not skip the check
+#   state-mode-partial  a state dir that only others can write (702), or only the group (720), is refused, not sourced
+#   state-parent-partial  the same for a dir above the state dir
+#   tmp-multihop      TMPDIR is this user's symlink to a second symlink in a dir that others can write, to a dir only this user
+#                     can write: launch accepts it, and after another user repoints the second symlink, `record` still
+#                     writes no byte of theirs into the evidence dir, because agent-tty never reads the caller's TMPDIR
+#   tmp-later-tmpdir  a command run with a TMPDIR that does not exist works: agent-tty makes its staging dirs in the state dir
 #   state-count       a stat that answers for one dir fewer than the walk asked for (a shim drops the record of the loose
 #                     dir above the state dir) makes the walk refuse, not pass
 #   state-newline     a state dir whose name ends in a newline is accepted: the check reads its resolved path whole
@@ -835,6 +841,33 @@ state_env_case() {
   cases=$((cases + 1))
 }
 
+# A test of both write bits catches a mode that only the group, or only others, can write. A test of one bit passes the
+# other: 702 is the mode for the group bit, 720 for the others bit.
+state_mode_partial_case() {
+  local name=state-mode-partial dir mode
+  for mode in 702 720; do
+    dir=$(marker_state_dir "$priv")
+    chmod "$mode" "$dir"
+    refuses_state "$name" "$dir" "refusing state dir $dir: it is group- or world-writable"
+    [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  done
+  echo "ok $name: a state dir that only others, or only the group, can write was refused and its run.env not sourced"
+  cases=$((cases + 1))
+}
+
+state_parent_partial_case() {
+  local name=state-parent-partial loose dir mode
+  for mode in 702 720; do
+    loose=$TMP/loose-$mode
+    mkdir -m "$mode" "$loose"
+    dir=$(marker_state_dir "$loose")
+    refuses_state "$name" "$dir" "refusing state dir $dir: $loose, above the state dir, is writable by others and not sticky"
+    rm -rf -- "$loose"
+  done
+  echo "ok $name: a dir above the state dir that only others, or only the group, can write was refused"
+  cases=$((cases + 1))
+}
+
 # unsafe_walk reads one stat record per dir that exists, and refuses when it gets fewer: a missing record would shift the
 # owner and mode of every dir after it. The stat shim drops the loose dir from its arguments, so the one dir that the walk
 # must refuse is the one that gets no record.
@@ -932,6 +965,72 @@ state_ancestor_case() {
     "a state dir under a dir that another user owns"
 }
 
+# swap_watch <dir> <seconds> plays another user who owns <dir>. When agent-tty's staging dir (agent-tty-webm-*) appears there,
+# it moves it aside and puts a dir of its own in its place, and when a .webm file appears in that dir, it moves the file
+# aside and writes its own bytes under the same name. It polls every 0.05 s and ends once it has planted a file.
+swap_watch() {
+  local d=$1 until=$((SECONDS + $2)) s f swapped="" planted=""
+  while ((SECONDS < until)); do
+    for s in "$d"/agent-tty-webm-*; do
+      [[ -d $s && ! -L $s && $s != *.orig && -z $swapped ]] || continue
+      mv -- "$s" "$s.orig" && mkdir -m 777 -- "$s" && swapped=$s
+    done
+    if [[ -n $swapped && -z $planted ]]; then
+      for f in "$swapped"/*.webm; do
+        [[ -f $f ]] || continue
+        mv -- "$f" "$f.orig" && printf 'FORGED-BY-ANOTHER-USER\n' >"$f" && planted=$f
+      done
+    fi
+    [[ -z $planted ]] || return 0
+    sleep 0.05
+  done
+}
+
+# agent-tty reads TMPDIR as it is given and follows every symlink in it each time it makes a staging dir. TMPDIR is a symlink of
+# this user's (hop1) to a symlink in a dir that others can write (hop2), to the private dir. Both walks of launch pass it: hop1
+# is this user's, and the resolved dir is private. After launch, hop2 is pointed at a dir of another user, whom swap_watch
+# plays while `record` runs. The evidence dir must not get the planted bytes.
+tmp_multihop_case() {
+  local name=tmp-multihop loose=$TMP/mh-loose own=$TMP/mh-own other r=0 wpid wcmd
+  other=$loose/other
+  mkdir -m 777 "$loose" "$other"
+  mkdir -m 700 "$own"
+  ln -s "$priv" "$loose/hop2"
+  ln -s "$loose/hop2" "$own/hop1"
+  launch "$name" "$good_path" TMPDIR="$own/hop1"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  rm -- "$loose/hop2"
+  ln -s "$other" "$loose/hop2"
+  swap_watch "$other" 120 &
+  wpid=$!
+  wcmd=$(tr '\0' ' ' <"/proc/$wpid/cmdline")
+  env PATH="$good_path" TMPDIR="$own/hop1" VCN_STATE="$state" "$V" record r2 >"$TMP/$name-record.txt" 2>&1 || r=$?
+  if [[ -d /proc/$wpid && $(tr '\0' ' ' <"/proc/$wpid/cmdline") == "$wcmd" ]]; then kill "$wpid"; fi
+  wait "$wpid" 2>/dev/null || true
+  stop "$good_path"
+  ((r == 0)) || fail "$name" "record exited $r: $(tail -n 2 "$TMP/$name-record.txt")"
+  [[ -s $TMP/out-$name/r2.webm ]] || fail "$name" "record wrote no r2.webm"
+  ! grep -q FORGED-BY-ANOTHER-USER "$TMP/out-$name/r2.webm" ||
+    fail "$name" "r2.webm holds the bytes that another user planted through the symlinks of TMPDIR"
+  echo "ok $name: after the second symlink of TMPDIR was repointed, record wrote none of the other user's bytes"
+  cases=$((cases + 1))
+}
+
+# A command that runs with another TMPDIR than launch did must not depend on it: this one names a dir that does not exist.
+tmp_later_case() {
+  local name=tmp-later-tmpdir missing=$TMP/no-such-tmp r=0
+  launch "$name" "$good_path"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  [[ $(stat -c %a -- "$state/tmp") == 700 ]] || fail "$name" "launch made $state/tmp with mode $(stat -c %a -- "$state/tmp"), not 700"
+  env PATH="$good_path" TMPDIR="$missing" VCN_STATE="$state" "$V" record r2 >"$TMP/$name-record.txt" 2>&1 || r=$?
+  stop "$good_path"
+  ((r == 0)) || fail "$name" "record with TMPDIR=$missing exited $r: $(tail -n 2 "$TMP/$name-record.txt")"
+  [[ -s $TMP/out-$name/r2.webm ]] || fail "$name" "record wrote no r2.webm"
+  [[ ! -e $missing ]] || fail "$name" "a command made the dir that the TMPDIR of the caller names"
+  echo "ok $name: record ran with a TMPDIR that does not exist, and agent-tty used a dir of the state dir"
+  cases=$((cases + 1))
+}
+
 signal_symlink_case() {
   local name=signal-symlink gate=$TMP/gate-signal-symlink sockdir
   ln -s "$priv" "$TMP/priv-link"
@@ -984,10 +1083,14 @@ state_mode_case
 state_parent_case
 state_names_case
 state_env_case
+state_mode_partial_case
+state_parent_partial_case
 state_count_case
 state_newline_case
 state_owner_case
 state_ancestor_case
+tmp_multihop_case
+tmp_later_case
 signal_symlink_case
 sigterm_case
 echo "CASES $cases"
