@@ -145,6 +145,8 @@ close_diff reject-own-sign || true
 check "close_tab leaves the sign column that the user set" kept_window_own_sign_column
 
 if [[ $target == existing ]]; then
+  "$V" keys ':only' Enter ':e hello.txt' Enter ':diffoff' Enter
+  back_to_one_window || true
   step "The user shows the proposal in the original window with :b, then close_tab deletes it"
   open_diff reject-orig-proposal
   "$V" keys ':wincmd t' Enter ':b proposed' Enter

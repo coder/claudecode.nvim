@@ -190,6 +190,59 @@ describe("diff mode in a window that left a split diff", function()
     end)
   end)
 
+  describe("the windows of the original side's tab page that show the file when the cleanup looks", function()
+    it("keeps the diff mode of a copy of the file that has a partner window", function()
+      local state = open_diff()
+      run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
+      local copy = vim.api.nvim_get_current_win()
+      vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      local partner = vim.api.nvim_get_current_win()
+      vim.cmd("diffthis")
+
+      close_tab()
+
+      assert.is_true(option(copy, "diff"), "the copy has a partner")
+      assert.is_true(option(partner, "diff"), "the partner stays")
+    end)
+
+    it("keeps the diff mode of two copies of the file that the user compares", function()
+      local state = open_diff()
+      run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
+      local first = vim.api.nvim_get_current_win()
+      vim.cmd("split " .. vim.fn.fnameescape(file))
+      local second = vim.api.nvim_get_current_win()
+
+      close_tab()
+
+      assert.is_true(option(first, "diff"), "each copy is the other's partner")
+      assert.is_true(option(second, "diff"), "each copy is the other's partner")
+    end)
+
+    it("leaves the options of a copy that is not in diff mode alone", function()
+      local state = open_diff()
+      run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
+      local copy = vim.api.nvim_get_current_win()
+      vim.cmd("diffoff")
+      vim.cmd("setlocal foldmethod=indent scrollbind nowrap")
+
+      close_tab()
+
+      assert.equal("indent", option(copy, "foldmethod"), "the user's 'foldmethod' stays")
+      assert.is_true(option(copy, "scrollbind"), "the user's 'scrollbind' stays")
+      assert.is_false(option(copy, "wrap"), "the user's 'wrap' stays")
+    end)
+
+    it("closes a diff whose original-side window the plugin opened and closes", function()
+      vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      local state = open_diff()
+      assert.is_true(state.target_window_created_by_plugin, "the plugin opened its own window for the file")
+
+      assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
+
+      assert.is_false(vim.api.nvim_win_is_valid(state.target_window), "the window that the plugin opened is closed")
+    end)
+  end)
+
   describe("a window that the diff never left", function()
     it("loses diff mode when close_tab runs, the same as before", function()
       local state = open_diff()
