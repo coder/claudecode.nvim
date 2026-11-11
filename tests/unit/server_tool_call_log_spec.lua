@@ -110,4 +110,19 @@ describe("tools/call debug log", function()
     assert_contains(log, "Response - tools/call close_tab")
     assert_contains(log, "Response - tools/call getDiagnostics")
   end)
+
+  it("names the rejected field of a tools/call with the wrong shape, and never its value", function()
+    for _, params in ipairs({ { name = { secret } }, { name = "getOpenEditors", arguments = secret }, secret }) do
+      local result, err = server.state.handlers["tools/call"]({ id = "client-1" }, params)
+
+      assert.is_nil(result)
+      assert.equals(-32602, err.code)
+    end
+
+    local log = message_history()
+    assert.is_nil(log:find(secret, 1, true), "a rejected value reached :messages:\n" .. log)
+    assert_contains(log, "Rejected tools/call: name (a string is required)")
+    assert_contains(log, "Rejected tools/call: arguments (an object is required)")
+    assert_contains(log, "Rejected tools/call: params (an object is required)")
+  end)
 end)

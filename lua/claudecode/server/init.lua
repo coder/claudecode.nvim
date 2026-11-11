@@ -349,6 +349,7 @@ function M.register_handlers()
         invalid = "arguments (an object is required)"
       end
       if invalid then
+        logger.debug("server", "Rejected tools/call:", invalid)
         return nil,
           {
             code = tools.ERROR_CODES.INVALID_PARAMS,
