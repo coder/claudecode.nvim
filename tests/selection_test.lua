@@ -2048,9 +2048,34 @@ describe("Range Selection Tests", function()
 
       -- What Neovim does for nvim_buf_attach: runs the callback of each listener on the buffer. on_lines drops a
       -- listener whose callback returns true. on_reload (:checktime, autoread) ignores what the callback returns and
-      -- keeps the listener. on_detach (:edit, :edit!, :bunload) means every listener is gone.
+      -- keeps the listener. on_detach (:edit, :edit!, :bunload) detaches the listeners one by one and calls each
+      -- on_detach while the others are still attached, so a listener that a callback attaches from inside on_detach
+      -- is detached in turn, and one that attaches again each time loops for ever. vim.schedule runs later, as in
+      -- Neovim.
       local function fire_buffer_listeners(bufnr, name)
         local listeners = _G.vim._buf_listeners[bufnr] or {}
+        if name == "on_detach" then
+          local real_schedule = _G.vim.schedule
+          local queued = {}
+          _G.vim.schedule = function(fn)
+            table.insert(queued, fn)
+          end
+          local calls = 0
+          local ok, err = pcall(function()
+            while #listeners > 0 do
+              calls = calls + 1
+              assert(calls <= 20, "on_detach loops: a listener was attached from inside on_detach")
+              local listener = table.remove(listeners, 1)
+              listener.on_detach(nil, bufnr)
+            end
+          end)
+          _G.vim.schedule = real_schedule
+          assert(ok, err)
+          for _, fn in ipairs(queued) do
+            fn()
+          end
+          return
+        end
         _G.vim._buf_listeners[bufnr] = {}
         for _, listener in ipairs(listeners) do
           -- A callback can attach a new listener, so the list is a fresh one and each callback runs once.
