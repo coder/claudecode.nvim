@@ -297,6 +297,39 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     assert.is_false(windows[term.win].config.hide)
   end)
 
+  describe("hide_float", function()
+    local function open_float()
+      snacks_provider.open("claude", {}, float_config(), true)
+      return snacks_provider._get_terminal_for_test()
+    end
+
+    it("config-hides a visible float, and a toggle shows it again", function()
+      local term = open_float()
+      local win = term.win
+
+      assert.is_true(snacks_provider.hide_float())
+      assert.is_true(windows[win].valid)
+      assert.is_true(windows[win].config.hide)
+      assert.is_false(snacks_provider.hide_float(), "a float that is already hidden is not hidden again")
+
+      snacks_provider.simple_toggle("claude", {}, float_config())
+      assert.is_false(windows[win].config.hide)
+    end)
+
+    it("leaves a split alone", function()
+      snacks_provider.open("claude", {}, split_config(), true)
+      local term = snacks_provider._get_terminal_for_test()
+
+      assert.is_false(snacks_provider.hide_float())
+      assert.is_true(windows[term.win].valid)
+      assert.is_false(windows[term.win].config.hide)
+    end)
+
+    it("is false before a terminal exists", function()
+      assert.is_false(snacks_provider.hide_float())
+    end)
+  end)
+
   it("split close that errors (E444 last window) does not throw and keeps state sane", function()
     snacks_provider.open("claude", {}, split_config(), true)
     local term = snacks_provider._get_terminal_for_test()

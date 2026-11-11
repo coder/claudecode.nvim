@@ -10,6 +10,9 @@
 #   parent-group   the default parent dir is group-writable
 #   parent-world   the default parent dir is world-writable
 #   above-world    a dir above the default parent dir is world-writable and not sticky
+#   tmp-world      TMPDIR, where launch makes its state dir, is world-writable and not sticky
+#   tmp-above-world  a dir above TMPDIR is world-writable and not sticky
+#   tmp-missing    TMPDIR does not exist, under a sticky dir where another user could make it after the checks
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
@@ -18,6 +21,7 @@
 #                  refuses it in the check after mkdir, and leaves it in place
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
+#   tmp-sticky     a world-writable TMPDIR with the sticky bit, like /tmp: the state dir is made there
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 #   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700 and
 #                  without an ACL, so every evidence file is 0600
@@ -96,6 +100,18 @@ refused parent-world "$TMP/world/verify-claudecode-nvim is group- or world-writa
 mkdir -m 777 "$TMP/above"
 refused above-world "$TMP/above, above the evidence dir, is writable by others and not sticky" \
   XUM_SCRATCH_DIR="$TMP/above"
+# The state dir holds the run.env that cleanup and every other command source, so another user who can swap it runs code
+# as this one. VERIFY_OUT is fresh, so only the TMPDIR check can refuse these.
+mkdir -m 777 "$TMP/tmp-world"
+refused tmp-world "$TMP/tmp-world, above the state dir, is writable by others and not sticky" \
+  TMPDIR="$TMP/tmp-world" VERIFY_OUT="$TMP/tmp-out"
+mkdir -m 700 "$TMP/above/tmp"
+refused tmp-above-world "$TMP/above, above the state dir, is writable by others and not sticky" \
+  TMPDIR="$TMP/above/tmp" VERIFY_OUT="$TMP/tmp-out"
+mkdir "$TMP/tmp-shared"
+chmod 1777 "$TMP/tmp-shared"
+refused tmp-missing "TMPDIR=$TMP/tmp-shared/later is not an existing directory" \
+  TMPDIR="$TMP/tmp-shared/later" VERIFY_OUT="$TMP/tmp-out"
 refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
@@ -134,6 +150,16 @@ VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$err") "$vcn" cleanup >/dev/null
 [[ $(stat -c %a -- "$TMP/cwd/-dash") == 700 ]] || fail "out-dash: $TMP/cwd/-dash is not a 0700 dir"
 [[ -e $TMP/cwd/-dash/session.webm ]] || fail "out-dash: cleanup from another directory did not save session.webm there"
 echo "PASS out-dash: launched with VERIFY_OUT=-dash from $TMP/cwd; cleanup from $PWD saved its evidence there"
+
+# The sticky bit stops another user from renaming a dir that this user made, so a sticky TMPDIR is safe: it is what /tmp is.
+mkdir "$TMP/tmp-sticky"
+chmod 1777 "$TMP/tmp-sticky"
+[[ $(stat -c %a -- "$TMP/tmp-sticky") == 1777 ]] || fail "tmp-sticky: cannot make $TMP/tmp-sticky 1777"
+err=$(env -u XUM_SCRATCH_DIR TMPDIR="$TMP/tmp-sticky" VERIFY_OUT="$TMP/tmp-sticky-out" "$vcn" launch 2>&1) || fail "tmp-sticky: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+VCN_STATE=$state "$vcn" cleanup >/dev/null
+[[ $state == "$TMP/tmp-sticky"/vcn.* ]] || fail "tmp-sticky: launch made its state dir $state outside TMPDIR"
+echo "PASS tmp-sticky: launch made its state dir in the sticky $TMP/tmp-sticky"
 
 # private <case> <dir>: a run with VERIFY_OUT=dir works, and after cleanup dir is 0700 and holds only 0600 files.
 private() {
