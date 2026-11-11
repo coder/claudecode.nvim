@@ -108,6 +108,36 @@ describe("openDiff tool MCP compliance", function()
     end)
   end)
 
+  describe("parameters that are not strings", function()
+    for _, param_name in ipairs({ "old_file_path", "new_file_path", "new_file_contents", "tab_name" }) do
+      for _, case in ipairs({
+        { label = "a boolean", value = true },
+        { label = "a number", value = 5 },
+        { label = "a table", value = { "x" } },
+      }) do
+        it("should error when " .. param_name .. " is " .. case.label, function()
+          local params = {
+            old_file_path = test_old_file,
+            new_file_path = test_new_file,
+            new_file_contents = test_content_new,
+            tab_name = test_tab_name,
+          }
+          params[param_name] = case.value
+
+          local co = coroutine.create(function()
+            open_diff_tool.handler(params)
+          end)
+
+          local success, err = coroutine.resume(co)
+          assert.is_false(success)
+          assert.is_table(err)
+          assert.equal(-32602, err.code)
+          assert.matches("Missing required parameter: " .. param_name, err.data)
+        end)
+      end
+    end
+  end)
+
   describe("coroutine context requirement", function()
     it("should error when not in coroutine context", function()
       local params = {

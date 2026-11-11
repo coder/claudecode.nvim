@@ -81,19 +81,11 @@ function M.register(tool_module)
 end
 
 ---Handle an invocation of a tool
+---@param client table|nil The calling WebSocket client
+---@param params {name: string, arguments: table|nil} The params of a tools/call, checked by the server
 function M.handle_invoke(client, params) -- client needed for blocking tools
   local tool_name = params.name
-  local input = params.arguments
-
-  if type(tool_name) ~= "string" then
-    return {
-      error = {
-        code = M.ERROR_CODES.INVALID_PARAMS,
-        message = "Invalid params",
-        data = "Missing or invalid parameter: name (a string is required)",
-      },
-    }
-  end
+  local input = params.arguments or {}
 
   if not M.tools[tool_name] then
     return {
