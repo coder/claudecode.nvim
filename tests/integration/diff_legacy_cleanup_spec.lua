@@ -532,4 +532,37 @@ describe("legacy open_diff when a step fails after the temp file was written", f
     assert.is_true(vim.bo[proposal].modified)
     assert.are.same({ "typed into the proposal" }, vim.api.nvim_buf_get_lines(proposal, 0, -1, false))
   end)
+
+  -- A BufEnter handler shows the proposal in a new tab, comes back and gives the split another buffer. Only a window of
+  -- another tab shows the proposal when the rename raises E95, so that window stays: the cleanup looks in every tab.
+  it("keeps a proposal that only a window of another tab shows", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    plant_proposal_name()
+    local files = temp_files()
+    local other_tab_win
+    fterr_group = vim.api.nvim_create_augroup("ClaudeCodeDiffLegacyCleanupSpec", { clear = true })
+    vim.api.nvim_create_autocmd("BufEnter", {
+      group = fterr_group,
+      pattern = "*.new",
+      once = true,
+      callback = function()
+        vim.cmd("tab split")
+        other_tab_win = vim.api.nvim_get_current_win()
+        vim.cmd("tabprevious")
+        vim.cmd("enew")
+      end,
+    })
+    track_closed_windows()
+
+    local ok, err = pcall(diff.open_diff, path, path, "local a = 2\n", "other tab only")
+
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("E95", 1, true), tostring(err))
+    assert.are.same(files, temp_files())
+    assert.is_true(
+      other_tab_win ~= nil and vim.api.nvim_win_is_valid(other_tab_win),
+      "the window of the other tab is open"
+    )
+    assert.are.same({}, closed, "no window was closed")
+  end)
 end)
