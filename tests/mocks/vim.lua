@@ -584,17 +584,6 @@ local vim = {
       return { "row", leaves }
     end,
 
-    -- The windows that show a buffer, in every tab.
-    win_findbuf = function(bufnr)
-      local found = {}
-      for _, win in ipairs(vim.api.nvim_list_wins()) do
-        if vim.api.nvim_win_get_buf(win) == bufnr then
-          found[#found + 1] = win
-        end
-      end
-      return found
-    end,
-
     -- Every code point is one cell wide here. Real Neovim gives most CJK characters two.
     strdisplaywidth = function(text)
       return select(2, text:gsub("[^\128-\191]", ""))
@@ -1030,26 +1019,6 @@ local vim = {
       if vim._buffers[bufnr] then
         vim._buffers[bufnr].b_vars = vars
       end
-    end,
-  }),
-
-  w = setmetatable({}, {
-    __index = function(_, winid)
-      -- As in Neovim, an invalid window raises, and a value that is read or written is a copy. nvim_list_wins always lists
-      -- the current window, even when the mock has no entry for it.
-      local window = vim._windows[winid] or (winid == vim._current_window and {} or nil)
-      if not window then
-        error("Invalid window id: " .. tostring(winid), 2)
-      end
-      window.w_vars = window.w_vars or {}
-      return setmetatable({}, {
-        __index = function(_, name)
-          return vim.deepcopy(window.w_vars[name])
-        end,
-        __newindex = function(_, name, value)
-          window.w_vars[name] = vim.deepcopy(value)
-        end,
-      })
     end,
   }),
 

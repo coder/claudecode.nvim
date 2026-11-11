@@ -2,8 +2,8 @@
 # Checks that `:wq`, `:x` and `ZZ` close the proposal window, a second `:w` neither fails nor answers again, no buffer
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
 # that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
-# after the `:e` stays. For an existing file it also checks that hello.txt comes back out of diff mode in a window that
-# left the diff, and that a new window for it opens out of diff mode. Needs VCN_STATE from a fresh launch:
+# after the `:e` stays. For an existing file it also checks that close_tab leaves the last window out of diff mode when
+# the user showed the proposal in the original window. Needs VCN_STATE from a fresh launch:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
@@ -74,7 +74,6 @@ kept_window_out_of_diff_mode() { [[ $(kept_windows '&diff') == '2|hello.txt|0,0'
 kept_window_sign_column_back() { [[ $(kept_windows '&signcolumn') == '2|other.txt|auto,auto' ]]; }
 kept_window_own_sign_column() { [[ $("$V" expr "bufname() . '|' . &signcolumn") == 'other.txt|yes:2' ]]; }
 back_out_of_diff_mode() { [[ $("$V" expr "winnr('\$') . '|' . bufname() . '|' . &diff") == '1|hello.txt|0' ]]; }
-new_window_out_of_diff_mode() { [[ $("$V" expr "winnr('\$') . '|' . bufname() . '|' . &diff") == '2|hello.txt|0' ]]; }
 
 "$V" doctor >"$OUT/diff-close-save-doctor.txt" || {
   echo "FAIL: doctor failed: $(cat "$OUT/diff-close-save-doctor.txt")" >&2
@@ -146,24 +145,6 @@ close_diff reject-own-sign || true
 check "close_tab leaves the sign column that the user set" kept_window_own_sign_column
 
 if [[ $target == existing ]]; then
-  step "The user switches the proposal window to other.txt with :e, and brings hello.txt back there after close_tab"
-  open_diff reject-reedit
-  "$V" keys ':e other.txt' Enter
-  check ":e answers DIFF_REJECTED" answered reject-reedit DIFF_REJECTED
-  close_diff reject-reedit || true
-  "$V" keys ':wincmd b' Enter ':only' Enter ':e hello.txt' Enter
-  "$V" capture diff-close-save-reedit >/dev/null
-  check "hello.txt comes back to the kept window out of diff mode" back_out_of_diff_mode
-
-  step "The user switches the original window to other.txt with :e, and brings hello.txt back with :e # after close_tab"
-  open_diff reject-orig-back
-  "$V" keys ':wincmd t' Enter ':e other.txt' Enter
-  close_diff reject-orig-back || true
-  back_to_one_window || true
-  "$V" keys ':e #' Enter
-  "$V" capture diff-close-save-orig-back >/dev/null
-  check "hello.txt comes back to the original window out of diff mode" back_out_of_diff_mode
-
   step "The user shows the proposal in the original window with :b, then close_tab deletes it"
   open_diff reject-orig-proposal
   "$V" keys ':wincmd t' Enter ':b proposed' Enter
@@ -172,14 +153,6 @@ if [[ $target == existing ]]; then
   "$V" capture diff-close-save-orig-proposal >/dev/null
   check "the last window shows hello.txt out of diff mode" back_out_of_diff_mode
 
-  step "The user opens hello.txt in a new window with :split after the original window left it for other.txt"
-  open_diff reject-split-after
-  "$V" keys ':wincmd t' Enter ':e other.txt' Enter
-  close_diff reject-split-after || true
-  back_to_one_window || true
-  "$V" keys ':split hello.txt' Enter
-  "$V" capture diff-close-save-split-after >/dev/null
-  check "the new window shows hello.txt out of diff mode" new_window_out_of_diff_mode
 fi
 
 if ((failures == 0)); then

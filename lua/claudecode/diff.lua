@@ -1418,129 +1418,35 @@ end
 ---the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. Neovim refuses
 ---`:diffoff` in some states (E11 in the command-line window), and then the window keeps its diff mode.
 ---@param win number
----@return boolean ended False when Neovim refused `:diffoff`, so that the window still has the leftover
 local function end_diff_mode_if_alone(win)
   if not vim.api.nvim_get_option_value("diff", { win = win }) then
-    return true
+    return
   end
   for _, other in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
     if other ~= win and vim.api.nvim_get_option_value("diff", { win = other }) then
-      return true
+      return
     end
   end
-  return (pcall(vim.api.nvim_win_call, win, function()
+  pcall(vim.api.nvim_win_call, win, function()
     vim.cmd("diffoff")
-  end))
-end
-
----What a window variable records, per file buffer, so that it goes with the window: "left" when the window left the file
----in a diff and waits for it, "shown" once the cleanup or the autocmd below has seen the window show the file
-local FILE_WINDOWS = "claudecode_file_windows"
-
----@param win number
----@param key string A buffer number
----@param state string
-local function set_file_state(win, key, state)
-  local states = vim.w[win][FILE_WINDOWS] or {}
-  for other in pairs(states) do
-    if not vim.api.nvim_buf_is_valid(tonumber(other)) then
-      states[other] = nil
-    end
-  end
-  states[key] = state
-  vim.w[win][FILE_WINDOWS] = states
-end
-
----@param win number
----@param key string A buffer number
----@return boolean seen True when the window showed the file at the last look
-local function file_seen_in_window(win, key)
-  local states = vim.w[win][FILE_WINDOWS]
-  return states ~= nil and states[key] == "shown"
-end
-
----@param key string A buffer number
----@return boolean waiting True when a window waits for the file
-local function window_waits_for_file(key)
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local states = vim.w[win][FILE_WINDOWS]
-    if states and states[key] == "left" then
-      return true
-    end
-  end
-  return false
-end
-
----@param key string A buffer number
-local function forget_file(key)
-  for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local states = vim.w[win][FILE_WINDOWS]
-    if states and states[key] then
-      states[key] = nil
-      vim.w[win][FILE_WINDOWS] = next(states) ~= nil and states or nil
-    end
-  end
+  end)
 end
 
 ---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and sets them again when the
----buffer enters it, so diff mode comes back after the diff has ended, in a window that left the file and in a new window
----for it. While a window waits for the file, the windows that show it when the cleanup looks are marked "shown". When
----the file enters a window, that window is one that shows the file and is not marked, wherever an earlier BufWinEnter
----handler left the focus, and it leaves diff mode if it is alone in it. One BufWinEnter autocmd per file serves all
----such windows and goes, with the marks, when none waits.
+---buffer enters it. When the cleanup has closed its windows and deleted its buffers, a window of the original side's tab
+---page that shows the file, and is the only window of that tab page in diff mode, has the leftover of the ended diff.
 ---@param diff_data table
-local function end_diff_mode_when_file_returns(diff_data)
+local function end_diff_mode_in_windows_that_show_the_file(diff_data)
   local buffer = diff_data.original_buffer
-  if not (buffer and vim.api.nvim_buf_is_valid(buffer)) then
-    return
-  end
-  local key = tostring(buffer)
-  for _, win in pairs({ proposal = diff_data.new_window, original = diff_data.target_window }) do
-    if vim.api.nvim_win_is_valid(win) and not window_shows(win, buffer) then
-      set_file_state(win, key, "left")
-    end
-  end
-  local refused = {}
   local target = diff_data.target_window
-  if target and vim.api.nvim_win_is_valid(target) then
-    local tabpage = vim.api.nvim_win_get_tabpage(target)
-    for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
-      if vim.api.nvim_win_get_tabpage(win) == tabpage and not end_diff_mode_if_alone(win) then
-        -- The window waits like one that left the file: the autocmd tries again when the file enters a window.
-        set_file_state(win, key, "left")
-        refused[win] = true
-      end
-    end
-  end
-  if not window_waits_for_file(key) then
+  if not (buffer and target and vim.api.nvim_buf_is_valid(buffer) and vim.api.nvim_win_is_valid(target)) then
     return
   end
-  for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
-    if not refused[win] then
-      set_file_state(win, key, "shown")
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(target))) do
+    if window_shows(win, buffer) then
+      end_diff_mode_if_alone(win)
     end
   end
-  local group = vim.api.nvim_create_augroup("ClaudeCodeDiffFileWait", { clear = false })
-  if #vim.api.nvim_get_autocmds({ group = group, buffer = buffer }) > 0 then
-    return
-  end
-  vim.api.nvim_create_autocmd("BufWinEnter", {
-    group = group,
-    buffer = buffer,
-    callback = function()
-      for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
-        if not file_seen_in_window(win, key) then
-          end_diff_mode_if_alone(win)
-          set_file_state(win, key, "shown")
-        end
-      end
-      local waiting = window_waits_for_file(key)
-      if not waiting then
-        forget_file(key)
-      end
-      return not waiting
-    end,
-  })
 end
 
 ---Clean up diff state and resources
@@ -1662,9 +1568,8 @@ function M._cleanup_diff_state(tab_name, reason)
     pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
   end
 
-  -- After the deletes, since a buffer that the cleanup deleted has no saved options to wait for, and before the event,
-  -- so that nothing a handler of it starts is looked at.
-  end_diff_mode_when_file_returns(diff_data)
+  -- After the deletes, and before the event, so that nothing a handler of it starts is looked at.
+  end_diff_mode_in_windows_that_show_the_file(diff_data)
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil
