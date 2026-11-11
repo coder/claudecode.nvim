@@ -1,7 +1,5 @@
--- Real-Neovim checks of diff mode in a window that left a split diff. Neovim saves the options of a window for each
--- buffer that leaves it and sets them again when the buffer returns, so only a real Neovim can show whether diff mode
--- comes back after the diff ended. Under busted's mock vim this is pending;
--- scripts/run_integration_tests_individually.sh runs it in Neovim.
+-- Neovim saves a window's options for a buffer that leaves it and restores them when the buffer returns, so only a real
+-- Neovim shows whether diff mode comes back after the diff ended.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("diff mode in a window that left a split diff", function()
     pending("needs a real Neovim")
@@ -56,6 +54,8 @@ describe("diff mode in a window that left a split diff", function()
   local function option(win, name)
     return vim.api.nvim_get_option_value(name, { win = win })
   end
+
+  local diff_mode_options = { "diff", "scrollbind", "cursorbind", "foldmethod", "foldcolumn", "wrap" }
 
   local function diff_windows()
     local count = 0
@@ -118,6 +118,18 @@ describe("diff mode in a window that left a split diff", function()
       assert.is_false(option(state.new_window, "diff"), "diff mode is off in the window")
     end)
 
+    it("gets back the options that diff mode changed, not only 'diff'", function()
+      local kept = {}
+      for _, name in ipairs(diff_mode_options) do
+        kept[name] = option(state.new_window, name)
+      end
+      run_in(state.new_window, "edit " .. vim.fn.fnameescape(file))
+
+      for _, name in ipairs(diff_mode_options) do
+        assert.equal(kept[name], option(state.new_window, name), "'" .. name .. "' is as in the kept window")
+      end
+    end)
+
     it("lets the next diff of the file open in this tab, and close_tab keeps the user's windows", function()
       run_in(state.new_window, "only")
       run_in(state.new_window, "edit " .. vim.fn.fnameescape(file))
@@ -149,8 +161,7 @@ describe("diff mode in a window that left a split diff", function()
 
     it("gets back the options that diff mode changed, not only 'diff'", function()
       local before = {}
-      local names = { "scrollbind", "cursorbind", "foldmethod", "foldcolumn", "wrap" }
-      for _, name in ipairs(names) do
+      for _, name in ipairs(diff_mode_options) do
         before[name] = option(0, name)
       end
       local state = open_diff()
@@ -160,7 +171,7 @@ describe("diff mode in a window that left a split diff", function()
 
       run_in(state.target_window, "edit #")
 
-      for _, name in ipairs(names) do
+      for _, name in ipairs(diff_mode_options) do
         assert.equal(before[name], option(state.target_window, name), "'" .. name .. "' is as before the diff")
       end
     end)

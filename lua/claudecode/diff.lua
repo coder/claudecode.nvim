@@ -1359,9 +1359,8 @@ function M._close_proposal_window(diff_data)
   end
 end
 
----Neovim saves a window's options for a buffer when the buffer leaves the window, and sets them again when the buffer
----comes back. A diff window that left the file's buffer in diff mode would turn diff mode back on at that moment, long
----after the diff ended. This ends it, once, in each window of the diff that does not show the file now.
+---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and restores them when the
+---buffer enters it again, so diff mode comes back after the diff has ended.
 ---@param diff_data table
 local function end_diff_mode_when_file_returns(diff_data)
   local buffer = diff_data.original_buffer
@@ -1385,11 +1384,9 @@ local function end_diff_mode_when_file_returns(diff_data)
           waiting[win] = nil
         elseif window_shows(win, buffer) then
           waiting[win] = nil
-          if vim.api.nvim_get_option_value("diff", { win = win }) then
-            pcall(vim.api.nvim_win_call, win, function()
-              vim.cmd("diffoff")
-            end)
-          end
+          pcall(vim.api.nvim_win_call, win, function()
+            vim.cmd("diffoff")
+          end)
         end
       end
       return next(waiting) == nil

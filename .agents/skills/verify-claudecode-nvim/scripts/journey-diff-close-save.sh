@@ -3,8 +3,7 @@
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
 # that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
 # after the `:e` stays. For an existing file it also checks that hello.txt comes back out of diff mode in a window that
-# left the diff: the proposal window after `:e other.txt`, the original window after `:e other.txt` and `:e #`, and the
-# original window that showed the proposal with `:b`. Needs VCN_STATE from a fresh launch:
+# left the diff. Needs VCN_STATE from a fresh launch:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
@@ -74,7 +73,6 @@ kept_windows() {
 kept_window_out_of_diff_mode() { [[ $(kept_windows '&diff') == '2|hello.txt|0,0' ]]; }
 kept_window_sign_column_back() { [[ $(kept_windows '&signcolumn') == '2|other.txt|auto,auto' ]]; }
 kept_window_own_sign_column() { [[ $("$V" expr "bufname() . '|' . &signcolumn") == 'other.txt|yes:2' ]]; }
-# The window count, the current buffer and 'diff' of the current window, after the user brought hello.txt back.
 back_out_of_diff_mode() { [[ $("$V" expr "winnr('\$') . '|' . bufname() . '|' . &diff") == '1|hello.txt|0' ]]; }
 
 "$V" doctor >"$OUT/diff-close-save-doctor.txt" || {
