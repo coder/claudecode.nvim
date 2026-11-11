@@ -791,14 +791,15 @@ function generateLines(random, coverage) {
     return String.fromCharCode(code);
   };
   // Up to three spaces, and now and then one more code unit, from the list above or from all of them.
-  // `>` is left out: it starts a block quote, which the runner does not track.
+  // `>` starts a block quote, and `+`, `-` and `*` start a list item when spaces follow. The runner tracks neither,
+  // so those four are left out.
   const indent = () => {
     const spaces = pick(["", "", "", " ", "  ", "   "]);
     if (random() >= 0.15) {
       return spaces;
     }
     let extra = random() < 0.5 ? pick(LOOKALIKES) : codeUnit();
-    if (extra === ">") {
+    if (">+-*".includes(extra)) {
       extra = "\u3000";
     }
     coverage.oddIndent += 1;
