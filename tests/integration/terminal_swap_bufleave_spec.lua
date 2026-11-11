@@ -198,6 +198,78 @@ describe("the native terminal's swap into its own split", function()
     )
   end
 
+  it(
+    "keeps the user's file in the window it was split from, also when the file's buffer is wiped once hidden",
+    function()
+      -- The buffer goes only to the split while the terminal is in the other window, so a swap that moved the terminal
+      -- into the split first would wipe it, and the other window could not get it back.
+      start_child()
+      local lines = call([[
+      _G.user_win = vim.api.nvim_get_current_win()
+      _G.user_buf = vim.api.nvim_win_get_buf(_G.user_win)
+      vim.bo[_G.user_buf].bufhidden = "wipe"
+      return vim.api.nvim_buf_get_lines(_G.user_buf, 0, -1, false)
+    ]])
+      arm_bufleave_autocmd(false)
+
+      call([[require("claudecode.terminal").ensure_visible()]])
+
+      expect_user_window_kept(lines)
+    end
+  )
+
+  it("runs no autocmd for the two swaps that repair a redirect", function()
+    start_child()
+
+    local runs = call([[
+      local utils = require("claudecode.utils")
+      local function run(repair)
+        vim.cmd("tabnew")
+        local file = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_win_set_buf(0, file)
+        local user_win = vim.api.nvim_get_current_win()
+        vim.cmd("vsplit")
+        local split = vim.api.nvim_get_current_win()
+        local terminal = vim.api.nvim_create_buf(true, false)
+        local roles = { [file] = "file", [terminal] = "terminal" }
+        local log = {}
+        local group = vim.api.nvim_create_augroup("swap_events_" .. tostring(repair), { clear = true })
+        local events = { "BufLeave", "BufEnter", "BufWinEnter", "BufWinLeave", "BufHidden", "WinEnter", "WinLeave" }
+        vim.api.nvim_create_autocmd(events, {
+          group = group,
+          callback = function(event)
+            table.insert(log, event.event .. "@" .. (roles[event.buf] or "other"))
+          end,
+        })
+        vim.api.nvim_create_autocmd("BufLeave", {
+          group = group,
+          buffer = file,
+          once = true,
+          callback = function()
+            vim.api.nvim_set_current_win(user_win)
+          end,
+        })
+        if repair then
+          utils.win_set_buf_in_split(split, terminal)
+        else
+          vim.api.nvim_win_set_buf(split, terminal)
+        end
+        vim.api.nvim_clear_autocmds({ group = group })
+        return {
+          log = log,
+          user_win_shows = roles[vim.api.nvim_win_get_buf(user_win)],
+          split_shows = roles[vim.api.nvim_win_get_buf(split)],
+        }
+      end
+      return { plain = run(false), repaired = run(true) }
+    ]])
+
+    assert.equal("terminal", runs.plain.user_win_shows, "a plain swap is redirected, or the test proves nothing")
+    assert.equal("file", runs.repaired.user_win_shows)
+    assert.equal("terminal", runs.repaired.split_shows)
+    assert.same(runs.plain.log, runs.repaired.log)
+  end)
+
   describe("a BufLeave autocmd of the user's file", function()
     ---A file of the user's with an edit, and an autosave autocmd that runs when the cursor leaves it.
     local function arm_autosave()

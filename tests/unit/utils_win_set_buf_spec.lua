@@ -97,6 +97,7 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       return wins
     end)
     stub(vim.api, "nvim_win_get_buf", function(win)
+      assert(shown[win], "Invalid window id: " .. tostring(win))
       return shown[win]
     end)
     stub(vim.api, "nvim_win_is_valid", function(win)
@@ -234,6 +235,31 @@ describe("claudecode.utils.win_set_buf_in_split", function()
 
     assert.same({ "noautocmd call nvim_win_set_buf(1000, 5)" }, commands)
     assert.is_nil(shown[SPLIT_WIN])
+  end)
+
+  it("skips a window that an autocmd closed during the swap", function()
+    shown[1002] = 6
+    live_buffers[6] = true
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+      shown[USER_WIN] = buf
+      shown[1002] = nil
+    end)
+
+    assert.same({
+      "noautocmd call nvim_win_set_buf(1000, 5)",
+      "noautocmd call nvim_win_set_buf(1001, 9)",
+    }, commands)
+  end)
+
+  it("does not swap again when the window shows the buffer after the other window got its own back", function()
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win, buf)
+      shown[USER_WIN] = buf
+      shown[win] = buf
+    end)
+
+    assert.same({ "noautocmd call nvim_win_set_buf(1000, 5)" }, commands)
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
   end)
 
   it("raises the error of the swap and repairs nothing", function()
