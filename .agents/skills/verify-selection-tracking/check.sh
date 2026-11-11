@@ -121,9 +121,9 @@ fact[DemotionIgnoresStale]=$(as_bool in_order 'vim\.schedule_wrap\(function\(\)'
 clears_before_close() {
   in_order '^  M\.state\.debounce_timer = nil$' '^  timer:close\(\)$' <<<"$cancel_debounce" &&
     in_order '^  M\.state\.demotion_timer = nil$' '^  timer:close\(\)$' <<<"$cancel_demotion" &&
-    in_order 'if M\.state\.debounce_timer ~= timer then' '^      M\.state\.debounce_timer = nil$' \
+    in_order 'vim\.schedule_wrap\(function\(\)' '^      M\.state\.debounce_timer = nil$' \
       '^      timer:close\(\)$' <<<"$debounce_update" &&
-    in_order 'if M\.state\.demotion_timer ~= timer then' '^          M\.state\.demotion_timer = nil$' \
+    in_order 'vim\.schedule_wrap\(function\(\)' '^          M\.state\.demotion_timer = nil$' \
       '^          timer:close\(\)$' <<<"$update_selection"
 }
 fact[ClearsBeforeClose]=$(as_bool clears_before_close)
@@ -142,7 +142,7 @@ fact[EntryClearsHeld]=$(as_bool entry_clears_held)
 # A flush skipped for an operator forgets the held selection and reports the cursor when Claude holds a selection.
 flush_skip_reports() {
   clear_held_clears_both &&
-    in_order '^  local entry = M\.state\.visual_entry$' '~= entry\.tick then$' '^    clear_held_state\(\)$' \
+    in_order '^  local entry = M\.state\.visual_entry$' '^    clear_held_state\(\)$' \
       '^    local held = M\.state\.latest_selection$' '^    if held and not held\.selection\.isEmpty then$' '^      M\.update_selection\(\)$' \
       '^    return$' 'M\.get_visual_selection_from_marks\(\)' <<<"$flush"
 }
@@ -150,7 +150,7 @@ fact[FlushSkipReports]=$(as_bool flush_skip_reports)
 # The pending-demotion branch ends the hold when it reports the cursor.
 pending_clears_held() {
   clear_held_clears_both &&
-    in_order '^    if M\.state\.demotion_timer then$' '^      if cursor_unmoved_since_flush\(current_buf\) then$' '^      else$' \
+    in_order '^    if M\.state\.demotion_timer then$' '^      else$' \
       '^        current_selection = M\.get_cursor_position\(\)$' '^        clear_held_state\(\)$' <<<"$update_selection"
 }
 fact[PendingClearsHeld]=$(as_bool pending_clears_held)
@@ -194,7 +194,7 @@ fact[LeaveNoted]=$(as_bool leave_noted)
 # The flush and the in-visual update call record_selection_read, which records the buffer and changedtick of the
 # selection they read.
 read_records_tick() {
-  in_order '^  M\.state\.cursor_at_flush = \{' '^  record_selection_read\(current_buf\)$' \
+  in_order 'M\.get_visual_selection_from_marks\(\)' '^  record_selection_read\(current_buf\)$' \
     'M\.send_selection_update\(selection\)' <<<"$flush" &&
     in_order 'M\.state\.last_active_visual_selection = \{' '^      record_selection_read\(current_buf\)$' \
       '^    else$' <<<"$update_selection" &&
@@ -204,26 +204,26 @@ fact[ReadRecordsTick]=$(as_bool read_records_tick)
 # record_selection_read listens to the buffer it records, and the listener schedules the check when the buffer changes
 # (a reload or a plugin's edit: TextChanged fires only for the current buffer).
 listens_to_selection_buffer() {
-  in_order '^  M\.state\.selection_tick = ' '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
+  in_order '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
     in_order '^  local function check_soon\(\)$' 'vim\.schedule\(function\(\)' '^        demote_if_selection_text_changed\(\)$' \
       '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' '^      check_soon\(\)$' \
       '^    on_reload = function\(_, buf\)$' '^        check_soon\(\)$' <<<"$watch_buffer"
 }
 fact[ListensToSelectionBuffer]=$(as_bool listens_to_selection_buffer)
-# The check runs in the Claude terminal for a selection of another buffer, clears the held state and sends the cursor of
-# that buffer: update_selection does nothing in the terminal.
+# The check runs in the Claude terminal for a selection of another buffer that is not a Claude terminal, clears the held
+# state and sends the cursor of that buffer: update_selection does nothing in the terminal.
 terminal_reports_held_buffer() {
   clear_held_clears_both &&
-    in_order '^  local from_terminal = read\.bufnr ~= current_buf and M\.is_claude_terminal_buffer\(current_buf\)$' \
-      '^  if read\.bufnr ~= current_buf and not from_terminal then$' '^    return false$' \
+    in_order '^  local in_terminal = M\.is_claude_terminal_buffer\(current_buf\)$' \
+      '^  if read\.bufnr ~= current_buf and not in_terminal then$' '^    return false$' \
+      '^  local from_terminal = read\.bufnr ~= current_buf and not M\.is_claude_terminal_buffer\(read\.bufnr\)$' \
       '^  local cursor = from_terminal and cursor_in_other_buffer\(read\.bufnr\)$' '^  clear_held_state\(\)$' '^  if cursor then$' \
       '^      M\.state\.latest_selection = cursor$' '^        M\.send_selection_update\(cursor\)$' <<<"$demote_text"
 }
 fact[TerminalReportsHeldBuffer]=$(as_bool terminal_reports_held_buffer)
 # update_selection in the Claude terminal also runs that check: a new terminal is not registered when BufEnter fires.
 update_checks_held_text() {
-  in_order 'if M\.is_claude_terminal_buffer\(current_buf\) then' 'M\._cancel_demotion_timer\(\)' \
-    '^    demote_if_selection_text_changed\(\)$' '^    return$' <<<"$update_selection"
+  in_order '^    M\._cancel_demotion_timer\(\)$' '^    demote_if_selection_text_changed\(\)$' <<<"$update_selection"
 }
 fact[UpdateChecksHeldText]=$(as_bool update_checks_held_text)
 
