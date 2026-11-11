@@ -62,27 +62,42 @@ describe("a diff tab that stays open: windows the user switched to their own fil
       end)
     end
 
-    it(
-      "drops the terminal's BufEnter handler although the user switched its window, with layout = " .. layout,
-      function()
-        child.start({ layout = layout, show_terminal_again = true })
-        child.open_diff("a.txt", "first diff")
-        assert.equal(1, child.close_first_tab().tabs)
-        child.focus_terminal_in_tab()
-        child.leave_terminal_mode()
-        assert.equal(1, child.leftovers().handlers)
-        child.call([[
-        local diff_data = assert(require("claudecode.diff")._get_active_diffs()["first diff"])
-        vim.api.nvim_set_current_win(diff_data.terminal_win_in_new_tab)
-        vim.cmd("edit " .. vim.fn.fnameescape(_G.dir .. "/b.txt"))
-      ]])
+    for _, nohidden in ipairs({ false, true }) do
+      local condition = nohidden and ", the buffer modified and 'nohidden' set" or ""
 
-        child.close_diff("first diff")
-        local state = child.state()
+      it(
+        "drops the terminal's BufEnter handler although the user switched its window"
+          .. condition
+          .. ", with layout = "
+          .. layout,
+        function()
+          child.start({ layout = layout, show_terminal_again = true })
+          child.open_diff("a.txt", "first diff")
+          assert.equal(1, child.close_first_tab().tabs)
+          child.focus_terminal_in_tab()
+          child.leave_terminal_mode()
+          assert.equal(1, child.leftovers().handlers)
+          child.call(
+            [[
+            local nohidden = ...
+            local diff_data = assert(require("claudecode.diff")._get_active_diffs()["first diff"])
+            vim.api.nvim_set_current_win(diff_data.terminal_win_in_new_tab)
+            vim.cmd("edit " .. vim.fn.fnameescape(_G.dir .. "/b.txt"))
+            if nohidden then
+              vim.o.hidden = false
+              vim.api.nvim_buf_set_lines(0, 0, -1, false, { "user changed" })
+            end
+          ]],
+            nohidden
+          )
 
-        assert.equal("n", state.mode)
-        assert.equal(0, child.leftovers().handlers)
-      end
-    )
+          child.close_diff("first diff")
+          local state = child.state()
+
+          assert.equal("n", state.mode)
+          assert.equal(0, child.leftovers().handlers)
+        end
+      )
+    end
   end
 end)
