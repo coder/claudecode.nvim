@@ -447,9 +447,10 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     end)
 
     local cases = {
-      { value = "CursorHold", during = "CursorHold,BufEnter" },
-      { value = "all,-BufEnter", during = "all,BufEnter" },
-      { value = "-bufenter,CursorHold", during = "CursorHold,BufEnter" },
+      { value = "CursorHold", during = "CursorHold,BufEnter,BufLeave" },
+      { value = "all,-BufEnter", during = "all,BufEnter,BufLeave" },
+      { value = "-bufenter,CursorHold", during = "CursorHold,BufEnter,BufLeave" },
+      { value = "all,-bufleave", during = "all,BufEnter,BufLeave" },
     }
     for _, case in ipairs(cases) do
       it("holds " .. case.during .. " during the call and comes back to " .. case.value, function()
@@ -464,6 +465,17 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         assert.are.equal(case.value, vim.o.eventignore)
       end)
     end
+
+    it("ignores only BufLeave for a focused show, so the BufEnter handlers of the terminal still run", function()
+      local cfg = config()
+      open_then_hide(cfg)
+      vim.o.eventignore = "CursorHold"
+
+      snacks_provider.open("claude", {}, cfg, true)
+
+      assert.are.equal("CursorHold,BufLeave", eventignore_during_set_buf)
+      assert.are.equal("CursorHold", vim.o.eventignore)
+    end)
 
     it("is back to the caller's value when the unfocused show fails", function()
       local cfg = config()

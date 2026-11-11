@@ -115,7 +115,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
           end
         end,
       }),
-      o = { columns = 120, lines = 40 },
+      o = { columns = 120, lines = 40, eventignore = "" },
       v = { event = { status = 0 } },
       w = setmetatable({}, {
         __index = function(t, win)

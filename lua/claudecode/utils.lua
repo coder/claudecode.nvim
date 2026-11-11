@@ -28,27 +28,41 @@ function M.map_terminal_suspend(bufnr)
   vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
 end
 
----Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
----`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
----'eventignore' is back to the caller's value afterwards, also when the call raises.
+---Show `buf` in `win` while `events` are in 'eventignore'. 'eventignore' is back to the caller's value afterwards, also
+---when the call raises.
 ---@param win number
 ---@param buf number
-function M.win_set_buf_without_bufenter(win, buf)
+---@param events string[] Event names such as "BufEnter" and "BufLeave"
+function M.win_set_buf_without_events(win, buf, events)
   local saved = vim.o.eventignore
-  -- A `-BufEnter` entry wins wherever it stands in the list.
+  -- A `-<event>` entry wins wherever it stands in the list, so it goes for the call.
+  local undone = {}
+  for _, event in ipairs(events) do
+    undone["-" .. event:lower()] = true
+  end
   local ignored = {}
   for entry in saved:gmatch("[^,]+") do
-    if entry:lower() ~= "-bufenter" then
+    if not undone[entry:lower()] then
       table.insert(ignored, entry)
     end
   end
-  table.insert(ignored, "BufEnter")
+  for _, event in ipairs(events) do
+    table.insert(ignored, event)
+  end
   vim.o.eventignore = table.concat(ignored, ",")
   local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
   vim.o.eventignore = saved
   if not ok then
     error(err, 0)
   end
+end
+
+---Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
+---`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
+---@param win number
+---@param buf number
+function M.win_set_buf_without_bufenter(win, buf)
+  M.win_set_buf_without_events(win, buf, { "BufEnter" })
 end
 
 local held_for_windows = {}

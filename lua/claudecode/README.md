@@ -81,7 +81,7 @@ Module map (direct files):
 - `integrations.lua`: `get_selected_files_from_tree()` dispatches on filetype to `_get_nvim_tree_selection`, `_get_neotree_selection`, `_get_oil_selection`, `_get_mini_files_selection`, `_get_mini_files_selection_with_range(start_line, end_line)`, `_get_netrw_selection`, and `_get_snacks_picker_selection` [integrations.lua:M.get_selected_files_from_tree]
 - `visual_commands.lua`: `create_visual_command_wrapper`, `exit_visual_and_schedule`, `validate_visual_mode`, `get_visual_range`, `get_tree_state`, `capture_visual_selection_data`, and `get_files_from_visual_selection` [visual_commands.lua:M.create_visual_command_wrapper]
 - `cwd.lua`: `resolve(term_cfg, ctx)` and `git_root(start_dir)` [cwd.lua:M.resolve]
-- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `selection_type`, `utf8_sequence_length`, `valid_utf8`, `win_set_buf_without_bufenter`, and `when_windows_allowed` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8] [utils.lua:M.win_set_buf_without_bufenter] [utils.lua:M.when_windows_allowed]
+- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `selection_type`, `utf8_sequence_length`, `valid_utf8`, `win_set_buf_without_bufenter`, `win_set_buf_without_events`, and `when_windows_allowed` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8] [utils.lua:M.win_set_buf_without_bufenter] [utils.lua:M.win_set_buf_without_events] [utils.lua:M.when_windows_allowed]
 - `logger.lua`: `levels`, `setup`, `error`, `warn`, `info`, `one_line`, `debug`, `trace`, and `is_level_enabled` [logger.lua:M.setup]
 - `health.lua`: `check()` [health.lua:M.check]
 

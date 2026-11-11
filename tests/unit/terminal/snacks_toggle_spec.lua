@@ -96,7 +96,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       schedule = function(fn)
         fn()
       end,
-      o = { columns = 120, lines = 40 },
+      o = { columns = 120, lines = 40, eventignore = "" },
       w = setmetatable({}, {
         __index = function(t, win)
           rawset(t, win, rawget(t, win) or {})

@@ -348,10 +348,12 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
+  -- A BufLeave autocmd of the buffer the split showed can enter another window inside the call, and Neovim then loads the
+  -- terminal into that window, so BufLeave is ignored for the call.
   if focus then
-    vim.api.nvim_win_set_buf(new_win, term.buf)
+    utils.win_set_buf_without_events(new_win, term.buf, { "BufLeave" })
   else
-    utils.win_set_buf_without_bufenter(new_win, term.buf)
+    utils.win_set_buf_without_events(new_win, term.buf, { "BufEnter", "BufLeave" })
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native
