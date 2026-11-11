@@ -35,7 +35,7 @@ local CLOSE_REASONS = {
 ---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
 ---@field drained_bytes integer The bytes libuv had written to the socket when `sample_write_progress` last saw progress
 ---@field last_drain number Timestamp of the last `sample_write_progress` check that found the write queue empty or smaller
----@field write_stalled boolean|nil True after a ping timer tick that came on time found no write progress. The next such tick drops the client
+---@field write_stalled boolean|nil True after an observation after a fresh poll found no write progress. The next such observation drops the client
 ---@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
 
 ---Create a new WebSocket client
@@ -499,19 +499,15 @@ end
 
 ---Check that a client still reads what the server writes to it. The keepalive cannot tell: a Claude whose reader is
 ---stuck can still answer each ping, while replies and pings pile up in libuv's write queue, in Neovim's memory.
----Call it at each ping tick. A tick that finds progress, or an empty queue, clears the count. A tick that finds none
----drops the client only when the tick before it that counted found none too, so one tick is never the whole evidence.
----A tick that came late, after the loop was blocked, is no evidence either way: libuv may not have reported yet what
----Claude read during the block, so such a tick does not start the count and does not end it.
+---Call it once per ping tick, in the check callback of a poll phase that began after the tick (`tcp.lua`): libuv had
+---its chance to report that the socket is writable again. An observation that finds progress, or an empty queue,
+---clears the count. The first that finds none sets it, and the second returns false, so one observation is never the
+---whole evidence.
 ---@param client WebSocketClient The client object
----@param tick_on_time boolean False when the tick came late: more than 1.05 intervals after the one before it (`start_ping_timer`)
----@return boolean reading False when this tick, and the one that counted before it, found no write progress
-function M.is_client_reading(client, tick_on_time)
+---@return boolean reading False when this observation, and the one before it, found no write progress
+function M.is_client_reading(client)
   if M.sample_write_progress(client) then
     client.write_stalled = nil
-    return true
-  end
-  if not tick_on_time then
     return true
   end
   if client.write_stalled then

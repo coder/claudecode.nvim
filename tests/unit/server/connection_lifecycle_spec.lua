@@ -6,7 +6,7 @@ require("tests.busted_setup")
 
 describe("The lifecycle of a WebSocket connection", function()
   local tcp, frame, utils, server, callbacks, scheduled
-  local clock, saved, timers
+  local clock, saved, timers, prepares, checks
   local token = "test-token-0123456789"
   local interval = 30000
 
@@ -22,12 +22,14 @@ describe("The lifecycle of a WebSocket connection", function()
     end
     tcp = require("claudecode.server.tcp")
     frame = require("claudecode.server.frame")
-    scheduled, clock, timers = nil, 1000000, {}
+    scheduled, clock, timers, prepares, checks = nil, 1000000, {}, {}, {}
     utils = require("claudecode.utils")
     saved = {
       schedule = vim.schedule,
       now = vim.loop.now,
       new_timer = vim.loop.new_timer,
+      new_prepare = vim.loop.new_prepare,
+      new_check = vim.loop.new_check,
       valid_utf8 = utils.valid_utf8,
     }
     -- `send_message` scans each outbound text with `utils.valid_utf8`, byte by byte in Lua. Under luacov every byte costs
@@ -51,6 +53,32 @@ describe("The lifecycle of a WebSocket connection", function()
       table.insert(timers, timer)
       return timer
     end
+    -- libuv runs a prepare callback at the start of the poll phase of a loop iteration and a check callback after it. These
+    -- handles run when the test calls `poll()`, and record how they ended.
+    local function fake_handle(list)
+      return function()
+        local handle = { active = false, closed = false }
+        function handle:start(callback)
+          self.active, self.callback = true, callback
+          return true
+        end
+        function handle:stop()
+          self.active = false
+          return true
+        end
+        function handle:close()
+          assert(not self.closed, "handle is already closing")
+          self.closed, self.active = true, false
+        end
+        function handle:is_closing()
+          return self.closed
+        end
+        table.insert(list, handle)
+        return handle
+      end
+    end
+    vim.loop.new_prepare = fake_handle(prepares)
+    vim.loop.new_check = fake_handle(checks)
     -- While `scheduled` is a list, scheduled callbacks wait in it, as they wait for the main loop in Neovim.
     vim.schedule = function(fn)
       if scheduled then
@@ -75,6 +103,7 @@ describe("The lifecycle of a WebSocket connection", function()
 
   after_each(function()
     vim.schedule, vim.loop.now, vim.loop.new_timer = saved.schedule, saved.now, saved.new_timer
+    vim.loop.new_prepare, vim.loop.new_check = saved.new_prepare, saved.new_check
     utils.valid_utf8 = saved.valid_utf8
   end)
 
@@ -143,12 +172,36 @@ describe("The lifecycle of a WebSocket connection", function()
   end
 
   ---Start the ping timer on the server, and return the function that runs on each tick.
+  ---One poll phase of the loop: the armed prepare callbacks run, then libuv polls its sockets (`during` runs, and
+  ---reports what Claude read), then the armed check callbacks run.
+  ---@param during function|nil What libuv reports while it polls
+  local function poll(during)
+    for _, handle in ipairs(prepares) do
+      if handle.active then
+        handle.callback()
+      end
+    end
+    if during then
+      during()
+    end
+    for _, handle in ipairs(checks) do
+      if handle.active then
+        handle.callback()
+      end
+    end
+  end
+
+  ---Start the ping timer. The first result runs one loop iteration: the timer callback, then a poll phase. The second
+  ---result runs the timer callback alone, as a tick that libuv runs before it polls.
   local function start_ping_timer()
     local before = #timers
     tcp.start_ping_timer(server, interval)
     assert.equals(before + 1, #timers)
     local ping_timer = timers[#timers]
-    return ping_timer.callback
+    return function()
+      ping_timer.callback()
+      poll()
+    end, ping_timer.callback
   end
 
   ---The timer that waits for the Close frame of a client. It repeats every keepalive window, two ping intervals, and
@@ -363,7 +416,7 @@ describe("The lifecycle of a WebSocket connection", function()
   end)
 
   -- A PONG keeps the keepalive window open, so only the write queue can show that Claude stopped reading. The queue
-  -- counts as stalled when libuv wrote no byte of it for two intervals, the window of the keepalive.
+  -- counts as stalled when two observations in a row, one per ping tick, found that libuv wrote no byte of it.
   describe("when Claude answers each ping but stops reading", function()
     local reply = string.rep("x", 262144)
 
@@ -505,8 +558,8 @@ describe("The lifecycle of a WebSocket connection", function()
   end)
 
   -- Two rules judge a connected client on each ping tick. The pong rule gives a client without a pong one more tick
-  -- (`pong_overdue`) and then drops it. The stall rule drops a client that answers, whose write queue made no progress for
-  -- two intervals. The pong rule runs first, so only a client that answers is judged for a stall.
+  -- (`pong_overdue`) and then drops it. The stall rule drops a client that answers, whose write queue made no progress at
+  -- two observations in a row. The pong rule runs first, so only a client that answers is judged for a stall.
   describe("when a client misses a pong and its write queue stalls", function()
     local reply = string.rep("x", 262144)
 
@@ -538,7 +591,7 @@ describe("The lifecycle of a WebSocket connection", function()
       client.drained_bytes = client.queued_bytes - handle:get_write_queue_size()
       client.write_stalled = true -- the tick before found no progress either
       assert.is_false(client_manager.is_client_alive(client, 2 * interval))
-      assert.is_false(client_manager.is_client_reading(client, true))
+      assert.is_false(client_manager.is_client_reading(client))
 
       tick()
 
@@ -617,131 +670,207 @@ describe("The lifecycle of a WebSocket connection", function()
     end)
   end)
 
-  describe("when write readiness waits behind a late tick inside a libuv I/O callback", function()
-    it("keeps a reading client until libuv can report the bytes it read during the block", function()
-      local tick = start_ping_timer()
-      local client, _, handle = connect_and_upgrade()
-      tcp.send_to_client(server, client.id, string.rep("x", 262144))
-      local pong = frame.create_frame(frame.OPCODE.PONG, "", true, true)
+  -- libuv reports that a socket is writable again only in a poll phase. A main-loop block inside an I/O callback can
+  -- make a ping tick run before that poll, so the tick finds no write progress although Claude read during the block.
+  -- A tick therefore only asks for an observation, which is taken in the check callback after a poll phase that began
+  -- after the tick. The stall count (`write_stalled`) changes only there, and the second observation in a row without
+  -- progress drops the client, however late the ticks come.
+  describe("when the write queue is observed after a fresh poll phase", function()
+    local pong
 
-      clock = clock + interval
-      handle._read_cb(nil, pong)
-      tick() -- observes the 101 reply as write progress
-      clock = clock + interval
-      handle._read_cb(nil, pong)
-      tick() -- no write progress for one interval, but a fresh pong arrived
-
-      -- A libuv I/O callback blocks for 1.3 intervals. Claude reads during the block. The late timer runs before the
-      -- next poll can account for the newly writable socket, while the last pong is still within its window.
-      clock = clock + 1.3 * interval
-      tick()
-      assert.is_not_nil(server.clients[client.id], "the late tick dropped a reader before libuv reported its progress")
-      assert.spy(callbacks.on_disconnect).was_not_called()
-
-      handle.drain(1024)
-      handle._read_cb(nil, pong)
-      clock = clock + interval
-      tick()
-      assert.is_not_nil(server.clients[client.id])
+    before_each(function()
+      pong = frame.create_frame(frame.OPCODE.PONG, "", true, true)
     end)
 
-    -- A tick that comes more than 1.05 intervals after the one before may not have had a chance to see progress: libuv
-    -- can still wait to report the bytes Claude read while the loop was blocked. Such a tick is no evidence of a stall,
-    -- so it neither starts the count of two ticks nor ends it. The test keeps Claude's pong fresh, to isolate the rule.
-    describe("with the stall counted in ticks that came on time", function()
-      local pong = frame.create_frame(frame.OPCODE.PONG, "", true, true)
+    ---A client with a queued reply that Claude does not read, and one tick that saw the 101 reply as progress.
+    local function stalled_client()
+      local tick, raw_tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, string.rep("x", 262144))
+      handle._read_cb(nil, pong)
+      clock = clock + interval
+      tick()
+      return tick, raw_tick, client, handle
+    end
 
-      ---A client with a queued reply that Claude does not read, and one tick that saw the 101 reply as progress.
-      local function stalled_client()
-        local tick = start_ping_timer()
+    local function answer_and(run, gap)
+      return function(handle)
+        handle._read_cb(nil, pong)
+        clock = clock + gap * interval
+        run()
+      end
+    end
+
+    it("keeps a reading client until libuv can report the bytes it read during the block", function()
+      local tick, raw_tick, client, handle = stalled_client()
+      answer_and(tick, 1)(handle) -- no write progress for one interval: the first observation that counts
+      assert.is_true(client.write_stalled)
+
+      -- A libuv I/O callback blocks for 1.3 intervals. Claude reads during the block. The late tick runs before the next
+      -- poll phase can account for the newly writable socket, while the last pong is still within its window.
+      answer_and(raw_tick, 1.3)(handle)
+      assert.is_not_nil(server.clients[client.id], "the late tick dropped a reader before libuv reported its progress")
+      poll(function()
+        handle.drain(1024) -- the poll phase reports the bytes that Claude read
+      end)
+
+      assert.is_not_nil(server.clients[client.id], "the observation after the poll dropped a reader that made progress")
+      assert.is_nil(client.write_stalled)
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+
+    it("does not drop a client at a tick without a poll phase after it, however stalled the queue is", function()
+      local tick, raw_tick, client, handle = stalled_client()
+      answer_and(tick, 1)(handle)
+      assert.is_true(client.write_stalled)
+
+      answer_and(raw_tick, 1)(handle) -- the second tick without progress, and no poll phase yet
+      assert.is_not_nil(server.clients[client.id], "the tick dropped the client before a fresh poll")
+      assert.spy(callbacks.on_disconnect).was_not_called()
+
+      poll() -- the poll phase reports nothing: the second observation without progress
+      assert.is_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+    end)
+
+    it("drops a client at the second observation in a row without progress, not at the first", function()
+      local tick, _, client, handle = stalled_client()
+      assert.is_nil(client.write_stalled)
+
+      answer_and(tick, 1)(handle)
+      assert.is_not_nil(server.clients[client.id], "the first observation without progress dropped the client")
+      assert.is_true(client.write_stalled)
+
+      answer_and(tick, 1)(handle)
+      assert.is_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+    end)
+
+    it("clears the count when an observation finds progress", function()
+      local tick, _, client, handle = stalled_client()
+      answer_and(tick, 1)(handle)
+      assert.is_true(client.write_stalled)
+
+      handle.drain(1024)
+      answer_and(tick, 1)(handle)
+      assert.is_nil(client.write_stalled)
+
+      answer_and(tick, 1)(handle) -- the first observation without progress again
+      assert.is_not_nil(server.clients[client.id])
+      assert.is_true(client.write_stalled)
+    end)
+
+    it("still drops a stalled client within two ticks when every tick comes late", function()
+      local tick, _, client, handle = stalled_client()
+
+      answer_and(tick, 1.06)(handle) -- 6% late, as under a loop that is always a little busy
+      assert.is_true(client.write_stalled)
+      answer_and(tick, 1.4)(handle) -- below the wake threshold of 1.5 intervals
+
+      assert.is_nil(server.clients[client.id], "late ticks kept a stalled client")
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+    end)
+
+    it("serves two ticks that came before one poll phase with one observation", function()
+      local tick, raw_tick, client, handle = stalled_client()
+
+      answer_and(raw_tick, 1)(handle)
+      answer_and(raw_tick, 1)(handle)
+      poll() -- one observation for both ticks: the first without progress
+      assert.is_not_nil(server.clients[client.id])
+      assert.is_true(client.write_stalled)
+
+      answer_and(tick, 1)(handle)
+      assert.is_nil(server.clients[client.id])
+    end)
+
+    it("makes no observation at the tick that finds the machine woken from sleep, and clears the count", function()
+      local tick, _, client, handle = stalled_client()
+      answer_and(tick, 1)(handle)
+      assert.is_true(client.write_stalled)
+
+      clock = clock + 600000 -- the machine slept for ten minutes
+      tick()
+
+      assert.is_nil(client.write_stalled, "the wake kept the count")
+      assert.is_not_nil(server.clients[client.id], "the sleep counted against the client")
+    end)
+
+    it("judges only the clients that answered at the tick", function()
+      local tick, _, client, handle = stalled_client()
+      answer_and(tick, 1)(handle)
+      assert.is_true(client.write_stalled)
+
+      -- No pong for two intervals: the pong rule gives its second chance, and the stall rule leaves the client alone.
+      client.last_pong = clock - 2 * interval
+      clock = clock + interval
+      tick()
+
+      assert.is_not_nil(server.clients[client.id])
+      assert.is_true(client.pong_overdue)
+      assert.is_true(client.write_stalled)
+    end)
+
+    describe("with the prepare and check handles of the server", function()
+      it("creates them with the ping timer, and arms them only between a tick and its observation", function()
+        local _, raw_tick = start_ping_timer()
+        assert.equals(1, #prepares)
+        assert.equals(1, #checks)
+        assert.is_false(prepares[1].active or checks[1].active)
+
+        connect_and_upgrade()
+        raw_tick()
+        assert.is_true(prepares[1].active)
+        assert.is_false(checks[1].active)
+
+        poll()
+        assert.is_false(prepares[1].active or checks[1].active, "a handle keeps running after its observation")
+        assert.is_false(prepares[1].closed or checks[1].closed)
+      end)
+
+      it("does not arm them for a server without a connected client", function()
+        local _, raw_tick = start_ping_timer()
+        raw_tick()
+        assert.is_false(prepares[1].active)
+      end)
+
+      it("reuses them when the ping timer starts again", function()
+        start_ping_timer()
+        start_ping_timer()
+        assert.equals(1, #prepares)
+        assert.equals(1, #checks)
+      end)
+
+      it("closes them in stop_server, and a pending observation never runs", function()
+        local _, raw_tick = start_ping_timer()
         local client, _, handle = connect_and_upgrade()
         tcp.send_to_client(server, client.id, string.rep("x", 262144))
-        handle._read_cb(nil, pong)
-        clock = clock + interval
-        tick()
-        return tick, client, handle
-      end
+        raw_tick()
+        assert.is_true(prepares[1].active)
 
-      local function on_time_tick(tick, handle)
-        handle._read_cb(nil, pong)
-        clock = clock + interval
-        tick()
-      end
+        tcp.stop_server(server)
 
-      local function late_tick(tick, handle)
-        handle._read_cb(nil, pong)
-        clock = clock + 1.3 * interval
-        tick()
-      end
-
-      it("drops a client at the second tick in a row that found no progress, not at the first", function()
-        local tick, client, handle = stalled_client()
-        assert.is_nil(client.write_stalled)
-
-        on_time_tick(tick, handle)
-        assert.is_not_nil(server.clients[client.id], "the first tick without progress dropped the client")
-        assert.is_true(client.write_stalled)
-
-        on_time_tick(tick, handle)
-        assert.is_nil(server.clients[client.id])
-        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+        assert.is_true(prepares[1].closed and checks[1].closed, "stop_server left a handle open")
+        assert.is_nil(server.stall_check)
+        poll() -- nothing runs, and nothing fails
+        assert.is_true(handle:is_closing() or client.state ~= "connected")
+        tcp.stop_server(server) -- a second stop leaves nothing to close
       end)
 
-      it("does not let a late tick start the count", function()
-        local tick, client, handle = stalled_client()
+      it("closes the timer and every handle, and reports an error, when libuv cannot create a handle", function()
+        local on_error = spy.new(function() end)
+        server.on_error = on_error
+        vim.loop.new_check = function()
+          return nil
+        end
 
-        late_tick(tick, handle) -- no progress, but this tick may not have had a chance to see it
-        assert.is_nil(client.write_stalled, "a late tick started the count")
-        on_time_tick(tick, handle) -- the first tick that counts
-        assert.is_not_nil(server.clients[client.id], "the late tick counted as the first of the two")
-        assert.is_true(client.write_stalled)
+        local result = tcp.start_ping_timer(server, interval)
 
-        on_time_tick(tick, handle)
-        assert.is_nil(server.clients[client.id])
-      end)
-
-      it("does not let a late tick end the count, and keeps the first tick that counted", function()
-        local tick, client, handle = stalled_client()
-        on_time_tick(tick, handle) -- the first tick that counts
-        assert.is_true(client.write_stalled)
-
-        late_tick(tick, handle)
-        assert.is_not_nil(server.clients[client.id], "a late tick ended the count")
-        assert.is_true(client.write_stalled, "a late tick cleared the first tick that counted")
-
-        on_time_tick(tick, handle) -- still no progress on a tick that came on time: the stall is real
-        assert.is_nil(server.clients[client.id])
-      end)
-
-      it("counts a tick that is a few percent late, as timers jitter, and not one that is 10% late", function()
-        local tick, client, handle = stalled_client()
-
-        handle._read_cb(nil, pong)
-        clock = clock + 1.1 * interval
-        tick()
-        assert.is_nil(client.write_stalled, "a tick 10% late counted")
-
-        handle._read_cb(nil, pong)
-        clock = clock + 1.04 * interval
-        tick()
-        assert.is_true(client.write_stalled, "a tick 4% late did not count")
-      end)
-
-      it("clears the count when any tick, late or on time, finds progress", function()
-        local tick, client, handle = stalled_client()
-        on_time_tick(tick, handle)
-        assert.is_true(client.write_stalled)
-
-        handle.drain(1024)
-        late_tick(tick, handle)
-        assert.is_nil(client.write_stalled, "progress on a late tick did not clear the count")
-
-        on_time_tick(tick, handle) -- the first tick that counts again
-        assert.is_not_nil(server.clients[client.id])
-        handle.drain(1024)
-        on_time_tick(tick, handle)
-        assert.is_nil(client.write_stalled, "progress on a tick on time did not clear the count")
-        assert.is_not_nil(server.clients[client.id])
+        assert.is_nil(result)
+        assert.spy(on_error).was_called(1)
+        assert.is_true(timers[#timers].closed, "the ping timer was left open")
+        assert.is_true(prepares[1].closed, "the prepare handle was left open")
+        assert.is_nil(server.stall_check)
       end)
     end)
 
@@ -755,33 +884,95 @@ describe("The lifecycle of a WebSocket connection", function()
       local function silent_client()
         local client, _, handle = connect_and_upgrade()
         tcp.send_to_client(server, client.id, string.rep("x", 262144))
-        client_manager.is_client_reading(client, true) -- sees the 101 reply
+        client_manager.is_client_reading(client) -- sees the 101 reply
         return client, handle
       end
 
-      it("says false only at the second check in a row that was on time and found no progress", function()
+      it("says false only at the second observation in a row that found no progress", function()
         local client = silent_client()
-        assert.is_true(client_manager.is_client_reading(client, true))
-        assert.is_false(client_manager.is_client_reading(client, true))
+        assert.is_true(client_manager.is_client_reading(client))
+        assert.is_false(client_manager.is_client_reading(client))
       end)
 
-      it("keeps the count over a late check and over a check with progress, as it clears it", function()
+      it("clears the count when an observation finds progress", function()
         local client, handle = silent_client()
-        assert.is_true(client_manager.is_client_reading(client, true))
-        assert.is_true(client_manager.is_client_reading(client, false))
+        assert.is_true(client_manager.is_client_reading(client))
         assert.is_true(client.write_stalled)
         handle.drain(1)
-        assert.is_true(client_manager.is_client_reading(client, true))
+        assert.is_true(client_manager.is_client_reading(client))
         assert.is_nil(client.write_stalled)
       end)
 
       it("counts an empty queue as progress", function()
         local client, handle = silent_client()
-        assert.is_true(client_manager.is_client_reading(client, true))
+        assert.is_true(client_manager.is_client_reading(client))
         handle.drain(math.huge)
-        assert.is_true(client_manager.is_client_reading(client, true))
+        assert.is_true(client_manager.is_client_reading(client))
         assert.is_nil(client.write_stalled)
       end)
+    end)
+  end)
+
+  -- `queued_bytes` must count every frame that the server writes, or a reader that makes progress looks stalled. A
+  -- reader that drains less than the frames queued behind its reads loses its progress in the count.
+  describe("when the server counts the frames it writes", function()
+    local reply = string.rep("x", 262144)
+
+    it("counts the pings it sends, while a reader drains one byte per tick", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      for _ = 1, 8 do
+        handle.drain(1)
+        handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+        clock = clock + interval
+        tick()
+        assert.is_not_nil(server.clients[client.id], "a reader was dropped despite one byte of progress")
+      end
+    end)
+
+    it("counts the pongs it sends, while a reader drains less than the payload of a pong", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      for _ = 1, 8 do
+        handle._read_cb(nil, frame.create_frame(frame.OPCODE.PING, string.rep("p", 125), true, true))
+        handle.drain(64)
+        handle._read_cb(nil, frame.create_frame(frame.OPCODE.PONG, "", true, true))
+        clock = clock + interval
+        tick()
+        assert.is_not_nil(server.clients[client.id], "a reader was dropped despite 64 bytes of progress")
+      end
+    end)
+
+    it("reports the write error once, to the callback, when the last piece of a frame fails", function()
+      local client, writes = connect_and_upgrade()
+      local callback = spy.new(function() end)
+      tcp.send_to_client(server, client.id, string.rep("x", 2 * 1024 * 1024), callback)
+      for index = 2, #writes - 1 do
+        writes[index].done()
+      end
+      assert.spy(callback).was_not_called()
+
+      writes[#writes].done("EPIPE")
+
+      assert.spy(callback).was_called(1)
+      assert.spy(callback).was_called_with("EPIPE")
+    end)
+
+    it("counts a broadcast to a client as failed when the last piece of its frame fails", function()
+      local _, writes = connect_and_upgrade()
+      local on_written = spy.new(function() end)
+      tcp.broadcast(server, string.rep("x", 2 * 1024 * 1024), on_written)
+      for index = 2, #writes - 1 do
+        writes[index].done()
+      end
+      assert.spy(on_written).was_not_called()
+
+      writes[#writes].done("EPIPE")
+
+      assert.spy(on_written).was_called(1)
+      assert.spy(on_written).was_called_with(0)
     end)
   end)
 

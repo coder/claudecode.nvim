@@ -1268,6 +1268,40 @@ local vim = {
         end,
       }
     end,
+    -- Prepare and check handles run a callback before and after the poll phase of each loop iteration. The mock never
+    -- runs them.
+    new_prepare = function()
+      return {
+        start = function(self, callback)
+          return true
+        end,
+        stop = function(self)
+          return true
+        end,
+        close = function(self)
+          return true
+        end,
+        is_closing = function(self)
+          return false
+        end,
+      }
+    end,
+    new_check = function()
+      return {
+        start = function(self, callback)
+          return true
+        end,
+        stop = function(self)
+          return true
+        end,
+        close = function(self)
+          return true
+        end,
+        is_closing = function(self)
+          return false
+        end,
+      }
+    end,
     now = function()
       return os.time() * 1000
     end,
