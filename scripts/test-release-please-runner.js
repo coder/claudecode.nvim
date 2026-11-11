@@ -343,9 +343,11 @@ async function testFenceTracking() {
 
   // CommonMark's rule for every marker length that matters: a closer closes the fence if and only if it uses the
   // opener's character, has at least as many markers, and has at most 3 spaces of indent. Blanks around it change
-  // nothing, so each row has as many trailing blanks as indent. The lengths run from 3 to 10, then 100 and 101, to
-  // catch a cap on a marker run, for example at 4 or at 100.
-  const lengths = [3, 4, 5, 6, 7, 8, 9, 10, 100, 101];
+  // nothing, so each row has as many trailing blanks as indent. The lengths run from 3 to 10, then 100 and 101, 255
+  // to 257, and 1,000 and 1,001, to catch a cap on a marker run, for example at 4, 100, 255 or 1,000.
+  const lengths = [
+    3, 4, 5, 6, 7, 8, 9, 10, 100, 101, 255, 256, 257, 1000, 1001,
+  ];
   for (const marker of ["`", "~"]) {
     const otherMarker = marker === "`" ? "~" : "`";
     for (const openerLength of lengths) {
@@ -423,6 +425,23 @@ async function testFenceTracking() {
           5,
           `${name} after a closing fence of ${marker} keeps the fence open`,
         );
+        // A blank next to it changes nothing.
+        for (const blank of [" ", "\t"]) {
+          for (const suffix of [blank + character, character + blank]) {
+            assert.equal(
+              outside([
+                fence,
+                "## Real",
+                fence + suffix,
+                "## Real",
+                fence,
+                "## Real",
+              ]),
+              5,
+              `${JSON.stringify(suffix)} after a closing fence of ${marker} keeps the fence open`,
+            );
+          }
+        }
       }
     }
   }
@@ -431,6 +450,67 @@ async function testFenceTracking() {
     5,
     "a backtick after a blank keeps the fence open",
   );
+  assert.equal(
+    outside(["~~~", "## Real", "~~~ ~", "## Real", "~~~", "## Real"]),
+    5,
+    "a tilde after a blank keeps the fence open",
+  );
+  // Only spaces are indent. Any other code unit before the markers keeps a line from opening or closing a fence.
+  for (const marker of ["`", "~"]) {
+    const fence = marker.repeat(3);
+    for (const character of characters.filter(
+      (other) => other !== marker && other !== " ",
+    )) {
+      const name = `U+${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+      assert.equal(
+        outside([character + fence, "## Real", fence, "## Real"]),
+        1,
+        `${name} before a fence of ${marker} is not indent for an opener`,
+      );
+      assert.equal(
+        outside([
+          fence,
+          "## Real",
+          character + fence,
+          "## Real",
+          fence,
+          "## Real",
+        ]),
+        5,
+        `${name} before a fence of ${marker} is not indent for a closer`,
+      );
+    }
+  }
+  // An info string has no length limit, and neither has a marker run.
+  for (const marker of ["`", "~"]) {
+    const fence = marker.repeat(3);
+    assert.equal(
+      outside([fence + "x".repeat(100_000), "## Real", fence, "## Real"]),
+      3,
+      `a fence of ${marker} can carry an info string of 100,000 code units`,
+    );
+    assert.equal(
+      outside([
+        marker.repeat(100_000),
+        "## Real",
+        marker.repeat(99_999),
+        "## Real",
+        marker.repeat(100_000),
+        "## Real",
+      ]),
+      5,
+      `a fence of 100,000 ${marker} needs a closer of 100,000`,
+    );
+  }
+  // A backtick after U+2028 or U+2029 is still a backtick in the info string, so the line opens no fence. The
+  // CommonMark spec says so, and markdown-it 14 agrees. (commonmark.js 0.31.2 gets this case wrong.)
+  for (const separator of ["\u2028", "\u2029"]) {
+    assert.equal(
+      outside([`\`\`\`x${separator}\``, "## Real"]),
+      1,
+      `a backtick after U+${separator.charCodeAt(0).toString(16)} keeps a backtick line from opening a fence`,
+    );
+  }
 
   // `findLineOutsideFences` never returns a fence line, a line inside a fence, or a closer, even
   // when the predicate matches every line.
@@ -602,6 +682,11 @@ async function testUnreleasedUpdaterFences() {
   }
 
   // A text without a line ending, and a missing changelog file, still work.
+  // Without a title or an Unreleased heading, CR CR LF is still two line endings.
+  assert.equal(
+    update("```\rx\r\r\ny\r```\r"),
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n```\nx\n\ny\n```\n",
+  );
   assert.equal(runner.normalizeCommuniqueBody("- Added x"), "- Added x");
   assert.equal(
     update(undefined),
