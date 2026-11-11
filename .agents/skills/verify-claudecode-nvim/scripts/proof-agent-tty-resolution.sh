@@ -696,17 +696,19 @@ setsid_resolved_case() {
 # jq-resolved and setsid-resolved reach only the calls that a launch makes. This case reads the source: any word jq or
 # setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it.
 bare_tools_case() {
-  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_./$-])(jq|setsid)($|[^[:alnum:]_-])'
+  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])' form
   local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
   while IFS= read -r site; do
-    bare=${site//"$jq_ref"/jq}
-    bare=${bare//"$setsid_ref"/setsid}
-    grep -qE "$word_re" <<<"$bare" || fail "$name" "the pattern misses this call written as a bare call: $bare"
+    for form in "" /usr/bin/ ./; do
+      bare=${site//"$jq_ref"/${form}jq}
+      bare=${bare//"$setsid_ref"/${form}setsid}
+      grep -qE "$word_re" <<<"$bare" || fail "$name" "the pattern misses this call written as a bare or path-qualified call: $bare"
+    done
     sites=$((sites + 1))
   done < <(grep -E '"\$(JQ_BIN|SETSID_BIN)"' "$V" | grep -v 'env_line JQ_BIN')
   ((sites > 0)) || fail "$name" "vcn.sh has no call through \$JQ_BIN or \$SETSID_BIN to check the pattern against"
   hits=$(grep -nE "$word_re" "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '=\$\(bin (jq|setsid)\)$' || true)
-  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare jq or setsid: $(tr '\n' ' ' <<<"$hits")"
+  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
   cases=$((cases + 1))
 }

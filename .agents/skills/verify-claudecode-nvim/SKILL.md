@@ -36,7 +36,7 @@ VCN_STATE=/tmp/vcn.AbC123
 OUT=/home/coder/.xum/sessions/<ws>/scratch/verify-claudecode-nvim/20261031T120000Z-AbC123
 ```
 
-Every bash call is a fresh shell. Start each later call with the two values launch printed: `export VCN_STATE=/tmp/vcn.AbC123 OUT=<the OUT line>`. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used. Do not `source` `$VCN_STATE/run.env` or `$OUT/run.env`: bash runs every line of a file it sources, as you. `launch` appends version lines such as `agent-tty 0.5.0` to `$OUT/run.env`, and bash would run those as commands. Get the other values from the run:
+Every bash call is a fresh shell. Start each later call with the two values launch printed, each in single quotes because a path can hold a space (`TMPDIR` and `VERIFY_OUT` allow it): `export VCN_STATE='/tmp/vcn.AbC123' OUT='<the OUT value>'`. Use a new request id for every `rpc` or `tool` call, because the harness refuses an id the run already used. Do not `source` `$VCN_STATE/run.env` or `$OUT/run.env`: bash runs every line of a file it sources, as you. `launch` appends version lines such as `agent-tty 0.5.0` to `$OUT/run.env`, and bash would run those as commands. Get the other values from the run:
 
 - `WORK` is `$VCN_STATE/work`, where `hello.txt` and `other.txt` live.
 - `$V doctor` prints the agent-tty session id (`SID`) in its `agent-tty session <SID> is running` line and the port of the plugin server (`PORT`) in its `plugin server is running on lock port <PORT>` line. The port is also the name of the lock file, `$VCN_STATE/claude/ide/<port>.lock`, so `PORT=$(basename "$VCN_STATE"/claude/ide/*.lock .lock)` gives it while the server runs.
@@ -150,7 +150,7 @@ A full run, with the `VCN_STATE` value from launch:
 ```bash
 V=.agents/skills/verify-claudecode-nvim/scripts/vcn.sh
 $V launch
-export VCN_STATE=/tmp/vcn.AbC123 OUT=<the OUT line>
+export VCN_STATE='/tmp/vcn.AbC123' OUT='<the OUT value>'
 $V doctor
 .agents/skills/verify-claudecode-nvim/scripts/journey-opendiff-accept.sh
 $V cleanup
@@ -161,7 +161,7 @@ $V cleanup
 This checks that the real Claude Code CLI accepts the plugin's WebSocket server. It registers the run's server in a scratch CLI config and asks the CLI for its status. Run it in any shell, with the `VCN_STATE` value launch printed in the first line:
 
 ```bash
-export VCN_STATE=/tmp/vcn.AbC123
+export VCN_STATE='/tmp/vcn.AbC123'
 PORT=$(basename "$VCN_STATE"/claude/ide/*.lock .lock)
 cfg=$(mktemp -d)
 helper="jq -c '{\"x-claude-code-ide-authorization\": .authToken}' \"$VCN_STATE/claude/ide/$PORT.lock\""
