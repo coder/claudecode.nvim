@@ -272,6 +272,10 @@ describe("claudecode.terminal.native toggle behavior", function()
           mock_state.next_winid = mock_state.next_winid + 1
           mock_state.windows[winid] = { bufnr = 0 }
           mock_state.current_win = winid
+          -- WinNew and WinEnter fire here, before the plugin has a buffer for the terminal.
+          if mock_state.vsplit_autocmd then
+            mock_state.vsplit_autocmd(winid)
+          end
         elseif command == "enew" then
           -- Create new buffer in current window
           local bufnr = mock_state.next_bufnr
@@ -1512,6 +1516,234 @@ describe("claudecode.terminal.native toggle behavior", function()
           assert.is_nil(native_provider.get_active_bufnr())
         end)
       end
+    end)
+
+    -- The vsplit of a start fires WinNew and WinEnter before the plugin has a buffer for Claude, so an entry that such an
+    -- autocmd calls finds nothing to adopt. A close() that a BufEnter or TermOpen autocmd calls cannot wait in the
+    -- middle of termopen (on Neovim 0.8 that aborts it).
+    describe("when an autocmd runs while the split of a start is created", function()
+      local mock_state
+      local notified
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        notified = {}
+        mock_vim.notify = function(msg, level)
+          table.insert(notified, { msg = msg, level = level })
+        end
+        mock_vim.log = { levels = { ERROR = 4, WARN = 3, INFO = 2 } }
+      end)
+
+      local function running_jobs()
+        local count = 0
+        for _ in pairs(mock_state.running_jobs) do
+          count = count + 1
+        end
+        return count
+      end
+
+      local function terminal_buffers()
+        local count = 0
+        for _, buf in pairs(mock_state.buffers) do
+          if buf.options and buf.options.buftype == "terminal" then
+            count = count + 1
+          end
+        end
+        return count
+      end
+
+      local function on_vsplit(action)
+        local fired = false
+        mock_state.vsplit_autocmd = function()
+          if not fired then
+            fired = true
+            action()
+          end
+        end
+        return function()
+          return fired
+        end
+      end
+
+      local vsplit_entries = {
+        {
+          "open",
+          function()
+            native_provider.open("claude", {}, config)
+          end,
+        },
+        {
+          "simple_toggle",
+          function()
+            native_provider.simple_toggle("claude", {}, config)
+          end,
+        },
+        {
+          "focus_toggle",
+          function()
+            native_provider.focus_toggle("claude", {}, config)
+          end,
+        },
+      }
+      for _, entry in ipairs(vsplit_entries) do
+        it("should start one Claude when the autocmd calls " .. entry[1], function()
+          local fired = on_vsplit(entry[2])
+
+          native_provider.open("claude", {}, config, true)
+
+          assert.is_true(fired())
+          assert.are.equal(1, running_jobs())
+          assert.are.equal(1, terminal_buffers())
+          local active = native_provider.get_active_bufnr()
+          assert.is_not_nil(active)
+          assert.are.equal(mock_state.buffers[active].jobid, next(mock_state.running_jobs))
+          assert.are.equal(1, windows_showing(active))
+          assert.are.equal(active, mock_state.windows[mock_state.current_win].bufnr)
+        end)
+      end
+
+      it("should keep your window when the autocmd closes the new split", function()
+        local fired = on_vsplit(function()
+          mock_vim.api.nvim_win_close(mock_state.current_win, false)
+          mock_state.current_win = 1
+        end)
+
+        local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+
+        assert.is_true(ok, tostring(err))
+        assert.is_true(fired())
+        assert.are.equal(0, mock_state.windows[1].bufnr, "your window still shows your buffer")
+        assert.are.equal(1, running_jobs())
+        local active = native_provider.get_active_bufnr()
+        assert.is_not_nil(active)
+        assert.are.equal(0, windows_showing(active))
+        assert.are.equal(1, mock_state.current_win)
+      end)
+
+      it("should show Claude in the new split when the autocmd moves to another window", function()
+        mock_state.windows[2] = { bufnr = 0 }
+        local fired = on_vsplit(function()
+          mock_state.current_win = 2
+        end)
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.is_true(fired())
+        assert.are.equal(0, mock_state.windows[1].bufnr)
+        assert.are.equal(0, mock_state.windows[2].bufnr)
+        local active = native_provider.get_active_bufnr()
+        assert.is_not_nil(active)
+        assert.are.equal(1, windows_showing(active))
+        assert.are.equal(1, running_jobs())
+      end)
+
+      it("should leave a floating window of the autocmd alone when it closes the new split", function()
+        local float = 7
+        local fired = on_vsplit(function()
+          mock_vim.api.nvim_win_close(mock_state.current_win, false)
+          mock_state.current_win = 1
+          mock_state.windows[float] = { bufnr = 0, relative = "editor" }
+        end)
+
+        local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+
+        assert.is_true(ok, tostring(err))
+        assert.is_true(fired())
+        assert.are.equal(0, mock_state.windows[float].bufnr)
+        assert.are.equal(0, mock_state.windows[1].bufnr)
+        local active = native_provider.get_active_bufnr()
+        assert.is_not_nil(active)
+        assert.are.equal(0, windows_showing(active))
+      end)
+
+      it("should not stay in the start after the vsplit raised", function()
+        local original_cmd = mock_vim.cmd
+        mock_vim.cmd = function(command)
+          if command:match("vsplit") then
+            error("Vim(vsplit):E36: Not enough room")
+          end
+          return original_cmd(command)
+        end
+
+        local ok = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.cmd = original_cmd
+        assert.is_false(ok)
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.are.equal(1, running_jobs())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+        native_provider.close()
+        assert.are.equal(0, running_jobs())
+      end)
+
+      local function from_bufenter(action)
+        local fired = false
+        mock_state.bufenter_autocmd = function(_, bufnr)
+          if not fired and bufnr ~= 0 then
+            fired = true
+            action()
+          end
+        end
+        return function()
+          return fired
+        end
+      end
+
+      local function from_termopen(action)
+        local fired = false
+        mock_vim.api.nvim_create_autocmd("TermOpen", {
+          callback = function()
+            if not fired then
+              fired = true
+              action()
+            end
+          end,
+        })
+        return function()
+          return fired
+        end
+      end
+
+      local closers = {
+        { "a BufEnter autocmd", from_bufenter },
+        { "a TermOpen autocmd", from_termopen },
+        { "a WinEnter autocmd", on_vsplit },
+      }
+      for _, closer in ipairs(closers) do
+        it("should close Claude after the start when " .. closer[1] .. " calls close", function()
+          local fired = closer[2](function()
+            native_provider.close()
+          end)
+
+          local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+
+          assert.is_true(ok, tostring(err))
+          assert.is_true(fired())
+          assert.are.equal(0, running_jobs())
+          assert.are.equal(0, terminal_buffers())
+          assert.is_nil(native_provider.get_active_bufnr())
+          assert.are.same({}, notified)
+          local open_windows = 0
+          for _ in pairs(mock_state.windows) do
+            open_windows = open_windows + 1
+          end
+          assert.are.equal(1, open_windows)
+        end)
+      end
+
+      it("should start Claude again after a close that waited for the start", function()
+        on_vsplit(function()
+          native_provider.close()
+        end)
+        native_provider.open("claude", {}, config, true)
+        mock_state.vsplit_autocmd = nil
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.are.equal(1, running_jobs())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+      end)
     end)
 
     it("should keep one exit handler on a terminal it adopts again after each reload", function()

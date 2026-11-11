@@ -16,6 +16,12 @@ local tip_shown = false
 -- Whether get_active_bufnr already looked for a terminal to adopt. After a reload, its first call looks. Later calls
 -- need not: this module copy starts every terminal it tracks, and the entry points adopt for themselves.
 local adoption_checked = false
+-- Where a start is. "split" while the vsplit creates the window: no buffer exists yet, so an entry that an autocmd of
+-- the vsplit calls has nothing to adopt. "buffer" from the vsplit until the start has recorded its state. nil otherwise.
+local start_phase = nil
+-- A close() that an autocmd of a start called. It runs when the start returns, because a close waits for the job to
+-- exit, and that wait cannot run inside termopen (on Neovim 0.8 it aborts the editor).
+local close_after_start = false
 
 -- Set on each terminal buffer this provider starts. Unlike the state above, a buffer variable survives a reload
 -- of this module, so the next module instance can adopt the terminal.
@@ -165,29 +171,16 @@ end
 
 -- Defined below. The safeguard in open_terminal shows a hidden terminal with it.
 local show_hidden_terminal
+-- Defined below. A start runs the close that an autocmd of it asked for.
+local close_terminal
 
-local function open_terminal(cmd_string, env_table, effective_config, focus)
-  focus = utils.normalize_focus(focus)
-  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and a
-  -- toggle may hide it again. The check below finds that terminal.
-  stop_snacks_terminal()
-
-  if is_valid() then -- Should not happen if called correctly, but as a safeguard
-    if not winid then
-      -- A callback hid the terminal after it started
-      show_hidden_terminal(effective_config, focus)
-    elseif focus then
-      -- Focus existing terminal: switch to terminal window and enter insert mode
-      vim.api.nvim_set_current_win(winid)
-      if effective_config.auto_insert ~= false then
-        vim.cmd("startinsert")
-      end
-    end
-    -- If focus=false, preserve user context by staying in current window
-    return
-  end
-
+---The start of Claude, from the split to the state that it records. open_terminal runs it.
+local function start_terminal(cmd_string, env_table, effective_config, focus)
   local original_win = vim.api.nvim_get_current_win()
+  local windows_before = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    windows_before[win] = true
+  end
   local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
   local full_height = vim.o.lines
   local placement_modifier
@@ -199,14 +192,35 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   vim.cmd(placement_modifier .. width .. "vsplit")
+  start_phase = "buffer"
+  -- WinNew and WinEnter autocmds ran inside vsplit. They can close the new split or move to another window, so the
+  -- split is the window that did not exist before (the current one, when it is new), and none is left when it closed.
+  local function is_new_split(win)
+    return vim.api.nvim_win_is_valid(win)
+      and not windows_before[win]
+      and vim.api.nvim_win_get_config(win).relative == ""
+  end
   local new_winid = vim.api.nvim_get_current_win()
-  vim.api.nvim_win_set_height(new_winid, full_height)
+  if not is_new_split(new_winid) then
+    new_winid = nil
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if is_new_split(win) then
+        new_winid = win
+        break
+      end
+    end
+  end
+  if new_winid then
+    vim.api.nvim_win_set_height(new_winid, full_height)
+  end
 
   -- Another plugin's autocmd can swap a different buffer into the split, so the code below uses this number.
   local new_bufnr = vim.api.nvim_create_buf(true, false)
   -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
   vim.b[new_bufnr][OWNED_MARK] = true
-  vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+  if new_winid then
+    vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+  end
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
@@ -248,7 +262,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   if failure then
     vim.notify("Failed to open native terminal." .. failure, vim.log.levels.ERROR)
     -- Wiping the buffer closes the split, unless an autocmd swapped another buffer into it first.
-    if vim.api.nvim_win_is_valid(new_winid) then
+    if new_winid and vim.api.nvim_win_is_valid(new_winid) then
       vim.api.nvim_win_close(new_winid, true)
     end
     vim.api.nvim_set_current_win(original_win)
@@ -263,7 +277,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   -- An autocmd of the start can close the split. A focus_toggle from a BufEnter or TermOpen autocmd adopts this
   -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
   -- terminal, and the next toggle shows it.
-  if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+  if new_winid and vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
   winid = new_winid
@@ -293,7 +307,42 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 end
 
-local function close_terminal()
+local function open_terminal(cmd_string, env_table, effective_config, focus)
+  focus = utils.normalize_focus(focus)
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and a
+  -- toggle may hide it again. The check below finds that terminal.
+  stop_snacks_terminal()
+
+  if is_valid() then -- Should not happen if called correctly, but as a safeguard
+    if not winid then
+      -- A callback hid the terminal after it started
+      show_hidden_terminal(effective_config, focus)
+    elseif focus then
+      -- Focus existing terminal: switch to terminal window and enter insert mode
+      vim.api.nvim_set_current_win(winid)
+      if effective_config.auto_insert ~= false then
+        vim.cmd("startinsert")
+      end
+    end
+    -- If focus=false, preserve user context by staying in current window
+    return
+  end
+
+  start_phase = "split"
+  -- pcall, so that an error of the start cannot leave the phase set, which would make every entry return.
+  local started, start_error = pcall(start_terminal, cmd_string, env_table, effective_config, focus)
+  start_phase = nil
+  local close_requested = close_after_start
+  close_after_start = false
+  if not started then
+    error(start_error, 0)
+  end
+  if close_requested then
+    close_terminal()
+  end
+end
+
+function close_terminal()
   if not is_valid() and not adopt_existing_terminal() then
     -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
     stop_snacks_terminal()
@@ -451,6 +500,9 @@ end
 --- @param effective_config table
 --- @param focus boolean|nil
 function M.open(cmd_string, env_table, effective_config, focus)
+  if start_phase == "split" then
+    return -- The start that is creating its split has no buffer to adopt yet, and shows Claude when it returns.
+  end
   focus = utils.normalize_focus(focus)
   forget_ended_terminal()
 
@@ -476,6 +528,10 @@ function M.open(cmd_string, env_table, effective_config, focus)
 end
 
 function M.close()
+  if start_phase then
+    close_after_start = true
+    return
+  end
   close_terminal()
 end
 
@@ -484,6 +540,9 @@ end
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
 function M.simple_toggle(cmd_string, env_table, effective_config)
+  if start_phase == "split" then
+    return
+  end
   forget_ended_terminal()
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
@@ -518,6 +577,9 @@ end
 ---@param env_table table
 ---@param effective_config ClaudeCodeTerminalConfig
 function M.focus_toggle(cmd_string, env_table, effective_config)
+  if start_phase == "split" then
+    return
+  end
   forget_ended_terminal()
   -- Check if we have a valid terminal buffer (process running)
   local has_buffer = bufnr and vim.api.nvim_buf_is_valid(bufnr)
