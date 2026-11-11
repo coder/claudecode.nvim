@@ -14,6 +14,7 @@ const http = require("node:http");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { promisify } = require("node:util");
+const commonmark = require("commonmark");
 
 const runner = require("./release-please-runner.js");
 
@@ -719,6 +720,403 @@ async function testUnreleasedUpdaterFences() {
   }
 }
 
+// A differential test against commonmark.js. The assertions above hold single examples, but a rule can also go wrong
+// for a multi-character input that no example thought of. This test builds top-level documents from fence, heading,
+// text and blank lines with random suffixes, indents, line endings and code units. A fixed seed makes the documents
+// the same on every run. `findLineOutsideFences` and `normalizeCommuniqueBody` must agree with commonmark.js on each
+// of them. It leaves out list items, block quotes and HTML blocks, which the runner does not track.
+const DIFFERENTIAL_SEED = 466;
+const DIFFERENTIAL_DOCUMENTS = 10000;
+const DIFFERENTIAL_UPDATER_DOCUMENTS = 100;
+
+/** A small seeded generator (mulberry32): the same seed gives the same numbers. */
+function createRandom(seed) {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let mixed = Math.imul(state ^ (state >>> 15), state | 1);
+    mixed ^= mixed + Math.imul(mixed ^ (mixed >>> 7), mixed | 61);
+    return ((mixed ^ (mixed >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Run lengths that sit on or just past a round cap: 100, 200, 255, 256, 1,000, 4,096, 65,535 and 100,000.
+const LONG_RUNS = [
+  99, 100, 101, 199, 200, 201, 255, 256, 257, 1000, 1001, 4096, 65535, 65536,
+  100_000,
+];
+// Code units that look like a blank or a line break. A tab is a blank after a fence and in an info string, but not
+// as indent. The rest are neither.
+const LOOKALIKES = [
+  "\t",
+  "\v",
+  "\f",
+  "\u001c",
+  "\u00a0",
+  "\u0085",
+  "\u1680",
+  "\u2003",
+  "\u2028",
+  "\u2029",
+  "\u200b",
+  "\u3000",
+  "\ufeff",
+];
+
+/**
+ * commonmark.js 0.31.2 opens a backtick fence for "```x<U+2028>`", but the spec says a backtick info string cannot
+ * hold a backtick, and markdown-it 14 agrees with the spec and with the runner. The cause: commonmark.js checks the
+ * info string with `(?!.*`)`, and `.` stops at U+2028 and U+2029. So its answer is wrong, and a differential test
+ * must not encode it. The generator leaves out a backtick fence line with a backtick after a U+2028 or U+2029. The
+ * fixed cases in `testFenceTracking` check that shape against the spec.
+ */
+function hitsCommonmarkJsBug(line) {
+  if (!/^ {0,3}`{3,}/.test(line)) {
+    return false;
+  }
+  const separator = line.search(/[\u2028\u2029]/);
+  return separator !== -1 && line.indexOf("`", separator) !== -1;
+}
+
+/** Makes the lines of one document. `coverage` counts the shapes that the document holds. */
+function generateLines(random, coverage) {
+  const pick = (list) => list[Math.floor(random() * list.length)];
+  const letter = () =>
+    pick("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  const codeUnit = () => {
+    let code = Math.floor(random() * 0x10000);
+    while (code === 0x0a || code === 0x0d) {
+      code = Math.floor(random() * 0x10000);
+    }
+    return String.fromCharCode(code);
+  };
+  // Up to three spaces, and now and then one more code unit, from the list above or from all of them.
+  // `>` is left out: it starts a block quote, which the runner does not track.
+  const indent = () => {
+    const spaces = pick(["", "", "", " ", "  ", "   "]);
+    if (random() >= 0.15) {
+      return spaces;
+    }
+    let extra = random() < 0.5 ? pick(LOOKALIKES) : codeUnit();
+    if (extra === ">") {
+      extra = "\u3000";
+    }
+    coverage.oddIndent += 1;
+    return random() < 0.5 ? extra + spaces : spaces + extra;
+  };
+  // Up to four pieces: blanks, markers, words and single code units, so a suffix can be "", " ~", "\tjs ~" or "`a ".
+  // Now and then one piece repeats for a very long run, so that no cap on an info string or on trailing blanks passes.
+  const suffix = () => {
+    if (random() < 0.04) {
+      coverage.longSuffix += 1;
+      return pick([
+        "x",
+        "x",
+        "x",
+        " ",
+        "\t",
+        "~",
+        "ab",
+        " x",
+        codeUnit(),
+      ]).repeat(pick(LONG_RUNS));
+    }
+    let text = "";
+    for (let count = Math.floor(random() * 5); count > 0; count -= 1) {
+      text += pick([
+        " ",
+        "\t",
+        "~",
+        "`",
+        "js",
+        "x",
+        " ",
+        "\u2028",
+        "\u2029",
+        pick(LOOKALIKES),
+        codeUnit(),
+      ]);
+    }
+    return text;
+  };
+  // Marker runs from 2 to 10, and now and then a long one.
+  const markers = () => {
+    if (random() < 0.02) {
+      coverage.longMarkers += 1;
+      return pick(["`", "~"]).repeat(
+        pick([20, 100, 101, 255, 256, 257, 1000, 1001, 4096]),
+      );
+    }
+    return pick(["`", "~"]).repeat(pick([2, 3, 3, 3, 4, 4, 5, 6, 10]));
+  };
+  const fence = () => {
+    for (;;) {
+      const text = indent() + markers() + suffix();
+      if (!hitsCommonmarkJsBug(text)) {
+        return text;
+      }
+    }
+  };
+  const line = () => {
+    const kind = random();
+    if (kind < 0.45) {
+      return fence();
+    }
+    if (kind < 0.65) {
+      return pick([
+        "## Real",
+        "## Real",
+        "## Other",
+        "# Title",
+        "### Sub",
+        "## Real ",
+        " ## Real",
+      ]);
+    }
+    if (kind < 0.8) {
+      return pick(["", "", " ", "\t"]);
+    }
+    if (kind < 0.9) {
+      // An indent of four spaces or a tab makes a code line or a continuation, never a fence.
+      return pick(["    ", "\t"]) + pick(["```", "~~~", "## Real", "x"]);
+    }
+    let text = letter();
+    for (let count = Math.floor(random() * 4); count > 0; count -= 1) {
+      text += codeUnit();
+    }
+    return text;
+  };
+  const lines = [];
+  for (let count = 1 + Math.floor(random() * 12); count > 0; count -= 1) {
+    lines.push(line());
+  }
+  return lines;
+}
+
+/** Joins `lines` with a random line ending after each one: LF, CR LF, or CR. */
+function joinWithEndings(random, lines) {
+  let text = "";
+  lines.forEach((line, index) => {
+    text += line;
+    if (index < lines.length - 1) {
+      const kind = random();
+      text += kind < 0.5 ? "\n" : kind < 0.8 ? "\r\n" : "\r";
+    }
+  });
+  return text;
+}
+
+/** What commonmark.js says about `text`: the lines it sees, the lines inside a fenced code block, and the headings. */
+function readWithCommonmark(text) {
+  const lines = text.split(/\r\n|\r|\n/);
+  // A final line ending ends the last line. It does not start another, empty one.
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  const fenced = new Set();
+  const headings = [];
+  const walker = new commonmark.Parser().parse(text).walker();
+  for (let event = walker.next(); event; event = walker.next()) {
+    const { entering, node } = event;
+    if (!entering) {
+      continue;
+    }
+    const [[firstLine], [lastLine]] = node.sourcepos ?? [[0], [0]];
+    if (node.type === "code_block" && node.info !== null) {
+      for (let line = firstLine; line <= lastLine; line += 1) {
+        fenced.add(line - 1);
+      }
+    }
+    if (node.type === "heading") {
+      let literal = "";
+      for (let child = node.firstChild; child; child = child.next) {
+        literal += child.literal ?? "";
+      }
+      headings.push({ level: node.level, line: firstLine - 1, text: literal });
+    }
+  }
+  return { lines, fenced, headings };
+}
+
+/** A document for an assertion message: the seed and the index repeat it, so a long one is cut short. */
+function describeDocument(text) {
+  const shown = JSON.stringify(text);
+  return shown.length <= 400
+    ? shown
+    : `${shown.slice(0, 400)}... (${text.length} code units)`;
+}
+
+async function testFenceDifferential() {
+  const random = createRandom(DIFFERENTIAL_SEED);
+  const coverage = {
+    longMarkers: 0,
+    longSuffix: 0,
+    oddIndent: 0,
+    skippedBodies: 0,
+  };
+  const anyLine = () => true;
+  const isReal = (line) => line === "## Real";
+
+  for (let index = 0; index < DIFFERENTIAL_DOCUMENTS; index += 1) {
+    const text = joinWithEndings(random, generateLines(random, coverage));
+    const where = `document ${index} of seed ${DIFFERENTIAL_SEED}: ${describeDocument(text)}`;
+    const { lines, fenced, headings } = readWithCommonmark(text);
+
+    // From every start, the first line that is outside every fenced code block.
+    for (let start = 0; start <= lines.length; start += 1) {
+      let expected = -1;
+      for (
+        let line = start;
+        line < lines.length && expected === -1;
+        line += 1
+      ) {
+        expected = fenced.has(line) ? -1 : line;
+      }
+      assert.equal(
+        runner.findLineOutsideFences(lines, start, anyLine),
+        expected,
+        `findLineOutsideFences from ${start} in ${where}`,
+      );
+    }
+    // The lines that are a real `## Real` heading.
+    const real = new Set(
+      headings
+        .filter((heading) => heading.level === 2 && isReal(lines[heading.line]))
+        .map((heading) => heading.line),
+    );
+    const found = [];
+    for (let start = 0; start < lines.length; ) {
+      const line = runner.findLineOutsideFences(lines, start, isReal);
+      if (line === -1) {
+        break;
+      }
+      found.push(line);
+      start = line + 1;
+    }
+    assert.deepEqual(
+      found,
+      [...real].sort((a, b) => a - b).filter((line) => !fenced.has(line)),
+      `headings in ${where}`,
+    );
+
+    // `normalizeCommuniqueBody` demotes every level-2 heading that is not in a fence, and keeps every line ending.
+    // `trim` can strip a U+2028, U+2029 or other blank from the front of the first line, so that line can then show
+    // the commonmark.js bug shape. Those documents have no valid expected value here.
+    const trimmed = text.trim();
+    const body = readWithCommonmark(trimmed);
+    if (body.lines.some(hitsCommonmarkJsBug)) {
+      coverage.skippedBodies += 1;
+      continue;
+    }
+    const endings = trimmed.match(/\r\n|\r|\n/g) ?? [];
+    const expectedBody = body.lines
+      .map((line, i) => {
+        const demote =
+          body.headings.some(
+            (heading) => heading.level === 2 && heading.line === i,
+          ) && line.startsWith("## ");
+        return (demote ? `### ${line.slice(3)}` : line) + (endings[i] ?? "");
+      })
+      .join("")
+      .trim();
+    assert.equal(
+      runner.normalizeCommuniqueBody(text),
+      expectedBody,
+      `normalizeCommuniqueBody in ${where}`,
+    );
+  }
+
+  // A generator that stops making a shape would silently stop testing it, so each shape must show up.
+  assert.ok(
+    coverage.skippedBodies <= DIFFERENTIAL_DOCUMENTS / 100,
+    `documents left out of the normalizeCommuniqueBody check: ${coverage.skippedBodies}`,
+  );
+  assert.ok(
+    coverage.longSuffix >= 100,
+    `long info strings and long blanks: ${coverage.longSuffix}`,
+  );
+  assert.ok(
+    coverage.longMarkers >= 100,
+    `long marker runs: ${coverage.longMarkers}`,
+  );
+  assert.ok(
+    coverage.oddIndent >= 1000,
+    `lines with an extra code unit as indent: ${coverage.oddIndent}`,
+  );
+
+  // The existing sections of a changelog stay headings. prettier would rewrite some of these documents (it dedents a
+  // line that CommonMark reads as a paragraph continuation, for example), so the formatter here is a script that
+  // prints its input. The real formatter runs in the updater tests above.
+  const directory = mkdtempSync(join(tmpdir(), "fence-differential-"));
+  const formatter = join(directory, "format.sh");
+  writeFileSync(formatter, "#!/bin/sh\ncat\n", { mode: 0o755 });
+  const previousFormatter = process.env.PRETTIER_BIN;
+  process.env.PRETTIER_BIN = formatter;
+  try {
+    checkUpdaterDocuments(random, coverage);
+  } finally {
+    if (previousFormatter === undefined) {
+      delete process.env.PRETTIER_BIN;
+    } else {
+      process.env.PRETTIER_BIN = previousFormatter;
+    }
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function checkUpdaterDocuments(random, coverage) {
+  const entry = "## [0.4.0] - 2026-06-15\n\n- Added x";
+  const updater = new runner.UnreleasedAwareChangelog({
+    changelogEntry: entry,
+  });
+  for (let index = 0; index < DIFFERENTIAL_UPDATER_DOCUMENTS; index += 1) {
+    const middle = generateLines(random, coverage);
+    const text = joinWithEndings(random, [
+      "# Changelog",
+      "",
+      "## [Unreleased]",
+      "",
+      ...middle,
+      "",
+      "## [0.3.0] - 2025-09-15",
+      "",
+      "- Previous",
+      "",
+    ]);
+    const where = `updater document ${index} of seed ${DIFFERENTIAL_SEED}: ${describeDocument(text)}`;
+    const { headings, lines } = readWithCommonmark(text);
+    const unreleased = headings.findIndex(
+      (heading) => heading.level === 2 && heading.text === "[Unreleased]",
+    );
+    assert.notEqual(
+      unreleased,
+      -1,
+      `the Unreleased heading stays a heading in ${where}`,
+    );
+    // The draft body goes, so the headings from there up to the next level 1 or 2 heading go with it. The updater
+    // looks for that heading at the start of a line, so an indented one does not end the draft.
+    const next = headings.findIndex(
+      (heading, i) =>
+        i > unreleased &&
+        heading.level <= 2 &&
+        /^##? /.test(lines[heading.line]),
+    );
+    const expected = [
+      ...headings.slice(0, unreleased + 1),
+      { level: 2, text: "[0.4.0] - 2026-06-15" },
+      ...(next === -1 ? [] : headings.slice(next)),
+    ].map((heading) => `${heading.level} ${heading.text}`);
+    const updated = readWithCommonmark(
+      updater.updateContent(text),
+    ).headings.map((heading) => `${heading.level} ${heading.text}`);
+    assert.deepEqual(
+      updated,
+      expected,
+      `headings after updateContent in ${where}`,
+    );
+  }
+}
+
 function testPullRequestOutputs() {
   assert.deepEqual(runner.formatPullRequestOutputs([]), {
     prs_created: "false",
@@ -932,6 +1330,7 @@ async function main() {
   await testUnreleasedUpdater();
   await testFenceTracking();
   await testUnreleasedUpdaterFences();
+  await testFenceDifferential();
   testPullRequestOutputs();
   await testInternalCommitSkipsCommunique();
   await testReleasableCommitRunsCommunique();
