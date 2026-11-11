@@ -1,5 +1,5 @@
 == lua/claudecode/config.lua
-file lua/claudecode/config.lua 787fa0432d1d77d7
+file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
@@ -211,7 +211,7 @@ file lua/claudecode/tools/open_file.lua b277cbe8b86ac7c8
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua dbd0dcb8b70c8107
+file lua/claudecode/types.lua 521c6f7a15c1d837
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua c4a21fe74858afe2
 == lua/claudecode/visual_commands.lua
