@@ -4,7 +4,10 @@
 // Usage: node proof-tools-call-wire.mjs <lock file> <tree> <cwd>   (proof-tools-call-wire.sh starts nvim, then this)
 // Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run or judged fewer cases than
 // the table holds (no case at all included).
-// The token is read from the 0600 lock file and goes only into the upgrade header, as in ws-client.mjs.
+// The token is read from the 0600 lock file and goes only into the upgrade header, as in ws-client.mjs. Text from a
+// frame or from the lock file reaches stdout or stderr only through `show`, which withholds a text that holds 8 or
+// more characters of the token in a row. The checker prints no message of a JSON parser: a frame that is not JSON, and
+// a lock file that does not parse, end the run with exit 2 and a fixed message.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -16,9 +19,12 @@ if (!cwd) {
   process.exit(2);
 }
 
-// Normalization. Every string of every frame that the server sends is rewritten before it is compared or checked for a
-// leak. A string that holds a JSON object or list, a tool's text item, is decoded first, so its paths are plain text.
-// The cwd goes first, so a run dir under the real home folder is not a leak: getWorkspaceFolders names the cwd on purpose.
+// Normalization. The path rewrite below applies to a string on its own. The cwd goes first, so a run dir under the real
+// home folder is not a leak: getWorkspaceFolders names the cwd on purpose. A string that holds a JSON object or list,
+// a tool's text item, is decoded first, so its paths are plain text. Two readers use this: the leak rule reads every
+// key and every string of a frame as it came off the wire, one by one, and nothing is merged or rebuilt before it
+// (`leakIn`). The comparison with the table reads a rebuilt copy (`normalize`), which does not rewrite keys, so
+// two keys that the rewrite would make equal never pass as a correct answer.
 const PLACEHOLDERS = [
   [cwd, "$CWD"],
   [tree, "$TREE"],
@@ -114,25 +120,37 @@ for (const { name, ok, strings = {} } of TOOLS) {
 
 const rewrite = (text) =>
   PLACEHOLDERS.reduce((out, [path, mark]) => out.replaceAll(path, mark), text);
+const parse = (text) => {
+  try {
+    return /^[[{]/.test(text) ? JSON.parse(text) : text;
+  } catch {
+    return text; // not JSON: plain text. The parser's message is never used.
+  }
+};
 const normalize = (value) => {
   if (typeof value === "string") {
-    if (/^[[{]/.test(value)) {
-      try {
-        return normalize(JSON.parse(value));
-      } catch {} // not JSON: plain text
-    }
-    return rewrite(value);
+    const decoded = parse(value);
+    return decoded === value ? rewrite(value) : normalize(decoded);
   }
   if (Array.isArray(value)) return value.map(normalize);
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        rewrite(key),
-        normalize(item),
-      ]),
+      Object.entries(value).map(([key, item]) => [key, normalize(item)]),
     );
   }
   return value;
+};
+// Every key and every string of a frame, at every depth, as the frame has them. A string that holds JSON is decoded.
+const strings = (value) => {
+  if (typeof value === "string") {
+    const decoded = parse(value);
+    return decoded === value ? [value] : strings(decoded);
+  }
+  if (!value || typeof value !== "object") return [];
+  return Object.entries(value).flatMap(([key, item]) => [
+    ...strings(key),
+    ...strings(item),
+  ]);
 };
 // An answer as the table states it: the error, or the result with its one text item.
 const view = ({ error, result }) => {
@@ -152,14 +170,17 @@ async function main() {
   if (typeof WebSocket !== "function")
     throw new Error("this Node has no global WebSocket: use Node 22 or newer");
   assert(rows.length > 0, "the case table is empty");
-  const { authToken } = JSON.parse(readFileSync(lockPath, "utf8"));
+  const { authToken } = parse(readFileSync(lockPath, "utf8"));
   assert(
     typeof authToken === "string" && authToken,
-    "the lock file has no token",
+    "the lock file does not parse or has no token",
   );
-  // The token must not reach stdout, so a frame that holds it is a leak and its text is not printed.
-  const show = (text) =>
-    text.includes(authToken) ? "<holds the auth token>" : text;
+  const runs = Array.from(
+    { length: Math.max(authToken.length - 7, 1) },
+    (_, i) => authToken.slice(i, i + 8),
+  );
+  const holdsToken = (text) => runs.some((run) => text.includes(run));
+  const show = (text) => (holdsToken(text) ? "<holds the auth token>" : text);
   const ws = new WebSocket(
     `ws://127.0.0.1:${lockPath.match(/(\d+)\.lock$/)[1]}`,
     {
@@ -172,14 +193,19 @@ async function main() {
   let leaks = 0;
   let wake = () => {};
   ws.onmessage = ({ data }) => {
-    const frame = normalize(JSON.parse(data));
-    const text = JSON.stringify(frame);
-    if (LEAK.test(text) || text.includes(authToken)) {
-      leaks++;
-      leak ??= text;
+    const frame = parse(String(data));
+    if (typeof frame !== "object") {
+      return die(new Error("the server sent a frame that is not JSON"));
     }
-    if (frame.id === want) {
-      answer ??= frame;
+    const hit = strings(frame).find(
+      (text) => holdsToken(text) || LEAK.test(rewrite(text)),
+    );
+    if (hit !== undefined) {
+      leaks++;
+      leak ??= rewrite(hit);
+    }
+    if (frame?.id === want) {
+      answer ??= normalize(frame);
       wake();
     }
   };
@@ -209,7 +235,7 @@ async function main() {
     const seen = answer && view(answer);
     const text = JSON.stringify(seen);
     let problem = null;
-    if (leak) problem = `a frame leaks a path: ${show(leak)}`;
+    if (leak) problem = `a frame leaks a path: ${leak}`;
     else if (!answer) problem = "no answer in 3 s";
     else if (expect.param !== undefined) {
       if (
@@ -226,7 +252,7 @@ async function main() {
     judged++;
     if (problem) failed++;
     console.log(
-      problem ? `FAIL: ${name}: ${problem.slice(0, 240)}` : `ok: ${name}`,
+      problem ? `FAIL: ${name}: ${show(problem).slice(0, 240)}` : `ok: ${name}`,
     );
   }
   // A frame that comes after the last answer is read too.
@@ -234,7 +260,7 @@ async function main() {
   if (leak) {
     failed++;
     console.log(
-      `FAIL: after the last case: a frame leaks a path: ${show(leak).slice(0, 240)}`,
+      `FAIL: after the last case: ${show(`a frame leaks a path: ${leak}`).slice(0, 240)}`,
     );
   }
   if (judged !== rows.length) {

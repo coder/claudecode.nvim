@@ -22,7 +22,8 @@ die() {
   exit 2
 }
 
-# The last lines of nvim's output say why the server did not come up.
+# The last lines of nvim's output say why the server did not come up. This runs only while no lock file exists, and the
+# plugin logs only the length of its token, never the token.
 why() {
   { tail -n 5 "$RUN/nvim.out" 2>/dev/null || true; } >&2
   echo >&2
