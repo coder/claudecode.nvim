@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Checks that `:wq`, `:x` and `ZZ` close the proposal window, a second `:w` neither fails nor answers again, no buffer
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
-# that window after `close_tab`, out of diff mode and with its own sign column. Needs VCN_STATE from a fresh launch:
+# that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
+# after the `:e` stays. Needs VCN_STATE from a fresh launch:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
@@ -69,9 +70,8 @@ kept_windows() {
 # `:b hello.txt` puts the proposal window on the file the user has open. For an existing file that buffer is still in
 # diff mode in the other window, so 'diff' stays on in the kept window until close_tab ends it.
 kept_window_out_of_diff_mode() { [[ $(kept_windows '&diff') == '2|hello.txt|0,0' ]]; }
-# `:b hello.txt` would give the window its old 'signcolumn' back by itself, so this step goes to a file that was never
-# in the window. The unified layout sets 'signcolumn' to `yes` in its window.
 kept_window_sign_column_back() { [[ $(kept_windows '&signcolumn') == '2|other.txt|auto,auto' ]]; }
+kept_window_own_sign_column() { [[ $("$V" expr "bufname() . '|' . &signcolumn") == 'other.txt|yes:2' ]]; }
 
 "$V" doctor >"$OUT/diff-close-save-doctor.txt" || {
   echo "FAIL: doctor failed: $(cat "$OUT/diff-close-save-doctor.txt")" >&2
@@ -130,6 +130,17 @@ check ":e answers DIFF_REJECTED" answered reject-other DIFF_REJECTED
 close_diff reject-other || true
 "$V" capture diff-close-save-reject-other >/dev/null
 check "close_tab keeps the user's window on other.txt, with its own sign column" kept_window_sign_column_back
+"$V" keys ':only' Enter
+back_to_one_window || true
+
+step "The user sets a sign column of its own in the window that :e switched to other.txt"
+open_diff reject-own-sign
+"$V" keys ':e other.txt' Enter
+check ":e answers DIFF_REJECTED" answered reject-own-sign DIFF_REJECTED
+"$V" keys ':setlocal signcolumn=yes:2' Enter
+close_diff reject-own-sign || true
+"$V" capture diff-close-save-reject-own-sign >/dev/null
+check "close_tab leaves the sign column that the user set" kept_window_own_sign_column
 
 if ((failures == 0)); then
   echo "PASS diff-close-save ($target): $checks checks; evidence in $OUT"

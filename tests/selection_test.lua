@@ -2729,6 +2729,85 @@ describe("Range Selection Tests", function()
           _G.vim._buffers[3] = nil
         end)
 
+        -- update_selection runs this check in the Claude terminal and does nothing else there. If the held selection was
+        -- read in a buffer that became the terminal afterwards, the check used to call update_selection,
+        -- which called the check again, until the stack overflowed.
+        it("does not recurse when the buffer of the held selection became the Claude terminal itself", function()
+          ticks = { [1] = 5, [2] = 5 }
+          _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
+            return ticks[bufnr]
+          end
+          selection.enable(mock_server)
+          start_selecting(5)
+          release_selection(1, 5, 4)
+          settle()
+          mock_server.last_broadcast = nil
+
+          -- A terminal provider adopts the buffer: its name now says Claude. Then its text changes.
+          _G.vim.test.add_buffer(1, "term://x//1:claude", { "beta gamma" })
+          ticks[1] = 6
+
+          assert.has_no.errors(function()
+            fire_autocmd("TextChanged")
+            fire_autocmd("CursorMoved")
+            selection.update_selection()
+            selection.update_selection()
+          end)
+          assert.is_nil(mock_server.last_broadcast) -- nothing in the Claude terminal reaches Claude
+          assert.are.equal("alpha", selection.get_latest_selection().text) -- Claude keeps the selection it has
+          assert.is_nil(selection.state.cursor_at_flush)
+          assert.is_nil(selection.state.last_active_visual_selection)
+
+          -- Nothing is left to check: the read is forgotten, so the listener on the buffer detaches at its next change.
+          assert.is_nil(selection.state.selection_tick)
+          fire_buffer_listeners(1, "on_lines")
+          assert.are.equal(0, #_G.vim._buf_listeners[1])
+        end)
+
+        -- The debounce armed the demotion, and the buffer became the terminal before it fired.
+        -- handle_selection_demotion only knows the terminal that the provider registered, so it would take this buffer
+        -- for an ordinary one.
+        it("cancels a pending demotion when the buffer of the held selection became the Claude terminal", function()
+          ticks = { [1] = 5, [2] = 5 }
+          _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
+            return ticks[bufnr]
+          end
+          selection.enable(mock_server, 1000)
+          start_selecting(5)
+          release_selection(1, 5, 4)
+          fire_debounce() -- arms the demotion: the selection is held
+          assert(selection.state.demotion_timer ~= nil)
+          mock_server.last_broadcast = nil
+
+          _G.vim.test.add_buffer(1, "term://x//1:claude", { "beta gamma" })
+          ticks[1] = 6
+          fire_autocmd("TextChanged")
+
+          assert.is_nil(selection.state.demotion_timer)
+          assert.is_nil(mock_server.last_broadcast)
+          assert.are.equal("alpha", selection.get_latest_selection().text)
+        end)
+
+        -- The same with you in another Claude terminal: the check sent the cursor of the buffer that became a terminal,
+        -- with its term:// path.
+        it(
+          "sends nothing when the buffer of the held selection became a Claude terminal and you are in another",
+          function()
+            hold_alpha_and_enter_the_terminal()
+
+            _G.vim.test.add_buffer(1, "term://x//1:claude", { "beta gamma" })
+            ticks[1] = 6
+            fire_buffer_listeners(1, "on_lines")
+
+            assert.is_nil(mock_server.last_broadcast)
+            assert.are.equal("alpha", selection.get_latest_selection().text)
+            assert.is_nil(selection.state.cursor_at_flush)
+            assert.is_nil(selection.state.selection_tick) -- nothing checks it again
+            fire_buffer_listeners(1, "on_lines")
+            assert.are.equal(0, #_G.vim._buf_listeners[1])
+          end
+        )
+
         it("checks once after a burst of changes, such as a :%s", function()
           hold_alpha_and_enter_the_terminal()
           local original_schedule = _G.vim.schedule
