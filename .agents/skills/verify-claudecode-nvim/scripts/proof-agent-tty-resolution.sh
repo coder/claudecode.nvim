@@ -20,12 +20,20 @@
 #                     or process, and saves no evidence (final screen, PNG, WebM), which takes long on a loaded host
 #   signal-early      SIGTERM, SIGINT and SIGHUP before the run exists (launch held in `mkdir`): exit 143, no state dir
 #   signal-doctor     the same three signals while `agent-tty doctor` runs: exit 143, no state dir, the full cleanup
-#                     ran (it calls `agent-tty home forget`), and launch printed `vcn: launch failed` to its caller
+#                     ran (it calls `agent-tty home forget`), launch printed `vcn: launch failed` to its caller, and the
+#                     socket directory that agent-tty made under the run's home is gone
 #   signal-mktemp     the same three signals while mktemp is making the state dir: exit 143, no state dir left
 #   signal-twice      a second SIGTERM, SIGINT or SIGHUP while the teardown is held in `agent-tty home forget` (or, for
 #                     the early teardown, in the `rm` of the state dir): the teardown still finishes (exit 143, no state
-#                     dir)
+#                     dir), and the held `home forget`, a Node process like the real one, is not killed by it
+#   signal-storm      ten rounds of SIGTERM, SIGINT and SIGHUP every 0.2 ms while launch is held in `agent-tty doctor`:
+#                     the signals that land while the first one's trap hands over to launch_failed do not stop the
+#                     teardown
+#   signal-outside    a child of launch that someone else kills with SIGTERM makes launch exit 143, but launch got no
+#                     signal: it runs the full cleanup, which saves the evidence
 #   signal-printed    SIGTERM while launch is blocked printing VCN_STATE (stdout is a full pipe): exit 143, no state dir
+#   cleanup-no-agent-tty  `vcn.sh cleanup` of a run that stopped before an agent-tty passed doctor, so run.env has no
+#                     ATT_BIN: it still removes the state dir
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
 # need everything under Needs in SKILL.md, and the signal cases need perl.
 # Prints one `ok <case>` per case, or `FAIL <case>: <reason>` and exits 1, and ends with `CASES <n>`.
@@ -33,11 +41,18 @@ set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 root=$PWD
 TMP=$(mktemp -d)
-live_state="" live_path=""
+live_state="" live_path="" st=""
+# stop_run <state dir>: stops a run that a case left behind, so no process of it outlives the proof.
+stop_run() {
+  [[ $1 == /tmp/vcn.* && -e $1 ]] || return 0
+  env PATH="$base" VCN_STATE="$1" "$V" cleanup >/dev/null 2>&1 || true
+  rm -rf -- "$1"
+}
 cleanup_all() {
   if [[ -n $live_state ]]; then
     env PATH="$live_path" VCN_STATE="$live_state" "$V" cleanup >/dev/null 2>&1 || true
   fi
+  stop_run "$st"
   rm -rf "$TMP"
 }
 trap cleanup_all EXIT
@@ -53,6 +68,7 @@ real_mise=$(command -v mise)
 real_mkdir=$(command -v mkdir)
 real_mktemp=$(command -v mktemp)
 real_rm=$(command -v rm)
+real_cp=$(command -v cp)
 perl=$(command -v perl) || fail setup "perl not found"
 # The tools vcn.sh needs, each linked by name, so PATH holds no agent-tty. A mise shim dir would hold one.
 mkdir "$TMP/tools"
@@ -106,7 +122,9 @@ MISE
 # the run's dirs, which runs before run.env exists, in the `rm` of the early teardown (while $GATE/hold-rm exists), or
 # in `agent-tty doctor` (the stand-in logs every call to $GATE/calls and answers all but doctor at once, and holds
 # `home forget` while $GATE/hold-forget exists). Each stand-in tells the proof it was reached through $GATE/reached.
-mkdir "$TMP/gate-bin" "$TMP/gate-mktemp" "$TMP/slow"
+# The agent-tty stand-in is a Node script, because Node resets the signals that its parent ignored, as it does for the
+# real agent-tty: a shell script would keep the ignore and could not show a signal killing `home forget`.
+mkdir "$TMP/gate-bin" "$TMP/gate-mktemp" "$TMP/gate-cp" "$TMP/slow"
 cat >"$TMP/gate-bin/mkdir" <<MKDIR
 #!/bin/sh
 case "\$*" in
@@ -146,20 +164,43 @@ case "\$*" in
 esac
 exec "$real_mktemp" "\$@"
 MKTEMP
-cat >"$TMP/slow/agent-tty" <<'SLOW'
+# The `cp` that copies run.env at the end of launch kills itself with SIGTERM, as a child that someone else kills does.
+cat >"$TMP/gate-cp/cp" <<CP
 #!/bin/sh
-echo "$3 $4" >>"$GATE/calls"
-if [ "$3 $4" = "home forget" ] && [ -f "$GATE/hold-forget" ]; then
-  : >"$GATE/forget-reached"
-  while [ -f "$GATE/hold-forget" ]; do sleep 0.05; done
-fi
-if [ "$3" = doctor ]; then
-  : >"$GATE/reached"
-  sleep 300
-fi
+case "\$*" in
+/tmp/vcn.*/run.env\ */run.env) kill -TERM \$\$ ;;
+esac
+exec "$real_cp" "\$@"
+CP
+cat >"$TMP/slow/agent-tty" <<'SLOW'
+#!/usr/bin/env node
+const fs = require("fs");
+const { execFileSync } = require("child_process");
+const gate = process.env.GATE;
+const [sub, sub2] = process.argv.slice(4);
+const wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+fs.appendFileSync(`${gate}/calls`, `${process.argv.slice(4, 6).join(" ")}\n`);
+if (sub === "home" && sub2 === "forget") {
+  if (fs.existsSync(`${gate}/hold-forget`)) {
+    fs.writeFileSync(`${gate}/forget-reached`, "");
+    while (fs.existsSync(`${gate}/hold-forget`)) wait(50);
+  }
+  fs.writeFileSync(`${gate}/forget-done`, "");
+}
+if (sub === "doctor") {
+  // The real agent-tty makes the socket directory under this home at its first call.
+  // signal-doctor checks that launch removes it.
+  if (process.env.REAL_ATT) {
+    try {
+      execFileSync(process.env.REAL_ATT, process.argv.slice(2), { stdio: "ignore" });
+    } catch {}
+  }
+  fs.writeFileSync(`${gate}/reached`, "");
+  wait(300000);
+}
 SLOW
 chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise" "$TMP/gate-bin/mkdir" "$TMP/gate-bin/rm" \
-  "$TMP/gate-mktemp/mktemp" "$TMP/slow/agent-tty"
+  "$TMP/gate-mktemp/mktemp" "$TMP/gate-cp/cp" "$TMP/slow/agent-tty"
 ln -s "$good" "$TMP/good/agent-tty"
 ln -s "$good" "$TMP/good2/agent-tty"
 good_path=$TMP/mise:$TMP/good:$base
@@ -304,7 +345,7 @@ await_exit() {
   wait "$pid" || rc=$?
   if [[ $rc != 143 || -e $dir ]]; then
     left=$([[ -e $dir ]] && echo yes || echo no)
-    [[ $dir != /tmp/vcn.* || $live_state == "$dir" ]] || rm -rf -- "$dir"
+    stop_run "$dir"
     fail "$name" "SIG$sig made launch exit $rc (wanted 143), state dir left: $left"
   fi
 }
@@ -316,7 +357,7 @@ signal_group() {
 }
 
 signal_case() { # <case> <early|doctor>
-  local name=$1 where=$2 sig gate run
+  local name=$1 where=$2 sig gate run sockdir
   for sig in TERM INT HUP; do
     run=$name-$sig gate=$TMP/gate-$name-$sig
     mkdir "$gate"
@@ -326,11 +367,17 @@ signal_case() { # <case> <early|doctor>
       wait_for "$run" "$gate/reached"
       st=$(<"$gate/state")
     else
-      start_launch "$run" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
+      start_launch "$run" "$TMP/mise:$TMP/slow:$base" GATE="$gate" REAL_ATT="$good"
       wait_for "$run" "$gate/reached"
       find_state "$run"
+      sockdir=/tmp/agent-tty/$(printf %s "$st/att" | sha256sum | cut -c1-8)
+      [[ -d $sockdir ]] || fail "$run" "the real agent-tty made no $sockdir, so the proof cannot show launch removes it"
     fi
     signal_group "$run" "$sig" "$st"
+    [[ $where == early || ! -e $sockdir ]] || {
+      rmdir "$sockdir"
+      fail "$run" "launch left the socket dir $sockdir of its agent-tty home"
+    }
     # Only the late trap runs launch_failed, whose cleanup ends with `agent-tty home forget`. The early trap only removes
     # the state dir. The line must reach launch's caller even though the trap runs while `agent-tty doctor` runs.
     [[ $where == early ]] || grep -qx 'home forget' "$gate/calls" || fail "$run" "launch did not run its cleanup, agent-tty calls: $(tr '\n' ',' <"$gate/calls")"
@@ -418,6 +465,7 @@ signal_twice_case() {
       fi
       signal_group "$run" "$sig" "$st"
       wait "$rel"
+      [[ $where == early || -f $gate/forget-done ]] || fail "$run" "the second SIG$sig ended 'agent-tty home forget' before it finished"
     done
   done
   echo "ok $name: a second SIGTERM, SIGINT or SIGHUP did not stop the teardown (exit 143, no state dir)"
@@ -441,7 +489,8 @@ signal_printed_case() {
   grep -q '^agent-tty ' "$TMP/out-$name/run.env" || fail "$name" "launch did not finish its run within 90 s"
   sleep 1
   kill -TERM -- "-$pid" || fail "$name" "no process group $pid to signal"
-  # bash runs a trap only after the write that blocks it ends, so read the pipe empty to let that write end.
+  # The signal fails the blocked write of VCN_STATE at once with EINTR. Bash then writes its `write error` message to
+  # stderr, which is the same full pipe, and that write blocks until the pipe is read: read it empty.
   dd if=/dev/fd/8 of=/dev/null bs=65536 count=64 iflag=nonblock status=none 2>/dev/null || true
   await_exit "$name" TERM "$st"
   exec 8>&-
@@ -450,10 +499,63 @@ signal_printed_case() {
   cases=$((cases + 1))
 }
 
+# Guards the `trap ""` at the start of launch's signal trap. The gap that it closes is a few microseconds wide and holds
+# no command that a stand-in could hold, so signal the process group every 0.2 ms from the moment launch is held in
+# doctor. The first signal kills the stand-in, which ends the hold.
+signal_storm_case() {
+  local name=signal-storm gate run storm attempt
+  for attempt in $(seq 10); do
+    run=$name-$attempt gate=$TMP/gate-$name-$attempt
+    mkdir "$gate"
+    start_launch "$run" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
+    wait_for "$run" "$gate/reached"
+    find_state "$run"
+    # shellcheck disable=SC2016
+    "$perl" -e '$end = time + 10; while (time < $end) { $n = 0; $n += kill("-$_", $ARGV[0]) for qw(TERM INT HUP); last unless $n; select(undef, undef, undef, 0.0002) }' \
+      "$pid" &
+    storm=$!
+    await_exit "$run" TERM "$st"
+    kill "$storm" 2>/dev/null || true
+    wait "$storm" 2>/dev/null || true
+    grep -qx 'home forget' "$gate/calls" || fail "$run" "launch did not run its cleanup, agent-tty calls: $(tr '\n' ',' <"$gate/calls")"
+  done
+  echo "ok $name: ten rounds of SIGTERM, SIGINT and SIGHUP storms made launch exit 143, run its cleanup and remove its state dir"
+  cases=$((cases + 1))
+}
+
+signal_outside_case() {
+  local name=signal-outside why=""
+  launch "$name" "$TMP/gate-cp:$good_path"
+  ((rc == 143)) || why="launch exited $rc, wanted 143"
+  [[ -f $TMP/out-$name/final.screen.txt ]] || why="${why:+$why, }the cleanup saved no final screen"
+  [[ -z $state || ! -e $state ]] || why="${why:+$why, }state dir $state is still there"
+  stop_run "$state"
+  [[ -z $why ]] || fail "$name" "$why: $out"
+  echo "ok $name: a child killed from outside made launch exit 143 and take the full cleanup"
+  cases=$((cases + 1))
+}
+
+# vcn.sh cleanup on the run.env of a launch that stopped before an agent-tty passed doctor: it has no ATT_BIN.
+cleanup_no_agent_tty_case() {
+  local name=cleanup-no-agent-tty dir
+  dir=$(mktemp -d /tmp/vcn.XXXXXX)
+  printf '%s=%s\n' VCN_STATE "$dir" OUT "$TMP/out-$name" ATT_HOME "$dir/att" >"$dir/run.env"
+  env PATH="$base" VCN_STATE="$dir" "$V" cleanup >"$TMP/$name.txt" 2>&1 || true
+  [[ ! -e $dir ]] || {
+    rm -rf -- "$dir"
+    fail "$name" "cleanup left $dir: $(cat "$TMP/$name.txt")"
+  }
+  echo "ok $name: cleanup of a run without an agent-tty removed its state dir"
+  cases=$((cases + 1))
+}
+
 signal_case signal-early early
 signal_case signal-doctor doctor
 signal_mktemp_case
 signal_twice_case
+signal_storm_case
 signal_printed_case
+signal_outside_case
+cleanup_no_agent_tty_case
 sigterm_case
 echo "CASES $cases"

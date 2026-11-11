@@ -50,8 +50,14 @@ load() {
   source "$VCN_STATE/run.env"
 }
 
-# agent-tty needs Node 24+, so it runs on the repo's mise node.
-att() { PATH="$NODE_DIR:$PATH" "$ATT_BIN" --home "$ATT_HOME" "$@"; }
+# agent-tty needs Node 24+, so it runs on the repo's mise node. During a teardown (own_session set) it gets a session of
+# its own: Node resets the signals that its parent ignores, so `trap ''` does not reach it, and a signal sent to launch's
+# process group would end the call. A process in another session never gets that signal.
+att() {
+  local own=()
+  [[ -z ${own_session-} ]] || own=(setsid -w)
+  PATH="$NODE_DIR:$PATH" ${own[@]+"${own[@]}"} "$ATT_BIN" --home "$ATT_HOME" "$@"
+}
 
 # Callers pass --json. A failed command answers ok:false.
 attj() {
@@ -233,7 +239,7 @@ server_under_tui() {
 # cleanup fast: for a signal, whose sender wants launch gone. It skips the evidence (a screenshot and a video), which
 # takes many seconds on a loaded host.
 cmd_cleanup() {
-  local fast=${1-} kill_at=30
+  local fast=${1-} own_session=1
   if [[ -z ${VCN_STATE-} || ! -f $VCN_STATE/run.env ]]; then
     echo "vcn: nothing to clean at ${VCN_STATE-<unset>}"
     return 0
@@ -241,15 +247,6 @@ cmd_cleanup() {
   load
   [[ $VCN_STATE == /tmp/vcn.* ]] || die "refusing to delete unexpected state dir $VCN_STATE"
   local i var pids=()
-  if [[ $fast == fast ]]; then
-    kill_at=1
-    for var in $(compgen -v CLIENT_PID); do
-      if ours "${!var}"; then kill "${!var}" 2>/dev/null || true; fi
-    done
-    mapfile -t pids < <(tagged)
-    # Every PID here carries this run's tag, so it is ours.
-    ((${#pids[@]} == 0)) || kill "${pids[@]}" 2>/dev/null || true
-  fi
   # agent-tty still renders a session whose nvim exited, so the evidence step runs for any session.
   if [[ -n ${SID-} ]]; then
     if [[ $fast != fast ]]; then
@@ -267,12 +264,15 @@ cmd_cleanup() {
     mapfile -t pids < <(tagged)
     ((${#pids[@]} == 0)) && break
     # Every PID here carries this run's tag, so it is ours.
-    if ((i == kill_at)); then kill "${pids[@]}" 2>/dev/null || true; fi
+    if ((i == 30)); then kill "${pids[@]}" 2>/dev/null || true; fi
     sleep 0.1
   done
   ((${#pids[@]} == 0)) || die "processes from this run still alive: ${pids[*]}"
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
-  att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
+  [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
+  # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the home path) at its first call, but
+  # ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK.
+  rmdir "/tmp/agent-tty/$(printf %s "$ATT_HOME" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
   echo "vcn: cleanup ok, no processes left; evidence kept in $OUT"
@@ -348,12 +348,14 @@ unsafe_above() {
   done
 }
 
-# Exit status 143 means a signal (the traps below make it so). A second signal must not stop the teardown halfway.
+# The fast cleanup runs for $signaled, not for status 143: a child that someone else killed with SIGTERM also gives 143.
+# A second signal must not stop the teardown halfway.
 launch_failed() {
   local rc=$?
   ((rc == 0)) && return 0
   trap '' TERM INT HUP
-  if ((rc == 143)); then
+  own_session=1
+  if [[ -n $signaled ]]; then
     echo "vcn: launch failed (VCN_STATE=$VCN_STATE); tearing the run down" >&2
     cmd_cleanup fast >&2 || true
   else
@@ -522,7 +524,9 @@ cmd_launch() {
   load
   trap launch_failed EXIT
   # A signal ends bash with $? still 0 in the EXIT trap, and launch_failed then skips its cleanup: make it an exit.
-  trap 'exit 143' TERM INT HUP
+  # Ignore the signals first. One that lands before launch_failed ignores them would run this trap again inside the EXIT
+  # trap, and its exit would end the shell before the teardown.
+  trap 'trap "" TERM INT HUP; signaled=1; exit 143' TERM INT HUP
   pick_agent_tty "${att_cands[@]}"
   load
   [[ $# -gt 0 ]] || set -- hello.txt
