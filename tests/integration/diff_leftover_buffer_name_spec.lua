@@ -5,9 +5,6 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
   return
 end
 
--- No active diff owns a diff buffer that a reload (:Lazy reload) left loaded, or that a failed setup could not delete
--- in the command-line window. An openDiff for that tab name, in either layout, must open a diff. The leftover buffer
--- keeps its windows and text under another name, and its tab name no longer resolves the new diff.
 describe("openDiff with a leftover diff buffer under its name", function()
   local dir
   local path
@@ -511,7 +508,6 @@ describe("openDiff with a leftover diff buffer under its name", function()
     end
   )
 
-  -- The diff of `path` splits the current window when that window shows another file.
   local function show_another_file()
     vim.fn.writefile({ "x" }, dir .. "/other.txt")
     vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
@@ -530,8 +526,6 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.same({ "UNSAVED USER WORK" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
   end
 
-  -- A failed setup closes no window and wipes no buffer: a user's handler can own any window it finds, and the
-  -- buffer in it.
   for _, trigger in ipairs({ "edit_e37", "newfile_e95" }) do
     it(
       "closes no window when the original buffer fails while a user handler opened a window during the split: "

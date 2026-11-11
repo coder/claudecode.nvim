@@ -1015,15 +1015,12 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----True while a setup runs. A user handler that runs the event loop inside a setup lets a second openDiff start before
----the first one has registered its diff. The first setup has named buffers by then that no active diff owns, so the
----second one must not rename any buffer. It runs as a setup did before the rename existed.
+---A user handler that runs the event loop (vim.wait) inside a setup can start a second openDiff before the first one
+---registers its diff.
 local setup_running = false
 
----Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take, and unbind `tab_name` from every
----buffer that no active diff owns. Such buffers are left by a reload, which drops `active_diffs`, or by a setup that
----failed in the command-line window. They keep their windows and text, but not their tab name, so that
----`:ClaudeCodeDiffAccept` in their windows cannot resolve a new diff.
+---A reload drops `active_diffs`, and Neovim refuses to delete a buffer from the command-line window (E11), so diff
+---buffers can outlive their diff.
 ---Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
 ---@param tab_name string
 ---@param old_file_path string
