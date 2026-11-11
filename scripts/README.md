@@ -8,7 +8,7 @@
 2. Interactive and probe clients built on those libraries (`claude_interactive.sh`, `mcp_test.sh`, `research_messages.sh`, `websocat.sh`, `test_neovim_websocket.sh`).
 3. Test harnesses (`run_integration_tests_individually.sh`, `test_opendiff.lua`, `test_opendiff_simple.sh`, `manual_test_helper.lua`).
 4. Standalone reproductions of GitHub issues (`repro_issue_*.lua`, `repro_issue_*.sh`).
-5. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`. Among them, a differential test compares fence tracking and heading demotion with commonmark.js on generated documents. It also runs the pinned `communique` binary with the repo's `communique.toml` against a fake Anthropic API, to check that one release-notes submission fits the configured output budget.
+5. Release tooling: a release-please wrapper that writes changelog entries with Communique (`release-please-runner.js`, `run-release-please.sh`, `package.json`). `test-release-please-runner.js` holds the tests for `release-please-runner.js`. It also runs the pinned `communique` binary with the repo's `communique.toml` against a fake Anthropic API, to check that one release-notes submission fits the configured output budget.
 
 CI runs four of these files: `.github/workflows/release-please.yaml` runs `./scripts/run-release-please.sh`, and `.github/workflows/test.yml` runs `./scripts/run_integration_tests_individually.sh` and `nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"` on Neovim stable and v0.8.0, and `npm --prefix scripts run test:release-please-runner` (which runs `test-release-please-runner.js`).
 
@@ -73,7 +73,7 @@ The Lua repros run from the repository root with `nvim --headless -u NONE -l scr
 - Environment for `release-please-runner.js`: `GITHUB_TOKEN` and `GITHUB_REPOSITORY` (required), `RELEASE_PLEASE_TARGET_BRANCH`, `GITHUB_OUTPUT`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `COMMUNIQUE_MODEL`, and `PRETTIER_BIN` [release-please-runner.js:requireEnv, assertLlmCredentials, resolvePrettierBin].
 - `release-please-runner.js` exports `CommuniqueSimpleStrategy`, `UnreleasedAwareChangelog`, `assertLlmCredentials`, `buildCommuniqueArgs`, `createCommuniqueChangelogNotes`, `findLineOutsideFences`, `formatChangelogMarkdown`, `formatChangelogSection`, `formatPullRequestOutputs`, `formatReleaseOutputs`, `normalizeCommuniqueBody`, `resolvePrettierBin`, `releasePleaseNotesAreEmpty`, and `todayIsoDate` [release-please-runner.js:module.exports].
 - GitHub Actions outputs: `releases_created`, `release_tags`, `prs_created`, `pr_branches`, and `pr_metadata` [release-please-runner.js:formatReleaseOutputs, formatPullRequestOutputs].
-- `package.json` is the private package `claudecode.nvim-release-tools`. It pins `prettier` 3.8.4, `release-please` 17.9.0, and `commonmark` 0.31.2 (used only by the runner tests) and defines the `test:release-please-runner` script [package.json:scripts].
+- `package.json` is the private package `claudecode.nvim-release-tools`. It pins `prettier` 3.8.4 and `release-please` 17.9.0 and defines the `test:release-please-runner` script [package.json:scripts].
 
 ## Invariants
 
