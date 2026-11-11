@@ -1016,8 +1016,11 @@ local function hide_terminal_float_for_diff(diff_win)
 end
 
 ---Tab names whose setup has started but has not registered its diff yet. A user handler that runs the event loop inside
----a setup lets a second openDiff for the same tab name start before that.
-local setups_in_flight = {}
+---a setup lets a second openDiff for the same tab name start before that. The table lives in `_G`: a plugin reload
+---inside the setup gives the new module a fresh local, which would not see the running setup.
+local SETUPS_IN_FLIGHT = "claudecode_diff_setups_in_flight"
+_G[SETUPS_IN_FLIGHT] = _G[SETUPS_IN_FLIGHT] or {}
+local setups_in_flight = _G[SETUPS_IN_FLIGHT]
 
 ---Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take, and unbind `tab_name` from every
 ---buffer that no active diff owns. Such buffers are left by a reload, which drops `active_diffs`, or by a setup that
@@ -1403,25 +1406,11 @@ function M._create_diff_view_from_window(
   local choice = choose_original_window(target_window, old_file_path, is_new_file, terminal_win_in_new_tab)
 
   local original_window
-  local split_window
   if choice.decision == "split" then
     vim.api.nvim_set_current_win(target_window)
-    local tab = vim.api.nvim_win_get_tabpage(target_window)
-    local cloned = vim.api.nvim_win_get_buf(target_window)
-    local before = {}
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      before[win] = true
-    end
     create_split()
     original_window = vim.api.nvim_get_current_win()
     target_window_created_by_plugin = true
-    -- The split's own window is the first new one that shows the clone. A user's WinNew handler can close it, or open
-    -- and enter more windows.
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      if not before[win] and vim.api.nvim_win_get_buf(win) == cloned and (not split_window or win < split_window) then
-        split_window = win
-      end
-    end
   else
     original_window = choice.original_win
   end
@@ -1436,15 +1425,7 @@ function M._create_diff_view_from_window(
       original_buffer_created_by_plugin = true
     end
     -- Load the original-side buffer into the chosen window
-    local loaded, loaded_or_error =
-      pcall(load_original_buffer, original_window, old_file_path, is_new_file, existing_buffer)
-    if not loaded then
-      if split_window and vim.api.nvim_win_is_valid(split_window) then
-        pcall(vim.api.nvim_win_close, split_window, true)
-      end
-      error(loaded_or_error, 0)
-    end
-    original_buffer = loaded_or_error
+    original_buffer = load_original_buffer(original_window, old_file_path, is_new_file, existing_buffer)
   end
 
   -- Set up the proposed buffer and finalize the diff layout
