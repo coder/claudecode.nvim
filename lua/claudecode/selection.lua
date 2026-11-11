@@ -146,7 +146,9 @@ local function demote_if_selection_text_changed()
     -- The selection's buffer is the Claude terminal itself: it became the terminal after the selection was read
     -- (termopen() in it, or a rename to a term://...claude name). update_selection does nothing in the terminal except
     -- cancel the demotion and call this function, so it must not come back here from it. Nothing in the terminal
-    -- reaches Claude, so no cursor of it is sent. Forget the read: nothing checks it again.
+    -- reaches Claude, so no cursor of it is sent. Forget the read: nothing checks it again. A pending demotion must
+    -- not fire here either: it would take this buffer for an ordinary one and send its cursor.
+    M._cancel_demotion_timer()
     M.state.selection_tick = nil
   else
     M.update_selection()

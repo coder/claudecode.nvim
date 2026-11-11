@@ -254,6 +254,26 @@ describe("a held selection with the real plugin", function()
       assert.are.equal("", vim.v.errmsg)
     end)
 
+    -- The demotion timer is pending when the buffer becomes the terminal. When it fires it only knows the terminal
+    -- that the provider registered, so it used to take this buffer for an ordinary one and send its cursor.
+    it("does not send a cursor of the buffer that became the Claude terminal when a demotion is pending", function()
+      start({ provider = "none" }, 1000)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      select_and_release()
+      local sent = {}
+      server.broadcast = function(method, params)
+        table.insert(sent, { method = method, params = params })
+        return true
+      end
+      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(1300) -- the demotion delay passes
+
+      assert.are.same({}, sent)
+    end)
+
     -- Neovim ignores what on_reload returns and keeps the listener. A listener that forgot its buffer there would let
     -- the next selection attach a second one, one more after every reload.
     it("keeps one listener on the file through reloads while Claude holds only a cursor", function()

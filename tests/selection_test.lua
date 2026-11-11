@@ -2763,6 +2763,28 @@ describe("Range Selection Tests", function()
           assert.are.equal(0, #_G.vim._buf_listeners[1])
         end)
 
+        -- The debounce armed the demotion, and the buffer became the terminal before it fired. handle_selection_demotion
+        -- only knows the terminal that the provider registered, so it would take this buffer for an ordinary one.
+        it("cancels a pending demotion when the buffer of the held selection became the Claude terminal", function()
+          ticks = { [1] = 5, [2] = 5 }
+          _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
+            return ticks[bufnr]
+          end
+          selection.enable(mock_server, 1000)
+          start_selecting(5)
+          release_selection(1, 5, 4)
+          fire_debounce() -- arms the demotion: the selection is held
+          assert(selection.state.demotion_timer ~= nil)
+          mock_server.last_broadcast = nil
+
+          _G.vim.test.add_buffer(1, "term://x//1:claude", { "beta gamma" })
+          ticks[1] = 6
+          fire_autocmd("TextChanged")
+
+          assert.is_nil(selection.state.demotion_timer)
+          assert.is_nil(mock_server.last_broadcast)
+        end)
+
         it("checks once after a burst of changes, such as a :%s", function()
           hold_alpha_and_enter_the_terminal()
           local original_schedule = _G.vim.schedule
