@@ -182,6 +182,25 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.same({ "alpha two" }, vim.api.nvim_buf_get_lines(state.new_buffer, 0, -1, false))
   end)
 
+  it("renames the leftover buffer for a setup that follows one that failed", function()
+    local _, tools = load_plugin()
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    close_old_diff_windows()
+    local diff
+    diff, tools = load_plugin()
+    vim.cmd("edit! " .. vim.fn.fnameescape(path))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "unsaved" })
+    local failed = open_diff(tools, "second\n")
+    assert.is_truthy(vim.inspect(failed.error):find("unsaved changes", 1, true), vim.inspect(failed.error))
+    vim.bo.modified = false
+
+    local call = open_diff(tools, "third\n")
+
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    local state = diff._get_active_diffs()[tab_name]
+    assert.same({ state.new_buffer }, buffers_named("(proposed)"))
+  end)
+
   local layout_pairs = {
     { old = "vertical", new = "vertical" },
     { old = "vertical", new = "unified" },
