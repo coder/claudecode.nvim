@@ -304,6 +304,39 @@ function findLineOutsideFences(lines, start, predicate) {
   return -1;
 }
 
+/**
+ * Throws when a code fence opens in the Unreleased draft. `updateContent` drops the draft: the lines after the
+ * Unreleased heading up to the next section outside a fence (or to the end of the text). The reader that finds that
+ * next section is `nextOpenFence`, and a fence that does not close where the maintainer meant (it has no closer, or a
+ * closer that CommonMark rejects, or Prettier closed it at the end of the file) hides every older release below it. So
+ * the draft is read with the same reader, and a fence in it is refused, whatever the fence holds and whether it
+ * closes. With no fence in the draft, the first `# ` or `## ` line after the Unreleased heading ends the draft, and
+ * nothing at or after that line is dropped. `start` is the first draft line and `end` is the line after the last one
+ * (both 0-based). The cost: a harmless code block in the draft is refused too.
+ */
+function assertDraftHasNoFence(lines, start, end) {
+  assert.ok(Array.isArray(lines), "lines must be an array");
+  assert.ok(
+    Number.isInteger(start) &&
+      Number.isInteger(end) &&
+      start >= 0 &&
+      start <= end &&
+      end <= lines.length,
+    "start and end must bound lines",
+  );
+
+  // The first fence line of the draft is an opener, because no fence is open before it.
+  for (let i = start; i < end; i += 1) {
+    if (nextOpenFence(null, lines[i]) !== null) {
+      throw new Error(
+        `The Unreleased draft has a code fence. Line ${i + 1} opens it: ${JSON.stringify(lines[i].slice(0, 80))}. ` +
+          "The update drops the draft, and a fence that does not close where you meant would drop the older releases below it too. " +
+          "Move the code block out of the Unreleased draft.",
+      );
+    }
+  }
+}
+
 function resolvePrettierBin(env = process.env, fileExists = existsSync) {
   if (env.PRETTIER_BIN !== undefined && env.PRETTIER_BIN !== "") {
     return env.PRETTIER_BIN;
@@ -363,6 +396,13 @@ class UnreleasedAwareChangelog {
         lines,
         unreleasedIndex + 1,
         (line) => NEXT_SECTION_PATTERN.test(line),
+      );
+      // The draft is the lines between the heading and the next section, or to the end of the text. They go, so no
+      // fence may open among them.
+      assertDraftHasNoFence(
+        lines,
+        unreleasedIndex + 1,
+        nextIndex === -1 ? lines.length : nextIndex,
       );
       const rest = nextIndex === -1 ? "" : lines.slice(nextIndex).join("\n");
       return formatChangelogMarkdown(joinSections(head, entry, rest));
