@@ -1,6 +1,3 @@
---- When Claude disconnects, the server closes the diffs that client left pending (#248). Closing a diff changes
---- windows, which Neovim refuses in the command-line window (E11) and under textlock (E565), so the cleanup waits
---- until Neovim allows it.
 require("tests.busted_setup")
 
 describe("The cleanup after a Claude client disconnects", function()
@@ -58,9 +55,7 @@ describe("The cleanup after a Claude client disconnects", function()
     package.loaded["claudecode.diff"] = saved.diff
   end)
 
-  ---Run what waits for the main loop or for a timer, as Neovim would on its next loop turn.
-  ---@param queue table[] scheduled or timers
-  local function run(queue)
+  local function run_queued(queue)
     local due = { unpack(queue) }
     for i = #queue, 1, -1 do
       queue[i] = nil
@@ -70,7 +65,6 @@ describe("The cleanup after a Claude client disconnects", function()
     end
   end
 
-  ---A Claude client that completed its WebSocket handshake.
   local function claude_connects()
     tcp._handle_new_connection(server.state.server)
     local client = assert(server.state.server.clients["client_" .. _G.claudecode_clients_created])
@@ -96,7 +90,7 @@ describe("The cleanup after a Claude client disconnects", function()
 
     client.tcp_handle._read_cb(nil, nil)
     assert.same({}, closed)
-    run(scheduled)
+    run_queued(scheduled)
 
     assert.same({ { client.id, "client disconnected" } }, closed)
     assert.same({}, timers)
@@ -107,14 +101,14 @@ describe("The cleanup after a Claude client disconnects", function()
     refusal = "E11: Invalid in command-line window; <CR> executes, CTRL-C quits"
 
     client.tcp_handle._read_cb(nil, nil)
-    run(scheduled)
+    run_queued(scheduled)
     assert.same({}, closed)
     refusal = "E565: Not allowed to change text or change window"
-    run(timers)
+    run_queued(timers)
     assert.same({}, closed)
 
     refusal = nil
-    run(timers)
+    run_queued(timers)
     assert.same({ { client.id, "client disconnected" } }, closed)
     assert.same({}, timers)
   end)

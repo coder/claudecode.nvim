@@ -80,8 +80,7 @@ function M.start(config, auth_token)
       )
 
       -- Close diffs this client opened but never resolved (issue #248) -- only if
-      -- the diff module is in use. Scheduled, because this runs in a libuv callback, and then held until Neovim
-      -- allows window changes: a cleanup that raised partway left diffs on screen and calls unanswered.
+      -- the diff module is in use. Scheduled, because this runs in a libuv callback.
       local diff = package.loaded["claudecode.diff"]
       if diff then
         local client_id = client.id

@@ -146,9 +146,9 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua c7b71559e4e554f7
+file lua/claudecode/server/init.lua 259d7bffc91011b5
 block server_stop            4dae0bf675cf2cc1
-block on_disconnect          09770448ba619f0f
+block on_disconnect          3dc8ee169a84ab1e
 block handle_request         b74ff7dc2e55a2b8
 block setup_deferred         f9381caaae0fe517
 site lua/claudecode/server/init.lua: _G.claude_deferred_responses = {} @ function M._setup_deferred_response(deferred_info)
@@ -213,7 +213,7 @@ file lua/claudecode/tools/save_document.lua df68d71e47300988
 == lua/claudecode/types.lua
 file lua/claudecode/types.lua 92f8f6ccda38e8c6
 == lua/claudecode/utils.lua
-file lua/claudecode/utils.lua fbe375bfce6a6c1c
+file lua/claudecode/utils.lua 6090e0d09a93a666
 == lua/claudecode/visual_commands.lua
 file lua/claudecode/visual_commands.lua f396dd26cc0c1050
 == plugin/claudecode.lua

@@ -8,7 +8,6 @@ describe("claudecode.utils.when_windows_allowed", function()
   before_each(function()
     saved.set_current_win, saved.defer_fn = vim.api.nvim_set_current_win, vim.defer_fn
     refusal, timers = nil, {}
-    -- Neovim raises E11 in the command-line window and E565 under textlock when the plugin sets the current window.
     vim.api.nvim_set_current_win = function(win)
       if refusal then
         error(refusal)

@@ -1,11 +1,10 @@
 -- Real-Neovim check that the diffs of a Claude client that disconnects while Neovim refuses window changes close once
--- it allows them again. Neovim refuses them in the command-line window (E11) and under textlock (E565). A cleanup
--- that ran there raised partway: one openDiff call stayed unanswered and one diff stayed on screen, and nothing ran
--- the cleanup again. Busted's mock vim has neither state nor sockets, so under busted this is pending;
--- scripts/run_integration_tests_individually.sh runs it in Neovim.
--- Claude is a plain TCP client of the real server. A headless Neovim has no keyboard, so the spec enters each state
--- with nvim_feedkeys in "x" mode and does its work inside it: in a CmdwinEnter handler for the command-line window
--- (Neovim closes the window when the handlers return), and in an <expr> mapping for textlock.
+-- it allows them again. Neovim refuses them in the command-line window (E11) and under textlock (E565). Busted's mock
+-- vim has neither state nor sockets, so under busted this is pending; scripts/run_integration_tests_individually.sh
+-- runs it in Neovim.
+-- A headless Neovim has no keyboard, so the spec enters each state with nvim_feedkeys in "x" mode and does its work
+-- inside it: in a CmdwinEnter handler for the command-line window (Neovim closes the window when the handlers
+-- return), and in an <expr> mapping for textlock.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("a Claude client that disconnects while Neovim refuses window changes", function()
     pending("needs a real Neovim")
@@ -55,7 +54,6 @@ describe("a Claude client that disconnects while Neovim refuses window changes",
     return found
   end
 
-  ---Two openDiff calls of one client wait for the user, the second in a tab of its own.
   local function open_two_diffs()
     send_open_diff(1, "a.txt")
     wait_for("the first diff opened", function()
@@ -68,22 +66,24 @@ describe("a Claude client that disconnects while Neovim refuses window changes",
     end)
   end
 
-  ---Claude exits. Returns once the server dropped it and the cleanup it scheduled has had its turn.
+  local function wait_for_functions_scheduled_so_far()
+    local ran = false
+    vim.schedule(function()
+      ran = true
+    end)
+    wait_for("the functions scheduled so far ran", function()
+      return ran
+    end)
+  end
+
   local function claude_exits()
     client:close()
     wait_for("the server dropped Claude", function()
       return next(server_clients()) == nil
     end)
-    -- The server schedules its cleanup before it drops the client, and scheduled functions run in order.
-    local flushed = false
-    vim.schedule(function()
-      flushed = true
-    end)
-    wait_for("the cleanup had its turn", function()
-      return flushed
-    end)
-    -- Long enough for the cleanup's retry timer to fire in this state at least once.
-    vim.wait(150)
+    wait_for_functions_scheduled_so_far()
+    local three_gate_retries_ms = 150
+    vim.wait(three_gate_retries_ms)
   end
 
   local function assert_closed_after_the_lock(windows_before)
