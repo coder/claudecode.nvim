@@ -510,9 +510,9 @@ end
 ---count (a block of more than half an interval that starts just before a tick is enough). Any bytes read from a client
 ---clear its stamp, so a Claude that sends anything, also a large message before its pong, is not dropped. A Claude that
 ---answers each ping before the next tick is not dropped by any block or sleep. A pong that comes later than one
----interval can wait unread when a callback blocks inside the poll phase, and the client is then dropped once its ping is
----`interval * 2.5` old. A Claude that sends nothing is dropped by the first check after a tick that finds its oldest
----ping `interval * 2.5` old: 3 intervals after that ping when the ticks come on time. A late tick moves the ticks after
+---interval can wait unread when a callback blocks inside the poll phase and refreshes the loop time, and the client is
+---then dropped once its ping is `interval * 2.5` old. A Claude that sends nothing is dropped by the first check that
+---finds its oldest ping `interval * 2.5` old: 3 intervals after that ping when the ticks come on time. A late tick moves the ticks after
 ---it back, so one late tick delays the drop. Two late ticks in a row, or a poll that a block delays after a tick, can
 ---bring it as early as 2.5 intervals, and never earlier. A client that answered is also judged for a stall of its write
 ---queue [judge_stall].

@@ -20,7 +20,7 @@ MAIN=lua/claudecode/init.lua
 COVERED=("$CLIENT" "$TCP" "$HANDSHAKE" "$SERVER" "$MAIN")
 # A site is a line that changes a client's state, writes to or closes its socket, or adds, drops, stops or
 # times out a client.
-SITE_RE='(close_client|_disconnect_client|_remove_client|stop_server|start_ping_timer|send_ping|drop_client|judge_silence|after_next_poll|tcp_handle:(write|close|read_start)|client\.state = |handshake_complete = |last_pong = |ping_unanswered_since = |server\.clients\[|server\.stop\(\)|ping_timer:)'
+SITE_RE='(close_client|_disconnect_client|_remove_client|stop_server|start_ping_timer|send_ping|drop_client|judge_silence|after_next_poll|tcp_handle:(write|close|read_start)|write\(client, |handle:close\(\)|client\.state = |handshake_complete = |last_pong = |ping_unanswered_since = |server\.clients\[|server\.stop\(\)|ping_timer:)'
 
 covered_block create_client "$CLIENT" '^function M\.create_client\('
 covered_block add_data_frame "$CLIENT" '^local function add_data_frame\('
@@ -62,9 +62,14 @@ fact[UpgradeInWriteCallback]=$(as_bool upgrade_in_write_callback)
 fact[UpgradeRechecksState]=$(as_bool in_order 'write\(client, response_from_handshake, function\(err\)$' \
   '^ *if client\.state ~= "upgrading" or client\.tcp_handle:is_closing\(\) then$' '^ *return$' \
   '^ *client\.handshake_complete = true$' <<<"$process_data")
-fact[DispatchGuard]=$(as_bool in_order '^ *vim\.schedule\(function\(\)$' \
-  '^ *if client\.state == "connected" and not client\.tcp_handle:is_closing\(\) then$' \
-  '^ *on_message\(client, message\)$' <<<"$process_data")
+# The scheduled on_message sits inside the guard: the end of the if follows it at once.
+dispatch_guard() {
+  in_order '^ *vim\.schedule\(function\(\)$' \
+    '^ *if client\.state == "connected" and not client\.tcp_handle:is_closing\(\) then$' \
+    '^ *on_message\(client, message\)$' <<<"$process_data" &&
+    grep -A1 -E '^ *on_message\(client, message\)$' <<<"$process_data" | grep -qE '^ *end$'
+}
+fact[DispatchGuard]=$(as_bool dispatch_guard)
 fact[PeerCloseMarksClosing]=$(as_bool in_order 'elseif opcode == frame\.OPCODE\.CLOSE then$' \
   '^ *if client\.state == "connected" then$' '^ *write\(client, close_frame\)$' \
   '^ *client\.state = "closing"$' '^ *on_close\(client, code, reason\)$' <<<"$process_data")
@@ -113,14 +118,15 @@ fact[ProtocolReportsAtOnce]=$(as_bool protocol_reports_at_once)
 # stop_server only calls close_client for each client: the Close write callback closes the socket.
 stop_waits_for_close_write() {
   grep -qE '^    client_manager\.close_client\(client, 1001, "Server shutting down"\)$' <<<"$stop_server" &&
-    ! grep -qE 'tcp_handle|_remove_client|_disconnect_client' <<<"$stop_server" &&
+    ! grep -qE 'tcp_handle|_remove_client|_disconnect_client|release_socket|abandon_close_frame|drop_client' <<<"$stop_server" &&
     in_order '^    write\(client, close_frame, function\(\)$' '^        client\.tcp_handle:close\(\)$' \
       <<<"$close_client"
 }
 fact[StopWaitsForCloseWrite]=$(as_bool stop_waits_for_close_write)
 # The ping timer pings each connected client, collects it in pinged, and arms after_next_poll once for the clients it
-# pinged. The callback runs judge_silence with a limit of interval * 2.5 (the third tick after the stamp, the model's Limit). judge_silence drops a client that is still listed and
-# connected and whose stamp is that old, with drop_client: close_client(1011), abandon_close_frame, _disconnect_client(1006).
+# pinged. The callback runs judge_silence with a limit of interval * 2.5 (the third tick after the stamp, the model's
+# Limit). judge_silence drops a client that is still listed and connected and whose stamp is that old, with drop_client:
+# close_client(1011), abandon_close_frame, _disconnect_client(1006).
 keepalive_reaps() {
   in_order '^        client_manager\.send_ping\(client, "ping"\)$' '^        table\.insert\(pinged, client\)$' \
     '^    if #pinged > 0 then$' '^      after_next_poll\(server, function\(\)$' \

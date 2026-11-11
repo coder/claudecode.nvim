@@ -161,7 +161,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua f0b2acfc1ccaf3b9
+file lua/claudecode/server/tcp.lua 5db5a02380274137
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
