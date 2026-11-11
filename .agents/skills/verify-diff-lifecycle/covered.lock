@@ -213,7 +213,7 @@ file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua
 file lua/claudecode/types.lua dbd0dcb8b70c8107
 == lua/claudecode/utils.lua
-file lua/claudecode/utils.lua dee1a74791760a03
+file lua/claudecode/utils.lua 961e2c2312d25d94
 == lua/claudecode/visual_commands.lua
 file lua/claudecode/visual_commands.lua f396dd26cc0c1050
 == plugin/claudecode.lua
