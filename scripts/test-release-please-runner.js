@@ -637,13 +637,12 @@ async function testFenceTracking() {
 /**
  * Runs `fn` with a formatter that prints its input, so a test sees the text that `updateContent` builds. prettier
  * rewrites some generated documents (it dedents a line that CommonMark reads as a paragraph continuation, for
- * example), and each prettier run takes far longer than the script. `command` replaces `cat` when a test needs a
- * formatter that changes its input.
+ * example), and each prettier run takes far longer than the script.
  */
-function withIdentityFormatter(fn, command = "cat") {
+function withIdentityFormatter(fn) {
   const directory = mkdtempSync(join(tmpdir(), "identity-formatter-"));
   const formatter = join(directory, "format.sh");
-  writeFileSync(formatter, `#!/bin/sh\n${command}\n`, { mode: 0o755 });
+  writeFileSync(formatter, "#!/bin/sh\ncat\n", { mode: 0o755 });
   const previousFormatter = process.env.PRETTIER_BIN;
   process.env.PRETTIER_BIN = formatter;
   try {
@@ -798,23 +797,25 @@ async function testUnreleasedUpdaterFences() {
 }
 
 /**
- * The error of `updateContent` for a release heading that it would lose. Lines are numbered from 1, and a line shows
- * its first 80 code units.
+ * The error of `updateContent` for a draft that holds a line like a release heading. Lines are numbered from 1, and a
+ * line shows its first 80 code units.
  */
-function refusal(lineNumber, heading) {
+function refusal(lineNumber, line) {
   return (
-    `The updated changelog would lose the release heading on line ${lineNumber} (${JSON.stringify(heading.slice(0, 80))}). ` +
-    "A code fence in the Unreleased draft that does not close where you meant is the usual cause, and Prettier closes a fence that is still open at the end of the file. " +
-    "Check the draft's code fences: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs."
+    `The Unreleased draft has a line that looks like a release heading, and the update would drop it with the draft. Line ${lineNumber}: ${JSON.stringify(line.slice(0, 80))}. ` +
+    "A code fence in the draft that does not close where you meant is the usual cause, and Prettier closes a fence that is still open at the end of the file. " +
+    "Check the draft's code fences: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs. " +
+    "If the line is only an example or a code comment, change it so that it does not look like a release heading."
   );
 }
 
 async function testUnreleasedDraftFenceGuard() {
   const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
-  const update = (content) =>
-    new runner.UnreleasedAwareChangelog({
-      changelogEntry: entry,
-    }).updateContent(content);
+  const updateWith = (changelogEntry, content) =>
+    new runner.UnreleasedAwareChangelog({ changelogEntry }).updateContent(
+      content,
+    );
+  const update = (content) => updateWith(entry, content);
   const head = "# Changelog\n\n## [Unreleased]\n\n";
   const release = "## [0.3.0] - 2025-09-15";
   const previous = `\n\n${release}\n\n- Previous\n`;
@@ -822,15 +823,17 @@ async function testUnreleasedDraftFenceGuard() {
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
   const entryOnly =
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n";
-  // The line of a heading in a text, numbered from 1.
-  const lineOf = (text, heading) =>
-    text.split(/\r\n|\r|\n/).indexOf(heading) + 1;
-  const refuses = (text, heading, name) =>
+  // The line of a text, numbered from 1.
+  const lineOf = (text, line) => text.split(/\r\n|\r|\n/).indexOf(line) + 1;
+  // `update` refuses, and the error names `line`: the first line of the draft that looks like a release heading.
+  const refuses = (text, line, name, run = update) => {
+    assert.ok(lineOf(text, line) > 0, `${name}: the text holds the line`);
     assert.throws(
-      () => update(text),
-      { message: refusal(lineOf(text, heading), heading) },
+      () => run(text),
+      { message: refusal(lineOf(text, line), line) },
       name,
     );
+  };
 
   // A draft fence that CommonMark does not close runs to the end of the text, and it holds every older release
   // below it. The updater must not write a changelog without that release, whatever shape the fence has.
@@ -872,21 +875,147 @@ async function testUnreleasedDraftFenceGuard() {
     refuses(formatted, release, `${name}, after prettier`);
   }
 
-  // Other forms of a release heading are protected the same way.
-  for (const heading of [
+  // The loose reading of a release heading. Each form below is dropped with the draft when it stands in a draft fence
+  // that does not close. `sectionStarts` are valid section starts outside a fence (the updater keeps them there), and
+  // `notSectionStarts` are not (the updater takes them for draft text even without a fence). Each part of the
+  // pattern has a form that pins it: the indent, the tab, the second space, the hash count, the brackets, `v` and
+  // `V`, the dotted version, and what follows it.
+  const sectionStarts = [
     "## 0.3.0",
     "## v0.3.0 - 2025-09-15",
     "# 1.0.0",
     "## [2026.11.9]",
     "## 1.0",
     "## [0.3.0](https://example.com/compare/v0.2.0...v0.3.0) (2025-09-15)",
-  ]) {
+    "##  [0.3.0] - 2025-09-15",
+    "## V0.3.0",
+    "## [0.5.0-rc.1] - 2026-11-01",
+    "## 0.4.0-beta.1",
+    "## 0.3.0+build.5",
+    "# \t0.3.0",
+  ];
+  const notSectionStarts = [
+    " ## [0.3.0] - 2025-09-15",
+    "   ## 0.3.0",
+    "    ## 0.3.0",
+    "\t## 0.3.0",
+    "##\t[0.3.0] - 2025-09-15",
+    "### [0.3.0] - 2025-09-15",
+    "#### 0.3.0",
+    "###### 1.0",
+    "0.3.0\n-----",
+    "1.0\n---",
+    "[0.3.0] - 2025-09-15\n=====",
+    "v0.3.0\n=",
+    "  V0.3.0\n  ---  ",
+    "\t0.3.0\n\t===\t",
+  ];
+  for (const form of [...sectionStarts, ...notSectionStarts]) {
+    const first = form.split("\n")[0];
     refuses(
-      `${head}\`\`\`text\nDraft\n\n${heading}\n\n- Previous\n`,
-      heading,
-      `the heading ${heading}`,
+      `${head}\`\`\`text\nDraft\n\n${form}\n\n- Previous\n`,
+      first,
+      `the form ${JSON.stringify(form)} in a draft fence`,
     );
   }
+  // Without a fence the loose forms are draft text too. Prettier then writes most of them as a canonical heading, and
+  // the updater keeps that. The others stay what they are: a heading that has three or more hashes or sits in an
+  // indented code block still belongs to the draft. Prettier turns the last form into a paragraph and a thematic
+  // break, which is no heading.
+  const prettierSections = new Set([
+    " ## [0.3.0] - 2025-09-15",
+    "   ## 0.3.0",
+    "##\t[0.3.0] - 2025-09-15",
+    "0.3.0\n-----",
+    "1.0\n---",
+    "[0.3.0] - 2025-09-15\n=====",
+    "v0.3.0\n=",
+  ]);
+  const prettierDraft = new Map([
+    ["    ## 0.3.0", "    ## 0.3.0"],
+    ["\t## 0.3.0", "    ## 0.3.0"],
+    ["### [0.3.0] - 2025-09-15", "### [0.3.0] - 2025-09-15"],
+    ["#### 0.3.0", "#### 0.3.0"],
+    ["###### 1.0", "###### 1.0"],
+    ["\t0.3.0\n\t===\t", "    0.3.0"],
+  ]);
+  for (const form of notSectionStarts) {
+    const first = form.split("\n")[0];
+    const raw = `${head}Draft\n\n${form}\n\n- Previous\n`;
+    refuses(raw, first, `the form ${JSON.stringify(form)}, no fence`);
+    const formatted = runner.formatChangelogMarkdown(raw);
+    const name = `the form ${JSON.stringify(form)}, no fence, after prettier`;
+    if (prettierSections.has(form)) {
+      assert.ok(
+        update(formatted)
+          .split("\n")
+          .some((line) => /^##? .*(?:0\.3\.0|1\.0)/.test(line)),
+        `${name}: the heading is kept`,
+      );
+    } else if (prettierDraft.has(form)) {
+      refuses(formatted, prettierDraft.get(form), name);
+    } else {
+      assert.equal(form, "  V0.3.0\n  ---  ", `${name}: the form is listed`);
+      assert.ok(
+        !/^#/m.test(formatted.slice(head.length)),
+        `${name}: no heading`,
+      );
+    }
+  }
+  // A few of them after Prettier, in a fence that Prettier closes: the form stays as it is.
+  for (const form of [
+    "##  [0.3.0] - 2025-09-15",
+    "##\t[0.3.0] - 2025-09-15",
+    "## V0.3.0",
+    "## [0.5.0-rc.1] - 2026-11-01",
+    "  V0.3.0\n  ---  ",
+  ]) {
+    const raw = `${head}\`\`\`text\nDraft\n\n${form}\n\n- Previous\n`;
+    const formatted = runner.formatChangelogMarkdown(raw);
+    refuses(
+      formatted,
+      form.split("\n")[0],
+      `the form ${JSON.stringify(form)} in a draft fence, after prettier`,
+    );
+  }
+
+  // Where the dropped lines start and end: the first line after the heading, and the last line before the next
+  // section, which may be the text line of a setext heading.
+  refuses(
+    "# Changelog\n\n## [Unreleased]\n  ## 0.3.0\n\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+    "  ## 0.3.0",
+    "a release heading on the first line after the Unreleased heading",
+  );
+  refuses(
+    "# Changelog\n\n## [Unreleased]\n\n  ## 0.3.0\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+    "  ## 0.3.0",
+    "a release heading on the last line before the next section",
+  );
+  refuses(
+    "# Changelog\n\n## [Unreleased]\n\n0.3.0\n---\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+    "0.3.0",
+    "a setext release heading right before the next section",
+  );
+  refuses(
+    `${head}\`\`\`text\nDraft\n\n## 0.3.0`,
+    "## 0.3.0",
+    "a release heading on the last line of a text that has no final newline",
+  );
+  // The next section stays. It is the first line that is kept.
+  assert.equal(
+    update(
+      "# Changelog\n\n## [Unreleased]\n\nDraft\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+    ),
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.2.0] - 2025-06-18\n\n- Older\n",
+    "the next section is not part of the draft",
+  );
+
+  // The error names the first line. A draft example that repeats the version of the real release comes first.
+  refuses(
+    `${head}\`\`\`md\n## [0.3.0] - 2025-09-14\n\`\`\`\n\n\`\`\`text\nDraft\n${previous}`,
+    "## [0.3.0] - 2025-09-14",
+    "a draft example that repeats the version of a lost release is named first",
+  );
   // A heading is cut at 80 code units in the message.
   const long = `## [0.3.0] - ${"x".repeat(100)}`;
   refuses(
@@ -894,17 +1023,59 @@ async function testUnreleasedDraftFenceGuard() {
     long,
     "a long heading is cut at 80 code units",
   );
-  // A version that occurs twice must occur twice. The message names the later line of the two.
-  const twice = `${head}\`\`\`md\n## [0.3.0] - 2025-09-14\n\`\`\`${previous}`;
-  refuses(twice, release, "a release heading that a draft example repeats");
 
-  // The cost: a draft that shows a release heading in a closed code example loses that line with the draft, so it
-  // is refused, even though nothing older was lost.
+  // What the new entry shows does not matter, because only the dropped lines are read. A prerelease that is lost
+  // behind a broken fence, and a new entry of the same version number or one that shows the lost heading as an
+  // example, do not hide it.
   refuses(
-    `${head}\`\`\`md\n## [1.0.0] - 2020-01-01\n\`\`\`${previous}`,
-    "## [1.0.0] - 2020-01-01",
-    "a release heading in a code example of the draft",
+    `${head}\`\`\`text\nDraft\n\n## [0.5.0-rc.1] - 2026-11-01\n\n- Candidate\n`,
+    "## [0.5.0-rc.1] - 2026-11-01",
+    "a lost prerelease of the new version",
+    (text) => updateWith("## [0.5.0] - 2026-11-11\n\n- Final", text),
   );
+  refuses(
+    `${head}\`\`\`text\nDraft\n\n## [0.4.0-beta.1] - 2026-11-01\n\n- Beta\n`,
+    "## [0.4.0-beta.1] - 2026-11-01",
+    "a lost prerelease of a new prerelease of the same version",
+    (text) => updateWith("## [0.4.0-beta.2] - 2026-11-11\n\n- Beta 2", text),
+  );
+  refuses(
+    `${head}\`\`\`text\nDraft\n\n## [0.4.0] - 2026-11-09\n\n- Real\n`,
+    "## [0.4.0] - 2026-11-09",
+    "a new entry that shows the lost heading as an example",
+    (text) =>
+      updateWith(
+        "## [0.5.0] - 2026-11-11\n\n```md\n## [0.4.0] - 2026-11-09\n```",
+        text,
+      ),
+  );
+
+  // The cost: a line in the dropped text that looks like a release heading is refused, even when it is an example
+  // or a code comment and nothing older was lost. The runner cannot tell it from a release.
+  for (const [name, text, line] of [
+    [
+      "a release heading in a code example of the draft",
+      `${head}\`\`\`md\n## [1.0.0] - 2020-01-01\n\`\`\`${previous}`,
+      "## [1.0.0] - 2020-01-01",
+    ],
+    [
+      "a code comment that starts with a version",
+      `${head}\`\`\`bash\n# 0.10 or newer\nnpm i\n\`\`\`${previous}`,
+      "# 0.10 or newer",
+    ],
+    [
+      "an H3 that starts with a version",
+      `${head}### [1.0.0] - notes\n\n- Draft${previous}`,
+      "### [1.0.0] - notes",
+    ],
+    [
+      "an indented code block with a release heading",
+      `${head}Example:\n\n    ## [1.0.0] - 2020-01-01\n${previous}`,
+      "    ## [1.0.0] - 2020-01-01",
+    ],
+  ]) {
+    refuses(text, line, name);
+  }
 
   // Inputs that b477362 handled keep their output. Without an older release, an open fence loses nothing, even when
   // it holds a heading: the first release of a project can end its draft with a Markdown example.
@@ -945,8 +1116,28 @@ async function testUnreleasedDraftFenceGuard() {
       released,
     ],
     [
-      "a draft with an H3, a mention and an indented line that look like a release heading",
-      `${head}### [1.0.0] - notes\n\nSee ## [1.0.0] here.\n\n    ## [1.0.0]${previous}`,
+      "a mention of a release heading in a line of text",
+      `${head}See ## [1.0.0] here.${previous}`,
+      released,
+    ],
+    [
+      "seven hashes and no space after the hash are not headings",
+      `${head}####### 1.0.0\n\n#1.0 is the issue${previous}`,
+      released,
+    ],
+    [
+      "a line that starts with a version, with no underline below it",
+      `${head}0.3.0 is out\n\n1.0.0\n- item\n\n2.0.0\n--- x${previous}`,
+      released,
+    ],
+    [
+      "a setext heading whose text has no dotted version",
+      `${head}3 reasons\n-------${previous}`,
+      released,
+    ],
+    [
+      "a list item that starts with a version",
+      `${head}- 0.3.0 fixed\n  ---${previous}`,
       released,
     ],
     [
@@ -954,6 +1145,12 @@ async function testUnreleasedDraftFenceGuard() {
       `${head}Draft\n\n##  [0.3.0]  - 2025-09-15   ##\n\n- Previous\n`,
       released,
     ],
+    [
+      "a title and no Unreleased heading, with a heading example further down",
+      `# Changelog${previous}\n\n\`\`\`md\n## [1.0.0]\n\`\`\`\n`,
+      `${released}\n\`\`\`md\n## [1.0.0]\n\`\`\`\n`,
+    ],
+    ["no title", previous.trimStart(), released],
   ]) {
     assert.equal(update(text), expected, name);
   }
@@ -964,22 +1161,6 @@ async function testUnreleasedDraftFenceGuard() {
     entryOnly,
     "a section that is not a release is not protected",
   );
-
-  // The check reads the text that is about to be returned, so it also covers a change that the formatter makes, on
-  // each path of `updateContent`. This formatter deletes the heading of the older release.
-  withIdentityFormatter(() => {
-    for (const [name, text] of [
-      ["a draft that closes", `${head}Draft${previous}`],
-      ["a title and no Unreleased heading", `# Changelog${previous}`],
-      ["no title", previous.trimStart()],
-    ]) {
-      refuses(
-        text,
-        release,
-        `a formatter that drops a release heading, ${name}`,
-      );
-    }
-  }, "sed '/^## \\[0.3.0\\]/d'");
 }
 
 // A differential test against commonmark.js. The assertions above hold single examples, but a rule can also go wrong
