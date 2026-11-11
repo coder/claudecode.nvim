@@ -523,6 +523,65 @@ describe("diff mode in a window that left a split diff", function()
     end)
 
     it(
+      "ends diff mode in the window of this tab, and not in the current window, when close_tab runs from another tab",
+      function()
+        local state = open_diff()
+        run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
+        local copy = vim.api.nvim_get_current_win()
+        assert.is_true(option(copy, "diff"), "the copy joined the diff")
+        vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        local user_first = vim.api.nvim_get_current_win()
+        vim.cmd("diffthis")
+        vim.cmd("vsplit " .. vim.fn.fnameescape(dir .. "/fourth.txt"))
+        local user_second = vim.api.nvim_get_current_win()
+        vim.cmd("diffthis")
+        vim.api.nvim_set_current_win(user_first)
+
+        close_tab()
+
+        assert.is_false(option(copy, "diff"), "the copy has no partner left")
+        assert.is_true(option(user_first, "diff"), "the user's diff in the current tab stays")
+        assert.is_true(option(user_second, "diff"), "the user's diff in the current tab stays")
+      end
+    )
+
+    it("ends diff mode in a window that a ClaudeCodeDiffClosed handler gave the file without an event", function()
+      local state = open_diff()
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+      vim.api.nvim_create_autocmd("User", {
+        pattern = "ClaudeCodeDiffClosed",
+        once = true,
+        callback = function()
+          vim.api.nvim_win_call(state.target_window, function()
+            vim.cmd("edit " .. vim.fn.fnameescape(file))
+          end)
+        end,
+      })
+
+      close_tab()
+
+      assert.equal(file, shows(state.target_window))
+      assert.is_false(option(state.target_window, "diff"), "diff mode is off in the window that got the file")
+      assert.equal(0, #vim.api.nvim_get_autocmds({ event = "BufWinEnter", buffer = vim.fn.bufnr(file) }), "none waits")
+    end)
+
+    it(
+      "keeps a diff of the file with itself that the user started, because each window is the other's partner",
+      function()
+        local state = wait_with_a_second_waiting_window()
+        close_tab()
+        run_in(state.target_window, "edit " .. vim.fn.fnameescape(file))
+        vim.cmd("diffthis")
+
+        vim.cmd("split " .. vim.fn.fnameescape(file))
+        local copy = vim.api.nvim_get_current_win()
+
+        assert.is_true(option(copy, "diff"), "the new window keeps the diff mode that it copied")
+        assert.is_true(option(state.target_window, "diff"), "the window that it was split from keeps diff mode")
+      end
+    )
+
+    it(
       "looks at a window once, so a diff that the user starts there stays when the file enters another window",
       function()
         local state = wait_with_a_second_waiting_window()

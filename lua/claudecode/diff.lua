@@ -1577,9 +1577,6 @@ function M._cleanup_diff_state(tab_name, reason)
     pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
   end
 
-  -- After the deletes: a buffer that the cleanup deleted has no saved options to wait for.
-  end_diff_mode_when_file_returns(diff_data)
-
   -- Remove from active diffs
   active_diffs[tab_name] = nil
 
@@ -1590,6 +1587,10 @@ function M._cleanup_diff_state(tab_name, reason)
     file_path = diff_data.old_file_path,
     reason = reason,
   })
+
+  -- After the deletes, since a buffer that the cleanup deleted has no saved options to wait for, and after the event,
+  -- since a handler that does not nest can bring the file back into a window without a BufWinEnter.
+  end_diff_mode_when_file_returns(diff_data)
 
   logger.debug("diff", "Cleaned up diff for", tab_name)
 end
