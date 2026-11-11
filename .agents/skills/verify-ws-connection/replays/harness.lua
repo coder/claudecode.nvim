@@ -201,6 +201,7 @@ function M.spawn_claude(port, token, mode)
   end
   vim.list_extend(env, {
     "VWC_HARNESS=" .. here .. "/harness.lua",
+    "VWC_CHILD=" .. here .. "/claude-process.lua",
     "VWC_PEER_PORT=" .. port,
     "VWC_PEER_TOKEN=" .. token,
     "VWC_PEER_SILENT_FLAG=" .. flag,
@@ -216,7 +217,8 @@ function M.spawn_claude(port, token, mode)
       "--cmd",
       "lua vim.opt.rtp:prepend(os.getenv('VWC_REPO'))",
       "-c",
-      "luafile " .. here .. "/claude-process.lua",
+      -- The path goes through the environment, not into Ex syntax: `:luafile` would expand a `%`, `#` or `*` in it.
+      "lua dofile(os.getenv('VWC_CHILD'))",
     },
     env = env,
   }, function() end)

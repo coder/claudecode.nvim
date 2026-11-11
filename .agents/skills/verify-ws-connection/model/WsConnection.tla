@@ -575,11 +575,15 @@ NoRequestAfterEnd == ~badDispatch
 DisconnectReportedOnce == \A c \in Conns : reports[c] <= 1
 
 (* A Close frame for a protocol error (1002, 1003, 1007, 1009) or a server stop (1001) is  *)
-(* written before the plugin closes the socket. The keepalive Close frame (1011) is not in *)
+(* written before the plugin closes the socket, as long as Claude keeps reading. The       *)
+(* deadline of close_client (start_close_timer) closes the socket and drops the frame of a *)
+(* Claude whose queue makes no progress for one keepalive window: the model has no such    *)
+(* step, so the rule does not cover that case. The keepalive Close frame (1011) is not in  *)
 (* the rule: server/README.md documents that a peer whose window is full does not get it.  *)
 StatusCloseDelivered == ~dropped
 
-(* A Claude that answers every ping is never dropped by the ping timer, whatever blocks Neovim: a tick never   *)
+(* A Claude that answers each ping before the next tick (PeerAnswersBeforeTick), or after a wake, is never      *)
+(* dropped by the ping timer, whatever blocks Neovim: a tick never                                               *)
 (* drops a client, the check that does runs after a poll, it judges nothing after a jump of the loop time, and   *)
 (* any bytes that the poll reads clear the stamp, so a pong that waits behind a large message cannot count      *)
 (* against the client. A Claude that stopped once is not covered. It holds in every state, written as a         *)
