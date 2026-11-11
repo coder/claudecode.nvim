@@ -81,6 +81,7 @@ describe("diff mode in a window that left a split diff", function()
     _G.claude_deferred_responses = {}
     answers = {}
     vim.cmd("edit " .. vim.fn.fnameescape(file))
+    vim.w[vim.api.nvim_get_current_win()].claudecode_file_windows = nil
   end)
 
   after_each(function()
@@ -545,24 +546,28 @@ describe("diff mode in a window that left a split diff", function()
       end
     )
 
-    it("ends diff mode in a window that a ClaudeCodeDiffClosed handler gave the file without an event", function()
+    it("keeps a diff that a ClaudeCodeDiffClosed handler starts, and the options that the handler sets", function()
       local state = open_diff()
-      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
       vim.api.nvim_create_autocmd("User", {
         pattern = "ClaudeCodeDiffClosed",
         once = true,
         callback = function()
-          vim.api.nvim_win_call(state.target_window, function()
-            vim.cmd("edit " .. vim.fn.fnameescape(file))
-          end)
+          run_in(state.target_window, "diffthis")
+          run_in(state.target_window, "setlocal foldmethod=indent scrollbind nowrap")
         end,
       })
 
       close_tab()
 
-      assert.equal(file, shows(state.target_window))
-      assert.is_false(option(state.target_window, "diff"), "diff mode is off in the window that got the file")
-      assert.equal(0, #vim.api.nvim_get_autocmds({ event = "BufWinEnter", buffer = vim.fn.bufnr(file) }), "none waits")
+      assert.is_true(option(state.target_window, "diff"), "the handler's diff mode stays")
+      assert.equal("indent", option(state.target_window, "foldmethod"), "the handler's 'foldmethod' stays")
+      assert.is_true(option(state.target_window, "scrollbind"), "the handler's 'scrollbind' stays")
+      assert.is_false(option(state.target_window, "wrap"), "the handler's 'wrap' stays")
+
+      run_in(state.target_window, "vsplit " .. vim.fn.fnameescape(dir .. "/fourth.txt"))
+      vim.cmd("diffthis")
+
+      assert.equal(2, diff_windows(), "the comparison that the handler started has both windows")
     end)
 
     it(
@@ -596,6 +601,67 @@ describe("diff mode in a window that left a split diff", function()
         assert.is_true(option(state.target_window, "diff"), "the window is not looked at again")
       end
     )
+  end)
+
+  describe("what the cleanup records on windows", function()
+    local function records(win)
+      return vim.w[win].claudecode_file_windows or {}
+    end
+
+    local function invalid_records(win)
+      local count = 0
+      for key in pairs(records(win)) do
+        if not vim.api.nvim_buf_is_valid(tonumber(key)) then
+          count = count + 1
+        end
+      end
+      return count
+    end
+
+    local function new_file(name)
+      local path = dir .. "/" .. name
+      vim.fn.writefile({ "one", "two" }, path)
+      return path
+    end
+
+    it("records nothing when no window waits for the file", function()
+      local window = vim.api.nvim_get_current_win()
+      for index = 1, 6 do
+        local path = new_file("kept-" .. index .. ".txt")
+        run_in(window, "edit " .. vim.fn.fnameescape(path))
+        local state = open_diff(path)
+        close_tab()
+        run_in(window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        vim.api.nvim_buf_delete(state.original_buffer, { force = true })
+      end
+
+      assert.is_nil(vim.w[window].claudecode_file_windows, "no record for a file that no window waited for")
+    end)
+
+    it("drops the records of files that were wiped while a window waited for them", function()
+      local window = vim.api.nvim_get_current_win()
+      for index = 1, 6 do
+        local path = new_file("waited-" .. index .. ".txt")
+        run_in(window, "edit " .. vim.fn.fnameescape(path))
+        local state = open_diff(path)
+        run_in(window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        close_tab()
+        vim.api.nvim_buf_delete(state.original_buffer, { force = true })
+      end
+
+      assert.is_true(invalid_records(window) <= 1, "only the record of the last file can name a wiped buffer")
+    end)
+
+    it("forgets the records of a file when the last window that waited for it has it again", function()
+      local state = open_diff()
+      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+      close_tab()
+      assert.is_not_nil(vim.w[state.target_window].claudecode_file_windows, "the window waits")
+
+      run_in(state.target_window, "edit #")
+
+      assert.is_nil(vim.w[state.target_window].claudecode_file_windows, "no record is left")
+    end)
   end)
 
   describe("the hook that waits for the file", function()
