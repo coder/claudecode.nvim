@@ -19,7 +19,7 @@ The server checks the `params` of each `tools/call` request once, where the requ
 
 Preconditions:
 
-- Neovim 0.8 or newer and Node 22 or newer (a global `WebSocket`). The script takes nvim from `VCN_NVIM`, else `mise which nvim`, else `PATH`, and node from `mise which node`, else `PATH`. It needs no `$V launch`, agent-tty or Chromium.
+- Neovim 0.8 or newer and Node 22 or newer, which has a global `WebSocket` (the probe ran on Node 22.23.4 and 26.12.1). The script takes nvim from `VCN_NVIM`, else `mise which nvim`, else `PATH`, and node from `mise which node`, else `PATH`. It needs no `$V launch`, agent-tty or Chromium.
 - No `claude` program on `PATH=/usr/bin:/bin`. The script exits 2 when it finds one.
 
 Steps:
@@ -32,7 +32,7 @@ Steps:
 ## Gotchas
 
 - The table holds `params`, `name`, `getWorkspaceFolders` and `openFile`. Another tool is not checked.
-- The folder nvim runs in is not a leak, because `getWorkspaceFolders` returns it on purpose. It is rewritten first, so a temp dir under the real home folder (a `TMPDIR` there) still passes.
-- nvim runs with an empty environment apart from `PATH=/usr/bin:/bin`, a scratch `HOME` and `XDG_*_HOME`, `CLAUDE_CONFIG_DIR`, and `terminal.provider = "none"`. The script stops nvim and the client by PID and removes its temp dir on exit.
+- The folder nvim runs in is not a leak, because `getWorkspaceFolders` returns it on purpose. The rewrite handles it first, so the answer passes even when that folder lies under the real home folder (`HOME=/tmp .../proof-tools-call-wire.sh` runs that case).
+- nvim runs with an empty environment apart from `PATH=/usr/bin:/bin`, a scratch `HOME` and `XDG_*_HOME`, `CLAUDE_CONFIG_DIR`, and `terminal.provider = "none"`. The script stops nvim and the client by PID, also on a signal, and removes its temp dir `/tmp/wire-probe.XXXXXX` on exit.
 - The auth token goes from the `0600` lock file in that temp dir into the upgrade header. The script prints no token and keeps no log.
-- A case with no answer in 3 seconds fails with `no answer in 3 s`. A tree that runs a tool on a malformed call can wait for a reply that never comes.
+- A case with no answer in 3 seconds fails with `no answer in 3 s`.

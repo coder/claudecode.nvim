@@ -37,6 +37,7 @@ NODE_PID=""
 # shellcheck disable=SC2329
 cleanup() {
   local pid
+  trap '' TERM INT HUP # a second signal must not end the cleanup
   for pid in $NODE_PID $NVIM_PID; do
     kill "$pid" 2>/dev/null || true
     for _ in {1..30}; do
@@ -53,7 +54,7 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
 
-RUN="$(mktemp -d)"
+RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)"
 RUN="$(cd "$RUN" && pwd -P)"
 mkdir "$RUN/work"
 # nvim quits by itself after 3 minutes, in case this script dies before its cleanup.
