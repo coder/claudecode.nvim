@@ -362,7 +362,7 @@ function M.register_handlers()
       local err = result_or_error_table.error
       local outcome = err and ("error " .. tostring(err.code) .. " " .. tostring(err.message))
         or ("result " .. describe_fields(result_or_error_table.result))
-      logger.debug("server", "Response - tools/call", params and params.name .. ":", outcome)
+      logger.debug("server", "Response - tools/call", params and tostring(params.name) .. ":", outcome)
 
       if result_or_error_table.error then
         return nil, result_or_error_table.error
