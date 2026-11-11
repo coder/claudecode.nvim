@@ -21,6 +21,7 @@ describe("Server lines on the command line", function()
     lines = {}
     saved.notify, saved.echo, saved.new_timer, saved.new_tcp =
       vim.notify, vim.api.nvim_echo, vim.loop.new_timer, vim.loop.new_tcp
+    saved.new_check, saved.update_time, saved.now = vim.loop.new_check, vim.loop.update_time, vim.loop.now
     vim.notify = function(msg, level)
       table.insert(lines, { text = msg, level = level })
     end
@@ -37,6 +38,7 @@ describe("Server lines on the command line", function()
     end
     vim.notify, vim.api.nvim_echo, vim.loop.new_timer, vim.loop.new_tcp =
       saved.notify, saved.echo, saved.new_timer, saved.new_tcp
+    vim.loop.new_check, vim.loop.update_time, vim.loop.now = saved.new_check, saved.update_time, saved.now
   end)
 
   local function start()
@@ -220,6 +222,7 @@ describe("Server lines on the command line", function()
 
   it("shows a keepalive timeout as one info line", function()
     local tick
+    local checks, clock = {}, 1000000
     vim.loop.new_timer = function()
       return {
         start = function(_, _, _, callback)
@@ -229,18 +232,38 @@ describe("Server lines on the command line", function()
         close = function() end,
       }
     end
+    vim.loop.new_check = function()
+      return {
+        start = function(_, callback)
+          table.insert(checks, callback)
+        end,
+        stop = function() end,
+        close = function() end,
+      }
+    end
+    vim.loop.update_time = function() end
+    vim.loop.now = function()
+      return clock
+    end
     local client = connect(start())
     client.tcp_handle._read_cb(nil, upgrade(token))
     assert.equals("connected", client.state)
     lines = {}
-    client.last_pong = vim.loop.now() - 61000
 
-    tick() -- the first tick that finds no pong pings again and logs nothing
-    assert.same({}, lines)
-    tick()
+    for round = 1, 4 do
+      clock = clock + 30000
+      tick() -- a tick pings and logs nothing: the timeout is decided at the check, after libuv read the socket
+      assert.same({}, lines)
+      if round < 4 then
+        table.remove(checks)()
+        assert.same({}, lines)
+      end
+    end
+    table.remove(checks)()
 
     local line = only_line()
     assert.equals(vim.log.levels.INFO, line.level)
     assert_contains(line.text, client.id)
+    assert_contains(line.text, "no reply for 90s")
   end)
 end)

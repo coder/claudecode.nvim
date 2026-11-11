@@ -88,6 +88,21 @@ describe(".luacov", function()
     assert_plugin_only(load_runner(root, root), root)
   end)
 
+  it("keeps the files of a checkout in a folder named like a temp folder", function()
+    local root = "/tmp/claudecode.Ab1234"
+
+    assert_plugin_only(load_runner(root, root), root)
+  end)
+
+  it("keeps the files of a checkout that a symlink points to in a folder named like a temp folder", function()
+    local typed = "/home/u/link"
+    local resolved = "/tmp/claudecode.Ab1234"
+    local runner = load_runner(typed, resolved)
+
+    assert_plugin_only(runner, typed)
+    assert_plugin_only(runner, resolved)
+  end)
+
   it("takes a folder name's pattern characters literally", function()
     local root = "/w/my-check.out+1%/claude-code.nvim"
     local runner = load_runner(root, root)
