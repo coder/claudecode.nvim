@@ -210,7 +210,41 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local log = assert(io.open(dir .. "/timeout_args"))
     local args = log:read("*a")
     log:close()
-    assert.are.equal("-k 5s 60s\n", args)
+    assert.are.equal("-k 5s 40s\n", args)
+  end)
+
+  -- plenary's test_file ends a file at 50s on its own: exit 1, no TIMEOUT line, and its nvim left running.
+  local PLENARY_FILE_TIMEOUT_SECONDS = 50
+
+  ---@return integer kill_grace_seconds
+  ---@return integer limit_seconds
+  local function timeout_limits()
+    local log = assert(io.open(dir .. "/timeout_args"))
+    local args = log:read("*a")
+    log:close()
+    local grace, limit = args:match("^%-k (%d+)s (%d+)s\n$")
+    assert(grace and limit, args)
+    return tonumber(grace), tonumber(limit)
+  end
+
+  it("stops a file before plenary's own per-file timeout can", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local grace, limit = timeout_limits()
+    assert.is_true(limit + grace < PLENARY_FILE_TIMEOUT_SECONDS, "limit " .. limit .. "s, grace " .. grace .. "s")
+  end)
+
+  it("names in its TIMEOUT line the limit it gave timeout", function()
+    local status, output = run_script({
+      { name = "hang_spec.lua", exit = 124, output = hung_output("hang_spec.lua") },
+    })
+
+    assert.are.equal("1", status, output)
+    local _, limit = timeout_limits()
+    assert.is_truthy(output:find("nvim did not exit within " .. limit .. "s", 1, true), output)
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
@@ -226,7 +260,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local log = assert(io.open(dir .. "/timeout_args"))
     local args = log:read("*a")
     log:close()
-    assert.are.equal("-k 5s 60s\n-k 1s 60s\n-k 5s 60s\n", args)
+    assert.are.equal("-k 5s 40s\n-k 1s 40s\n-k 5s 40s\n", args)
   end)
 
   it("runs command_args_spec.lua like every other file", function()

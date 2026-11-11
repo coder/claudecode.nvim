@@ -19,7 +19,7 @@ For a manual WebSocket check, create an empty out file, then run `mise exec -- n
 
 ### Test harnesses
 
-- `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout -k 5s 60s`, and prints totals [run_integration_tests_individually.sh:run_test_file].
+- `run_integration_tests_individually.sh` (no arguments) runs each `tests/integration/*_spec.lua` in its own headless Neovim under `timeout -k 5s 40s` (plenary's `test_file` ends a file at 50 s on its own, without a `TIMEOUT:` line, so the limit plus the kill grace stays under 50 s), and prints totals [run_integration_tests_individually.sh:run_test_file].
 - `manual_test_helper.lua` is run with `:luafile` in a Neovim that has the plugin on its `runtimepath`. It calls the `claudecode.tools.open_diff` handler in a coroutine and reports whether it yields [manual_test_helper.lua:test_opendiff_directly]. CI fails unless it opens the repo's `README.md` and the handler yields [.github/workflows/test.yml:Manual openDiff helper works outside the repo].
 - `coverage-summary.sh <luacov.report.out> <checkout folder>` prints a Markdown summary of the report's Summary table: the Total row as the overall figure, then one row per file with the checkout folder stripped and a mark per threshold (90% and above, 70% and above, below 70%). It exits 0 when it prints the summary, 1 when the report has no file row, no Total row or a repeated path, 2 when the report cannot be read, and 64 for the wrong number of arguments. `tests/unit/coverage_summary_spec.lua` runs it on small reports [coverage-summary.sh:emoji].
 
