@@ -28,7 +28,10 @@ if not _G.vim then
     fs = { remove = function() end }, ---@type vim_fs_module
     fn = { ---@type vim_fn_table
       expand = function(path)
-        return select(1, path:gsub("~", home))
+        local expanded = path:gsub("~", function()
+          return home
+        end)
+        return expanded
       end,
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
