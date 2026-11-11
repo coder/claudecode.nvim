@@ -230,6 +230,18 @@ local function set_backdrop_hidden(term, hidden)
   end
 end
 
+---Writes the backdrop window of a float to the buffer variable that an adoption after a reload reads, or clears the
+---variable when the float has none. Snacks makes a new backdrop each time it re-creates a float, so this runs after
+---each start and each re-creation.
+---@param term table Snacks terminal instance
+local function remember_backdrop(term)
+  if not (term.buf and vim.api.nvim_buf_is_valid(term.buf)) then
+    return
+  end
+  local backdrop = term.backdrop
+  vim.b[term.buf][BACKDROP_VAR] = backdrop and backdrop.win or nil
+end
+
 -- Re-apply the Snacks-managed window-local options/vars that are lost when a
 -- split window is closed and recreated (minimal style turns off number/sign
 -- column, sets winhighlight, etc.), so the re-shown split matches the original.
@@ -349,6 +361,7 @@ local function cc_show(term, focus, config)
         error(err, 0)
       end
     end
+    remember_backdrop(term)
     if focus and term.win and vim.api.nvim_win_is_valid(term.win) then
       vim.api.nvim_set_current_win(term.win)
       maybe_start_insert(term, config)
@@ -496,47 +509,60 @@ local function find_backdrop(win, buf)
   }
 end
 
----Brings an adopted instance up to date with what has happened since the last entry: the window that shows its
----buffer, the backdrop of that window (an adopted float keeps the one that its first start made), and the entry's
----config.
----@param instance table
----@param config table|nil
-local function sync_adopted(instance, config)
-  instance.win = vim.fn.win_findbuf(instance.buf)[1]
-  if not (instance.backdrop and instance.backdrop.win and vim.api.nvim_win_is_valid(instance.backdrop.win)) then
-    instance.backdrop = find_backdrop(instance.win, instance.buf)
+---The window of the current tab that shows the buffer, for the first look of an adoption. A diff tab can show a copy of
+---the terminal, and a window of another tab is not where this entry shows Claude. Later entries keep the window that the
+---instance tracks, as an instance that `snacks` started does, so a hide and a show never mistake a copy for the
+---terminal's window.
+---@param buf number
+---@return number|nil win
+local function find_window(buf)
+  local tab = vim.api.nvim_get_current_tabpage()
+  for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+    if vim.api.nvim_win_get_tabpage(win) == tab then
+      return win
+    end
   end
-  if config then
-    instance._cc.config = adopted_config(instance.buf, config)
-  end
+  return nil
 end
 
----A Snacks instance for the Claude that an earlier copy of this module started (before a reload). The Claude buffer
----keeps its mark, but Snacks.terminal.list() cannot hand out its instance: Snacks keys an instance by its command,
----directory, env and count, and clears the key when any buffer with that key is wiped, so it can lose a running Claude.
----So this wraps the buffer in a new Snacks window with the window options that the terminal started with (from the
----buffer variable, or the entry's config for an older version), and shows no window of its own. A split or a float
----then comes back the way it started.
+---The options of the Snacks window that wraps an adopted terminal. The window options are what the terminal started
+---with, from its buffer variable (the entry's config decides for an older version, which wrote none), and the keys are
+---the entry's, as at a start: a key holds a function, which a buffer variable cannot keep.
 ---@param buf number
 ---@param config table|nil
----@return table instance
-local function wrap_terminal(buf, config)
+---@return table win_opts
+local function wrapper_options(buf, config)
+  local built = build_opts(config or {}, {}, true).win
   local stored = vim.b[buf][WINDOW_VAR]
   local win_opts
   if type(stored) == "table" then
     win_opts = plain(stored)
   else
     -- An older version stored nothing. Snacks.terminal.open gives a split the winbar below.
-    win_opts = plain(build_opts(config or {}, {}, true).win)
+    win_opts = plain(built)
     win_opts.wo = win_opts.wo or {}
     win_opts.wo.winbar = win_opts.position == "float" and "" or "1: %{get(b:, 'term_title', '')}"
   end
-  win_opts.keys, win_opts.bo = nil, nil
+  win_opts.keys, win_opts.bo = built.keys, nil
   win_opts.buf, win_opts.show = buf, false
   -- The terminal style gives the keys of a Snacks terminal (q hides it). Without it, the generic `q = "close"` would
   -- wipe the buffer and stop Claude.
   win_opts.style = "terminal"
-  local instance = Snacks.win(win_opts)
+  return win_opts
+end
+
+---A Snacks instance for the Claude that an earlier copy of this module started (before a reload). The Claude buffer
+---keeps its mark, but Snacks.terminal.list() cannot hand out its instance: Snacks keys an instance by its command,
+---directory, env and count, and clears the key when any buffer with that key is wiped, so it can lose a running Claude.
+---So this wraps the buffer in a new Snacks window with the window options that the terminal started with, and shows no
+---window of its own. A split or a float then comes back the way it started. The keys of the buffer close over the
+---instance that started the Claude, and a hide or a show on the wrapper would leave that one with a stale window, so
+---the wrapper maps its own keys over them.
+---@param buf number
+---@param config table|nil
+---@return table instance
+local function wrap_terminal(buf, config)
+  local instance = Snacks.win(wrapper_options(buf, config))
   -- The style sets a filetype. The buffer has its own already, and setting it again would fire FileType again.
   instance.opts.bo = {}
   -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
@@ -544,8 +570,24 @@ local function wrap_terminal(buf, config)
   instance.buf, instance.scratch_buf = buf, buf
   patch_instance(instance, adopted_config(buf, config))
   instance.adopted = true
-  sync_adopted(instance, nil)
+  -- Without a config the keys are the style's alone, and the entry that brings a config adds the user's.
+  instance._cc.configless = config == nil
+  instance.win = find_window(buf)
+  instance.backdrop = find_backdrop(instance.win, buf)
+  instance:map()
   return instance
+end
+
+---Gives an adopted instance that an entry without a config wrapped the options that a config brings: the user's keys,
+---and the window options of a terminal that an older version started.
+---@param instance table
+---@param config table
+local function upgrade_wrapper(instance, config)
+  local fresh = Snacks.win(wrapper_options(instance.buf, config))
+  fresh.opts.bo = {}
+  instance.opts, instance.keys = fresh.opts, fresh.keys
+  instance._cc.configless = false
+  instance:map()
 end
 
 ---Forgets a tracked terminal whose Claude exited. When no terminal is tracked then, tracks the Claude that an earlier
@@ -554,8 +596,11 @@ end
 ---@param config table|nil The config of the entry, when it has one
 local function adopt_existing_terminal(config)
   -- The entry's config first: an older version wrote no auto_close, and forget_ended_terminal needs the entry's.
-  if terminal and terminal.adopted and terminal:buf_valid() then
-    sync_adopted(terminal, config)
+  if config and terminal and terminal.adopted and terminal:buf_valid() then
+    terminal._cc.config = adopted_config(terminal.buf, config)
+    if terminal._cc.configless then
+      upgrade_wrapper(terminal, config)
+    end
   end
   forget_ended_terminal()
   if terminal and terminal:buf_valid() then
@@ -662,10 +707,7 @@ function M.open(cmd_string, env_table, config, focus)
     pcall(function()
       vim.b[term_instance.buf][WINDOW_VAR] = window
     end)
-    local backdrop = term_instance.backdrop
-    if backdrop and backdrop.win then
-      vim.b[term_instance.buf][BACKDROP_VAR] = backdrop.win
-    end
+    remember_backdrop(term_instance)
     if not focus then
       -- Snacks keeps these opts for every later show.
       term_instance.opts.enter = (config.snacks_win_opts or {}).enter

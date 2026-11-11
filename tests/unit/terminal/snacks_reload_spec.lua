@@ -32,7 +32,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
   local function new_window(bufnr)
     local win = state.next_win
     state.next_win = state.next_win + 1
-    state.windows[win] = { buf = bufnr }
+    state.windows[win] = { buf = bufnr, tab = state.current_tab }
     state.current_win = win
     return win
   end
@@ -82,6 +82,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
       end
     end
     term.hide, term.show, term.toggle = function() end, function() end, function() end
+    -- Snacks maps the keys of an instance to the buffer when it shows the window, and each map calls `self:hide()` on
+    -- that instance.
+    state.buffers[bufnr].mapped_by = term
     if opts.win.on_buf then
       opts.win.on_buf(term)
     end
@@ -116,6 +119,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
       next_jobid = 7,
       next_win = 1000,
       current_win = 1,
+      current_tab = 1,
     }
 
     _G.vim = {
@@ -156,11 +160,19 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end,
       }),
       tbl_deep_extend = function(_, ...)
+        local function merge(into, from)
+          for k, v in pairs(from) do
+            if type(v) == "table" and type(into[k]) == "table" and v[1] == nil then
+              into[k] = merge(vim.tbl_deep_extend("force", into[k]), v)
+            else
+              into[k] = v
+            end
+          end
+          return into
+        end
         local res = {}
         for _, t in ipairs({ ... }) do
-          for k, v in pairs(t) do
-            res[k] = v
-          end
+          merge(res, t)
         end
         return res
       end,
@@ -300,6 +312,13 @@ describe("claudecode.terminal.snacks after a module reload", function()
         nvim_get_current_win = function()
           return state.current_win
         end,
+        nvim_get_current_tabpage = function()
+          return state.current_tab
+        end,
+        nvim_win_get_tabpage = function(win)
+          assert(state.windows[win], "Invalid window id: " .. tostring(win))
+          return state.windows[win].tab or 1
+        end,
         nvim_set_current_win = function(win)
           state.current_win = win
         end,
@@ -321,6 +340,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
             wo = opts.wo or {},
             w = opts.w or {},
             position = opts.position,
+            width = opts.width,
+            height = opts.height,
             bo = { filetype = "snacks_terminal" },
           },
           config = opts,
@@ -340,6 +361,14 @@ describe("claudecode.terminal.snacks after a module reload", function()
           end
         end
         term.hide, term.show, term.toggle = function() end, function() end, function() end
+        -- Snacks resolves the keys when it creates the instance, and maps them to the buffer (each map closes over the
+        -- instance that maps it) when it shows a window or when `map` is called.
+        term.keys = opts.keys
+        function term:map()
+          assert(self:buf_valid(), "Snacks.win:map needs a valid buffer")
+          state.buffers[self.buf].mapped_by = self
+          state.buffers[self.buf].mapped_keys = self.keys
+        end
         table.insert(state.wrapped, term)
         return term
       end,
@@ -515,7 +544,6 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.is_false(wrapped.config.show)
       assert.are.equal("right", wrapped.config.position)
       assert.are.equal(0.3, wrapped.config.width)
-      assert.is_nil(wrapped.config.keys)
       assert.is_nil(wrapped.config.bo)
       assert.are.equal(claude.buf, wrapped.buf)
     end)
@@ -665,6 +693,266 @@ describe("claudecode.terminal.snacks after a module reload", function()
         assert.are.equal(auto_close and 2 or 1, #started)
       end)
     end
+
+    -- Snacks maps the keys of an instance to the buffer when it shows a window, and each map closes over that instance.
+    -- The maps of the first start close over the instance that started the Claude. Once the wrapper hides and shows the
+    -- terminal, that instance has a stale window: q did nothing, and gf left the file in Claude's window.
+    it("maps its own keys over those of the instance that started the Claude", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      assert.are.equal(claude, state.buffers[claude.buf].mapped_by)
+      reload_snacks()
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal(state.wrapped[1], state.buffers[claude.buf].mapped_by)
+    end)
+
+    for _, reloads in ipairs({ 1, 2 }) do
+      it("hides with the q key after a hide and a show (reloads=" .. reloads .. ")", function()
+        snacks_provider.open("claude", {}, config, true)
+        local claude = started[1]
+        for _ = 1, reloads do
+          reload_snacks()
+          snacks_provider.simple_toggle("claude", {}, config) -- adopts, and hides
+          snacks_provider.simple_toggle("claude", {}, config) -- shows it in a new window
+          assert.are.equal(1, windows_showing(claude.buf))
+        end
+
+        state.buffers[claude.buf].mapped_by:hide() -- what q runs
+
+        assert.are.equal(0, windows_showing(claude.buf))
+      end)
+    end
+
+    -- A key of the user is a function, which a buffer variable cannot keep, so the keys come from the entry's config.
+    it("maps the keys of the entry's config, functions included", function()
+      local hide_key = { "<C-,>", function() end, mode = "t", desc = "Hide" }
+      local configured =
+        vim.tbl_deep_extend("force", config, { snacks_win_opts = { keys = { claude_hide = hide_key } } })
+      snacks_provider.open("claude", {}, configured, true)
+      local claude = started[1]
+      reload_snacks()
+
+      snacks_provider.open("claude", {}, configured, true)
+
+      local keys = state.wrapped[1].config.keys
+      assert.are.equal(hide_key, keys.claude_hide)
+      assert.are.equal("function", type(keys.claude_new_line[2]))
+      assert.are.equal(state.wrapped[1], state.buffers[claude.buf].mapped_by)
+    end)
+
+    -- An older version stored no window options, and the options that the entry's config builds hold keys that a copy
+    -- without functions would break (a key table without its function names an action that does not exist).
+    it("maps the real keys of a terminal that an older version started", function()
+      local configured = vim.tbl_deep_extend("force", config, { snacks_win_opts = { keys = { claude_hide = "hide" } } })
+      snacks_provider.open("claude", {}, configured, true)
+      local claude = started[1]
+      state.buffers[claude.buf].vars.claudecode_snacks_auto_close = nil
+      state.buffers[claude.buf].vars.claudecode_snacks_window = nil
+      reload_snacks()
+
+      snacks_provider.open("claude", {}, configured, true)
+
+      local keys = state.wrapped[1].config.keys
+      assert.are.equal("function", type(keys.claude_new_line[2]))
+      assert.are.equal("hide", keys.claude_hide)
+    end)
+
+    -- get_active_bufnr has no config, so the first adoption can come without the user's keys. The next entry brings them.
+    it("takes the keys of the next entry's config after a configless adoption", function()
+      local hide_key = { "<C-,>", function() end, mode = "t", desc = "Hide" }
+      local configured =
+        vim.tbl_deep_extend("force", config, { snacks_win_opts = { keys = { claude_hide = hide_key } } })
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      local wrapped = snacks_provider._get_terminal_for_test()
+      assert.is_nil(wrapped.keys.claude_hide)
+
+      snacks_provider.simple_toggle("claude", {}, configured)
+
+      assert.are.equal(wrapped, snacks_provider._get_terminal_for_test())
+      assert.are.equal(hide_key, wrapped.keys.claude_hide)
+      assert.are.equal(wrapped, state.buffers[claude.buf].mapped_by)
+      assert.are.equal(hide_key, state.buffers[claude.buf].mapped_keys.claude_hide)
+    end)
+
+    -- An older version stored no window options, so a configless adoption has no size. The next entry's config gives it.
+    it("takes the window options of the next entry's config for a terminal of an older version", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      state.buffers[claude.buf].vars.claudecode_snacks_auto_close = nil
+      state.buffers[claude.buf].vars.claudecode_snacks_window = nil
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      local wrapped = snacks_provider._get_terminal_for_test()
+
+      snacks_provider.simple_toggle(
+        "claude",
+        {},
+        vim.tbl_deep_extend("force", config, { snacks_win_opts = { position = "float", width = 0.9, height = 0.8 } })
+      )
+
+      assert.are.equal("float", wrapped.opts.position)
+      assert.are.equal(0.9, wrapped.opts.width)
+      assert.are.equal(0.8, wrapped.opts.height)
+    end)
+
+    it("keeps the stored window options when a later entry has another config", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      local wrapped = snacks_provider._get_terminal_for_test()
+
+      snacks_provider.simple_toggle("claude", {}, vim.tbl_deep_extend("force", config, { split_side = "left" }))
+
+      assert.are.equal("right", wrapped.opts.position)
+    end)
+
+    it("writes the backdrop of a float that Snacks made at the first start", function()
+      local float_config = vim.tbl_deep_extend("force", config, {
+        snacks_win_opts = {
+          position = "float",
+          on_buf = function(instance)
+            instance.backdrop = { win = 77 }
+          end,
+        },
+      })
+
+      snacks_provider.open("claude", {}, float_config, true)
+
+      assert.are.equal(77, state.buffers[started[1].buf].vars.claudecode_snacks_backdrop)
+    end)
+
+    -- Snacks makes a new backdrop each time it re-creates a float. A reload after that must find the new one.
+    it("remembers the backdrop that Snacks makes when it re-creates a float", function()
+      local float_config = vim.tbl_deep_extend("force", config, { snacks_win_opts = { position = "float" } })
+      snacks_provider.open("claude", {}, float_config, true)
+      local claude = started[1]
+      state.windows[claude.win].config = { relative = "editor", zindex = 50, hide = false }
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      local wrapped = snacks_provider._get_terminal_for_test()
+      local backdrop
+      -- The float is closed. Snacks re-creates it with a new backdrop.
+      state.windows[claude.win] = nil
+      wrapped._cc.orig_show = function(self)
+        self.win = new_window(self.buf)
+        state.windows[self.win].config = { relative = "editor", zindex = 50, hide = false }
+        local backdrop_buf = state.next_bufnr
+        state.next_bufnr = state.next_bufnr + 1
+        state.buffers[backdrop_buf] = { jobid = 0, vars = {}, filetype = "snacks_win_backdrop" }
+        backdrop = new_window(backdrop_buf)
+        state.windows[backdrop].config = { relative = "editor", zindex = 49, hide = false }
+        self.backdrop = { win = backdrop }
+      end
+      snacks_provider.open("claude", {}, float_config, true)
+      assert.are.equal(backdrop, state.buffers[claude.buf].vars.claudecode_snacks_backdrop)
+
+      reload_snacks()
+      snacks_provider.simple_toggle("claude", {}, float_config) -- hides the float
+
+      assert.is_true(state.windows[backdrop].config.hide)
+    end)
+
+    it("clears the backdrop that it remembers when Snacks re-creates the float without one", function()
+      local float_config = vim.tbl_deep_extend("force", config, { snacks_win_opts = { position = "float" } })
+      snacks_provider.open("claude", {}, float_config, true)
+      local claude = started[1]
+      state.buffers[claude.buf].vars.claudecode_snacks_backdrop = 4242
+      state.windows[claude.win] = nil
+      claude._cc.orig_show = function(self)
+        self.win = new_window(self.buf)
+      end
+
+      snacks_provider.open("claude", {}, float_config, true)
+
+      assert.is_nil(state.buffers[claude.buf].vars.claudecode_snacks_backdrop)
+    end)
+
+    -- A diff in a new tab shows the terminal's buffer in a second window. That copy is no terminal window, as on an
+    -- instance that `snacks` started itself, which tracks the window that it showed.
+    describe("when a diff tab shows a copy of the terminal", function()
+      local claude, copy
+
+      before_each(function()
+        snacks_provider.open("claude", {}, config, true)
+        claude = started[1]
+        reload_snacks()
+        assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+        state.current_tab = 2
+        copy = new_window(claude.buf)
+        state.current_tab = 1
+        state.current_win = 1
+      end)
+
+      local function showing_in_tab(tab)
+        local count = 0
+        for _, w in pairs(state.windows) do
+          if w.buf == claude.buf and w.tab == tab then
+            count = count + 1
+          end
+        end
+        return count
+      end
+
+      it("opens Claude in the first tab after a hide there", function()
+        snacks_provider.simple_toggle("claude", {}, config) -- hides the window of the first tab
+        assert.are.equal(0, showing_in_tab(1))
+
+        snacks_provider.open("claude", {}, config, true)
+
+        assert.are.equal(1, showing_in_tab(1))
+        assert.are.equal(1, state.windows[state.current_win].tab)
+        assert.are.equal(claude.buf, state.windows[state.current_win].buf)
+        assert.is_true(vim.api.nvim_win_is_valid(copy))
+      end)
+
+      it("hides its own window from the diff tab, and shows Claude there on the next toggle", function()
+        state.current_tab = 2
+        state.current_win = copy
+
+        snacks_provider.simple_toggle("claude", {}, config)
+        assert.are.equal(0, showing_in_tab(1))
+        assert.are.equal(1, showing_in_tab(2))
+        assert.is_true(vim.api.nvim_win_is_valid(copy))
+
+        snacks_provider.simple_toggle("claude", {}, config)
+        assert.are.equal(2, showing_in_tab(2))
+        assert.is_true(vim.api.nvim_win_is_valid(copy))
+      end)
+    end)
+
+    it("takes the window of the current tab when it adopts a terminal that two tabs show", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      state.current_tab = 2
+      local copy = new_window(claude.buf)
+      reload_snacks()
+
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+
+      assert.are.equal(copy, snacks_provider._get_terminal_for_test().win)
+    end)
+
+    -- A window of another tab is not where this entry shows Claude: the open shows it in the current tab.
+    it("tracks no window when only another tab shows the terminal", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      state.current_tab = 2
+      reload_snacks()
+
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      assert.is_nil(snacks_provider._get_terminal_for_test().win)
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal(2, state.windows[snacks_provider._get_terminal_for_test().win].tab)
+      assert.are.equal(1, #started)
+    end)
   end)
 
   -- Codex round 3: the plugin reloads, no entry adopts the running Claude, it exits, an entry in the gap starts a new
