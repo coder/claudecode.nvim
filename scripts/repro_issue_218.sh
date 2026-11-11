@@ -193,10 +193,11 @@ warn() {
 # beyond bash. The call reads /dev/null because a background group cannot read a terminal. Output
 # goes to the caller, and the error output is dropped. A call that takes 3 s on a quiet host can
 # take 10 s on a busy one, so the deadlines are long. A call that the deadline stops prints a
-# warning and returns 124.
+# warning and returns 124. A call that exits with a non-zero status prints a warning and returns
+# that status, because a failed `destroy` leaves the session running.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 atty_cleanup() {
-  local secs=$1 end=$((SECONDS + $1)) pid live what
+  local secs=$1 end=$((SECONDS + $1)) pid live what rc
   shift
   what=$1
   [[ "$1" != home ]] || what="$1 $2"
@@ -214,12 +215,17 @@ atty_cleanup() {
     return 124
   fi
   wait "$pid" 2>/dev/null
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    warn "WARNING: 'agent-tty $what' exited with status $rc."
+    return "$rc"
+  fi
   return 0
 }
 # shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
 cleanup() {
   trap '' INT TERM HUP # a second signal must not cut the cleanup short
-  local pid sid sock socks dir end entry stopped='' forget_stopped='' q_home q_work
+  local pid sid sock socks dir end entry stopped='' forget_stopped='' q_home q_work q_socks
   # A create that is still running makes a session whose ID this script has not read yet.
   # Give it about 5 s to finish, then stop it.
   if [[ -n "$CREATE_PID" ]]; then
@@ -259,7 +265,13 @@ cleanup() {
       if [[ "$sock" == /* ]]; then socks+=" $(dirname "$sock")"; fi
     done
     # The directory of a session whose Neovim has exited has no path in `inspect`, so the home
-    # gives it. The host can delete its socket file a moment after `destroy` returns, so retry.
+    # gives it. The same directory often comes from both sources, so list each one once.
+    dir=""
+    for sock in $socks; do
+      [[ " $dir " == *" $sock "* ]] || dir+=" $sock"
+    done
+    socks="$dir"
+    # The host can delete its socket file a moment after `destroy` returns, so retry.
     if [[ -z "$stopped" ]]; then
       end=$((SECONDS + 5))
       for dir in $socks; do
@@ -275,10 +287,15 @@ cleanup() {
     # remove everything.
     q_home="$(printf '%q' "$AGENT_HOME")"
     q_work="$(printf '%q' "$WORK")"
+    q_socks=""
+    for dir in $socks; do
+      if [[ -d "$dir" ]]; then q_socks+=" $(printf '%q' "$dir")"; fi
+    done
     warn "         A session of this run can still be running. Its agent-tty home stays: $q_home"
     warn "         List its sessions:  agent-tty --home $q_home list --all"
     warn "         Remove a session:   agent-tty --home $q_home destroy <session-id>"
-    warn "         When no session is left: agent-tty home forget $q_home; rm -rf $q_work"
+    [[ -z "$q_socks" ]] || warn "         Its socket directory stays:$q_socks"
+    warn "         When no session is left: agent-tty home forget $q_home; rm -rf $q_work${q_socks:+; rmdir$q_socks}"
   elif [[ -n "$WORK" ]]; then
     rm -rf "$WORK"
   fi
