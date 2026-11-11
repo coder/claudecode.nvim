@@ -43,7 +43,11 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
   'echo "$*" >> "$STUB_DIR/nvim_args"',
-  'if [ -f "$STUB_DIR/$name.sleep" ]; then : > "$STUB_DIR/$name.started"; sleep 2; fi',
+  'if [ -f "$STUB_DIR/$name.sleep" ]; then',
+  '  : > "$STUB_DIR/$name.started"',
+  '  sleep 2',
+  '  mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada"',
+  'fi',
   "folders=missing",
   'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
   'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
@@ -394,7 +398,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_truthy(args:find("--headless -i NONE -u tests/minimal_init.lua", 1, true), args)
   end)
 
-  it("removes the temp files and folders of the running file when it gets SIGTERM, and exits 143", function()
+  it("stops the running file and removes its temp files and folders when it gets SIGTERM, and exits 143", function()
     write(dir .. "/tests/integration/slow_spec.lua", {})
     write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
     write(dir .. "/slow_spec.lua.exit", { "0" })
@@ -415,7 +419,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       .. quote(script)
       .. " > /dev/null 2>&1 & pid=$!; for _ in $(seq 100); do [ -e "
       .. quote(dir .. "/slow_spec.lua.started")
-      .. " ] && break; sleep 0.1; done; kill -TERM $pid; wait $pid; echo status=$?"
+      .. " ] && break; sleep 0.1; done; kill -TERM $pid; wait $pid; echo status=$?; sleep 3"
     local pipe = assert(io.popen(command))
     local output = pipe:read("*a")
     pipe:close()
