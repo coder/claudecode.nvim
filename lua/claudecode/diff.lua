@@ -782,17 +782,26 @@ local function setup_new_buffer(
   return new_win
 end
 
----Open diff using native Neovim functionality
----@param old_file_path string Path to the original file
----@param new_file_path string Path to the new file (used for naming)
----@param new_file_contents string Contents of the new file
----@param tab_name string Name for the diff tab/view
----@return table res Result with provider, tab_name, and success status
-function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
-  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
-  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
-  if not tmp_file then
-    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+---What a native diff changed, so a failure in a later step can undo it.
+---@class NativeDiffProgress
+---@field tab integer the tab the diff opens in
+---@field win_before integer the window that was current before the diff
+---@field windows_before table<integer, true> the windows of that tab before the diff
+---@field old_win integer? the window that holds the original, once it is in diff mode
+---@field proposed_buf integer? the buffer of the proposal's temp file
+
+---Open the original and the proposal side by side, in diff mode. Raises when a step fails: a swap file for the original
+---(E325), a buffer that already has the proposal's name (E95), an autocmd that errors.
+---@param old_file_path string
+---@param new_file_path string
+---@param tmp_file string
+---@param progress NativeDiffProgress
+local function show_native_diff(old_file_path, new_file_path, tmp_file, progress)
+  progress.tab = vim.api.nvim_get_current_tabpage()
+  progress.win_before = vim.api.nvim_get_current_win()
+  progress.windows_before = {}
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(progress.tab)) do
+    progress.windows_before[win] = true
   end
 
   local target_win = find_main_editor_window()
@@ -812,13 +821,15 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
   vim.cmd("diffthis")
+  progress.old_win = vim.api.nvim_get_current_win()
   create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
+  progress.proposed_buf = vim.api.nvim_get_current_buf()
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
-  local proposed_buf = vim.api.nvim_get_current_buf()
+  local proposed_buf = progress.proposed_buf
   local old_filetype = detect_filetype(old_file_path)
   if old_filetype and old_filetype ~= "" then
     vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })
@@ -847,6 +858,56 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     end,
     once = true,
   })
+end
+
+---Undo a native diff that failed halfway: the diff mode of the original, the buffer of the proposal, the windows that
+---the diff split off, and the temp file. The cleanup autocmd of a finished diff is registered last, so nothing else
+---would remove them.
+---@param tmp_file string
+---@param progress NativeDiffProgress
+local function undo_native_diff(tmp_file, progress)
+  if progress.old_win and vim.api.nvim_win_is_valid(progress.old_win) then
+    vim.api.nvim_win_call(progress.old_win, function()
+      vim.cmd("diffoff")
+    end)
+  end
+  if progress.proposed_buf and vim.api.nvim_buf_is_valid(progress.proposed_buf) then
+    pcall(vim.api.nvim_buf_delete, progress.proposed_buf, { force = true })
+  end
+  -- Wiping the buffer keeps the window that is current, and a split that edit never filled is still there too.
+  if vim.api.nvim_tabpage_is_valid(progress.tab) then
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(progress.tab)) do
+      if not progress.windows_before[win] then
+        pcall(vim.api.nvim_win_close, win, true)
+      end
+    end
+  end
+  if vim.api.nvim_win_is_valid(progress.win_before) then
+    pcall(vim.api.nvim_set_current_win, progress.win_before)
+  end
+  cleanup_temp_file(tmp_file)
+end
+
+---Open diff using native Neovim functionality
+---@param old_file_path string Path to the original file
+---@param new_file_path string Path to the new file (used for naming)
+---@param new_file_contents string Contents of the new file
+---@param tab_name string Name for the diff tab/view
+---@return table res Result with provider, tab_name, and success status
+function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
+  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
+  if not tmp_file then
+    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+  end
+
+  local progress = {}
+  local ok, failure = pcall(show_native_diff, old_file_path, new_file_path, tmp_file, progress)
+  if not ok then
+    -- Raise as before, after the diff has put back what it changed.
+    undo_native_diff(tmp_file, progress)
+    error(failure, 0)
+  end
 
   return {
     provider = "native",
