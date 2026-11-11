@@ -130,6 +130,25 @@ jobs:
       - name: Run integration tests
         run: ./scripts/run_integration_tests_individually.sh
 
+      # A test that hands a temp path to an Ex command without fnameescape fails on a `%` or a space in TMPDIR (E499,
+      # a split path), and no other step has such a TMPDIR.
+      - name: Run integration tests under a TMPDIR with a space and a %
+        run: |
+          odd_tmp="$RUNNER_TEMP/odd tmp 50%"
+          mkdir -p "$odd_tmp"
+          TMPDIR="$odd_tmp" ./scripts/run_integration_tests_individually.sh
+
+      # The runner's Neovims open real diffs, whose temp files go under stdpath("cache"). A spec that uses the real
+      # cache folder instead of a temp one shows here.
+      - name: Check the integration tests left the real cache folder alone
+        run: |
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvim"
+          if [ -e "$cache" ]; then
+            echo "::error::A test wrote under $cache"
+            find "$cache" | head -20
+            exit 1
+          fi
+
       # Real-Neovim regression gate for issue #238 (reject-with-:q). The unit spec
       # only exercises the WinClosed handler logic against a mock; this drives a
       # genuine `:q` and self-reports via cquit (exit 0 = fixed, 1 = regressed).
