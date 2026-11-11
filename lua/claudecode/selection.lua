@@ -142,9 +142,12 @@ local function demote_if_selection_text_changed()
         M.send_selection_update(cursor)
       end
     end
-  elseif not in_terminal then
-    -- update_selection does nothing in the Claude terminal except call this function, so it must not come back here
-    -- from it. The selection's buffer is the terminal when the plugin adopted it after the selection was read.
+  elseif in_terminal then
+    -- The selection's buffer is the Claude terminal itself: the plugin adopted it after the selection was read.
+    -- update_selection does nothing in the terminal except call this function, so it must not come back here from it,
+    -- and nothing in the terminal reaches Claude, so no cursor of it is sent. Forget the read: nothing checks it again.
+    M.state.selection_tick = nil
+  else
     M.update_selection()
   end
   return true

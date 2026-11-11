@@ -2756,6 +2756,11 @@ describe("Range Selection Tests", function()
           assert.is_nil(mock_server.last_broadcast) -- nothing in the Claude terminal reaches Claude
           assert.is_nil(selection.state.cursor_at_flush)
           assert.is_nil(selection.state.last_active_visual_selection)
+
+          -- Nothing is left to check: the read is forgotten, so the listener on the buffer detaches at its next change.
+          assert.is_nil(selection.state.selection_tick)
+          fire_buffer_listeners(1, "on_lines")
+          assert.are.equal(0, #_G.vim._buf_listeners[1])
         end)
 
         it("checks once after a burst of changes, such as a :%s", function()
