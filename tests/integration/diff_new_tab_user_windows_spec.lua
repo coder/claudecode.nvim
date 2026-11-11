@@ -44,6 +44,7 @@ describe("a diff tab that stays open: windows the user switched to their own fil
         local after = child.call([[
           local win_valid = vim.api.nvim_win_is_valid(_G.user_win)
           return {
+            cursor_stays = vim.api.nvim_get_current_win() == _G.user_win,
             win_valid = win_valid,
             shown_buf = win_valid and vim.api.nvim_win_get_buf(_G.user_win) or -1,
             user_buf = _G.user_buf,
@@ -53,6 +54,7 @@ describe("a diff tab that stays open: windows the user switched to their own fil
         ]])
 
         assert.is_true(after.win_valid, "the window of the user's file must stay open")
+        assert.is_true(after.cursor_stays, "the cursor must stay in the window of the user's file")
         assert.equal(after.user_buf, after.shown_buf, "the window must keep showing the user's file")
         assert.same(before, after.lines)
         assert.is_true(after.modified)

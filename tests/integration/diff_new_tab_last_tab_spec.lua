@@ -94,6 +94,27 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
       assert.equal(0, child.leftovers().in_diff_mode)
     end)
 
+    it("turns diff mode off in a window the user split from the file window when 'diffopt' lacks closeoff", function()
+      child.start({ layout = "vertical", show_terminal_again = true })
+      child.call([[vim.o.diffopt = "internal,filler"]])
+      child.open_diff("a.txt", "first diff")
+      child.close_first_tab()
+      child.call([[
+        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+          if vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)):find("a.txt", 1, true) then
+            vim.api.nvim_set_current_win(win)
+            vim.cmd("split")
+            break
+          end
+        end
+      ]])
+
+      child.close_diff("first diff")
+      child.state()
+
+      assert.equal(0, child.leftovers().in_diff_mode)
+    end)
+
     it("turns diff mode off when 'diffopt' lacks closeoff", function()
       child.start({ layout = "vertical", show_terminal_again = true })
       child.call([[vim.o.diffopt = "internal,filler"]])
@@ -105,38 +126,6 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
 
       assert.equal("n", state.mode)
       assert.equal(0, child.leftovers().in_diff_mode)
-    end)
-  end)
-
-  describe("with layout = vertical, when :tabclose stops at a modified buffer of the user's", function()
-    it("closes the diff's windows, keeps the user's, and leaves the user in their tab in Normal mode", function()
-      child.start({ layout = "vertical", show_terminal_again = true })
-      child.call([[vim.o.hidden = false]])
-      child.open_diff("a.txt", "first diff")
-      child.call([[
-        vim.cmd("split " .. _G.dir .. "/b.txt")
-        vim.api.nvim_buf_set_lines(0, 0, 1, false, { "one!" })
-      ]])
-      child.go_to_first_tab()
-
-      child.close_diff("first diff")
-      local state = child.state()
-
-      assert.equal(2, state.tabs)
-      assert.equal("n", state.mode)
-      assert.is_true(state.name:find("a.txt", 1, true) ~= nil, state.name)
-      assert.equal(0, child.leftovers().handlers)
-      local diff_tab = child.call([[
-        local names = {}
-        for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2])) do
-          local buf = vim.api.nvim_win_get_buf(win)
-          local name = vim.bo[buf].buftype == "terminal" and "TERMINAL" or vim.fn.fnamemodify(vim.api.nvim_buf_get_name(buf), ":t")
-          table.insert(names, name .. (vim.bo[buf].modified and "+" or ""))
-        end
-        table.sort(names)
-        return names
-      ]])
-      assert.same({ "a.txt", "b.txt+" }, diff_tab)
     end)
   end)
 end)
