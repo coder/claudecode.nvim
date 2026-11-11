@@ -1359,55 +1359,79 @@ function M._close_proposal_window(diff_data)
   end
 end
 
----@type table<number, table<number, true>> Windows that wait for a file's buffer, by buffer
-local windows_waiting_for_file = {}
+---Give a window that never showed the file a saved set of options without diff mode. Such a window takes the newest
+---set saved for the file, which has diff mode on when the file left a diff window. A hidden float shows the file once,
+---ends diff mode there and closes, so that its set is the newest. No window of the user changes.
+---@param buffer number The file's buffer
+local function save_options_without_diff_mode(buffer)
+  local eventignore = vim.o.eventignore
+  vim.o.eventignore = "all"
+  local opened, float = pcall(vim.api.nvim_open_win, buffer, false, {
+    relative = "editor",
+    row = 0,
+    col = 0,
+    width = 1,
+    height = 1,
+    focusable = false,
+  })
+  if opened then
+    pcall(vim.api.nvim_win_call, float, function()
+      if vim.wo.diff then
+        vim.cmd("diffoff")
+      end
+    end)
+    pcall(vim.api.nvim_win_close, float, true)
+  end
+  vim.o.eventignore = eventignore
+end
 
----Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and restores them when the
+---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and sets them again when the
 ---buffer enters it again, so diff mode comes back after the diff has ended. Each window that left the file waits for it.
 ---@param diff_data table
 local function end_diff_mode_when_file_returns(diff_data)
-  for buffer in pairs(windows_waiting_for_file) do
-    if not vim.api.nvim_buf_is_valid(buffer) then
-      windows_waiting_for_file[buffer] = nil
-    end
-  end
   local buffer = diff_data.original_buffer
   if not (buffer and vim.api.nvim_buf_is_valid(buffer)) then
     return
   end
-  local waiting = windows_waiting_for_file[buffer] or {}
-  for win in pairs(waiting) do
-    if not vim.api.nvim_win_is_valid(win) then
-      waiting[win] = nil
-    end
-  end
+  local waiting = {}
   for _, win in pairs({ proposal = diff_data.new_window, original = diff_data.target_window }) do
     if vim.api.nvim_win_is_valid(win) and not window_shows(win, buffer) then
       waiting[win] = true
     end
   end
-  if windows_waiting_for_file[buffer] or next(waiting) == nil then
+  if next(waiting) == nil then
     return
   end
-  windows_waiting_for_file[buffer] = waiting
-  vim.api.nvim_create_autocmd("BufWinEnter", {
+  -- A hidden float closes the file's last window, which would unload or wipe a buffer that does so when hidden.
+  if vim.api.nvim_buf_is_loaded(buffer) and vim.bo[buffer].bufhidden == "" then
+    save_options_without_diff_mode(buffer)
+  end
+  -- A window that shows the file again without a BufWinEnter (`:noautocmd buffer`, an autocmd that does not nest) stops
+  -- waiting at the next event of the file in it: leaving it, reloading it, or another window getting the file. From then
+  -- on its diff mode is the user's. A closed window stops waiting at the next event too, and an autocmd with no window
+  -- left deletes itself, so the autocmds of earlier diffs of the file are gone when a later diff of it opens.
+  local autocmd_id
+  autocmd_id = vim.api.nvim_create_autocmd({ "BufWinEnter", "BufLeave", "BufUnload" }, {
     buffer = buffer,
-    callback = function()
+    callback = function(args)
       local entered = vim.api.nvim_get_current_win()
       for win in pairs(waiting) do
         if not vim.api.nvim_win_is_valid(win) then
           waiting[win] = nil
         elseif window_shows(win, buffer) then
           waiting[win] = nil
-          -- Skip a window that got the file without this event: the user may have turned diff mode on there since.
-          if win == entered and vim.api.nvim_get_option_value("diff", { win = win }) then
+          if
+            args.event == "BufWinEnter"
+            and win == entered
+            and vim.api.nvim_get_option_value("diff", { win = win })
+          then
             vim.cmd("diffoff")
           end
         end
       end
       if next(waiting) == nil then
-        windows_waiting_for_file[buffer] = nil
-        return true
+        -- Returning true would delete only the event that fired.
+        vim.api.nvim_del_autocmd(autocmd_id)
       end
     end,
   })
@@ -1476,8 +1500,9 @@ function M._cleanup_diff_state(tab_name, reason)
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close new diff window if still open (only if not in a new tab)
     M._close_proposal_window(diff_data)
-    -- `:edit` clears 'diff' only when the new buffer is in no other diff window, so a kept window that went back to the
-    -- file's own buffer (`:edit #`) is still in diff mode. A window that shows another buffer has left it.
+    -- Neovim sets the options it saved for the file in a window when the file comes back there (`:edit #`), diff mode
+    -- included, so a kept window that went back to the file's own buffer is still in diff mode. A window that shows
+    -- another buffer has left it.
     if window_shows(diff_data.new_window, diff_data.original_buffer) then
       pcall(vim.api.nvim_win_call, diff_data.new_window, function()
         vim.cmd("diffoff")
@@ -2334,12 +2359,6 @@ end
 ---@return table active_diffs The active diffs table
 function M._get_active_diffs()
   return active_diffs
-end
-
----Test helper function (only for testing)
----@return table<number, table<number, true>> windows The windows that wait for each file's buffer
-function M._windows_waiting_for_file()
-  return windows_waiting_for_file
 end
 
 ---Manual buffer reload function for testing/debugging
