@@ -32,6 +32,10 @@
 #   signal-outside    a child of launch that someone else kills with SIGTERM makes launch exit 143, but launch got no
 #                     signal: it runs the full cleanup, which saves the evidence
 #   signal-printed    SIGTERM while launch is blocked printing VCN_STATE (stdout is a full pipe): exit 143, no state dir
+#   signal-failed     a launch that fails by itself (initialize answers an error), then SIGTERM to its process group
+#                     while the real `agent-tty snapshot` of the failure screen runs: launch exits 1, screen has text
+#   decoy-state       a symlink /tmp/vcn.* to a directory of this user, whose run.env would touch a marker, sorts after
+#                     the real state dirs: find_state does not pick it and stop_run does not run it
 #   cleanup-no-agent-tty  `vcn.sh cleanup` of a run that stopped before an agent-tty passed doctor, so run.env has no
 #                     ATT_BIN: it still removes the state dir
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
@@ -41,7 +45,7 @@ set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 root=$PWD
 TMP=$(mktemp -d)
-live_state="" live_path="" st=""
+live_state="" live_path="" st="" decoy=""
 # own_dir <dir>: true for a real directory that this user owns. `vcn.sh cleanup` sources the run.env of a state dir, so the
 # proof never acts on one that another user made.
 own_dir() { [[ -d $1 && ! -L $1 && -O $1 ]]; }
@@ -56,6 +60,7 @@ cleanup_all() {
     env PATH="$live_path" VCN_STATE="$live_state" "$V" cleanup >/dev/null 2>&1 || true
   fi
   stop_run "$st"
+  [[ -z $decoy || ! -L $decoy ]] || rm -f -- "$decoy"
   rm -rf "$TMP"
 }
 trap cleanup_all EXIT
@@ -202,6 +207,19 @@ if (sub === "doctor") {
   wait(300000);
 }
 SLOW
+# A preload (NODE_OPTIONS=--require) that holds the first `agent-tty snapshot` while $GATE/hold-snapshot exists. It runs
+# in the Node process of the real agent-tty, after Node has reset the signals that launch's shell ignores.
+cat >"$TMP/hold-snapshot.js" <<'HOLD'
+const fs = require("fs");
+const gate = process.env.GATE;
+const args = process.argv.slice(2);
+const held = gate && args[0] === "--home" && args[2] === "snapshot" && fs.existsSync(`${gate}/hold-snapshot`);
+if (held && !fs.existsSync(`${gate}/snapshot-reached`)) {
+  fs.writeFileSync(`${gate}/snapshot-reached`, "");
+  const cell = new Int32Array(new SharedArrayBuffer(4));
+  while (fs.existsSync(`${gate}/hold-snapshot`)) Atomics.wait(cell, 0, 0, 50);
+}
+HOLD
 chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise" "$TMP/gate-bin/mkdir" "$TMP/gate-bin/rm" \
   "$TMP/gate-mktemp/mktemp" "$TMP/gate-cp/cp" "$TMP/slow/agent-tty"
 ln -s "$good" "$TMP/good/agent-tty"
@@ -333,9 +351,9 @@ wait_for() {
   fail "$1" "launch did not reach the stand-in within 30 s: $(cat "$TMP/$1.txt")"
 }
 
-# await_exit <case> <signal> <state dir>: waits for launch and checks it exited 143 and removed the dir.
+# await_exit <case> <signal> <state dir> [status]: waits for launch, checks its exit (143 unless given) and the dir.
 await_exit() {
-  local name=$1 sig=$2 dir=$3 rc=0 left pstat
+  local name=$1 sig=$2 dir=$3 want=${4-143} rc=0 left pstat
   for _ in $(seq 1800); do
     pstat=$(ps -o stat= -p "$pid" 2>/dev/null) || true
     [[ -z $pstat || $pstat == Z* ]] && break
@@ -346,10 +364,10 @@ await_exit() {
     fail "$name" "launch was still running 180 s after SIG$sig (stopped now)"
   fi
   wait "$pid" || rc=$?
-  if [[ $rc != 143 || -e $dir ]]; then
+  if [[ $rc != "$want" || -e $dir ]]; then
     left=$([[ -e $dir ]] && echo yes || echo no)
     stop_run "$dir"
-    fail "$name" "SIG$sig made launch exit $rc (wanted 143), state dir left: $left"
+    fail "$name" "SIG$sig made launch exit $rc (wanted $want), state dir left: $left"
   fi
 }
 
@@ -538,6 +556,53 @@ signal_outside_case() {
   cases=$((cases + 1))
 }
 
+# A launch that fails by itself gets a signal to its process group while its teardown saves the screen of the failure.
+# The teardown ignores the signal and runs agent-tty in a session of its own: launch exits 1, and the screen has text.
+signal_failed_case() {
+  local name=signal-failed gate=$TMP/gate-signal-failed
+  mkdir "$gate"
+  : >"$gate/hold-snapshot"
+  start_launch "$name" "$good_path" GATE="$gate" NODE_OPTIONS="--require $TMP/hold-snapshot.js" VCN_INIT_JSONRPC=1.0
+  for _ in $(seq 900); do
+    [[ -f $gate/snapshot-reached ]] && break
+    sleep 0.1
+  done
+  [[ -f $gate/snapshot-reached ]] || fail "$name" "launch did not reach the failure snapshot in 90 s: $(cat "$TMP/$name.txt")"
+  find_state "$name"
+  kill -TERM -- "-$pid" || fail "$name" "no process group $pid to signal"
+  release "$gate/hold-snapshot"
+  await_exit "$name" TERM "$st" 1
+  wait "$rel"
+  [[ -s $TMP/out-$name/launch-failure.screen.txt ]] || fail "$name" "the saved failure screen is empty: the signal ended snapshot"
+  [[ -f $TMP/out-$name/final.screen.txt ]] || fail "$name" "the cleanup saved no final screen"
+  echo "ok $name: a signal while a failed launch saved its screen left exit 1 and a screen with text"
+  cases=$((cases + 1))
+}
+
+# find_state scans /tmp/vcn.*/run.env, and vcn.sh cleanup sources the run.env of the dir that stop_run gets. A symlink
+# to a directory of this user passes the owner test, so own_dir refuses it too. The decoy sorts after every real dir.
+decoy_case() {
+  local name=decoy-state gate=$TMP/gate-decoy target=$TMP/decoy-target marker=$TMP/decoy-marker why=""
+  mkdir "$gate" "$target"
+  decoy=/tmp/vcn.zzzzzzzz$RANDOM$RANDOM
+  printf 'OUT=%s\ntouch %s\n' "$TMP/out-$name" "$marker" >"$target/run.env"
+  ln -s "$target" "$decoy"
+  start_launch "$name" "$TMP/mise:$TMP/slow:$base" GATE="$gate"
+  wait_for "$name" "$gate/reached"
+  find_state "$name"
+  [[ $st != "$decoy" ]] || why="find_state picked the decoy"
+  stop_run "$decoy"
+  [[ ! -e $marker ]] || why="${why:+$why, }stop_run sourced the run.env of the decoy"
+  [[ -L $decoy && -f $target/run.env ]] || why="${why:+$why, }stop_run removed the decoy"
+  kill -TERM -- "-$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  rm -f -- "$decoy"
+  decoy=""
+  [[ -z $why ]] || fail "$name" "$why"
+  echo "ok $name: a symlink decoy was neither picked by find_state nor run by stop_run"
+  cases=$((cases + 1))
+}
+
 # vcn.sh cleanup on the run.env of a launch that stopped before an agent-tty passed doctor: it has no ATT_BIN.
 cleanup_no_agent_tty_case() {
   local name=cleanup-no-agent-tty dir
@@ -556,9 +621,11 @@ signal_case signal-early early
 signal_case signal-doctor doctor
 signal_mktemp_case
 signal_twice_case
+decoy_case
 signal_storm_case
 signal_printed_case
 signal_outside_case
+signal_failed_case
 cleanup_no_agent_tty_case
 sigterm_case
 echo "CASES $cases"
