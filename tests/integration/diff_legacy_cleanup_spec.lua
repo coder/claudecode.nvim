@@ -35,8 +35,12 @@ describe("legacy open_diff when a step fails after the temp file was written", f
   end
 
   -- Another Neovim changes `file` and is killed after :preserve, which leaves a swap file whose header names it.
+  -- SIGKILL leaves the socket folder of that Neovim in $TMPDIR (or $XDG_RUNTIME_DIR), so it gets folders of its own
+  -- inside `dir`, which after_each deletes.
   local function leave_swap_file_of(file)
-    vim.fn.system({
+    local child_dir = dir .. "/child"
+    vim.fn.mkdir(child_dir, "p")
+    local job = vim.fn.jobstart({
       vim.v.progpath,
       "--headless",
       "-u",
@@ -53,7 +57,9 @@ describe("legacy open_diff when a step fails after the temp file was written", f
       "preserve",
       "-c",
       "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)",
-    })
+    }, { stdin = "null", env = { TMPDIR = child_dir, XDG_RUNTIME_DIR = child_dir } })
+    assert.is_true(job > 0, "the child Neovim started")
+    vim.fn.jobwait({ job }, 30000)
     assert.are.equal(1, #vim.fn.glob(swap_dir .. "/*", false, true), "the killed Neovim left its swap file")
   end
 
