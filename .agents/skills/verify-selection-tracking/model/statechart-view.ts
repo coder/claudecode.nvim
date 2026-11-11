@@ -8,6 +8,7 @@ const waiting = (v: any) =>
   v.dbLoose ||
   v.dm !== "nil" ||
   v.dmStale ||
+  v.chk ||
   (v.dmLoose && v.dmLoose.length > 0);
 
 // What Claude holds. While a timer waits, a cursor that is behind is normal, so only a settled state says so.

@@ -12,7 +12,8 @@
 (* synchronous flush on visual exit and restart a 100 ms debounce timer;    *)
 (* the debounced update can start a demotion timer. Both are one-shot uv    *)
 (* timers whose callback goes through vim.schedule, so a timer can fire,    *)
-(* queue its callback, and be cancelled before the callback runs.          *)
+(* queue its callback, and be cancelled before the callback runs. The       *)
+(* listener on the buffer of a held selection queues its check the same way.*)
 (*                                                                          *)
 (* One user step is one key (or command) with the autocmds it fires:       *)
 (* ModeChanged, TextChanged, CursorMoved and BufEnter run in the same main- *)
@@ -122,6 +123,7 @@ VARIABLES
   dmBuf,      \* the buffer the demotion callback was scheduled for (current_buf)
   dmStale,    \* a callback of a cancelled demotion timer waits in the schedule queue
   dmLoose,    \* (only without DemotionIgnoresStale) buffers of live demotion timers the state lost
+  chk,        \* check_soon of the listener on the buffer of the held selection: its callback waits in the schedule queue
   \* ghosts
   phantom,    \* Claude was sent text at the '<,'> marks that an edit changed after the selection
   closedTwice,\* timer:close() ran on a closed handle: Lua error "handle ... is already closing"
@@ -132,7 +134,7 @@ VARIABLES
 
 nvim == <<buf, mode, cur, vsel, ver>>
 plugin == <<latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, dm, dmBuf, dmStale,
-            dmLoose, phantom, closedTwice>>
+            dmLoose, chk, phantom, closedTwice>>
 spec == <<hold, holdPos, holdLoose, released>>
 vars == <<nvim, plugin, spec>>
 
@@ -147,7 +149,7 @@ TypeOK ==
   /\ entryBuf \in Bufs \cup {None} /\ entryVer \in 0..MaxEdits
   /\ db \in TStates /\ dbStale \in BOOLEAN /\ dbLoose \in BOOLEAN
   /\ dm \in TStates /\ dmBuf \in Bufs \cup {None} /\ (dm = "nil") = (dmBuf = None)
-  /\ dmStale \in BOOLEAN /\ dmLoose \subseteq Bufs
+  /\ dmStale \in BOOLEAN /\ dmLoose \subseteq Bufs /\ chk \in BOOLEAN
   /\ phantom \in BOOLEAN /\ closedTwice \in BOOLEAN
   /\ hold \in VisValues \cup {None} /\ holdPos \in Pos /\ holdLoose \in BOOLEAN /\ released \in BOOLEAN
 
@@ -157,7 +159,7 @@ Init ==
   /\ ver = [b \in Bufs |-> 0]
   /\ latest = None /\ lastVis = None /\ cafBuf = None /\ cafPos = P0 /\ cafLeft = FALSE /\ cafAway = None /\ rdBuf = None /\ rdVer = 0 /\ entryBuf = None /\ entryVer = 0
   /\ db = "nil" /\ dbStale = FALSE /\ dbLoose = FALSE
-  /\ dm = "nil" /\ dmBuf = None /\ dmStale = FALSE /\ dmLoose = {}
+  /\ dm = "nil" /\ dmBuf = None /\ dmStale = FALSE /\ dmLoose = {} /\ chk = FALSE
   /\ phantom = FALSE /\ closedTwice = FALSE
   /\ hold = None /\ holdPos = P0 /\ holdLoose = FALSE /\ released = FALSE
 
@@ -167,7 +169,7 @@ Init ==
 
 S == [latest |-> latest, lastVis |-> lastVis, cafBuf |-> cafBuf, cafPos |-> cafPos, cafLeft |-> cafLeft, cafAway |-> cafAway, rdBuf |-> rdBuf, rdVer |-> rdVer, entryBuf |-> entryBuf,
       entryVer |-> entryVer, db |-> db, dbStale |-> dbStale, dbLoose |-> dbLoose, dm |-> dm, dmBuf |-> dmBuf,
-      dmStale |-> dmStale, dmLoose |-> dmLoose, phantom |-> phantom, closedTwice |-> closedTwice]
+      dmStale |-> dmStale, dmLoose |-> dmLoose, chk |-> chk, phantom |-> phantom, closedTwice |-> closedTwice]
 
 SetS(s) ==
   /\ latest' = s.latest /\ lastVis' = s.lastVis /\ cafBuf' = s.cafBuf
@@ -178,7 +180,7 @@ SetS(s) ==
   /\ entryBuf' = s.entryBuf /\ entryVer' = s.entryVer
   /\ db' = s.db /\ dbStale' = s.dbStale /\ dbLoose' = s.dbLoose
   /\ dm' = s.dm /\ dmBuf' = IF s.dm = "nil" THEN None ELSE s.dmBuf
-  /\ dmStale' = s.dmStale /\ dmLoose' = s.dmLoose
+  /\ dmStale' = s.dmStale /\ dmLoose' = s.dmLoose /\ chk' = s.chk
   /\ phantom' = s.phantom /\ closedTwice' = s.closedTwice
 
 \* marks: the '<,'> marks that ending visual mode just set: the range and the buffer
@@ -313,12 +315,21 @@ Reconcile(s, e, compareCursor, termKnown) ==
                   ELSE IF MoveReports /\ compareCursor /\ ~Unmoved(s1, e) THEN Update(ClearHeld(s1), e)
                   ELSE s1
 
-\* The listener on the buffer b of the selection Claude holds (watch_selection_buffer), after b changed while it is not
-\* current. demote_if_selection_text_changed sends the cursor of b: where its window has the cursor, else where the
-\* selection was released.
-OnOtherBufferChanged(s, e, b) ==
-  IF ListensToSelectionBuffer /\ TerminalReportsHeldBuffer /\ s.rdBuf = b /\ TerminalChanged(s, e)
-  THEN ReportHeldBuffer(s)
+\* The listener on the buffer b of the selection Claude holds (watch_selection_buffer): on_lines runs while b changes,
+\* and only queues the check with vim.schedule (check_soon), which does not touch the buffer in the callback. It
+\* queues nothing when b does not hold the selection.
+OnOtherBufferChanged(s, b) ==
+  IF ListensToSelectionBuffer /\ s.rdBuf = b /\ s.latest \in VisValues THEN [s EXCEPT !.chk = TRUE] ELSE s
+
+\* The queued callback: demote_if_selection_text_changed in whatever state the user is in when it runs. For the buffer
+\* you are in it ends the hold, as TextChanged does. In the Claude terminal, which does not update the selection, it
+\* sends the cursor of the selection's buffer: where its window has the cursor, else where the selection was released.
+\* In another file it does nothing: the debounce replaces the selection there.
+\* A scheduled callback runs after the command that made a new Claude terminal returned, so the plugin knows the
+\* terminal then, unlike at the BufEnter that the command fires.
+ListenerCheck(s, e) ==
+  IF TextChanged(s, e) THEN Update(ClearHeld(s), e)
+  ELSE IF TerminalReportsHeldBuffer /\ TerminalChanged(s, e) THEN ReportHeldBuffer(s)
   ELSE s
 
 \* The two handlers that call it. A key that edits the cursor line (x) fires CursorMoved, then TextChanged.
@@ -398,13 +409,12 @@ YouEditByPlugin ==
   /\ NoSpecChange
 
 (* A plugin edits, or Neovim reloads, a file that is not the current buffer, and the held *)
-(* text with it: no TextChanged and no BufEnter fire. The listener on that buffer checks the *)
-(* held text. In the Claude terminal, which does not update the selection, it sends the *)
-(* cursor of the file. In another file the debounce replaces the selection. *)
+(* text with it: no TextChanged and no BufEnter fire. The listener on that buffer queues a *)
+(* check (ListenerCheckRuns), which runs later, after any other step. *)
 YouEditOtherBuffer(b) ==
   /\ mode = "n" /\ b \in Files /\ b # buf /\ ver[b] < MaxEdits
   /\ ver' = [ver EXCEPT ![b] = @ + 1]
-  /\ SetS(OnOtherBufferChanged(S, E2(buf, "n", cur, None, None, ver'), b))
+  /\ SetS(OnOtherBufferChanged(S, b))
   /\ UNCHANGED <<buf, mode, cur, vsel>>
   /\ NoSpecChange
 
@@ -447,7 +457,7 @@ DebounceTimerFires ==
   /\ DelayBelowDebounce => dm \notin Alive
   /\ db' = "queued"
   /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, dbStale, dbLoose, dm, dmBuf, dmStale,
-                 dmLoose, phantom, closedTwice>>
+                 dmLoose, chk, phantom, closedTwice>>
   /\ NoSpecChange
 
 (* debounce_update's callback for the current timer: clear the field, close, update_selection. *)
@@ -468,7 +478,7 @@ StaleDebounceCallbackRuns ==
      ELSE /\ db' = IF ClearsBeforeClose THEN "nil" ELSE db
           /\ dbLoose' = (dbLoose \/ (ClearsBeforeClose /\ db \in Alive))
           /\ closedTwice' = TRUE
-  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, dm, dmBuf, dmStale, dmLoose, phantom>>
+  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, dm, dmBuf, dmStale, dmLoose, chk, phantom>>
   /\ NoSpecChange
 
 (* Without the identity check: a live debounce timer the field lost fires and runs in full. *)
@@ -479,11 +489,18 @@ LooseDebounceCallbackRuns ==
   /\ UNCHANGED nvim
   /\ NoSpecChange
 
+(* check_soon's callback of the listener runs: the check, then nothing is queued. *)
+ListenerCheckRuns ==
+  /\ chk
+  /\ SetS(ListenerCheck([S EXCEPT !.chk = FALSE], E))
+  /\ UNCHANGED nvim
+  /\ NoSpecChange
+
 DemotionTimerFires ==
   /\ dm = "armed"
   /\ dm' = "queued"
   /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, dmBuf, dmStale,
-                 dmLoose, phantom, closedTwice>>
+                 dmLoose, chk, phantom, closedTwice>>
   /\ NoSpecChange
 
 (* update_selection's demotion callback: clear the field, close, handle_selection_demotion. *)
@@ -503,7 +520,7 @@ StaleDemotionCallbackRuns ==
           /\ dmBuf' = IF ClearsBeforeClose THEN None ELSE dmBuf
           /\ dmLoose' = IF ClearsBeforeClose /\ dm \in Alive THEN dmLoose \cup {dmBuf} ELSE dmLoose
           /\ closedTwice' = TRUE
-  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, phantom>>
+  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, chk, phantom>>
   /\ NoSpecChange
 
 LooseDemotionCallbackRuns(b) ==
@@ -534,6 +551,7 @@ Next ==
   \/ DemotionCallbackRuns
   \/ StaleDemotionCallbackRuns
   \/ \E b \in Bufs : LooseDemotionCallbackRuns(b)
+  \/ ListenerCheckRuns
 
 Spec == Init /\ [][Next]_vars
 
@@ -541,7 +559,7 @@ Spec == Init /\ [][Next]_vars
 (* Rules *)
 
 \* No timer is running and no timer callback waits: the events have settled.
-Settled == db = "nil" /\ dm = "nil" /\ ~dbStale /\ ~dmStale /\ ~dbLoose /\ dmLoose = {}
+Settled == db = "nil" /\ dm = "nil" /\ ~dbStale /\ ~dmStale /\ ~dbLoose /\ dmLoose = {} /\ ~chk
 InFile == buf \in Files
 
 (* Right after you release a selection in a file, Claude holds it, also when you made it *)
