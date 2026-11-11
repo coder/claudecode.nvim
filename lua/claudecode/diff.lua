@@ -1379,6 +1379,9 @@ end
 ---shows the buffer the diff put there: a window that the user switched to a file of their own stays as it is, and the
 ---terminal handler goes either way. A cursor in a window that closes goes to the file window, or to the window of a
 ---unified diff, which gets an empty buffer. The caller deletes the proposal buffer.
+---Creating a buffer, changing a window's buffer and moving the cursor can each run an autocmd of the user's, which can
+---switch a window of the diff to a file of their own. So each window is looked up again right before the step that
+---uses it.
 ---@param diff_data table
 local function release_surviving_diff_tab(diff_data)
   local tab = diff_data.new_tab_number
@@ -1388,34 +1391,53 @@ local function release_surviving_diff_tab(diff_data)
   local function shows(win, buffer)
     return buffer ~= nil and in_tab(win) and vim.api.nvim_win_get_buf(win) == buffer
   end
-
-  local proposal_win = shows(diff_data.new_window, diff_data.new_buffer) and diff_data.new_window or nil
-  local terminal_win = shows(diff_data.terminal_win_in_new_tab, diff_data.terminal_buffer_in_new_tab)
-      and diff_data.terminal_win_in_new_tab
-    or nil
-  local file_win = in_tab(diff_data.target_window) and diff_data.target_window or nil
-
-  if proposal_win and (file_win == nil or file_win == proposal_win) then
-    pcall(vim.api.nvim_win_set_buf, proposal_win, vim.api.nvim_create_buf(true, false))
+  local function proposal_window()
+    return shows(diff_data.new_window, diff_data.new_buffer) and diff_data.new_window or nil
   end
-  local destination = file_win or proposal_win
-  local cursor_win = vim.api.nvim_get_current_win()
-  if destination and (cursor_win == terminal_win or cursor_win == proposal_win) then
-    pcall(vim.api.nvim_set_current_win, destination)
+  local function terminal_window()
+    return shows(diff_data.terminal_win_in_new_tab, diff_data.terminal_buffer_in_new_tab)
+        and diff_data.terminal_win_in_new_tab
+      or nil
+  end
+  local function file_window()
+    return in_tab(diff_data.target_window) and diff_data.target_window or nil
+  end
+  local function proposal_window_that_gets_an_empty_buffer()
+    local proposal_win = proposal_window()
+    local file_win = file_window()
+    if proposal_win and (file_win == nil or file_win == proposal_win) then
+      return proposal_win
+    end
   end
 
-  if terminal_win then
-    pcall(vim.api.nvim_win_close, terminal_win, false)
-  end
   if diff_data.terminal_enter_handler then
     pcall(vim.api.nvim_del_autocmd, diff_data.terminal_enter_handler)
   end
 
+  local emptied_win, empty_buffer
+  if proposal_window_that_gets_an_empty_buffer() then
+    local new_empty_buffer = vim.api.nvim_create_buf(true, false)
+    local proposal_win = proposal_window_that_gets_an_empty_buffer()
+    if proposal_win and pcall(vim.api.nvim_win_set_buf, proposal_win, new_empty_buffer) then
+      emptied_win, empty_buffer = proposal_win, new_empty_buffer
+    else
+      pcall(vim.api.nvim_buf_delete, new_empty_buffer, { force = true })
+    end
+  end
+
+  local destination = file_window() or (shows(emptied_win, empty_buffer) and emptied_win or nil)
+  local cursor_win = vim.api.nvim_get_current_win()
+  if destination and (cursor_win == terminal_window() or cursor_win == proposal_window()) then
+    pcall(vim.api.nvim_set_current_win, destination)
+  end
+
+  local terminal_win = terminal_window()
+  if terminal_win then
+    pcall(vim.api.nvim_win_close, terminal_win, false)
+  end
+
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-    if
-      vim.api.nvim_win_get_buf(win) == diff_data.original_buffer
-      and vim.api.nvim_get_option_value("diff", { win = win })
-    then
+    if shows(win, diff_data.original_buffer) and vim.api.nvim_get_option_value("diff", { win = win }) then
       pcall(vim.api.nvim_win_call, win, function()
         vim.cmd("diffoff")
       end)
