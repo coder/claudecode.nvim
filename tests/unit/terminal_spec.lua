@@ -1199,6 +1199,16 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
           hide_float:was_called(1)
         end)
 
+        it("passes the tab to the provider", function()
+          local hide_float = spy.new(function()
+            return true
+          end)
+          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
+
+          assert.is_true(terminal_wrapper.hide_float(3))
+          hide_float:was_called_with(3)
+        end)
+
         it("returns false when the provider hid nothing", function()
           terminal_wrapper.setup({
             provider = provider_with({
