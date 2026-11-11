@@ -42,10 +42,11 @@ CONSTANTS
                            \* status == "rejected"
   ClientTagged,            \* tools/init.lua passes the client to openDiff, which records client.id
   ClientIdsUnique,         \* server/client.lua numbers client ids, so a new connection never reuses one
-  CleanupHoldsWhenLocked,  \* diff.lua _cleanup_diff_state returns, entry registered, while Neovim refuses window
-                           \* changes (the command-line window, text lock), before it closes any window
-  CleanupRetries,          \* that held cleanup is scheduled to run again, with vim.defer_fn
-  RetryChecksEntry,        \* and the retry runs only while active_diffs still holds the entry that waited
+  CleanupHoldsWhenLocked,  \* diff.lua _cleanup_diff_state hands the whole teardown to utils.when_windows_allowed
+                           \* and keeps the entry registered until it runs, while Neovim refuses window changes
+                           \* (the command-line window, text lock)
+  CleanupRetries,          \* that gate runs a held teardown again, with one shared 50 ms timer
+  RetryChecksEntry,        \* and the held teardown runs only while active_diffs still holds the entry that waited
   SetupAnswerReturned,     \* diff.lua open_diff_blocking returns a result that arrives before its yield
   OpenedEventInSetup       \* diff.lua fires ClaudeCodeDiffOpened synchronously before the yield
                            \* (not a guard: TRUE lets a user handler resolve the diff in setup)
@@ -149,6 +150,9 @@ Remove(w, t, closer) ==
 (* With CleanupHoldsWhenLocked the entry stays registered, waits for its retry,    *)
 (* and counts as lost or not as an unlocked close would. Without it the closes     *)
 (* fail or raise: the entry stays, and the bulk close that called it stops.        *)
+(* The server also holds the whole disconnect cleanup until windows can change,   *)
+(* so in the code that cleanup never finds them locked. The model lets it, as it  *)
+(* lets the others.                                                               *)
 Teardown(w, t, closer, lockable) ==
   {Remove(w, t, closer)} \cup
   IF ~lockable THEN {}
@@ -380,7 +384,7 @@ ServerStops ==
        SetW([v EXCEPT !.sender = [q \in Reqs |-> FALSE]])
   /\ UNCHANGED <<reqTab, reqClient, scheduled, staleOwner>>
 
-(* The retry that _cleanup_diff_state schedules runs once windows can change. With *)
+(* The window gate's retry of a held _cleanup_diff_state runs once windows can change. With *)
 (* RetryChecksEntry it tears down only the entry that waited, and fires           *)
 (* ClaudeCodeDiffClosed as every cleanup does.                                    *)
 DeferredCleanupRuns(t) ==

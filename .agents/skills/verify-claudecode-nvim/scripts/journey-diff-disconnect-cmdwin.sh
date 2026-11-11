@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Claude exits while the user is in the command-line window (`q:`) with two openDiff calls waiting: both calls are
-# answered at once, and both diffs close once the user leaves that window. Needs VCN_STATE from a fresh `vcn.sh launch`
+# Claude exits while the user is in the command-line window (`q:`) with two openDiff calls waiting: nothing raises, and
+# both diffs close and both calls are answered once the user leaves that window. Needs VCN_STATE from a fresh `vcn.sh launch`
 # (hello.txt open). Evidence lands in $OUT as diff-disconnect-cmdwin-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
@@ -15,7 +15,6 @@ fail() {
 step() { echo "== $*"; }
 tab_name() { printf '✻ [Claude Code] %s (%s) ⧉' "$1" "$2"; }
 
-# The diffs as "<pending>/<rejected>/<saved>" counts, the proposal buffers that exist, and the senders that still wait.
 statuses() {
   "$V" expr "luaeval('(function() local n = {pending = 0, rejected = 0, saved = 0}; for _, d in pairs(require(\"claudecode.diff\")._get_active_diffs()) do n[d.status] = n[d.status] + 1 end; return n.pending .. \"/\" .. n.rejected .. \"/\" .. n.saved end)()')"
 }
@@ -48,22 +47,20 @@ step "The user opens the command-line window"
 
 step "Claude exits: its socket closes while the window is open"
 "$V" disconnect
-"$V" until "luaeval('(function() local n = 0; for _, d in pairs(require(\"claudecode.diff\")._get_active_diffs()) do if d.status == \"pending\" then n = n + 1 end end; return n end)()')" 0 5 ||
-  fail "a call is still waiting for its answer after Claude exited: $(snapshot)"
-[[ $(senders) == 0 ]] || fail "a response sender is still registered: $(snapshot)"
-[[ $(statuses) == 0/2/0 ]] || fail "both diffs should be rejected: $(snapshot)"
+sleep 1
 messages=$("$V" expr 'execute("messages")')
 [[ $messages != *E11* && $messages != *E565* ]] || fail "the cleanup raised in the command-line window: $messages"
 [[ $(proposals) == 2 ]] || fail "the proposals closed while windows could not change: $(snapshot)"
 "$V" capture diff-disconnect-cmdwin-2-after-exit >/dev/null
-echo "ok: both calls answered, diffs held while the window is open: $(snapshot)"
+echo "ok: no error, the proposals wait while the window is open: $(snapshot)"
 
 step "The user leaves the command-line window; both diffs close"
 "$V" keys ':quit' Enter
 "$V" until 'getcmdwintype()' ''
 "$V" until "luaeval('vim.tbl_count(require(\"claudecode.diff\")._get_active_diffs())')" 0 5 ||
-  fail "a rejected diff kept its registry entry after the window closed: $(snapshot)"
+  fail "a diff kept its registry entry after the window closed: $(snapshot)"
 [[ $(proposals) == 0 ]] || fail "a proposal buffer is left after its diff closed: $(snapshot)"
+[[ $(senders) == 0 ]] || fail "a response sender is still registered, so a call waits for its answer: $(snapshot)"
 "$V" capture diff-disconnect-cmdwin-3-closed >/dev/null
 "$V" screenshot diff-disconnect-cmdwin-3-closed >/dev/null
 "$V" record diff-disconnect-cmdwin >/dev/null

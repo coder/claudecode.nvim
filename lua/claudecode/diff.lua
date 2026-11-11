@@ -1414,37 +1414,11 @@ function M._close_proposal_window(diff_data)
   end
 end
 
-local CLEANUP_RETRY_MS = 100
-
----True while Neovim refuses to change windows: the command-line window is open (E11), or text is locked (E565, as
----inside an `<expr>` mapping or a handler that waits in the event loop). A switch to the current window does nothing
----and raises in both states.
----@return boolean
-local function windows_locked()
-  return not pcall(vim.api.nvim_set_current_win, vim.api.nvim_get_current_win())
-end
-
----Clean up diff state and resources
+---Runs only while Neovim allows window changes: `M._cleanup_diff_state` calls it through the window gate.
 ---@param tab_name string The diff identifier
+---@param diff_data table The entry that `active_diffs[tab_name]` holds
 ---@param reason string Reason for cleanup
-function M._cleanup_diff_state(tab_name, reason)
-  local diff_data = active_diffs[tab_name]
-  if not diff_data then
-    return
-  end
-
-  -- While windows cannot change, the closes below fail or raise, and the entry would leave `active_diffs` with its
-  -- windows still on screen. So the whole cleanup waits with the entry registered. The retry runs only while the
-  -- entry is still this one, because a new diff can take the tab name before it fires.
-  if windows_locked() then
-    vim.defer_fn(function()
-      if active_diffs[tab_name] == diff_data then
-        M._cleanup_diff_state(tab_name, reason)
-      end
-    end, CLEANUP_RETRY_MS)
-    return
-  end
-
+local function teardown_diff(tab_name, diff_data, reason)
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
     local inline = require("claudecode.diff_inline")
@@ -1566,6 +1540,23 @@ function M._cleanup_diff_state(tab_name, reason)
   })
 
   logger.debug("diff", "Cleaned up diff for", tab_name)
+end
+
+---Clean up diff state and resources. While Neovim refuses window changes (the command-line window, textlock), the closes
+---fail or raise, and a half-run cleanup drops the entry while its windows stay. A new diff can take the tab name before
+---a held teardown runs.
+---@param tab_name string The diff identifier
+---@param reason string Reason for cleanup
+function M._cleanup_diff_state(tab_name, reason)
+  local diff_data = active_diffs[tab_name]
+  if not diff_data then
+    return
+  end
+  utils.when_windows_allowed(function()
+    if active_diffs[tab_name] == diff_data then
+      teardown_diff(tab_name, diff_data, reason)
+    end
+  end)
 end
 
 ---Clean up all active diffs

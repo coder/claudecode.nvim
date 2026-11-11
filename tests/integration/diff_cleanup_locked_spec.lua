@@ -19,6 +19,7 @@ end
 describe("diff cleanup while Neovim refuses window changes", function()
   local diff = require("claudecode.diff")
   local tools = require("claudecode.tools.init")
+  local window_lock = require("tests.helpers.window_lock")
   local client = { id = "locked_cleanup_spec_client" }
   local group = vim.api.nvim_create_augroup("ClaudeCodeLockedCleanupSpec", { clear = true })
   local dir, answers, closed
@@ -27,7 +28,7 @@ describe("diff cleanup while Neovim refuses window changes", function()
     return response.content[1].text
   end
 
-  -- Claude calls openDiff for `name` and waits. The sender stands in for the WebSocket reply of that one call.
+  -- The sender stands in for the WebSocket reply of that one call.
   local function open_diff(name, layout, diff_opts)
     diff.setup({
       terminal = { provider = "none" },
@@ -56,44 +57,6 @@ describe("diff cleanup while Neovim refuses window changes", function()
     local newer, newer_state = open_diff("newer.txt", layout)
     return { tab = older, state = older_state }, { tab = newer, state = newer_state }
   end
-
-  -- Runs `fn` while the command-line window is open: typeahead opens it, `:lua` runs `fn` inside it, `:quit` leaves.
-  local function in_command_line_window(fn)
-    local outcome
-    _G.claudecode_locked_spec_run = function()
-      local ok, err = pcall(fn)
-      outcome = { in_window = vim.fn.getcmdwintype() ~= "", ok = ok, err = err }
-    end
-    vim.api.nvim_feedkeys(vim.keycode("q::lua _G.claudecode_locked_spec_run()<CR>:quit<CR>"), "x", false)
-    _G.claudecode_locked_spec_run = nil
-    assert.is_not_nil(outcome, "typeahead ran fn")
-    assert.is_true(outcome.in_window, "fn ran inside the command-line window")
-    assert.equal("", vim.fn.getcmdwintype(), "the command-line window is closed again")
-    return outcome.ok, outcome.err
-  end
-
-  -- Runs `fn` while text is locked, as inside an <expr> mapping.
-  local function under_text_lock(fn)
-    local outcome
-    _G.claudecode_locked_spec_run = function()
-      local locked = not pcall(vim.api.nvim_set_current_win, vim.api.nvim_get_current_win())
-      local ok, err = pcall(fn)
-      outcome = { locked = locked, ok = ok, err = err }
-      return ""
-    end
-    vim.cmd("nnoremap <expr> <Plug>(claudecode-locked-spec) v:lua.claudecode_locked_spec_run()")
-    vim.api.nvim_feedkeys(vim.keycode("<Plug>(claudecode-locked-spec)"), "x", false)
-    vim.cmd("nunmap <Plug>(claudecode-locked-spec)")
-    _G.claudecode_locked_spec_run = nil
-    assert.is_not_nil(outcome, "the mapping ran fn")
-    assert.is_true(outcome.locked, "fn ran with text locked")
-    return outcome.ok, outcome.err
-  end
-
-  local locks = {
-    { name = "the command-line window is open", run = in_command_line_window },
-    { name = "text is locked", run = under_text_lock },
-  }
 
   local function wait_until_closed(timeout)
     return vim.wait(timeout or 2000, function()
@@ -153,16 +116,15 @@ describe("diff cleanup while Neovim refuses window changes", function()
         assert.same({ "DIFF_REJECTED" }, vim.tbl_map(texts, answers[newer.tab]))
       end)
 
-      for _, lock in ipairs(locks) do
+      for _, lock in ipairs(window_lock.states) do
         describe("when " .. lock.name, function()
           it("answers both waiting calls once and does not raise", function()
             local older, newer = open_two_diffs(layout)
 
-            local ok, err = lock.run(function()
+            lock.enter(function()
               diff.close_diffs_for_client(client.id, "client disconnected")
             end)
 
-            assert.is_true(ok, "the disconnect cleanup raised: " .. tostring(err))
             assert.same({ "DIFF_REJECTED" }, vim.tbl_map(texts, answers[older.tab]), "the older call is answered")
             assert.same({ "DIFF_REJECTED" }, vim.tbl_map(texts, answers[newer.tab]), "the newer call is answered")
             assert.is_nil(next(_G.claude_deferred_responses), "no call is left waiting for an answer")
@@ -172,7 +134,7 @@ describe("diff cleanup while Neovim refuses window changes", function()
             local older, newer = open_two_diffs(layout)
             local during
 
-            local ok, err = lock.run(function()
+            lock.enter(function()
               diff.close_diffs_for_client(client.id, "client disconnected")
               during = {
                 registered = vim.tbl_keys(diff._get_active_diffs()),
@@ -180,7 +142,6 @@ describe("diff cleanup while Neovim refuses window changes", function()
               }
             end)
 
-            assert.is_true(ok, "the disconnect cleanup raised: " .. tostring(err))
             table.sort(during.registered)
             assert.same({ newer.tab, older.tab }, during.registered, "both stay registered while windows cannot close")
             assert.equal(4, #during.left, "their windows and buffers cannot close yet")
@@ -195,7 +156,7 @@ describe("diff cleanup while Neovim refuses window changes", function()
           it("closes a diff once when two cleanups ask for it", function()
             local older, newer = open_two_diffs(layout)
 
-            lock.run(function()
+            lock.enter(function()
               diff.close_diffs_for_client(client.id, "client disconnected")
               diff.close_rejected_diffs("user command")
             end)
@@ -210,11 +171,10 @@ describe("diff cleanup while Neovim refuses window changes", function()
             local older = open_diff("older.txt", layout)
             local reply
 
-            local ok, err = lock.run(function()
+            lock.enter(function()
               reply = tools.handle_invoke(client, { name = "close_tab", arguments = { tab_name = older } })
             end)
 
-            assert.is_true(ok, "close_tab raised: " .. tostring(err))
             assert.is_nil(reply.error, "close_tab answered with an error: " .. vim.inspect(reply.error))
             assert.equal("TAB_CLOSED", reply.result.content[1].text)
             assert.is_true(wait_until_closed())
@@ -223,7 +183,7 @@ describe("diff cleanup while Neovim refuses window changes", function()
           it("leaves a diff that replaced the waiting one alone", function()
             local tab = open_diff("older.txt", layout)
 
-            lock.run(function()
+            lock.enter(function()
               diff.close_diff_by_tab_name(tab)
             end)
             local replacement = open_diff("older.txt", layout)
@@ -241,17 +201,16 @@ describe("diff cleanup while Neovim refuses window changes", function()
   end
 
   describe("with a diff in its own tab", function()
-    for _, lock in ipairs(locks) do
+    for _, lock in ipairs(window_lock.states) do
       it("closes the tab after the lock when " .. lock.name, function()
         local tab = open_diff("tabbed.txt", "vertical", { open_in_new_tab = true })
         assert.equal(2, #vim.api.nvim_list_tabpages(), "the diff opened its own tab")
         vim.api.nvim_set_current_tabpage(diff._get_active_diffs()[tab].original_tab_number)
 
-        local ok, err = lock.run(function()
+        lock.enter(function()
           diff.close_diffs_for_client(client.id, "client disconnected")
         end)
 
-        assert.is_true(ok, "the disconnect cleanup raised: " .. tostring(err))
         assert.same({ "DIFF_REJECTED" }, vim.tbl_map(texts, answers[tab]))
         assert.is_true(wait_until_closed())
         assert.equal(1, #vim.api.nvim_list_tabpages(), "the diff's tab is closed")
