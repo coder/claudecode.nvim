@@ -5,7 +5,8 @@
 # Usage: proof-tools-call-wire.sh [tree]     tree: a plugin tree with lua/claudecode (default: this checkout)
 # Prints one `ok:` or `FAIL:` line per case and ends with `COUNT tools-call-wire cases=<n> failed=<n> leaks=<n>`.
 # Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
-# its table holds.
+# its table holds, or the tree, the work folder or the home folder path holds a double quote, a backslash or a control
+# character (the checker refuses it: the leak rule could not find such a path in a frame).
 # VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be the Neovim binary itself or a wrapper that
 # runs it with exec, because nvim must be a direct child of this script, and not a version-manager shim, which does not
 # start with an empty environment. nvim and the checker start with an empty environment. When nvim and node are the
@@ -68,7 +69,8 @@ trap 'exit 130' INT
 trap 'exit 129' HUP
 
 RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)" || die "cannot make a temp dir under /tmp"
-RUN="$(cd "$RUN" && pwd -P)" || die "cannot enter the temp dir $RUN"
+REAL="$(cd "$RUN" && pwd -P)" || die "cannot enter the temp dir $RUN"
+RUN="$REAL"
 mkdir "$RUN/work" "$RUN/tmp" || die "cannot make the dirs in $RUN"
 # What nvim gets, and nothing else. The checker gets nothing.
 NVIM_ENV=(env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" WIRE_TREE="$TREE" WIRE_CWD="$RUN/work" HOME="$RUN/home"

@@ -2,22 +2,27 @@
 // Sends malformed and valid `tools/call` messages to the plugin server of one tree over a real WebSocket and judges
 // every answer against the case table below. Prints one line per case and ends with one COUNT line.
 // Usage: node proof-tools-call-wire.mjs <lock file> <tree> <cwd>   (proof-tools-call-wire.sh starts nvim, then this)
-// Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run or judged fewer cases than
-// the table holds (no case at all included).
-// The token is read from the 0600 lock file and goes only into the upgrade header, as in ws-client.mjs. Text from a
-// frame or from the lock file reaches stdout or stderr only through `show`, which withholds a text that holds 8 or
-// more characters of the token in a row. The checker prints no message of a JSON parser: a frame that is not JSON, and
-// a lock file that does not parse, end the run with exit 2 and a fixed message.
-import assert from "node:assert/strict";
+// Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
+// the table holds (no case at all included), or a path that the leak rule looks for holds a double quote, a backslash
+// or a control character.
+// The token is read from the 0600 lock file and goes only into the upgrade header, as in ws-client.mjs. The checker
+// prints only text that it wrote itself (`stop`) and text of a frame that passed `show`, which withholds a text that
+// holds 8 or more characters of the token in a row. It never prints the message or the stack of an exception that Node
+// or a library raised, because such a message can quote its input: `die` prints only the class name.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isDeepStrictEqual } from "node:util";
 
-const [lockPath, tree, cwd] = process.argv.slice(2); // cwd: nvim's, the workspace folder getWorkspaceFolders reports
-if (!cwd) {
-  console.error("usage: proof-tools-call-wire.mjs <lock file> <tree> <cwd>");
+const stop = (message) => {
+  console.error(`proof-tools-call-wire: ${message}`);
   process.exit(2);
-}
+};
+const die = (error) =>
+  stop(`stopped by an unexpected ${error?.constructor?.name}`);
+process.on("uncaughtException", die);
+
+const [lockPath, tree, cwd] = process.argv.slice(2); // cwd: nvim's, the workspace folder getWorkspaceFolders reports
+if (!cwd) stop("usage: proof-tools-call-wire.mjs <lock file> <tree> <cwd>");
 
 // Normalization. The path rewrite below applies to a text on its own. The cwd goes first, so a run dir under the real
 // home folder is not a leak: getWorkspaceFolders names the cwd on purpose. Two readers use it. The leak rule reads the
@@ -29,6 +34,11 @@ const PLACEHOLDERS = [
   [tree, "$TREE"],
   [homedir(), "$HOME"], // the checker has an empty environment, so this is the home of the password database
 ].filter(([path]) => path.length > 1);
+const PATHS = {
+  $CWD: "the work folder",
+  $TREE: "the tree",
+  $HOME: "the home folder",
+};
 // A leak is a Lua source path with a line number, the plugin tree, or a path under the real home folder. The last
 // two are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is one too.
 const LEAK = /\.lua:\d|\$TREE|\$HOME/;
@@ -39,7 +49,7 @@ const LEAK = /\.lua:\d|\$TREE|\$HOME/;
 //   fails(...)  an error answer that is not a refusal
 // An answer is compared after the normalization, so getWorkspaceFolders is written with $CWD.
 const refuses = (param) => {
-  assert(typeof param === "string", "refuses() needs a parameter name");
+  if (typeof param !== "string") stop("refuses() needs a parameter name");
   return { param };
 };
 const ans = (result) => ({ answer: { result } });
@@ -147,21 +157,22 @@ const view = ({ error, result }) => {
     : { result: item?.type === "text" ? item.text : result };
 };
 
-const die = (error) => {
-  console.error(`proof-tools-call-wire: ${error.message}`);
-  process.exit(2);
-};
-process.on("uncaughtException", die);
-
 async function main() {
   if (typeof WebSocket !== "function")
-    throw new Error("this Node has no global WebSocket: use Node 22 or newer");
-  assert(rows.length > 0, "the case table is empty");
+    stop("this Node has no global WebSocket: use Node 22 or newer");
+  if (rows.length === 0) stop("the case table is empty");
+  // The leak rule reads the raw text of a frame, where JSON writes some characters escaped. A path with one of them
+  // would not be found in a frame, so the probe refuses to run with it.
+  for (const [path, mark] of PLACEHOLDERS) {
+    if (/["\\\x00-\x1f\x7f]/.test(path)) {
+      stop(
+        `the path of ${PATHS[mark]} holds a double quote, a backslash or a control character: use another path`,
+      );
+    }
+  }
   const { authToken } = parse(readFileSync(lockPath, "utf8"));
-  assert(
-    typeof authToken === "string" && authToken,
-    "the lock file does not parse or has no token",
-  );
+  if (typeof authToken !== "string" || !authToken)
+    stop("the lock file does not parse or has no token");
   const runs = Array.from(
     { length: Math.max(authToken.length - 7, 1) },
     (_, i) => authToken.slice(i, i + 8),
@@ -190,17 +201,17 @@ async function main() {
     }
     const frame = parse(String(data));
     if (typeof frame !== "object") {
-      return die(new Error("the server sent a frame that is not JSON"));
+      return stop("the server sent a frame that is not JSON");
     }
     if (frame?.id === want) {
       answer ??= normalize(frame);
       wake();
     }
   };
-  ws.onclose = () => die(new Error("the server closed the connection"));
-  await new Promise((resolve, reject) => {
+  ws.onclose = () => stop("the server closed the connection");
+  await new Promise((resolve) => {
     ws.onopen = resolve;
-    ws.onerror = () => reject(new Error("WebSocket handshake failed"));
+    ws.onerror = () => stop("WebSocket handshake failed");
   });
 
   let judged = 0;
@@ -252,9 +263,8 @@ async function main() {
       `FAIL: after the last case: ${show(`a frame leaks a path: ${leak}`).slice(0, 240)}`,
     );
   }
-  if (judged !== rows.length) {
-    throw new Error(`the checker judged ${judged} of ${rows.length} cases`);
-  }
+  if (judged !== rows.length)
+    stop(`the checker judged ${judged} of ${rows.length} cases`);
   console.log(
     `COUNT tools-call-wire cases=${judged} failed=${failed} leaks=${leaks}`,
   );
