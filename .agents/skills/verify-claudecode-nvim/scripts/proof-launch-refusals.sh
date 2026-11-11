@@ -17,6 +17,9 @@
 #   tmp-dot        TMPDIR has a . part
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
 #   out-space      the same above VERIFY_OUT
+#   out-above-resolved  a symlink above VERIFY_OUT points into a dir that others can write: only the resolved path shows it
+#   out-above-logical   a dir that others can write holds a symlink above VERIFY_OUT, to a safe dir: only the path as given
+#                  shows it
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
@@ -133,6 +136,17 @@ refused tmp-space "TMPDIR: $TMP/sp/q , above the state dir, is writable by other
   TMPDIR="$TMP/sp/q /tmp" VERIFY_OUT="$TMP/tmp-out"
 refused out-space "refusing evidence dir: $TMP/sp/q , above the evidence dir, is writable by others and not sticky" \
   VERIFY_OUT="$TMP/sp/q /out-parent/out"
+# The dirs above VERIFY_OUT are walked as given and as resolved. Each chain has a case that only it can refuse. The first
+# case has a clean chain as given (a symlink that this user owns, then dirs that only this user can write). The second has a
+# clean chain as resolved, but the dir that holds the symlink lets another user point the symlink elsewhere.
+mkdir -m 700 "$TMP/ch" "$TMP/ch/safe"
+mkdir -m 777 "$TMP/ch/loose" "$TMP/ch/loose2"
+ln -s "$TMP/ch/loose" "$TMP/ch/to-loose"
+ln -s "$TMP/ch/safe" "$TMP/ch/loose2/to-safe"
+refused out-above-resolved "$TMP/ch/loose, above the evidence dir, is writable by others and not sticky" \
+  VERIFY_OUT="$TMP/ch/to-loose/out"
+refused out-above-logical "$TMP/ch/loose2, above the evidence dir, is writable by others and not sticky" \
+  VERIFY_OUT="$TMP/ch/loose2/to-safe/out"
 refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
