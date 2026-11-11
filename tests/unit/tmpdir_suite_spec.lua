@@ -3,6 +3,11 @@ require("tests.busted_setup")
 local temp_dir = require("tests.helpers.temp_dir")
 local quote = temp_dir.quote
 
+-- integration_runner_spec.lua registers only a pending case when no `timeout` executable exists, so the child below
+-- would have nothing to run.
+local has_timeout = os.execute("command -v timeout > /dev/null 2>&1")
+local it_with_timeout = (has_timeout == 0 or has_timeout == true) and it or pending
+
 describe("the suite under an odd TMPDIR", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
   local outer
@@ -43,7 +48,7 @@ describe("the suite under an odd TMPDIR", function()
     assert.is_truthy(output:find("16 successes", 1, true), output)
   end)
 
-  it("runs a test of the integration runner spec with a relative TMPDIR", function()
+  it_with_timeout("runs a test of the integration runner spec with a relative TMPDIR", function()
     local output = run_child(outer, "reltmp", "tests/unit/integration_runner_spec.lua", "passes when every file prints")
 
     assert.is_truthy(output:find("status=0", 1, true), output)
