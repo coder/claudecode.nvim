@@ -1359,6 +1359,44 @@ function M._close_proposal_window(diff_data)
   end
 end
 
+---Neovim saves a window's options for a buffer when the buffer leaves the window, and sets them again when the buffer
+---comes back. A diff window that left the file's buffer in diff mode would turn diff mode back on at that moment, long
+---after the diff ended. This ends it, once, in each window of the diff that does not show the file now.
+---@param diff_data table
+local function end_diff_mode_when_file_returns(diff_data)
+  local buffer = diff_data.original_buffer
+  if not (buffer and vim.api.nvim_buf_is_valid(buffer)) then
+    return
+  end
+  local waiting = {}
+  for _, win in pairs({ proposal = diff_data.new_window, original = diff_data.target_window }) do
+    if vim.api.nvim_win_is_valid(win) and not window_shows(win, buffer) then
+      waiting[win] = true
+    end
+  end
+  if next(waiting) == nil then
+    return
+  end
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    buffer = buffer,
+    callback = function()
+      for win in pairs(waiting) do
+        if not vim.api.nvim_win_is_valid(win) then
+          waiting[win] = nil
+        elseif window_shows(win, buffer) then
+          waiting[win] = nil
+          if vim.api.nvim_get_option_value("diff", { win = win }) then
+            pcall(vim.api.nvim_win_call, win, function()
+              vim.cmd("diffoff")
+            end)
+          end
+        end
+      end
+      return next(waiting) == nil
+    end,
+  })
+end
+
 ---Clean up diff state and resources
 ---@param tab_name string The diff identifier
 ---@param reason string Reason for cleanup
@@ -1451,6 +1489,8 @@ function M._cleanup_diff_state(tab_name, reason)
         end)
       end
     end
+
+    end_diff_mode_when_file_returns(diff_data)
 
     restore_cursor(diff_data.window_sizes, diff_data.cursor_origin, cursor_window)
     -- A restore gives a Claude terminal in this tab its width from before the diff, a width the user chose included,
