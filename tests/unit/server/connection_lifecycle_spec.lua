@@ -669,7 +669,8 @@ describe("The lifecycle of a WebSocket connection", function()
   -- make a ping tick run before that poll, so the tick finds no write progress although Claude read during the block.
   -- A tick that would drop a client for a stall therefore arms a check handle, which libuv runs right after its next
   -- poll, and only the judgement there drops the client. The stall count (`write_stalled`) is kept by the ticks: the
-  -- second tick in a row without progress asks for the confirmation, however late the ticks come.
+  -- second tick in a row without progress asks for the confirmation. A wake tick, a gap above 1.5 intervals, starts a
+  -- fresh stall window, and the two ticks after it always count.
   describe("when a stall is confirmed after the next poll", function()
     local pong
 
@@ -957,6 +958,26 @@ describe("The lifecycle of a WebSocket connection", function()
         assert.equals("Client error: Binary messages not supported", callbacks.on_disconnect.calls[1].vals[3])
         assert.equals(1003, close_status(writes[#writes]), "the Close frame of the protocol error was replaced")
         assert.is_false(handle:is_closing(), "the confirmation closed the socket before its Close frame was written")
+        assert.is_nil(server.clients[client.id])
+      end)
+
+      it("skips a listed peer-closing client until its scheduled close callback runs", function()
+        local client, handle = pending_confirmation()
+        scheduled = {}
+        local lines = logged_info_during(function()
+          poll(function()
+            handle._read_cb(nil, frame.create_frame(frame.OPCODE.CLOSE, string.char(3, 232) .. "Done", true, true))
+            assert.equals("closing", client.state)
+            assert.equals(client, server.clients[client.id], "the peer Close must wait for vim.schedule")
+          end)
+        end)
+        assert.same({}, lines, "a peer-closing client was logged as stalled")
+        assert.equals(client, server.clients[client.id])
+        assert.spy(callbacks.on_disconnect).was_not_called()
+        assert.is_true(checks[1].closed and idles[1].closed)
+        run_scheduled()
+        assert.spy(callbacks.on_disconnect).was_called(1)
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1000, "Done")
         assert.is_nil(server.clients[client.id])
       end)
 
