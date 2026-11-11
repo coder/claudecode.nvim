@@ -7,6 +7,11 @@ set -e
 # pipefail: don't let `tee` mask a failing nvim in the pipe below
 set -o pipefail
 
+# How long timeout lets one file's nvim run. plenary's test_file ends a file at 50s on its own: exit 1, no TIMEOUT
+# line, and its nvim left running. So this limit plus the 5s kill grace below must stay under 50s.
+# selection_held_spec.lua sleeps 21.6s in 77 vim.wait calls, so 30s left each of them 0.1s of slack under load.
+FILE_TIMEOUT=40s
+
 echo "=== Running Integration Tests Individually ==="
 
 # Track overall results
@@ -29,7 +34,7 @@ run_test_file() {
   group_file=$(mktemp)
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
-  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s 30s "$@"' _ "$group_file" \
+  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
     nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
     2>&1 | tee "$temp_output"; then
@@ -64,7 +69,7 @@ run_test_file() {
 
   # Exit 124 is timeout's, 137 is its SIGKILL after 5 more seconds, and 143 is SIGTERM.
   if [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 137 ]] || [[ $EXIT_CODE -eq 143 ]]; then
-    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within 30s"
+    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within $FILE_TIMEOUT"
     # nvim busy in a Lua loop ignores SIGTERM and outlives timeout.
     kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
   fi
