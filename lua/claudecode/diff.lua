@@ -784,9 +784,8 @@ end
 
 ---What a native diff changed, so a failure in a later step can undo it.
 ---@class NativeDiffProgress
----@field tab integer the tab the diff opens in
 ---@field win_before integer the window that was current before the diff
----@field windows_before table<integer, true> the windows of that tab before the diff
+---@field created_wins integer[] the windows that the diff split off, in the tab where it opens
 ---@field old_win integer? the window that holds the original, once it is in diff mode
 ---@field proposed_buf integer? the buffer of the proposal's temp file
 
@@ -797,11 +796,13 @@ end
 ---@param tmp_file string
 ---@param progress NativeDiffProgress
 local function show_native_diff(old_file_path, new_file_path, tmp_file, progress)
-  progress.tab = vim.api.nvim_get_current_tabpage()
   progress.win_before = vim.api.nvim_get_current_win()
-  progress.windows_before = {}
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(progress.tab)) do
-    progress.windows_before[win] = true
+  progress.created_wins = {}
+
+  -- Split off a window, and remember it: a rollback closes these windows and no other.
+  local function split()
+    create_split()
+    table.insert(progress.created_wins, vim.api.nvim_get_current_win())
   end
 
   local target_win = find_main_editor_window()
@@ -815,14 +816,14 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     local buftype = vim.api.nvim_buf_get_option(vim.api.nvim_win_get_buf(win), "buftype")
 
     if buftype == "terminal" or buftype == "nofile" or vim.api.nvim_win_get_option(win, "previewwindow") then
-      create_split()
+      split()
     end
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
   vim.cmd("diffthis")
   progress.old_win = vim.api.nvim_get_current_win()
-  create_split()
+  split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
   progress.proposed_buf = vim.api.nvim_get_current_buf()
@@ -862,12 +863,13 @@ end
 
 ---Undo a native diff that failed halfway: the diff mode of the original, the buffer of the proposal, the windows that
 ---the diff split off, and the temp file. The cleanup autocmd of a finished diff is registered last, so nothing else
----would remove them.
+---would remove them. Every step is protected, so an autocmd that errors in one (an OptionSet handler, for instance)
+---cannot stop the next one or replace the error that made the diff fail.
 ---@param tmp_file string
 ---@param progress NativeDiffProgress
 local function undo_native_diff(tmp_file, progress)
   if progress.old_win and vim.api.nvim_win_is_valid(progress.old_win) then
-    vim.api.nvim_win_call(progress.old_win, function()
+    pcall(vim.api.nvim_win_call, progress.old_win, function()
       vim.cmd("diffoff")
     end)
   end
@@ -875,17 +877,15 @@ local function undo_native_diff(tmp_file, progress)
     pcall(vim.api.nvim_buf_delete, progress.proposed_buf, { force = true })
   end
   -- Wiping the buffer keeps the window that is current, and a split that edit never filled is still there too.
-  if vim.api.nvim_tabpage_is_valid(progress.tab) then
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(progress.tab)) do
-      if not progress.windows_before[win] then
-        pcall(vim.api.nvim_win_close, win, true)
-      end
+  for _, win in ipairs(progress.created_wins) do
+    if vim.api.nvim_win_is_valid(win) then
+      pcall(vim.api.nvim_win_close, win, true)
     end
   end
-  if vim.api.nvim_win_is_valid(progress.win_before) then
+  if progress.win_before and vim.api.nvim_win_is_valid(progress.win_before) then
     pcall(vim.api.nvim_set_current_win, progress.win_before)
   end
-  cleanup_temp_file(tmp_file)
+  pcall(cleanup_temp_file, tmp_file)
 end
 
 ---Open diff using native Neovim functionality

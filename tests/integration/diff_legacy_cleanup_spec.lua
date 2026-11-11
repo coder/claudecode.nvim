@@ -20,6 +20,18 @@ describe("legacy open_diff when a step fails after the temp file was written", f
     return files
   end
 
+  -- Buffers of the proposal: its temp file ("foo.lua.new") or its final name ("foo.lua (New)").
+  local function proposal_buffers()
+    local names = {}
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      local name = vim.api.nvim_buf_get_name(buf)
+      if name:find("foo.lua.new", 1, true) or name:find("foo.lua (New)", 1, true) then
+        table.insert(names, name)
+      end
+    end
+    return names
+  end
+
   local function window_count()
     return #vim.api.nvim_tabpage_list_wins(0)
   end
@@ -136,11 +148,67 @@ describe("legacy open_diff when a step fails after the temp file was written", f
     if not ok then
       assert.are.equal(windows, window_count())
       assert.are.equal(0, diff_windows())
+      assert.are.same({}, proposal_buffers(), "the buffer of the proposal was wiped, although its edit raised")
     end
     vim.cmd("silent! diffoff!")
     vim.cmd("silent! only")
     vim.cmd("silent! %bwipeout!")
 
     assert.are.same(files, temp_files())
+  end)
+
+  -- The tab where open_diff starts has only a prompt window, so the diff opens in the editor window of another tab. A
+  -- FileType autocmd raises while the temp file is edited, so the buffer of the proposal is never recorded and only the
+  -- windows can say where the diff split.
+  it(
+    "closes the windows it split off in the tab of the editor window it picked, not in the tab it started in",
+    function()
+      vim.cmd("edit " .. vim.fn.fnameescape(path))
+      local editor_tab = vim.api.nvim_get_current_tabpage()
+      vim.cmd("tabnew")
+      vim.cmd("enew")
+      vim.bo.buftype = "prompt"
+      local start_win, start_tab = vim.api.nvim_get_current_win(), vim.api.nvim_get_current_tabpage()
+      fterr_group = vim.api.nvim_create_augroup("ClaudeCodeDiffLegacyCleanupSpec", { clear = true })
+      vim.api.nvim_create_autocmd("FileType", {
+        group = fterr_group,
+        pattern = "lua",
+        callback = function()
+          error("boom from FileType")
+        end,
+      })
+      local files, editor_windows = temp_files(), #vim.api.nvim_tabpage_list_wins(editor_tab)
+
+      local ok = pcall(diff.open_diff, path, path, "local a = 2\n", "other tab")
+
+      if not ok then
+        assert.are.same(files, temp_files())
+        assert.are.equal(editor_windows, #vim.api.nvim_tabpage_list_wins(editor_tab))
+        assert.are.equal(start_win, vim.api.nvim_get_current_win(), "the window it started in is current again")
+        assert.are.equal(start_tab, vim.api.nvim_get_current_tabpage())
+      end
+    end
+  )
+
+  -- The FileType autocmd runs while the proposal's temp file is edited. It opens a window of its own and then fails.
+  it("keeps a window that an autocmd opened while the diff failed", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    local files, windows = temp_files(), window_count()
+    fterr_group = vim.api.nvim_create_augroup("ClaudeCodeDiffLegacyCleanupSpec", { clear = true })
+    vim.api.nvim_create_autocmd("FileType", {
+      group = fterr_group,
+      pattern = "lua",
+      callback = function()
+        vim.cmd("botright new")
+        error("boom from FileType")
+      end,
+    })
+
+    local ok = pcall(diff.open_diff, path, path, "local a = 2\n", "autocmd window")
+
+    if not ok then
+      assert.are.equal(windows + 1, window_count(), "only the window of the autocmd is left")
+      assert.are.same(files, temp_files())
+    end
   end)
 end)
