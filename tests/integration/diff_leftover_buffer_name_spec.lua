@@ -880,20 +880,20 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_nil(diff._get_active_diffs()[tab_name])
   end)
 
-  it("renames a leftover buffer without BufFilePre and BufFilePost", function()
+  it("frees and names the proposal name without BufFilePre, BufFilePost and BufWipeout", function()
     local _, tools = load_plugin()
     assert.is_true(open_diff(tools, "first\n")._deferred)
     local old = buffers_named("(proposed)")[1]
     close_old_diff_windows()
     local diff
     diff, tools = load_plugin()
-    local events = 0
+    local events = {}
     local group = vim.api.nvim_create_augroup("LeftoverRenameEvents", { clear = true })
-    vim.api.nvim_create_autocmd({ "BufFilePre", "BufFilePost" }, {
+    vim.api.nvim_create_autocmd({ "BufFilePre", "BufFilePost", "BufWipeout" }, {
       group = group,
       callback = function(event)
-        if event.buf == old then
-          events = events + 1
+        if event.buf == old or vim.api.nvim_buf_get_name(event.buf):find(tab_name, 1, true) then
+          events[#events + 1] = event.event .. " " .. vim.api.nvim_buf_get_name(event.buf)
         end
       end,
     })
@@ -903,7 +903,9 @@ describe("openDiff with a leftover diff buffer under its name", function()
 
     assert.is_true(call._deferred, vim.inspect(call.error))
     assert.is_truthy(vim.api.nvim_buf_get_name(old):find("(orphaned " .. old .. ")", 1, true))
-    assert.equal(0, events, "the rename fires no BufFilePre or BufFilePost for the leftover buffer")
+    -- Neovim keeps an unlisted buffer under the old name after a rename and wipes it when the name is taken again,
+    -- so a naming with events lets a BufWipeout handler run before the new buffer holds the name.
+    assert.same({}, events, "the rename and the naming fire no event for a diff buffer")
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
