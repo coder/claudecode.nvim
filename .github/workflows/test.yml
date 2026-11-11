@@ -81,56 +81,11 @@ jobs:
           if [ -f "luacov.stats.out" ]; then
             ./.luarocks/bin/luacov
 
-            echo "Creating lcov.info from luacov.report.out"
-            {
-              echo "TN:"
-              grep -E "^Summary$" -A1000 luacov.report.out | grep -E "^[^ ].*:" | while read -r line; do
-                file=$(echo "$line" | cut -d':' -f1)
-                echo "SF:$file"
-                percent=$(echo "$line" | grep -oE "[0-9\.]+%" | tr -d '%')
-                if [ -n "$percent" ]; then
-                  echo "DA:1,1"
-                  echo "LF:1"
-                  echo "LH:$percent"
-                fi
-                echo "end_of_record"
-              done
-            } > lcov.info
-
-            {
-              echo "## 📊 Test Coverage Report"
-              echo ""
-
-              if [ -f "luacov.report.out" ]; then
-                overall_coverage=$(grep -E "Total.*%" luacov.report.out | grep -oE "[0-9]+\.[0-9]+%" | head -1)
-                if [ -n "$overall_coverage" ]; then
-                  echo "**Overall Coverage: $overall_coverage**"
-                  echo ""
-                fi
-
-                echo "| File | Coverage |"
-                echo "|------|----------|"
-
-                grep -E "^[^ ].*:" luacov.report.out | while read -r line; do
-                  file=$(echo "$line" | cut -d':' -f1)
-                  percent=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+%" | head -1)
-                  if [ -n "$percent" ]; then
-                    # Add emoji based on coverage level
-                    percent_num="${percent%.*}"
-                    if [ "$percent_num" -ge 90 ]; then
-                      emoji="🟢"
-                    elif [ "$percent_num" -ge 70 ]; then
-                      emoji="🟡"
-                    else
-                      emoji="🔴"
-                    fi
-                    echo "| \`$file\` | $emoji $percent |"
-                  fi
-                done
-              else
-                echo "❌ No coverage report generated"
-              fi
-            } >> "$GITHUB_STEP_SUMMARY"
+            summary=$(mktemp)
+            status=0
+            scripts/coverage-summary.sh luacov.report.out "$PWD" > "$summary" || status=$?
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
           else
             {
               echo "## 📊 Test Coverage Report"

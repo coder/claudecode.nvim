@@ -5,15 +5,23 @@ local client_manager = require("claudecode.server.client")
 describe("TCP server disconnect handling", function()
   local tcp
   local original_process_data
+  local original_loop
 
   before_each(function()
     package.loaded["claudecode.server.tcp"] = nil
     tcp = require("claudecode.server.tcp")
     original_process_data = client_manager.process_data
+    original_loop = {}
+    for _, name in ipairs({ "new_timer", "new_check", "update_time", "now" }) do
+      original_loop[name] = vim.loop[name]
+    end
   end)
 
   after_each(function()
     client_manager.process_data = original_process_data
+    for name, fn in pairs(original_loop) do
+      vim.loop[name] = fn
+    end
   end)
 
   describe("find_available_port", function()
@@ -313,7 +321,8 @@ describe("TCP server disconnect handling", function()
   it("closes a client that stopped answering pings with 1011, and reports 1006 to on_disconnect", function()
     local frame = require("claudecode.server.frame")
     local tick
-    local new_timer = vim.loop.new_timer
+    local checks = {}
+    local clock = 1000000
     vim.loop.new_timer = function()
       return {
         start = function(_, _, _, callback)
@@ -322,6 +331,20 @@ describe("TCP server disconnect handling", function()
         stop = function() end,
         close = function() end,
       }
+    end
+    -- A check handle runs after the poll that reads the sockets. Neovim runs the callback of the ping timer's check once.
+    vim.loop.new_check = function()
+      return {
+        start = function(self, callback)
+          table.insert(checks, callback)
+        end,
+        stop = function() end,
+        close = function() end,
+      }
+    end
+    vim.loop.update_time = function() end
+    vim.loop.now = function()
+      return clock
     end
     local writes = {}
     local handle = { closed = false }
@@ -337,18 +360,29 @@ describe("TCP server disconnect handling", function()
     function handle:is_closing()
       return self.closed
     end
+    function handle:get_write_queue_size()
+      return 0
+    end
     local client = client_manager.create_client(handle)
-    client.state, client.handshake_complete, client.last_pong = "connected", true, vim.loop.now() - 61000
+    client.state, client.handshake_complete = "connected", true
     local server = { clients = { [client.id] = client }, on_disconnect = spy.new(function() end) }
     tcp.start_ping_timer(server, 30000)
-    vim.loop.new_timer = new_timer
 
-    tick() -- the first tick that finds no pong pings again: a late tick finds the pong of the last ping unread
-    assert.equals(frame.OPCODE.PING, assert(frame.parse_frame(writes[1])).opcode)
-    assert.is_not_nil(server.clients[client.id])
-    tick()
+    for round = 1, 4 do
+      clock = clock + 30000
+      tick() -- a tick pings and never drops: it can run before libuv reads the pong of the last ping
+      assert.is_not_nil(server.clients[client.id])
+      assert.equals(frame.OPCODE.PING, assert(frame.parse_frame(writes[#writes])).opcode)
+      assert.equals(1, #checks)
+      if round < 4 then
+        table.remove(checks)() -- libuv read the socket, and Claude did not answer
+        assert.is_not_nil(server.clients[client.id])
+      end
+    end
+    -- The oldest ping is 3 intervals old, and libuv read the socket: Claude did not answer.
+    table.remove(checks)()
 
-    local close = assert(frame.parse_frame(writes[2]))
+    local close = assert(frame.parse_frame(writes[#writes]))
     assert.equals(frame.OPCODE.CLOSE, close.opcode)
     assert.equals(1011, close.payload:byte(1) * 256 + close.payload:byte(2))
     assert.spy(server.on_disconnect).was_called_with(client, 1006, "Connection timeout")

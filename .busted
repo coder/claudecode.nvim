@@ -1,5 +1,5 @@
 return {
   default = {
-    helper = "tests/helpers/test_order.lua",
+    helper = "tests/helpers/busted_helper.lua",
   },
 }

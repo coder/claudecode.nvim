@@ -3,6 +3,7 @@ local claudecode_main = require("claudecode") -- Added for version access
 local logger = require("claudecode.logger")
 local tcp_server = require("claudecode.server.tcp")
 local tools = require("claudecode.tools.init") -- Added: Require the tools module
+local utils = require("claudecode.utils")
 
 local MCP_PROTOCOL_VERSION = "2024-11-05"
 
@@ -79,12 +80,15 @@ function M.start(config, auth_token)
       )
 
       -- Close diffs this client opened but never resolved (issue #248) -- only if
-      -- the diff module is in use. Scheduled: diff cleanup touches window APIs.
+      -- the diff module is in use. Scheduled, because this runs in a libuv callback. A client without a completed
+      -- handshake ran no tool, so it owns no diff.
       local diff = package.loaded["claudecode.diff"]
-      if diff then
+      if diff and client.handshake_complete then
         local client_id = client.id
         vim.schedule(function()
-          diff.close_diffs_for_client(client_id, "client disconnected")
+          utils.when_windows_allowed(function()
+            diff.close_diffs_for_client(client_id, "client disconnected")
+          end)
         end)
       end
     end,
@@ -359,7 +363,7 @@ function M.register_handlers()
       local err = result_or_error_table.error
       local outcome = err and ("error " .. tostring(err.code) .. " " .. tostring(err.message))
         or ("result " .. describe_fields(result_or_error_table.result))
-      logger.debug("server", "Response - tools/call", params and params.name .. ":", outcome)
+      logger.debug("server", "Response - tools/call", params and tostring(params.name) .. ":", outcome)
 
       if result_or_error_table.error then
         return nil, result_or_error_table.error

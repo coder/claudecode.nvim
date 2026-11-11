@@ -26,7 +26,14 @@ describe("WebSocket client messages", function()
     function handle:is_closing()
       return self.closed
     end
-    c = { id = "test_client", tcp_handle = handle, state = "connected", buffer = "", handshake_complete = true }
+    c = {
+      id = "test_client",
+      tcp_handle = handle,
+      state = "connected",
+      buffer = "",
+      handshake_complete = true,
+      queued_bytes = 0,
+    }
   end)
 
   -- The client masks every frame it sends.
