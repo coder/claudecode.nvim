@@ -541,6 +541,20 @@ describe("The @ mention queue", function()
     end
   )
 
+  it("D: a send 400 ms after the handshake waits until connection_wait_delay has passed since the handshake", function()
+    local claude = claude_connects()
+    claude.handshake()
+    run(400)
+    send("/project/a.lua")
+    -- The flush 50 ms after the send finds Claude ready in 150 ms, and waits that long.
+    run(150)
+    assert.same({}, claude.received(), "nothing goes out before 600 ms after the handshake")
+
+    run(100)
+    assert.same({ "a.lua" }, names(claude.received()))
+    assert.same({}, errors)
+  end)
+
   it("D: a Claude whose handshake came 700 ms after its TCP connect still gets connection_wait_delay", function()
     local claude = claude_connects()
     run(700)
