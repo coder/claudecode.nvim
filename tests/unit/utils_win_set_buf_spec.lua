@@ -72,9 +72,10 @@ describe("claudecode.utils.win_set_buf_in_split", function()
   local USER_BUF, TERM_BUF = 5, 9
   local original = {}
   local shown
-  local live_buffers
   local commands
   local option_writes
+  local bufhidden
+  local hidden
 
   local function stub(table_, name, value)
     original[#original + 1] = { table_, name, table_[name] }
@@ -84,9 +85,10 @@ describe("claudecode.utils.win_set_buf_in_split", function()
   before_each(function()
     original = {}
     shown = { [USER_WIN] = USER_BUF, [SPLIT_WIN] = USER_BUF }
-    live_buffers = { [USER_BUF] = true, [TERM_BUF] = true }
     commands = {}
     option_writes = 0
+    bufhidden = "hide"
+    hidden = true
 
     stub(vim.api, "nvim_list_wins", function()
       local wins = {}
@@ -103,8 +105,9 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     stub(vim.api, "nvim_win_is_valid", function(win)
       return shown[win] ~= nil
     end)
-    stub(vim.api, "nvim_buf_is_valid", function(buf)
-      return live_buffers[buf] == true
+    stub(vim.api, "nvim_buf_get_option", function(buf, name)
+      assert(buf == TERM_BUF and name == "bufhidden", "unexpected option read")
+      return bufhidden
     end)
     stub(vim.api, "nvim_win_set_buf", function(win, buf)
       shown[win] = buf
@@ -119,7 +122,10 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       vim,
       "o",
       setmetatable({}, {
-        __index = function()
+        __index = function(_, key)
+          if key == "hidden" then
+            return hidden
+          end
           return ""
         end,
         __newindex = function()
@@ -141,6 +147,164 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     shown[USER_WIN] = buf
   end
 
+  describe(
+    "a swap that a BufLeave autocmd redirected into a window that showed the same buffer as the split",
+    function()
+      it("puts that window's buffer back, then shows the buffer in its own window, both without autocmds", function()
+        utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+        assert.same({
+          "noautocmd call nvim_win_set_buf(1000, 5)",
+          "noautocmd call nvim_win_set_buf(1001, 9)",
+        }, commands)
+        assert.equal(USER_BUF, shown[USER_WIN])
+        assert.equal(TERM_BUF, shown[SPLIT_WIN])
+      end)
+
+      it("repairs when another window already showed the buffer before the swap, and keeps that window", function()
+        shown[1002] = TERM_BUF
+
+        utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+        assert.same({
+          "noautocmd call nvim_win_set_buf(1000, 5)",
+          "noautocmd call nvim_win_set_buf(1001, 9)",
+        }, commands)
+        assert.equal(TERM_BUF, shown[1002])
+      end)
+
+      it("writes no option", function()
+        utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+        assert.equal(0, option_writes)
+      end)
+
+      it("leaves the buffer where Neovim put it when putting the other window's buffer back fails", function()
+        vim.cmd = function()
+          error("E37: No write since last change")
+        end
+
+        local ok = pcall(utils.win_set_buf_in_split, SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+        assert.is_true(ok)
+        assert.equal(TERM_BUF, shown[USER_WIN])
+        assert.equal(USER_BUF, shown[SPLIT_WIN])
+      end)
+
+      it("repairs a buffer with an empty 'bufhidden' while 'hidden' is set", function()
+        bufhidden = ""
+
+        utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+        assert.equal(TERM_BUF, shown[SPLIT_WIN])
+      end)
+
+      local keeps = {
+        { name = "an empty 'bufhidden' while 'hidden' is not set", bufhidden = "", hidden = false },
+        { name = "'bufhidden' set to wipe", bufhidden = "wipe", hidden = true },
+        { name = "'bufhidden' set to delete", bufhidden = "delete", hidden = true },
+        { name = "'bufhidden' set to unload", bufhidden = "unload", hidden = true },
+      }
+      for _, case in ipairs(keeps) do
+        it("does what a plain swap does for a buffer with " .. case.name, function()
+          bufhidden = case.bufhidden
+          hidden = case.hidden
+
+          utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+          assert.same({}, commands)
+          assert.equal(TERM_BUF, shown[USER_WIN])
+          assert.equal(USER_BUF, shown[SPLIT_WIN])
+        end)
+      end
+
+      it("does what a plain swap does when two windows got the buffer", function()
+        shown[1002] = USER_BUF
+
+        utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+          shown[USER_WIN] = buf
+          shown[1002] = buf
+        end)
+
+        assert.same({}, commands)
+        assert.equal(TERM_BUF, shown[USER_WIN])
+        assert.equal(TERM_BUF, shown[1002])
+        assert.equal(USER_BUF, shown[SPLIT_WIN])
+      end)
+    end
+  )
+
+  describe("every other shape keeps what a plain swap does", function()
+    it("for a redirect into a window that showed another buffer", function()
+      shown[USER_WIN] = 6
+
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[USER_WIN])
+      assert.equal(USER_BUF, shown[SPLIT_WIN])
+    end)
+
+    it("for a window that the autocmd created", function()
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+        shown[1002] = buf
+      end)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[1002])
+      assert.equal(USER_BUF, shown[SPLIT_WIN])
+    end)
+
+    it("for a window that already showed the buffer before the swap", function()
+      shown[USER_WIN] = TERM_BUF
+
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function() end)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[USER_WIN])
+      assert.equal(USER_BUF, shown[SPLIT_WIN])
+    end)
+
+    it("when an autocmd closed the window that the swap was for", function()
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+        shown[USER_WIN] = buf
+        shown[SPLIT_WIN] = nil
+      end)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[USER_WIN])
+    end)
+
+    it("when another window got the buffer and the window got it too, as for a mirror", function()
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win, buf)
+        shown[win] = buf
+        shown[USER_WIN] = buf
+      end)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[USER_WIN])
+      assert.equal(TERM_BUF, shown[SPLIT_WIN])
+    end)
+
+    it("when the window showed the buffer before the swap and still does", function()
+      shown[SPLIT_WIN] = TERM_BUF
+
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[SPLIT_WIN])
+    end)
+
+    it("when another autocmd put its own buffer into the window in place of the buffer", function()
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win)
+        shown[win] = 7
+      end)
+
+      assert.same({}, commands)
+      assert.equal(7, shown[SPLIT_WIN])
+    end)
+  end)
+
   it("shows the buffer in the window with nvim_win_set_buf and runs no command", function()
     utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
 
@@ -161,148 +325,6 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     end)
 
     assert.same({ { SPLIT_WIN, TERM_BUF } }, given)
-    assert.equal(TERM_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("puts the other window's buffer back, then shows the buffer in its own window, both without autocmds", function()
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
-
-    assert.same({
-      "noautocmd call nvim_win_set_buf(1000, 5)",
-      "noautocmd call nvim_win_set_buf(1001, 9)",
-    }, commands)
-    assert.equal(USER_BUF, shown[USER_WIN])
-    assert.equal(TERM_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("puts back every window that lost its buffer", function()
-    shown[1002] = 6
-    live_buffers[6] = true
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
-      shown[USER_WIN] = buf
-      shown[1002] = buf
-    end)
-
-    assert.equal(USER_BUF, shown[USER_WIN])
-    assert.equal(6, shown[1002])
-    assert.equal(TERM_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("writes no option", function()
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
-
-    assert.equal(0, option_writes)
-  end)
-
-  it("leaves a window alone that already showed the buffer before the swap", function()
-    shown[USER_WIN] = TERM_BUF
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
-
-    assert.same({}, commands)
-    assert.equal(TERM_BUF, shown[USER_WIN])
-    assert.equal(TERM_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("leaves the buffer where Neovim put it when the other window's buffer is gone", function()
-    live_buffers[USER_BUF] = nil
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
-
-    assert.same({}, commands)
-    assert.equal(TERM_BUF, shown[USER_WIN])
-    assert.equal(USER_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("leaves the buffer where Neovim put it when putting the other window's buffer back fails", function()
-    vim.cmd = function()
-      error("E37: No write since last change")
-    end
-
-    local ok = pcall(utils.win_set_buf_in_split, SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
-
-    assert.is_true(ok)
-    assert.equal(TERM_BUF, shown[USER_WIN])
-    assert.equal(USER_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("repairs nothing when an autocmd closed the window that the swap was for", function()
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
-      shown[USER_WIN] = buf
-      shown[SPLIT_WIN] = nil
-    end)
-
-    assert.same({}, commands)
-    assert.equal(TERM_BUF, shown[USER_WIN])
-  end)
-
-  it("skips a window that an autocmd closed during the swap", function()
-    shown[1002] = 6
-    live_buffers[6] = true
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
-      shown[USER_WIN] = buf
-      shown[1002] = nil
-    end)
-
-    assert.same({
-      "noautocmd call nvim_win_set_buf(1000, 5)",
-      "noautocmd call nvim_win_set_buf(1001, 9)",
-    }, commands)
-  end)
-
-  it(
-    "leaves another window alone that an autocmd showed the buffer in on purpose, when the window got it too",
-    function()
-      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win, buf)
-        shown[win] = buf
-        shown[USER_WIN] = buf
-      end)
-
-      assert.same({}, commands)
-      assert.equal(TERM_BUF, shown[USER_WIN])
-      assert.equal(TERM_BUF, shown[SPLIT_WIN])
-    end
-  )
-
-  it("runs no command when the window showed the buffer before the swap and still does", function()
-    shown[SPLIT_WIN] = TERM_BUF
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
-
-    assert.same({}, commands)
-    assert.equal(TERM_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("leaves a buffer alone that another autocmd put into the window in place of the buffer", function()
-    live_buffers[7] = true
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win)
-      shown[win] = 7
-    end)
-
-    assert.same({}, commands)
-    assert.equal(7, shown[SPLIT_WIN])
-  end)
-
-  it("shows the buffer in the window when the autocmd entered a window that already showed it", function()
-    shown[USER_WIN] = TERM_BUF
-
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function() end)
-
-    assert.same({ "noautocmd call nvim_win_set_buf(1001, 9)" }, commands)
-    assert.equal(TERM_BUF, shown[USER_WIN])
-    assert.equal(TERM_BUF, shown[SPLIT_WIN])
-  end)
-
-  it("shows the buffer in the window and keeps it in a window that the autocmd created", function()
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
-      shown[1002] = buf
-    end)
-
-    assert.same({ "noautocmd call nvim_win_set_buf(1001, 9)" }, commands)
-    assert.equal(TERM_BUF, shown[1002])
     assert.equal(TERM_BUF, shown[SPLIT_WIN])
   end)
 

@@ -77,7 +77,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       schedule = function(fn)
         fn()
       end,
-      o = { columns = 120, lines = 40, eventignore = "" },
+      o = { columns = 120, lines = 40, eventignore = "", hidden = true },
       w = setmetatable({}, {
         __index = function(t, win)
           rawset(t, win, rawget(t, win) or {})
@@ -145,8 +145,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         nvim_buf_is_valid = function(b)
           return b ~= nil and b >= 1
         end,
-        nvim_buf_get_option = function()
-          return "terminal"
+        nvim_buf_get_option = function(_, name)
+          return name == "buftype" and "terminal" or ""
         end,
         nvim_win_is_valid = function(w)
           return w ~= nil and windows[w] ~= nil and windows[w].valid

@@ -45,11 +45,12 @@ describe("the native terminal's swap into its own split", function()
     ]])
   end
 
-  ---An edited file of the user's in a window above the current one. The cursor stays in the window it was in.
+  ---A second window of the user's above the current one. It shows the same file, with an edit, as the window that the
+  ---provider splits, which is the shape that the repair covers. The cursor stays in the window it was in.
   local function open_user_window()
     return call([[
       local start = vim.api.nvim_get_current_win()
-      vim.cmd("topleft split " .. vim.fn.fnameescape(_G.dir .. "/other.txt"))
+      vim.cmd("topleft split")
       _G.user_win = vim.api.nvim_get_current_win()
       _G.user_buf = vim.api.nvim_win_get_buf(_G.user_win)
       vim.api.nvim_buf_set_lines(_G.user_buf, 0, -1, false, { "user changed one", "user kept two" })
@@ -78,8 +79,9 @@ describe("the native terminal's swap into its own split", function()
     )
   end
 
-  ---Another plugin's BufEnter swaps a scratch buffer of its own into the split when the new terminal buffer is entered,
-  ---so the provider's repair swap runs. Only the BufLeave of that scratch buffer enters the user's window.
+  ---Another plugin's BufEnter swaps a scratch buffer of its own into the split and into the user's window when the new
+  ---terminal buffer is entered, so the provider's repair swap runs, and the user's window shows the same buffer as the
+  ---split. Only the BufLeave of that scratch buffer enters the user's window.
   local function arm_repair_swap(every_time)
     call(
       [[
@@ -94,6 +96,8 @@ describe("the native terminal's swap into its own split", function()
           swapped = true
           local scratch = vim.api.nvim_create_buf(true, true)
           vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch)
+          vim.api.nvim_win_set_buf(_G.user_win, scratch)
+          _G.user_buf = scratch
           vim.api.nvim_create_autocmd("BufLeave", {
             buffer = scratch,
             once = not every_time,
@@ -188,12 +192,13 @@ describe("the native terminal's swap into its own split", function()
       "shows the new terminal in its own split when a BufEnter autocmd swapped another buffer into it, with " .. autocmd,
       function()
         start_child()
-        local lines = open_user_window()
+        open_user_window()
         arm_repair_swap(every_time)
 
         call([[require("claudecode.terminal").ensure_visible()]])
 
-        expect_user_window_kept(lines)
+        -- The user's window now shows the scratch buffer of the other plugin, which has one empty line.
+        expect_user_window_kept({ "" })
       end
     )
   end
@@ -298,7 +303,7 @@ describe("the native terminal's swap into its own split", function()
       )
     end
 
-    it("shows the terminal in the split when an autocmd entered a window that already showed it", function()
+    it("does what a plain swap does when an autocmd entered a window that already showed the buffer", function()
       local result = run([[
         local file, terminal = ...
         local current = vim.api.nvim_get_current_win()
@@ -316,11 +321,11 @@ describe("the native terminal's swap into its own split", function()
         return { other_tab = other_tab }
       ]])
 
-      assert.equal("terminal", result.split)
+      assert.equal("other", result.split)
       assert.equal("terminal", result.other_tab)
     end)
 
-    it("shows the terminal in the split when an autocmd entered a window that it created", function()
+    it("does what a plain swap does when an autocmd entered a window that it created", function()
       local result = run([[
         local file = ...
         vim.api.nvim_create_autocmd("BufLeave", {
@@ -333,7 +338,7 @@ describe("the native terminal's swap into its own split", function()
         return {}
       ]])
 
-      assert.equal("terminal", result.split)
+      assert.equal("other", result.split)
     end)
 
     it("leaves a window alone that a BufWinEnter autocmd of the terminal buffer showed it in on purpose", function()

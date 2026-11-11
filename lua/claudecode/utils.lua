@@ -59,12 +59,23 @@ local function win_set_buf_without_autocmds(win, buf)
   vim.cmd(string.format("noautocmd call nvim_win_set_buf(%d, %d)", win, buf))
 end
 
+---Whether `buf` stays loaded, with its job running, after it loses its last window.
+---@param buf number
+---@return boolean
+local function stays_loaded_when_hidden(buf)
+  local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
+  return bufhidden == "hide" or (bufhidden == "" and vim.o.hidden)
+end
+
 ---Show `buf` in `win`, a split that was just made for it, by calling `set_buf(win, buf)`. When a `BufLeave` autocmd of
 ---the buffer that `win` showed enters another window inside the call, Neovim loads `buf` into that window, even
----though the call names `win`, and `win` keeps its buffer. This puts that window's own buffer back and shows `buf` in
----`win`. A window that an autocmd created during the call has no earlier buffer to put back, so it keeps `buf`. All
----autocmds run as for a plain `nvim_win_set_buf`. Nothing happens when `win` shows `buf` afterwards, or shows a buffer
----that another autocmd put there. Only the repairing swaps run under `:noautocmd`.
+---though the call names `win`, and `win` keeps its buffer. This repairs one shape of that: the window that got `buf`
+---showed the same buffer as `win`. The helper puts that buffer back there and shows `buf` in `win`. In every other
+---shape it does what a plain `nvim_win_set_buf` does, because a repair would swap a buffer that Neovim's window count
+---no longer matches. Those shapes are a window that showed another buffer, a window that an autocmd created, more
+---than one window that got `buf`, a split that shows a buffer that another autocmd put there, and a `buf` that is
+---wiped or unloaded when it loses its last window. All autocmds run as for a plain `nvim_win_set_buf`. Only the
+---repairing swaps run under `:noautocmd`.
 ---@param win number
 ---@param buf number
 ---@param set_buf? fun(win: number, buf: number) The swap that is to show `buf` in `win` (default `nvim_win_set_buf`)
@@ -80,8 +91,8 @@ function M.win_set_buf_in_split(win, buf, set_buf)
   if not vim.api.nvim_win_is_valid(win) then
     return
   end
-  local shown = vim.api.nvim_win_get_buf(win)
-  if shown == buf or shown ~= shown_before[win] then
+  local old = shown_before[win]
+  if vim.api.nvim_win_get_buf(win) ~= old then
     return
   end
 
@@ -89,16 +100,18 @@ function M.win_set_buf_in_split(win, buf, set_buf)
   local redirected = {}
   for _, other in ipairs(vim.api.nvim_list_wins()) do
     local previous = shown_before[other]
-    if other ~= win and previous ~= nil and previous ~= buf and vim.api.nvim_win_get_buf(other) == buf then
+    if other ~= win and previous ~= buf and vim.api.nvim_win_get_buf(other) == buf then
+      if previous ~= old then
+        return
+      end
       table.insert(redirected, other)
     end
   end
-  -- A window whose buffer is gone stays as it is. Then `buf` stays in it, as on a plain `nvim_win_set_buf`.
-  for _, other in ipairs(redirected) do
-    local previous = shown_before[other]
-    if not vim.api.nvim_buf_is_valid(previous) or not pcall(win_set_buf_without_autocmds, other, previous) then
-      return
-    end
+  if #redirected ~= 1 or not stays_loaded_when_hidden(buf) then
+    return
+  end
+  if not pcall(win_set_buf_without_autocmds, redirected[1], old) then
+    return
   end
   win_set_buf_without_autocmds(win, buf)
 end

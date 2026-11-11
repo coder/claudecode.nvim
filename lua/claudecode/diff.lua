@@ -434,7 +434,7 @@ local function display_terminal_in_new_tab()
     vim.cmd("wincmd L")
   end
 
-  utils.win_set_buf_in_split(terminal_win, terminal_bufnr, utils.win_set_buf_without_bufenter)
+  utils.win_set_buf_without_bufenter(terminal_win, terminal_bufnr)
 
   apply_window_options(terminal_win, terminal_options)
 
