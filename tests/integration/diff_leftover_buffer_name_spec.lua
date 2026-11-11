@@ -1009,8 +1009,10 @@ describe("openDiff with a leftover diff buffer under its name", function()
       nested = open_recording(tools, "B", second_file, "B PROPOSAL\n", answers)
     end
     local group = vim.api.nvim_create_augroup("LeftoverSecondCall", { clear = true })
-    vim.api.nvim_create_autocmd(event, {
+    local user_pattern = event:match("^User:(.+)$")
+    vim.api.nvim_create_autocmd(user_pattern and "User" or event, {
       group = group,
+      pattern = user_pattern,
       callback = function(args)
         if fired or (filter and not filter(vim.api.nvim_buf_get_name(args.buf))) then
           return
@@ -1084,6 +1086,23 @@ describe("openDiff with a leftover diff buffer under its name", function()
       end
     )
   end
+
+  -- ClaudeCodeDiffOpened fires inside the setup after the diff is registered. A second openDiff that runs there finds
+  -- a registered diff of its tab name. In the unified layout its naming failure is swallowed, so it goes on and
+  -- replaces the first diff, as it does without a leftover buffer. The first setup freed a name, but it has finished
+  -- its registration, so nothing abandons the second one.
+  it(
+    "answers both calls, each with its own text, when a ClaudeCodeDiffOpened handler runs a second openDiff: unified",
+    function()
+      local diff, answers, _, nested =
+        run_second_call("User:ClaudeCodeDiffOpened", "unified", path, dir .. "/brand-new.txt")
+
+      assert.is_true(nested._deferred, vim.inspect(nested.error))
+      settle(diff, "B PROPOSAL")
+      assert_answered_once_with_own_text(answers, { A = "A PROPOSAL\n", B = "B PROPOSAL\n" })
+      assert.equal("FILE_SAVED", answers.B[1].content[1].text, "the second call is served, not refused")
+    end
+  )
 
   for _, event in ipairs({ "BufNew", "BufFilePre" }) do
     it(
