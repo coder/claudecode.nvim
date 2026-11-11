@@ -35,7 +35,7 @@ describe("the native terminal's swap into its own split", function()
       vim.fn.mkdir(_G.dir, "p")
       vim.fn.writefile({ "alpha", "beta" }, _G.dir .. "/a.txt")
       vim.fn.writefile({ "one", "two" }, _G.dir .. "/other.txt")
-      vim.cmd("edit " .. _G.dir .. "/a.txt")
+      vim.cmd("edit " .. vim.fn.fnameescape(_G.dir .. "/a.txt"))
       require("claudecode").setup({
         auto_start = false,
         log_level = "error",
