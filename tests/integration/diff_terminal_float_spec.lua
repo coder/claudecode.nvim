@@ -52,11 +52,14 @@ describe("openDiff with a floating Claude terminal", function()
         fake.win = nil
       end
     end
-    -- Counts every show and hide, as the Snacks provider does. `hide_float` hands out the count as its token, and
-    -- `restore_float` shows the float only while the count is the same. `opts.own_mark` makes a provider that
-    -- follows the older contract instead: it returns `true`, ignores the token, and keeps its own mark of a hide
-    -- that nothing has undone. That mark does not say which diff hid the float.
+    -- Counts every show and hide, as the Snacks provider does. `hide_float` returns a token with the terminal
+    -- instance and the count, and `restore_float` shows the float only while both are the same. Closing a terminal
+    -- and starting a new one changes no count, as in the Snacks provider, so only the instance tells them apart.
+    -- `opts.own_mark` makes a provider that follows the older contract instead: it returns `true`, ignores the
+    -- token, and keeps its own mark of a hide that nothing has undone. That mark does not say which diff hid the
+    -- float.
     local own_mark = opts and opts.own_mark
+    fake.instance = 1
     fake.changes = 0
     fake.marked = false
     local function show_window()
@@ -79,6 +82,20 @@ describe("openDiff with a floating Claude terminal", function()
       fake.marked = false
       fake.changes = fake.changes + 1
       show_window()
+    end
+
+    -- :ClaudeCodeClose: the buffer and its windows are gone.
+    function fake.close_terminal()
+      vim.api.nvim_buf_delete(fake.buf, { force = true })
+      fake.win = nil
+    end
+
+    -- :ClaudeCodeFocus after a close: a new terminal instance, shown as a float in the current tab.
+    function fake.start_new_terminal()
+      fake.instance = fake.instance + 1
+      fake.buf = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(fake.buf, 0, -1, false, { "Claude terminal" })
+      open_window()
     end
 
     open_window()
@@ -106,17 +123,17 @@ describe("openDiff with a floating Claude terminal", function()
         if own_mark then
           return true
         end
-        return fake.changes
+        return { instance = fake.instance, changes = fake.changes }
       end,
       restore_float = function(token)
         local unchanged
         if own_mark then
           unchanged = fake.marked
         else
-          unchanged = token == fake.changes
+          unchanged = type(token) == "table" and token.instance == fake.instance and token.changes == fake.changes
         end
         fake.marked = false
-        if unchanged and not window_is_open() then
+        if unchanged and vim.api.nvim_buf_is_valid(fake.buf) and not window_is_open() then
           fake.show_calls = fake.show_calls + 1
           show_window()
         end
@@ -174,7 +191,7 @@ describe("openDiff with a floating Claude terminal", function()
   before_each(function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
-    for _, name in ipairs({ "proposed.txt", "second.txt" }) do
+    for _, name in ipairs({ "proposed.txt", "second.txt", "third.txt" }) do
       vim.fn.writefile({ "alpha" }, dir .. "/" .. name)
     end
     tools.register_all()
@@ -215,6 +232,26 @@ describe("openDiff with a floating Claude terminal", function()
         "the float does not take focus from the editor window"
       )
     end)
+  end
+
+  local pair_orders = { { "proposed.txt", "second.txt" }, { "second.txt", "proposed.txt" } }
+  local triple_orders = {
+    { "proposed.txt", "second.txt", "third.txt" },
+    { "proposed.txt", "third.txt", "second.txt" },
+    { "second.txt", "proposed.txt", "third.txt" },
+    { "second.txt", "third.txt", "proposed.txt" },
+    { "third.txt", "proposed.txt", "second.txt" },
+    { "third.txt", "second.txt", "proposed.txt" },
+  }
+
+  local function order_name(order)
+    return table.concat(order, ", "):gsub("%.txt", "")
+  end
+
+  local function close_in_order(order)
+    for _, file in ipairs(order) do
+      close_tab(file)
+    end
   end
 
   local it_parks_floats = vim.fn.has("nvim-0.10") == 1 and it
@@ -295,21 +332,23 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(0, float.show_calls, "a float that no diff hid stays as the user left it")
   end)
 
-  it("keeps the float hidden until the last of two unified diffs closes", function()
-    setup_diff({ layout = "unified" })
+  for _, order in ipairs(pair_orders) do
+    it("keeps the float hidden until the last of two unified diffs closes, closing " .. order_name(order), function()
+      setup_diff({ layout = "unified" })
 
-    open_diff("proposed.txt")
-    open_diff("second.txt")
-    assert.equal(0, #visible_floats())
-    assert.equal(1, float.hide_calls)
+      open_diff("proposed.txt")
+      open_diff("second.txt")
+      assert.equal(0, #visible_floats())
+      assert.equal(1, float.hide_calls)
 
-    close_tab("proposed.txt")
-    assert.equal(0, #visible_floats(), "the second diff is still open")
+      close_tab(order[1])
+      assert.equal(0, #visible_floats(), "the other diff is still open")
 
-    close_tab("second.txt")
-    assert.equal(1, #visible_floats())
-    assert.equal(1, float.show_calls)
-  end)
+      close_tab(order[2])
+      assert.equal(1, #visible_floats())
+      assert.equal(1, float.show_calls)
+    end)
+  end
 
   it("keeps the float hidden when a second diff opens in a new tab and closes first", function()
     setup_diff({ layout = "vertical" })
@@ -526,21 +565,90 @@ describe("openDiff with a floating Claude terminal", function()
     )
   end
 
-  it("keeps a float hidden that the user hid again when a second diff opens in the tab", function()
-    setup_diff({ layout = "unified" })
+  for _, order in ipairs(pair_orders) do
+    it(
+      "keeps a float hidden that the user hid again before a second diff opened, closing " .. order_name(order),
+      function()
+        setup_diff({ layout = "unified" })
 
-    open_diff("proposed.txt")
-    float.user_show()
-    float.user_hide()
-    open_diff("second.txt")
-    assert.equal(1, float.hide_calls, "the second diff found the float hidden and hid nothing")
+        open_diff("proposed.txt")
+        float.user_show()
+        float.user_hide()
+        open_diff("second.txt")
+        assert.equal(1, float.hide_calls, "the second diff found the float hidden and hid nothing")
 
-    close_tab("proposed.txt")
-    close_tab("second.txt")
+        close_in_order(order)
 
-    assert.equal(0, #visible_floats(), "the user hid the float after the first diff did")
-    assert.equal(0, float.show_calls)
-  end)
+        assert.equal(0, #visible_floats(), "the user hid the float after the first diff did")
+        assert.equal(0, float.show_calls)
+      end
+    )
+  end
+
+  for _, order in ipairs(pair_orders) do
+    it(
+      "brings the float back when the last of two diffs closes after a show between the hides, closing "
+        .. order_name(order),
+      function()
+        setup_diff({ layout = "unified" })
+
+        open_diff("proposed.txt")
+        float.user_show()
+        open_diff("second.txt")
+        assert.equal(2, float.hide_calls, "the second diff hid the float again")
+
+        close_in_order(order)
+
+        assert.equal(1, #visible_floats(), "the newest hide reaches the last diff, whichever closes first")
+        assert.equal(1, float.show_calls)
+      end
+    )
+
+    it("leaves a float that the user showed over two diffs visible, closing " .. order_name(order), function()
+      setup_diff({ layout = "unified" })
+
+      open_diff("proposed.txt")
+      open_diff("second.txt")
+      float.user_show()
+
+      close_in_order(order)
+
+      assert.equal(1, #visible_floats(), "the user's float stays")
+      assert.equal(0, float.show_calls)
+    end)
+
+    it("leaves a float that the user closed over two diffs closed, closing " .. order_name(order), function()
+      setup_diff({ layout = "unified" })
+
+      open_diff("proposed.txt")
+      open_diff("second.txt")
+      float.user_show()
+      vim.api.nvim_win_close(float.win, true)
+      float.win = nil
+
+      close_in_order(order)
+
+      assert.equal(0, #visible_floats(), "the user closed the float")
+      assert.equal(0, float.show_calls)
+    end)
+  end
+
+  for _, order in ipairs(triple_orders) do
+    it("brings the float back when the last of three diffs closes, closing " .. order_name(order), function()
+      setup_diff({ layout = "unified" })
+
+      open_diff("proposed.txt")
+      float.user_show()
+      open_diff("second.txt")
+      open_diff("third.txt")
+      assert.equal(2, float.hide_calls, "the third diff found the float hidden")
+
+      close_in_order(order)
+
+      assert.equal(1, #visible_floats())
+      assert.equal(1, float.show_calls)
+    end)
+  end
 
   it("shows the float when the last diff closes, if that diff shared the newest hide", function()
     setup_diff({ layout = "unified" })
@@ -550,7 +658,6 @@ describe("openDiff with a floating Claude terminal", function()
     open_diff("second.txt")
     assert.equal(2, float.hide_calls, "the second diff hid the float again")
 
-    vim.fn.writefile({ "alpha" }, dir .. "/third.txt")
     open_diff("third.txt")
     assert.equal(2, float.hide_calls, "the third diff found the float hidden")
 
@@ -561,6 +668,125 @@ describe("openDiff with a floating Claude terminal", function()
 
     assert.equal(1, #visible_floats(), "the float comes back, as the third diff shares the second diff's hide")
   end)
+
+  -- The first diff opens in tab 1 and hides the float. The user shows it and closes it with :close, opens tab 2 and
+  -- re-creates the float there, and a second diff in tab 2 hides it. The user is in tab 2.
+  local function two_diffs_in_two_tabs()
+    setup_diff({ layout = "vertical" })
+    local first_tab = vim.api.nvim_get_current_tabpage()
+    open_diff("proposed.txt")
+    float.user_show()
+    vim.api.nvim_win_close(float.win, true)
+    float.win = nil
+    vim.cmd("tabnew " .. vim.fn.fnameescape(dir .. "/second.txt"))
+    local second_tab = vim.api.nvim_get_current_tabpage()
+    float.user_show()
+    local second = open_diff("second.txt")
+    assert.is_false(second.created_new_tab)
+    assert.equal(0, #visible_floats(second_tab), "the second diff hid the float")
+    return first_tab, second_tab
+  end
+
+  it("brings the float back in the second tab when the later diff closes first and the user stays there", function()
+    local _, second_tab = two_diffs_in_two_tabs()
+
+    close_tab("second.txt")
+    assert.equal(0, #visible_floats(second_tab), "the first diff is still open")
+    assert.equal(0, float.show_calls)
+
+    close_tab("proposed.txt")
+    assert.equal(1, #visible_floats(second_tab), "the later diff's hide reached the last diff")
+    assert.equal(1, float.show_calls)
+  end)
+
+  it("leaves the float hidden when the last diff closes in the first tab after the later diff closed", function()
+    local first_tab, second_tab = two_diffs_in_two_tabs()
+
+    close_tab("second.txt")
+    vim.api.nvim_set_current_tabpage(first_tab)
+    close_tab("proposed.txt")
+
+    assert.equal(0, #visible_floats(first_tab))
+    assert.equal(0, #visible_floats(second_tab), "the float lives in the second tab, where the user is not")
+    assert.equal(0, float.show_calls)
+  end)
+
+  it("does not re-create a replacement terminal whose float the user closed", function()
+    setup_diff({ layout = "unified" })
+
+    open_diff("proposed.txt")
+    float.close_terminal()
+    float.start_new_terminal()
+    assert.equal(1, #visible_floats(), "the replacement terminal has a float")
+    vim.api.nvim_win_close(float.win, true)
+    float.win = nil
+    close_tab("proposed.txt")
+
+    assert.equal(0, #visible_floats(), "the user closed the replacement's float")
+    assert.equal(0, float.show_calls)
+  end)
+
+  it("shows nothing when the terminal was closed during the diff", function()
+    setup_diff({ layout = "unified" })
+
+    open_diff("proposed.txt")
+    float.close_terminal()
+    assert.has_no.errors(function()
+      close_tab("proposed.txt")
+    end)
+
+    assert.equal(0, float.show_calls)
+    assert.is_nil(float.win)
+  end)
+
+  it("leaves a replacement terminal's float visible when the diff closes", function()
+    setup_diff({ layout = "unified" })
+
+    open_diff("proposed.txt")
+    float.close_terminal()
+    float.start_new_terminal()
+    close_tab("proposed.txt")
+
+    assert.equal(1, #visible_floats())
+    assert.equal(0, float.show_calls)
+  end)
+
+  for _, order in ipairs(pair_orders) do
+    it(
+      "brings a replacement terminal's float back when the last diff that hid it closes, closing " .. order_name(order),
+      function()
+        setup_diff({ layout = "unified" })
+
+        open_diff("proposed.txt")
+        float.close_terminal()
+        float.start_new_terminal()
+        open_diff("second.txt")
+        assert.equal(0, #visible_floats(), "the second diff hid the replacement's float")
+
+        close_in_order(order)
+
+        assert.equal(1, #visible_floats(), "the replacement's float is back")
+        assert.equal(1, float.show_calls)
+      end
+    )
+  end
+
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it("hides a float when a tiled window also shows its terminal buffer, with a " .. layout .. " diff", function()
+      setup_diff({ layout = layout })
+      vim.cmd("botright vsplit")
+      vim.api.nvim_win_set_buf(0, float.buf)
+      assert.equal(1, #visible_floats())
+
+      open_diff("proposed.txt")
+
+      assert.equal(0, #visible_floats(), "the tiled terminal window must not hide the floating terminal from the diff")
+      assert.equal(1, float.hide_calls)
+
+      close_tab("proposed.txt")
+      assert.equal(0, float.show_calls, "a window still shows the terminal, so the float stays hidden")
+    end)
+  end
 
   it_parks_floats("puts the cursor in the editor window when the window it was in is a hidden float", function()
     setup_diff({ layout = "unified" })

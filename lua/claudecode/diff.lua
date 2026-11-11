@@ -990,32 +990,28 @@ local function visible_terminal_windows()
   return wins
 end
 
----The newest other open diff that hid the Claude terminal's float, in `tab` or, without `tab`, in any tab. The
----newest one, so that a diff that shares its hide gets the hide that is still current, and not an older one that the
----user has undone since.
+---Counts the hides that diffs made, so that the newest hide among the diff records can be told from an older one.
+local terminal_float_hides = 0
+
+---Another open diff that hid the Claude terminal's float, in `tab` or, without `tab`, in any tab.
 ---@param tab_name string The diff identifier to leave out
 ---@param tab number? Only a diff that hid the float in this tab
 ---@return table? other The other diff's state
 local function other_diff_that_hid_float(tab_name, tab)
-  local newest = nil
   for other_name, other in pairs(active_diffs) do
     local hid = other.hid_terminal_float
-    if
-      other_name ~= tab_name
-      and hid
-      and (tab == nil or hid.tab == tab)
-      and (newest == nil or other.open_order > newest.open_order)
-    then
-      newest = other
+    if other_name ~= tab_name and hid and (tab == nil or hid.tab == tab) then
+      return other
     end
   end
-  return newest
+  return nil
 end
 
 ---Hide the Claude terminal's float when it covers the tab of the diff window `diff_win`. A float is not a tiled
 ---window, so the diff cannot make room for it. The diff keeps what it needs to bring the float back in its own
----`hid_terminal_float` (the tab, and the token that `hide_float` returned). A second diff in that tab, with the float
----already hidden, takes the same token, so that the float comes back when the last of them closes.
+---`hid_terminal_float` (the tab, the token that `hide_float` returned, and the order of the hide). A second diff in
+---that tab, with the float already hidden, takes such a record, so that the float comes back when the last of them
+---closes. Which record it takes does not matter: a diff that closes gives its own to each diff with an older one.
 ---@param tab_name string The diff identifier
 ---@param diff_win number? The diff's proposed window
 local function hide_terminal_float_for_diff(tab_name, diff_win)
@@ -1033,7 +1029,8 @@ local function hide_terminal_float_for_diff(tab_name, diff_win)
       if vim.api.nvim_win_get_tabpage(win) == diff_tab and (vim.api.nvim_win_get_config(win).relative or "") ~= "" then
         local token = require("claudecode.terminal").hide_float()
         if token then
-          diff_data.hid_terminal_float = { tab = diff_tab, token = token }
+          terminal_float_hides = terminal_float_hides + 1
+          diff_data.hid_terminal_float = { tab = diff_tab, token = token, sequence = terminal_float_hides }
         end
         return
       end
@@ -1051,11 +1048,24 @@ end
 ---Show the float that this diff hid, once the last diff that hid it has closed. It comes back without focus, and
 ---only while the user is in the diff's tab, nothing else shows the terminal, and the provider finds the terminal as
 ---this diff left it. Otherwise it stays hidden.
+---
+---While another open diff holds a hide, this diff leaves the float hidden, and gives its own hide to each such diff
+---that has an older one. A diff that closes first then cannot lose the newest hide, and an older hide that the user
+---has undone since cannot stop the newest one from coming back when the last diff closes.
 ---@param tab_name string The diff identifier
 ---@param diff_data table The diff's state
 local function show_terminal_float_after_diff(tab_name, diff_data)
   local hid = diff_data.hid_terminal_float
-  if not hid or other_diff_that_hid_float(tab_name) then
+  if not hid then
+    return
+  end
+  if other_diff_that_hid_float(tab_name) then
+    for other_name, other in pairs(active_diffs) do
+      local theirs = other.hid_terminal_float
+      if other_name ~= tab_name and theirs and theirs.sequence < hid.sequence then
+        other.hid_terminal_float = hid
+      end
+    end
     return
   end
   local ok, err = pcall(function()

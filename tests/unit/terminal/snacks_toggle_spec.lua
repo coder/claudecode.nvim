@@ -381,7 +381,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       windows[win].config.hide = false
       local later = snacks_provider.hide_float()
       assert.is_truthy(later)
-      assert.are_not.equal(earlier, later, "a later hide has its own token")
+      assert.are_not.equal(earlier.window_changes, later.window_changes, "a later hide has its own count")
       assert.is_true(windows[win].config.hide)
 
       snacks_provider.restore_float(earlier)
@@ -461,6 +461,23 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
 
       snacks_provider.restore_float(token)
       assert.is_true(windows[replacement.win].config.hide)
+    end)
+
+    it("restore_float does not re-create a replacement terminal whose window the user closed", function()
+      local term = open_float()
+      local token = snacks_provider.hide_float()
+      -- :ClaudeCodeClose, then :ClaudeCodeFocus starts a new terminal. Neither changes the count of shows and hides.
+      term.buf = nil
+      snacks_provider.open("claude", {}, float_config(), true)
+      local replacement = snacks_provider._get_terminal_for_test()
+      assert.are_not.equal(term, replacement)
+      -- The user closes the new terminal's window with :close, not through the provider.
+      windows[replacement.win].valid = false
+      replacement.win = nil
+
+      snacks_provider.restore_float(token)
+      assert.is_nil(replacement.win, "the window that the user closed stays closed")
+      assert.spy(open_show_spy).was_not_called()
     end)
   end)
 
