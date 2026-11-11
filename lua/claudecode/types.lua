@@ -153,8 +153,8 @@
 ---@field initialized boolean
 ---@field mention_queue ClaudeCodeMention[]
 ---@field mention_timer uv.uv_timer_t?  -- the next flush of the mention queue (compatible with vim.loop timer)
----@field connection_timer uv.uv_timer_t?  -- the deadline timer, nil while a ready client drains the queue. Then it is
----  due at the deadline of the mention that queue_mention adds, or of the oldest one after a flush with no ready client
+---@field connection_timer uv.uv_timer_t?  -- the deadline timer: runs while the queue holds a mention. It is nil after
+---  a deadline passed while a ready client was connected, until queue_mention or a flush with no ready client starts it
 
 -- This module only defines types, no runtime functionality
 return {}
