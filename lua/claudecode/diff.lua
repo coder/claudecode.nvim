@@ -1369,11 +1369,12 @@ function M._close_proposal_window(diff_data)
   end
 end
 
----`:tabclose` refuses the last tab page (E784), so the tab of a diff stays as the user's tab. Remove what the diff put
----in it, as closing the tab would: the Claude terminal window, which takes its `BufEnter` handler along and keeps the
----cursor out of the terminal. A cursor in one of the diff's windows goes to the file window, or to the window of a
----unified diff, which gets an empty buffer. A cursor in another window stays there. The caller deletes the proposal
----buffer, which also ends the diff mode of the file window.
+---`:tabclose` can leave the tab of a diff open: it refuses the last tab page (E784), and with 'nohidden' it stops at a
+---modified buffer of the user's in that tab (E37). Remove what the diff put in the tab, as closing it would: the Claude
+---terminal window, which takes its `BufEnter` handler along and keeps the cursor out of the terminal, and the diff mode
+---of the windows that show the file. A cursor in one of the diff's windows goes to the file window, or to the window
+---of a unified diff, which gets an empty buffer. A cursor in another window stays there. The caller deletes the
+---proposal buffer.
 ---@param diff_data table
 local function release_surviving_diff_tab(diff_data)
   local tab = diff_data.new_tab_number
@@ -1389,6 +1390,17 @@ local function release_surviving_diff_tab(diff_data)
     end
     if editor_win == diff_data.new_window then
       pcall(vim.api.nvim_win_set_buf, editor_win, vim.api.nvim_create_buf(true, false))
+    end
+  end
+
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+    if
+      vim.api.nvim_win_get_buf(win) == diff_data.original_buffer
+      and vim.api.nvim_get_option_value("diff", { win = win })
+    then
+      pcall(vim.api.nvim_win_call, win, function()
+        vim.cmd("diffoff")
+      end)
     end
   end
 
