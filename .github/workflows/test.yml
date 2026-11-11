@@ -116,6 +116,8 @@ jobs:
         env:
           # plenary.nvim's master head since 2026-04-10, which the unpinned clone fetched until now.
           # Pinned so a new plenary commit cannot change or break CI (for example by dropping 0.8).
+          # Whoever bumps the pin must recheck plenary's per-file timeout (50s, test_harness.lua) against FILE_TIMEOUT
+          # in scripts/run_integration_tests_individually.sh: that limit plus its kill grace must stay below it.
           PLENARY_SHA: 74b06c6c75e4eeb3108ec01852001636d85a932b
         run: |
           plenary=~/.local/share/nvim/site/pack/vendor/start/plenary.nvim

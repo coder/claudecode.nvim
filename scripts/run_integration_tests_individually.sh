@@ -34,9 +34,11 @@ run_test_file() {
   group_file=$(mktemp)
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
-  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
+  # plenary's test_file takes no options, so the Neovim it starts for a spec gets no -u and reads the developer's init
+  # file. Without -u, Neovim runs $VIMINIT instead, so it names tests/minimal_init.lua. The Neovim started here has -u.
+  if VIMINIT='luafile tests/minimal_init.lua' bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
     nvim --headless -u tests/minimal_init.lua \
-    -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
+    -c "lua require('plenary.test_harness').test_file('$test_file')" \
     2>&1 | tee "$temp_output"; then
     EXIT_CODE=0
   else
