@@ -1186,6 +1186,25 @@ describe("The lifecycle of a WebSocket connection", function()
       end)
     end
 
+    it("stops at a piece that libuv refuses at once, and passes its error to the callback once", function()
+      local client, writes, handle = connect_and_upgrade()
+      local queue_write, refused = handle.write, false
+      function handle:write(data, callback)
+        if not refused then -- the first piece: libuv refuses it, and never runs its callback
+          refused = true
+          return nil, "EPIPE: broken pipe"
+        end
+        return queue_write(self, data, callback)
+      end
+      local callback = spy.new(function() end)
+
+      tcp.send_to_client(server, client.id, string.rep("x", 3 * piece), callback)
+
+      assert.equals(1, #writes, "a piece followed the refused one")
+      assert.spy(callback).was_called(1)
+      assert.spy(callback).was_called_with("EPIPE: broken pipe")
+    end)
+
     it("queues a message of one piece or less as one write", function()
       local client, writes = connect_and_upgrade()
 

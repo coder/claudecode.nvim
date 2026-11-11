@@ -72,7 +72,8 @@ local WRITE_PIECE_BYTES = 1024 * 1024
 ---Write to the socket of a client. Every write goes through here, so `queued_bytes` counts them all: the bytes still in
 ---libuv's write queue are `queued_bytes - drained_bytes`, and `is_client_reading` tells a stalled queue from a slow one.
 ---A frame of more than `WRITE_PIECE_BYTES` is queued in pieces. libuv finishes the requests of a socket in order, so the
----callback of the last piece says that the whole frame is written, or that a piece failed.
+---callback of the last piece says that the whole frame is written, or that a piece failed. A piece that libuv refuses at
+---once ends the frame there.
 ---@param client WebSocketClient
 ---@param data string
 ---@param callback function? Optional callback: function(err)
@@ -87,6 +88,11 @@ local function write(client, data, callback)
     local last_piece = first + WRITE_PIECE_BYTES > #data
     queued, err =
       client.tcp_handle:write(data:sub(first, first + WRITE_PIECE_BYTES - 1), last_piece and callback or nil)
+    if not queued and err then
+      -- The frame is cut short, and the callback rides on the last piece: no later piece may follow, and the caller
+      -- hears the error here.
+      return nil, err
+    end
   end
   return queued, err
 end
