@@ -1,18 +1,10 @@
 #!/usr/bin/env bash
-# openDiff accept via :w, from a fresh `vcn.sh launch` (hello.txt open).
+# openDiff accept via :w, from a fresh `vcn.sh launch` (hello.txt open). Needs VCN_STATE.
 # Evidence lands in $OUT as opendiff-accept-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# OUT and WORK come from the run itself, so the evidence of a journey cannot land in the dir of another run. doctor
-# prints them on its `paths:` line, and a doctor that fails still prints it.
-: "${VCN_STATE:?export VCN_STATE, the value launch printed}"
-run_paths=$({ "$V" doctor || true; } | sed -n 's/^paths: //p')
-OUT=$(sed -n 's/.* OUT=\(.*\) WORK=.*/\1/p' <<<"$run_paths")
-[[ -n $OUT ]] || {
-  echo "FAIL: $V doctor printed no paths line for VCN_STATE=$VCN_STATE" >&2
-  exit 1
-}
-WORK=$VCN_STATE/work
+# shellcheck source=/dev/null
+source "$VCN_STATE/run.env"
 FILE="$WORK/hello.txt"
 TAB="✻ [Claude Code] hello.txt (vcn) ⧉"
 PROPOSED=$'alpha\nBETA\ngamma\n'

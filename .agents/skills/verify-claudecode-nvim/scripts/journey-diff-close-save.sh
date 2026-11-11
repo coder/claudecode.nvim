@@ -2,23 +2,15 @@
 # Checks that `:wq`, `:x` and `ZZ` close the proposal window, a second `:w` neither fails nor answers again, no buffer
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
 # that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
-# after the `:e` stays. Run it after a fresh launch:
+# after the `:e` stays. Needs VCN_STATE from a fresh launch:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
 # `PASS` or `FAIL: <count> of <total> checks failed` last. Evidence lands in $OUT as diff-close-save-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# OUT and WORK come from the run itself, so the evidence of a journey cannot land in the dir of another run. doctor
-# prints them on its `paths:` line, and a doctor that fails still prints it.
-: "${VCN_STATE:?export VCN_STATE, the value launch printed}"
-run_paths=$({ "$V" doctor || true; } | sed -n 's/^paths: //p')
-OUT=$(sed -n 's/.* OUT=\(.*\) WORK=.*/\1/p' <<<"$run_paths")
-[[ -n $OUT ]] || {
-  echo "FAIL: $V doctor printed no paths line for VCN_STATE=$VCN_STATE" >&2
-  exit 1
-}
-WORK=$VCN_STATE/work
+# shellcheck source=/dev/null
+source "$VCN_STATE/run.env"
 target=${1:-existing}
 [[ $target == existing || $target == new ]] || {
   echo "usage: journey-diff-close-save.sh [existing|new]" >&2

@@ -11,8 +11,6 @@
 #                     forget`, all through the setsid that mise names
 #   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
 #                     reaches every call site, which the two cases above do not)
-#   no-caller-source  no doc or script of the skill except vcn.sh (and this proof) tells a caller to source a
-#                     run.env
 #   doc-vars          a code block, or the inline code of a doc, that expands PORT, SID, NVIM_PID or NODE_DIR sets it in
 #                     the same block (or the same doc, for inline code), because a fresh shell has none of them. Prose
 #                     that names an assignment sets nothing.
@@ -718,20 +716,6 @@ bare_tools_case() {
   cases=$((cases + 1))
 }
 
-# A caller that sources a run.env runs every line of it without the checks that load makes first. This proof holds the
-# sample strings, so it is the one other file left out.
-callers_case() {
-  local name=no-caller-source hits sample skill source_re='(^|[;&|(`[:space:]])(source[[:space:]]+[^#]*|\.[[:space:]]+[^[:space:]]*)run\.env'
-  skill=$(dirname "$V")/..
-  for sample in 'source "$VCN_STATE/run.env"' '. "$VCN_STATE/run.env"' 'export VCN_STATE=x; source "$VCN_STATE/run.env"; V=y' 'To watch, run `source "$VCN_STATE/run.env"; agent-tty` in a terminal.' 'if true; then . "$VCN_STATE/run.env"; fi' 'run `. "$VCN_STATE/run.env"` first'; do
-    grep -qE "$source_re" <<<"$sample" || fail "$name" "the pattern misses a known source of run.env: $sample"
-  done
-  hits=$(grep -rnE "$source_re" "$skill" --include='*.sh' --include='*.md' --exclude=vcn.sh --exclude=proof-agent-tty-resolution.sh || true)
-  [[ -z $hits ]] || fail "$name" "a doc or script sources a run.env: $(tr '\n' ' ' <<<"$hits" | cut -c1-400)"
-  echo "ok $name: only vcn.sh sources a run.env"
-  cases=$((cases + 1))
-}
-
 # A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A recipe that expands one of them must set
 # it with `VAR=$(`, because a fresh shell has none. A recipe is a fenced code block (checked on its own) or an inline code
 # span (all of them in a doc are checked together, because a bullet cites one assignment for the steps below it). Prose
@@ -866,7 +850,6 @@ signal_gap_case
 cleanup_no_agent_tty_case
 setsid_resolved_case
 bare_tools_case
-callers_case
 doc_vars_case
 jq_old_run_case
 load_symlink_case

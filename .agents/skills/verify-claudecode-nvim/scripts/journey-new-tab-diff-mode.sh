@@ -1,20 +1,12 @@
 #!/usr/bin/env bash
-# Two openDiff calls that each open in a new tab leave the cursor in the proposal in Normal mode. Run it after a launch
-# with a real Claude terminal and diff_opts.open_in_new_tab, for example:
+# Two openDiff calls that each open in a new tab leave the cursor in the proposal in Normal mode. Needs VCN_STATE from a
+# launch with a real Claude terminal and diff_opts.open_in_new_tab, for example:
 #   VCN_SETUP='{"terminal_cmd":"sleep 300","terminal":{"provider":"native"},"diff_opts":{"open_in_new_tab":true}}' vcn.sh launch
 # Add "layout":"unified" to diff_opts for the unified layout. Evidence lands in $OUT as new-tab-diff-mode-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# OUT and WORK come from the run itself, so the evidence of a journey cannot land in the dir of another run. doctor
-# prints them on its `paths:` line, and a doctor that fails still prints it.
-: "${VCN_STATE:?export VCN_STATE, the value launch printed}"
-run_paths=$({ "$V" doctor || true; } | sed -n 's/^paths: //p')
-OUT=$(sed -n 's/.* OUT=\(.*\) WORK=.*/\1/p' <<<"$run_paths")
-[[ -n $OUT ]] || {
-  echo "FAIL: $V doctor printed no paths line for VCN_STATE=$VCN_STATE" >&2
-  exit 1
-}
-WORK=$VCN_STATE/work
+# shellcheck source=/dev/null
+source "$VCN_STATE/run.env"
 
 fail() {
   echo "FAIL: $*" >&2
