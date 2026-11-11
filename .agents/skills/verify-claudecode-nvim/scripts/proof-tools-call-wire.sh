@@ -4,9 +4,13 @@
 # tree in a headless nvim and sends the cases over a real WebSocket (see proof-tools-call-wire.mjs).
 # Usage: proof-tools-call-wire.sh [tree]     tree: a plugin tree with lua/claudecode (default: this checkout)
 # Prints one `ok:` or `FAIL:` line per case and ends with `COUNT tools-call-wire cases=<n> failed=<n> leaks=<n>`.
-# Exit: 0 every case passed, 1 a case failed or an answer leaked, 2 the probe could not run.
-# VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. nvim gets an empty environment apart from
-# PATH=/usr/bin:/bin, a scratch HOME and scratch XDG dirs, and runs with terminal.provider = "none": no `claude` starts.
+# Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
+# its table holds.
+# VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be a real binary: a version-manager shim does
+# not start with an empty environment. nvim and the checker start with an empty environment. nvim gets only
+# PATH=/usr/bin:/bin, WIRE_PARENT, WIRE_TREE, WIRE_CWD, and HOME, TMPDIR, XDG_CONFIG_HOME, XDG_DATA_HOME,
+# XDG_STATE_HOME, XDG_CACHE_HOME and CLAUDE_CONFIG_DIR in the run dir. It runs with terminal.provider = "none", so no
+# `claude` starts. The checker gets no variable.
 set -euo pipefail
 umask 077
 
@@ -16,6 +20,13 @@ REPO="$(cd "$SKILL_DIR/../../.." && pwd)"
 die() {
   echo "proof-tools-call-wire: $*" >&2
   exit 2
+}
+
+# The last lines of nvim's output say why the server did not come up.
+why() {
+  { tail -n 5 "$RUN/nvim.out" 2>/dev/null || true; } >&2
+  echo >&2
+  die "$1"
 }
 
 bin() {
@@ -56,12 +67,18 @@ trap 'exit 129' HUP
 
 RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)"
 RUN="$(cd "$RUN" && pwd -P)"
-mkdir "$RUN/work"
+mkdir "$RUN/work" "$RUN/tmp"
+# What nvim gets, and nothing else. The checker gets nothing.
+NVIM_ENV=(env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" WIRE_TREE="$TREE" WIRE_CWD="$RUN/work" HOME="$RUN/home"
+  TMPDIR="$RUN/tmp" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" XDG_STATE_HOME="$RUN/state"
+  XDG_CACHE_HOME="$RUN/cache" CLAUDE_CONFIG_DIR="$RUN/claude")
+"${NVIM_ENV[@]}" "$NVIM" --version >/dev/null 2>&1 ||
+  die "$NVIM does not start with an empty environment (a version-manager shim?): set VCN_NVIM to a real Neovim binary"
+env -i "$NODE" --version >/dev/null 2>&1 ||
+  die "$NODE does not start with an empty environment (a version-manager shim?): put a real node first on PATH"
 # nvim quits by itself when this script is gone, SIGKILL included: it checks its parent every half second. Its server
 # stop closes the socket, which ends the checker, and removes the lock file.
-env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" HOME="$RUN/home" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" \
-  XDG_STATE_HOME="$RUN/state" XDG_CACHE_HOME="$RUN/cache" CLAUDE_CONFIG_DIR="$RUN/claude" \
-  WIRE_TREE="$TREE" WIRE_CWD="$RUN/work" "$NVIM" --headless -u NONE -i NONE \
+"${NVIM_ENV[@]}" "$NVIM" --headless -u NONE -i NONE \
   --cmd 'lua vim.opt.rtp:prepend(vim.env.WIRE_TREE); vim.api.nvim_set_current_dir(vim.env.WIRE_CWD)' \
   -c "lua require('claudecode').setup({ terminal = { provider = 'none' }, track_selection = false })" \
   -c "lua vim.fn.timer_start(500, function() if (vim.uv or vim.loop).os_getppid() ~= tonumber(vim.env.WIRE_PARENT) then vim.cmd('qa!') end end, { ['repeat'] = -1 })" >"$RUN/nvim.out" 2>&1 &
@@ -71,11 +88,11 @@ shopt -s nullglob
 for _ in {1..100}; do
   locks=("$RUN"/claude/ide/*.lock)
   [[ ${#locks[@]} -eq 0 ]] || break
-  kill -0 "$NVIM_PID" 2>/dev/null || die "nvim exited before it wrote a lock file"
+  kill -0 "$NVIM_PID" 2>/dev/null || why "nvim exited before it wrote a lock file"
   sleep 0.1
 done
-[[ ${#locks[@]} -gt 0 ]] || die "nvim wrote no lock file in 10 s"
-"$NODE" "$SKILL_DIR/scripts/proof-tools-call-wire.mjs" "${locks[0]}" "$TREE" "$RUN/work" &
+[[ ${#locks[@]} -gt 0 ]] || why "nvim wrote no lock file in 10 s"
+env -i "$NODE" "$SKILL_DIR/scripts/proof-tools-call-wire.mjs" "${locks[0]}" "$TREE" "$RUN/work" &
 NODE_PID=$!
 rc=0
 wait "$NODE_PID" || rc=$?

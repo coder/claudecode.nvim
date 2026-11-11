@@ -22,7 +22,7 @@ if (!cwd) {
 const PLACEHOLDERS = [
   [cwd, "$CWD"],
   [tree, "$TREE"],
-  [homedir(), "$HOME"],
+  [homedir(), "$HOME"], // the checker has an empty environment, so this is the home of the password database
 ].filter(([path]) => path.length > 1);
 // A leak is a Lua source path with a line number, the plugin tree, or a path under the real home folder. The last
 // two are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is one too.
@@ -112,6 +112,8 @@ for (const { name, ok, strings = {} } of TOOLS) {
   }
 }
 
+const rewrite = (text) =>
+  PLACEHOLDERS.reduce((out, [path, mark]) => out.replaceAll(path, mark), text);
 const normalize = (value) => {
   if (typeof value === "string") {
     if (/^[[{]/.test(value)) {
@@ -119,15 +121,15 @@ const normalize = (value) => {
         return normalize(JSON.parse(value));
       } catch {} // not JSON: plain text
     }
-    return PLACEHOLDERS.reduce(
-      (text, [path, mark]) => text.replaceAll(path, mark),
-      value,
-    );
+    return rewrite(value);
   }
   if (Array.isArray(value)) return value.map(normalize);
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, normalize(item)]),
+      Object.entries(value).map(([key, item]) => [
+        rewrite(key),
+        normalize(item),
+      ]),
     );
   }
   return value;
