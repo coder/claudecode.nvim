@@ -33,7 +33,7 @@ The check explores every order of keys, mode changes, buffer switches, timer fir
 ```bash
 .agents/skills/verify-selection-tracking/check.sh            # about 1 min
 .agents/skills/verify-selection-tracking/check.sh --keep     # same, keeps the TLC configs and output, prints the dir
-.agents/skills/verify-selection-tracking/check.sh --mutants  # about 1 to 1.5 h (4957 s at a load average near 25), after you edit the model or a fact
+.agents/skills/verify-selection-tracking/check.sh --mutants  # about 1 to 1.5 h (4957 s and 4990 s at a load average near 25), after you edit the model or a fact
 .agents/skills/verify-selection-tracking/check.sh --record   # rewrite covered.lock, only after "Update after an intended change"
 .agents/skills/verify-selection-tracking/check.sh --hash-only  # about 5 s, no TLC: only compares covered.lock with the code
 ```
