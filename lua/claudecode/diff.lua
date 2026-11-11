@@ -1793,12 +1793,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
       for _, win in ipairs(created.split_windows) do
         if vim.api.nvim_win_is_valid(win) then
-          -- A WinClosed handler of the user that raises makes this raise after the window is gone: look at the
-          -- window, not at the error. A window that stays goes into the answer.
-          local _, err = pcall(vim.api.nvim_win_close, win, true)
-          if vim.api.nvim_win_is_valid(win) then
-            error_msg = error_msg .. " (window " .. win .. " stays: " .. tostring(err) .. ")"
-          end
+          -- A user's autocmd handler that raises makes this raise, and the rest of the cleanup must still run.
+          pcall(vim.api.nvim_win_close, win, true)
         end
       end
       for _, win in ipairs(created.diffthis_windows) do
