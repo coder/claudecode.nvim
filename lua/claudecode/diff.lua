@@ -244,10 +244,13 @@ local function find_claudecode_terminal_window()
       local win_config = vim.api.nvim_win_get_config(win)
       local is_floating = win_config.relative and win_config.relative ~= ""
 
-      if is_floating then
-        floating_fallback = floating_fallback or win
-      else
-        return win
+      -- A config-hidden float still lists the buffer but is not on screen.
+      if win_config.hide ~= true then
+        if is_floating then
+          floating_fallback = floating_fallback or win
+        else
+          return win
+        end
       end
     end
   end
@@ -937,6 +940,17 @@ local function restore_window_sizes(saved)
   return true
 end
 
+---A window that is open and not hidden with the `hide` config (Neovim 0.10+): a cursor in a hidden window is lost.
+---@param win NvimWin|nil
+---@return boolean
+local function is_shown_window(win)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return false
+  end
+  local ok, win_config = pcall(vim.api.nvim_win_get_config, win)
+  return not (ok and win_config and win_config.hide == true)
+end
+
 ---Put the cursor back in `origin`, the window it was in when the diff opened, or in `saved.cursor_window` when
 ---`origin` is gone (it was another diff's window). Only when the window the cursor was in before the diff's windows
 ---closed (`cursor_window`) closed with them: Neovim gives the cursor to the window that takes the space, such as the
@@ -949,8 +963,8 @@ local function restore_cursor(saved, origin, cursor_window)
   if not saved or (cursor_window and vim.api.nvim_win_is_valid(cursor_window)) then
     return
   end
-  local target = (origin and vim.api.nvim_win_is_valid(origin)) and origin or saved.cursor_window
-  if vim.api.nvim_win_is_valid(target) then
+  local target = is_shown_window(origin) and origin or saved.cursor_window
+  if is_shown_window(target) then
     pcall(vim.api.nvim_set_current_win, target)
   end
 end
@@ -958,6 +972,47 @@ end
 M._save_window_sizes = save_window_sizes
 M._restore_window_sizes = restore_window_sizes
 M._restore_cursor = restore_cursor
+
+---The windows that show the Claude terminal.
+---@return number[] wins
+local function terminal_windows()
+  local wins = {}
+  local terminal_ok, terminal_module = pcall(require, "claudecode.terminal")
+  local bufnr = terminal_ok and terminal_module.get_active_terminal_bufnr() or nil
+  if not bufnr then
+    return wins
+  end
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if vim.api.nvim_win_get_buf(win) == bufnr then
+      wins[#wins + 1] = win
+    end
+  end
+  return wins
+end
+
+---Hide the Claude terminal's float when it covers the tab of the diff window `diff_win`. A float is not a tiled
+---window, so the diff cannot make room for it. Nothing shows it again: the user brings it back.
+---@param diff_win number? The diff's proposed window
+local function hide_terminal_float_for_diff(diff_win)
+  if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
+    return
+  end
+  local ok, err = pcall(function()
+    if not (diff_win and vim.api.nvim_win_is_valid(diff_win)) then
+      return
+    end
+    local diff_tab = vim.api.nvim_win_get_tabpage(diff_win)
+    for _, win in ipairs(terminal_windows()) do
+      if vim.api.nvim_win_get_tabpage(win) == diff_tab and (vim.api.nvim_win_get_config(win).relative or "") ~= "" then
+        require("claudecode.terminal").hide_float()
+        return
+      end
+    end
+  end)
+  if not ok then
+    logger.debug("diff", "Could not hide the Claude terminal float:", err)
+  end
+end
 
 local diffs_registered = 0
 
@@ -1350,22 +1405,12 @@ local function window_shows(win, buffer)
   return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buffer
 end
 
----Close the proposal window unless the user switched it to another buffer. A kept window gives back what the diff set
----in it. In the split layout that is 'diff', which `:edit` clears only when the new buffer is in no other diff window,
----so `:edit #` back to the file's own buffer leaves it on.
+---Close the proposal window unless the user switched it to another buffer.
 ---@param diff_data table
 function M._close_proposal_window(diff_data)
   local win = diff_data.new_window
   if window_shows(win, diff_data.new_buffer) then
     pcall(vim.api.nvim_win_close, win, true)
-  elseif win and diff_data.layout == "unified" then
-    if diff_data.signcolumn then
-      pcall(vim.api.nvim_set_option_value, "signcolumn", diff_data.signcolumn, { win = win })
-    end
-  elseif win then
-    pcall(vim.api.nvim_win_call, win, function()
-      vim.cmd("diffoff")
-    end)
   end
 end
 
@@ -1454,6 +1499,13 @@ function M._cleanup_diff_state(tab_name, reason)
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close new diff window if still open (only if not in a new tab)
     M._close_proposal_window(diff_data)
+    -- `:edit` clears 'diff' only when the new buffer is in no other diff window, so a kept window that went back to the
+    -- file's own buffer (`:edit #`) is still in diff mode. A window that shows another buffer has left it.
+    if window_shows(diff_data.new_window, diff_data.original_buffer) then
+      pcall(vim.api.nvim_win_call, diff_data.new_window, function()
+        vim.cmd("diffoff")
+      end)
+    end
 
     -- Close the fallback window we created when no editor window existed (issue #231); it's reused
     -- as the original pane, so target_window_created_by_plugin below doesn't cover it.
@@ -1470,8 +1522,7 @@ function M._cleanup_diff_state(tab_name, reason)
         pcall(vim.api.nvim_win_close, diff_data.target_window, false)
       end
 
-      -- If the target window is still around, ensure diff mode is off.
-      if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+      if window_shows(diff_data.target_window, diff_data.original_buffer) then
         vim.api.nvim_win_call(diff_data.target_window, function()
           vim.cmd("diffoff")
         end)
@@ -1568,6 +1619,7 @@ function M._setup_blocking_diff(params, resolution_callback)
 
       local state = active_diffs[tab_name]
       if state then
+        hide_terminal_float_for_diff(state.new_window)
         fire_diff_event("ClaudeCodeDiffOpened", {
           tab_name = tab_name,
           file_path = params.old_file_path,
@@ -1761,6 +1813,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       is_new_file = is_new_file,
       client_id = params.client_id,
     })
+
+    hide_terminal_float_for_diff(diff_info.new_window)
 
     -- Notify listeners that a diff is now open. Always emitted (independent of
     -- auto_resize_terminal); pairs with ClaudeCodeDiffClosed. Handlers receive

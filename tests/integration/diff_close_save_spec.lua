@@ -226,6 +226,32 @@ describe("closing and saving a proposed diff", function()
             )
             assert.equal(1, #answers, "one answer for one openDiff")
           end)
+
+          it("keeps the 'signcolumn' that the user set in the window that :edit switched" .. suffix, function()
+            local other = dir .. "/other.txt"
+            vim.o.signcolumn = "no"
+            local state = propose({ on_new_file_reject = reject_mode })
+            run_in(state.new_window, "edit " .. vim.fn.fnameescape(other))
+            wait_for_answers(1)
+            run_in(state.new_window, "setlocal signcolumn=yes:2")
+
+            close_tab()
+            settle()
+
+            assert.equal(state.new_window, window_showing(other), "close_tab keeps the user's window")
+            assert.equal(
+              "yes:2",
+              vim.api.nvim_get_option_value("signcolumn", { win = state.new_window }),
+              "the user's own 'signcolumn' stays"
+            )
+
+            run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+            assert.equal(
+              "no",
+              vim.api.nvim_get_option_value("signcolumn", { win = state.new_window }),
+              "a buffer that the window shows later gets the window's default, not the diff's 'yes' or the user's value"
+            )
+          end)
         end
       end)
     end
@@ -283,6 +309,107 @@ describe("closing and saving a proposed diff", function()
         assert.equal(file, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(state.new_window)), "close_tab keeps it")
         assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "diff mode ends there")
       end)
+
+      it(
+        "keeps the diff mode that the user turned on in the proposal window that :edit switched in the "
+          .. layout
+          .. " layout",
+        function()
+          local file = dir .. "/existing.txt"
+          vim.cmd("edit " .. vim.fn.fnameescape(file))
+          local state = open_diff(layout, file)
+          run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+          wait_for_answers(1)
+          run_in(state.new_window, "setlocal diff")
+
+          close_tab()
+          settle()
+
+          assert.is_true(
+            vim.api.nvim_get_option_value("diff", { win = state.new_window }),
+            "the user's diff mode stays"
+          )
+        end
+      )
+
+      it(
+        "keeps the diff mode that the user turned on in the original-side window that :edit switched in the "
+          .. layout
+          .. " layout",
+        function()
+          vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+          local state = open_diff(layout, dir .. "/existing.txt")
+          assert.is_true(state.target_window_created_by_plugin, "the diff opened a window of its own for the file")
+          run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+          run_in(state.target_window, "diffthis")
+          run_in(state.target_window, "belowright split " .. vim.fn.fnameescape(dir .. "/other.txt"))
+          vim.cmd("diffthis")
+
+          run_in(state.new_window, "quit")
+          wait_for_answers(1)
+          close_tab()
+          settle()
+
+          assert.is_true(
+            vim.api.nvim_get_option_value("diff", { win = state.target_window }),
+            "the user's diff mode stays"
+          )
+        end
+      )
+    end
+
+    if layout == "unified" then
+      it(
+        "keeps the diff mode that the user turned on in the proposal window that :edit switched in the "
+          .. layout
+          .. " layout",
+        function()
+          local file = dir .. "/existing.txt"
+          vim.cmd("edit " .. vim.fn.fnameescape(file))
+          local state = open_diff(layout, file)
+          run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+          wait_for_answers(1)
+          run_in(state.new_window, "diffthis")
+          run_in(state.target_window, "diffthis")
+
+          close_tab()
+          settle()
+
+          assert.is_true(
+            vim.api.nvim_get_option_value("diff", { win = state.new_window }),
+            "the user's diff mode stays"
+          )
+        end
+      )
+
+      it(
+        "keeps the diff mode that the user turned on in the proposal window that :edit # switched back in the "
+          .. layout
+          .. " layout",
+        function()
+          local file = dir .. "/existing.txt"
+          vim.cmd("edit " .. vim.fn.fnameescape(file))
+          local state = open_diff(layout, file)
+          run_in(state.new_window, "edit #")
+          wait_for_answers(1)
+          assert.equal(
+            file,
+            vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(state.new_window)),
+            "the switch went back"
+          )
+          run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+          run_in(state.new_window, "diffthis")
+          run_in(state.target_window, "diffthis")
+
+          close_tab()
+          settle()
+
+          assert.is_true(
+            vim.api.nvim_get_option_value("diff", { win = state.new_window }),
+            "the user's diff mode stays"
+          )
+        end
+      )
     end
 
     if layout == "vertical" then

@@ -389,7 +389,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
       --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
       open_in_new_tab = false,
-      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (a floating terminal then stays on screen)
       hide_terminal_in_new_tab = false,
       auto_resize_terminal = true, -- Let the plugin manage the terminal width across the diff lifecycle; set false to own it via the User autocmds below
       -- on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
@@ -777,6 +777,8 @@ snacks_win_opts = {
 
 </details>
 
+While a diff is open in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. The float stays hidden when the diff closes, and `:ClaudeCodeFocus` brings it back. A diff in its own tab (`open_in_new_tab`) leaves a visible float in the original tab alone while it is open. When that diff closes, the plugin shows the terminal in the original tab again if it was visible there when the diff opened, as it did before. That can show a float that another diff hid there. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
+
 For complete configuration options, see:
 
 - [Snacks.nvim Terminal Documentation](https://github.com/folke/snacks.nvim/blob/main/docs/terminal.md)
@@ -961,6 +963,8 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff. The plugin does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes, as it did before.
+
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 
 ## Community Extensions
@@ -1144,7 +1148,9 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   an error that names both directories [lua/claudecode/diff.lua:create_temp_file]. The `openDiff` tool writes no temp
   files [lua/claudecode/diff.lua:M.open_diff_blocking].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
-  `ClaudeCodeDiffCleanup`), `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
+  `ClaudeCodeDiffCleanup`), `nvim_buf_attach` change listeners on the buffer of a held selection
+  [lua/claudecode/selection.lua:watch_selection_buffer], `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`,
+  `ClaudeCodeDiffClosed`),
   and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2
   [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install].
 - Release tooling: `scripts/release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and PRs

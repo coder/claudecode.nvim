@@ -13,6 +13,8 @@ local M = {}
 ---@field on_open function Callback for a client whose WebSocket handshake completed
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
+---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress: twice the ping interval, set by `start_ping_timer`
+---@field pending_polls table<table, boolean>|nil The check and idle handles of each stall judgement that waits for the next poll: closed by `stop_server`
 
 -- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
@@ -197,7 +199,7 @@ function M._handle_new_connection(server)
   end
 
   -- Create WebSocket client wrapper
-  local client = client_manager.create_client(client_tcp)
+  local client = client_manager.create_client(client_tcp, server.keepalive_timeout)
   server.clients[client.id] = client
 
   -- Set up data handler
@@ -287,6 +289,20 @@ function M._remove_client(server, client)
   end
 end
 
+---Drop a client that the ping timer gave up on, and report it at once. RFC 6455 reserves 1006, so the Close frame says
+---1011, as other servers do for a keepalive timeout. The connection still ends without the client's Close frame, which
+---is what 1006 means here. The socket does not wait for that frame: a Claude that stopped answering or reading may
+---never read it, and the frame waits behind everything queued for it. Closing now drops the frame and the queue.
+---@param server TCPServer The server object
+---@param client WebSocketClient The client to drop
+---@param close_reason string The reason in the Close frame
+---@param disconnect_reason string The reason that `on_disconnect` gets, with the code 1006
+local function drop_client(server, client, close_reason, disconnect_reason)
+  client_manager.close_client(client, 1011, close_reason)
+  client_manager.abandon_close_frame(client)
+  M._disconnect_client(server, client, 1006, disconnect_reason)
+end
+
 ---Send a message to a specific client
 ---@param server TCPServer The server object
 ---@param client_id string The client ID
@@ -364,9 +380,87 @@ function M.get_clients_info(server)
   return clients
 end
 
+---Run `fn` once, right after libuv polls its sockets the next time. libuv reports that a socket is writable again
+---only in a poll phase, and it runs a check handle right after each poll phase, in every libuv version. A ping tick
+---that Neovim runs after a main-loop block inside an I/O callback can run before that poll, so it cannot see the bytes
+---that Claude read during the block: what runs here can. An idle handle keeps that poll from waiting for a timer or a
+---socket. Both handles are closed once `fn` ran. `stop_server` closes those that did not run yet.
+---@param server TCPServer The server object
+---@param fn function
+---@return boolean armed False when libuv could not create a handle, and `fn` will not run
+local function after_next_poll(server, fn)
+  local check = vim.loop.new_check()
+  local idle = vim.loop.new_idle()
+  if not check or not idle then
+    if check then
+      check:close()
+    end
+    if idle then
+      idle:close()
+    end
+    return false
+  end
+  local handles = { check, idle }
+  server.pending_polls = server.pending_polls or {}
+  server.pending_polls[handles] = true
+  idle:start(function() end)
+  check:start(function()
+    server.pending_polls[handles] = nil
+    for _, handle in ipairs(handles) do
+      handle:stop()
+      handle:close()
+    end
+    fn()
+  end)
+  return true
+end
+
+---Close the handles of the polls that `fn` did not run after yet.
+---@param server TCPServer The server object
+local function close_pending_polls(server)
+  local pending = server.pending_polls
+  server.pending_polls = nil
+  for handles in pairs(pending or {}) do
+    for _, handle in ipairs(handles) do
+      handle:stop()
+      if not handle:is_closing() then
+        handle:close()
+      end
+    end
+  end
+end
+
+---Drop a client that answered its ping and whose write queue made no progress at two ticks in a row, unless the next
+---poll shows progress. A Claude whose reader is stuck can still answer each ping, so only its write queue shows it.
+---The queue is Neovim's memory: it goes with the client. The tick can run before libuv reported the bytes that Claude
+---read during a block, so the stall is judged once more right after the next poll, and only that judgement drops.
+---@param server TCPServer The server object
+---@param client WebSocketClient The client whose queue made no progress at two ticks in a row
+local function confirm_stall(server, client)
+  after_next_poll(server, function()
+    if server.clients[client.id] ~= client or client.state ~= "connected" then
+      return
+    end
+    if client_manager.sample_write_progress(client) then
+      client.write_stalled = nil
+      return
+    end
+    local time_since_drain = math.floor((vim.loop.now() - client.last_drain) / 1000)
+    local queued_kb = math.floor(client.tcp_handle:get_write_queue_size() / 1024)
+    require("claudecode.logger").one_line(
+      "info",
+      "server",
+      string.format("Closed %s: not reading for %ds, %d KB queued", client.id, time_since_drain, queued_kb)
+    )
+    drop_client(server, client, "Not reading", "Write queue stalled")
+  end)
+end
+
 ---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)
+  close_pending_polls(server)
+
   -- Close all clients
   for _, client in pairs(server.clients) do
     client_manager.close_client(client, 1001, "Server shutting down")
@@ -388,12 +482,19 @@ end
 function M.start_ping_timer(server, interval)
   interval = interval or 30000 -- 30 seconds
   local last_run = vim.loop.now()
+  -- The ticks since the last one that started a fresh stall window: see `fresh_start` below.
+  local ticks_since_fresh = math.huge
 
   local timer = vim.loop.new_timer()
   if not timer then
     server.on_error("Failed to create ping timer")
     return nil
   end
+
+  -- A client has this long to answer a ping, and to let libuv write some of its queue. A Close frame gets the same
+  -- window (see `client.close_client`), and the clients accepted from now on carry it.
+  local timeout = interval * 2
+  server.keepalive_timeout = timeout
 
   timer:start(interval, interval, function()
     local now = vim.loop.now()
@@ -402,9 +503,18 @@ function M.start_ping_timer(server, interval)
     -- Detect potential system sleep: timer interval was significantly exceeded
     -- Allow 50% grace period (e.g., 45s instead of 30s) to account for system load
     local is_wake_from_sleep = elapsed > (interval * 1.5)
+    -- A wake tick gives each client a fresh stall window: Claude had no chance yet to read after the sleep, so the stall
+    -- count starts again and this tick judges nothing. The next two ticks always count, wake ticks or not, because wake
+    -- ticks that come again and again are a loop that stays blocked, not sleeps. A stalled client is then closed at the
+    -- second of them, and no pattern of late ticks keeps it.
+    ticks_since_fresh = ticks_since_fresh + 1
+    local fresh_start = is_wake_from_sleep and ticks_since_fresh > 2
+    if fresh_start then
+      ticks_since_fresh = 0
+    end
 
     if is_wake_from_sleep then
-      -- After system sleep/wake, reset all client pong timestamps to prevent false timeouts
+      -- After system sleep/wake, reset all client pong and write-progress timestamps to prevent false timeouts
       -- This gives clients a fresh keepalive window since the time jump isn't their fault
       require("claudecode.logger").debug(
         "server",
@@ -415,21 +525,34 @@ function M.start_ping_timer(server, interval)
       )
       for _, client in pairs(server.clients) do
         if client.state == "connected" then
+          -- The alive check below finds the fresh pong and clears `pong_overdue`.
           client.last_pong = now
+          if fresh_start then
+            client.last_drain = now
+            client.write_stalled = nil
+          end
         end
       end
     end
 
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
+        -- Every tick samples the write queue, so that "two ticks in a row" are consecutive ticks, whether the client
+        -- answered or not. A tick that starts a fresh stall window does not.
+        local reading = fresh_start or client_manager.is_client_reading(client)
         -- Check if client is alive (local connections, so use standard timeout)
-        if client_manager.is_client_alive(client, interval * 2) then
+        if client_manager.is_client_alive(client, timeout) then
           client.pong_overdue = nil
           client_manager.send_ping(client, "ping")
+          -- Only a client that answered is dropped for a stall, and only after the next poll confirms it.
+          if not reading then
+            confirm_stall(server, client)
+          end
         elseif not client.pong_overdue then
-          -- libuv runs timers before it reads sockets, so a tick that Neovim runs late after a block finds the pong of
-          -- the last ping still unread. The first tick that finds no pong for two intervals pings again. The next one
-          -- finds the pong that was read in between, or drops the client.
+          -- A tick that Neovim runs late after a block can come before the loop has read the pong of the last ping.
+          -- The first tick that finds no pong for two intervals pings again. The next one finds the pong that was read
+          -- in between, or drops the client. A client without a pong gets this second chance whatever its write queue
+          -- shows: the stall rule above judges only a client that answered.
           client.pong_overdue = true
           client_manager.send_ping(client, "ping")
         else
@@ -440,13 +563,7 @@ function M.start_ping_timer(server, interval)
             "server",
             string.format("Closed %s: no reply for %ds", client.id, time_since_pong)
           )
-          -- RFC 6455 reserves 1006, so the Close frame says 1011, as other servers do for a keepalive timeout. The
-          -- connection still ends without the client's Close frame, which is what 1006 means here.
-          client_manager.close_client(client, 1011, "Keepalive timeout")
-          -- The socket does not wait for the Close frame: a Claude that stopped answering may never read it. Closing
-          -- now drops the frame when Claude's window is full.
-          client.close_pending = nil
-          M._disconnect_client(server, client, 1006, "Connection timeout")
+          drop_client(server, client, "Keepalive timeout", "Connection timeout")
         end
       end
     end
