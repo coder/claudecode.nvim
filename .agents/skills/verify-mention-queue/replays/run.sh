@@ -9,6 +9,9 @@ here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$here" rev-parse --show-toplevel)
 NVIM=${NVIM:-nvim}
 OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/mention-replays.XXXXXX")}
+# Each replay runs from its own cwd, so a relative OUT or NVIM must become absolute first.
+mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd) || exit 2
+if [[ $NVIM == */* ]]; then NVIM=$(cd "$(dirname "$NVIM")" && pwd)/$(basename "$NVIM") || exit 2; fi
 echo "logs: $OUT"
 names=("$@")
 if ((${#names[@]} == 0)); then
@@ -20,9 +23,12 @@ kept=0
 for name in "${names[@]}"; do
   run="$OUT/$name.run"
   mkdir -p "$run/xdg-config" "$run/xdg-data" "$run/xdg-state" "$run/xdg-cache" "$run/claude" "$run/cwd"
+  # macOS has no `timeout`, so perl's alarm bounds the run. REPLAY_REPO reaches 'runtimepath' through Lua, so a
+  # checkout path with a space or another Ex-special character still loads the plugin.
   (cd "$run/cwd" && XDG_CONFIG_HOME="$run/xdg-config" XDG_DATA_HOME="$run/xdg-data" XDG_STATE_HOME="$run/xdg-state" \
-    XDG_CACHE_HOME="$run/xdg-cache" CLAUDE_CONFIG_DIR="$run/claude" timeout 120 \
-    "$NVIM" --headless -u NONE -i NONE --cmd "set rtp^=$repo" -l "$here/$name.lua") >"$OUT/$name.log" 2>&1
+    XDG_CACHE_HOME="$run/xdg-cache" CLAUDE_CONFIG_DIR="$run/claude" REPLAY_REPO="$repo" \
+    perl -e 'alarm 120; exec @ARGV' "$NVIM" --headless -u NONE -i NONE \
+    --cmd 'lua vim.opt.rtp:prepend(vim.env.REPLAY_REPO)' -l "$here/$name.lua") >"$OUT/$name.log" 2>&1
   verdict=$(grep -E '^(KEPT|BROKEN) ' "$OUT/$name.log" | tail -1)
   [[ -n $verdict ]] || verdict="BROKEN $name: the replay printed no verdict (see $OUT/$name.log)"
   [[ $verdict == KEPT* ]] && kept=$((kept + 1))
