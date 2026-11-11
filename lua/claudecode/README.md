@@ -13,22 +13,22 @@
 
 Module map (direct files):
 
-| File                  | Role                                                                                         |
-| --------------------- | -------------------------------------------------------------------------------------------- |
-| `init.lua`            | Entry point: `setup`, `start`/`stop`, user commands, @-mention queue                         |
-| `config.lua`          | Defaults, legacy-option mapping, and assert-based validation                                 |
-| `lockfile.lua`        | `<port>.lock` discovery file and auth token                                                  |
-| `terminal.lua`        | Provider dispatcher: command, env, cwd, `send_to_terminal`                                   |
-| `diff.lua`            | Native side-by-side blocking diff and the diff lifecycle                                     |
-| `diff_inline.lua`     | Unified (`layout = "unified"`) inline diff renderer                                          |
-| `selection.lua`       | Visual and cursor selection tracking and the `selection_changed` broadcast                   |
-| `integrations.lua`    | File-explorer selection readers (nvim-tree, neo-tree, oil, mini.files, netrw, snacks picker) |
-| `visual_commands.lua` | Visual-mode command wrapper and tree-explorer line-to-path mapping                           |
-| `cwd.lua`             | Terminal working-directory resolution and git root lookup                                    |
-| `utils.lua`           | Shell-free argv parsing, tilde expansion, the selection type of a mode, and UTF-8 repair     |
-| `logger.lua`          | Level-filtered logging to `vim.notify` and `nvim_echo`                                       |
-| `health.lua`          | `:checkhealth claudecode`                                                                    |
-| `types.lua`           | LuaLS `@class` and `@alias` declarations. Its only runtime code is `return {}`               |
+| File                  | Role                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `init.lua`            | Entry point: `setup`, `start`/`stop`, user commands, @-mention queue                                                  |
+| `config.lua`          | Defaults, legacy-option mapping, and assert-based validation                                                          |
+| `lockfile.lua`        | `<port>.lock` discovery file and auth token                                                                           |
+| `terminal.lua`        | Provider dispatcher: command, env, cwd, `send_to_terminal`                                                            |
+| `diff.lua`            | Native side-by-side blocking diff and the diff lifecycle                                                              |
+| `diff_inline.lua`     | Unified (`layout = "unified"`) inline diff renderer                                                                   |
+| `selection.lua`       | Visual and cursor selection tracking and the `selection_changed` broadcast                                            |
+| `integrations.lua`    | File-explorer selection readers (nvim-tree, neo-tree, oil, mini.files, netrw, snacks picker)                          |
+| `visual_commands.lua` | Visual-mode command wrapper and tree-explorer line-to-path mapping                                                    |
+| `cwd.lua`             | Terminal working-directory resolution and git root lookup                                                             |
+| `utils.lua`           | Shell-free argv parsing, tilde expansion, the selection type of a mode, UTF-8 repair, and the gate for window changes |
+| `logger.lua`          | Level-filtered logging to `vim.notify` and `nvim_echo`                                                                |
+| `health.lua`          | `:checkhealth claudecode`                                                                                             |
+| `types.lua`           | LuaLS `@class` and `@alias` declarations. Its only runtime code is `return {}`                                        |
 
 ## Interface
 
@@ -81,7 +81,7 @@ Module map (direct files):
 - `integrations.lua`: `get_selected_files_from_tree()` dispatches on filetype to `_get_nvim_tree_selection`, `_get_neotree_selection`, `_get_oil_selection`, `_get_mini_files_selection`, `_get_mini_files_selection_with_range(start_line, end_line)`, `_get_netrw_selection`, and `_get_snacks_picker_selection` [integrations.lua:M.get_selected_files_from_tree]
 - `visual_commands.lua`: `create_visual_command_wrapper`, `exit_visual_and_schedule`, `validate_visual_mode`, `get_visual_range`, `get_tree_state`, `capture_visual_selection_data`, and `get_files_from_visual_selection` [visual_commands.lua:M.create_visual_command_wrapper]
 - `cwd.lua`: `resolve(term_cfg, ctx)` and `git_root(start_dir)` [cwd.lua:M.resolve]
-- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `selection_type`, `utf8_sequence_length`, `valid_utf8`, and `win_set_buf_without_bufenter` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8] [utils.lua:M.win_set_buf_without_bufenter]
+- `utils.lua`: `shell_split`, `parse_command`, `expand_tilde`, `normalize_focus`, `selection_type`, `utf8_sequence_length`, `valid_utf8`, `win_set_buf_without_bufenter`, and `when_windows_allowed` [utils.lua:M.parse_command] [utils.lua:M.valid_utf8] [utils.lua:M.win_set_buf_without_bufenter] [utils.lua:M.when_windows_allowed]
 - `logger.lua`: `levels`, `setup`, `error`, `warn`, `info`, `one_line`, `debug`, `trace`, and `is_level_enabled` [logger.lua:M.setup]
 - `health.lua`: `check()` [health.lua:M.check]
 
