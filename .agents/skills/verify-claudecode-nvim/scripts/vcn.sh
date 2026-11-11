@@ -239,7 +239,7 @@ server_under_tui() {
 # cleanup fast: for a signal, whose sender wants launch gone. It skips the evidence (a screenshot and a video), which
 # takes many seconds on a loaded host.
 cmd_cleanup() {
-  local fast=${1-} own_session=1
+  local fast=${1-}
   if [[ -z ${VCN_STATE-} || ! -f $VCN_STATE/run.env ]]; then
     echo "vcn: nothing to clean at ${VCN_STATE-<unset>}"
     return 0
@@ -523,10 +523,10 @@ cmd_launch() {
   export VCN_STATE=$state
   load
   trap launch_failed EXIT
-  # A signal ends bash with $? still 0 in the EXIT trap, and launch_failed then skips its cleanup: make it an exit.
-  # Ignore the signals first. One that lands before launch_failed ignores them would run this trap again inside the EXIT
-  # trap, and its exit would end the shell before the teardown.
-  trap 'trap "" TERM INT HUP; signaled=1; exit 143' TERM INT HUP
+  # A signal ends bash with $? still 0 in the EXIT trap, so this trap acts on it: it ignores the signals, drops the
+  # EXIT trap, and runs launch_failed itself with status 143. An exit here would end the shell before the teardown
+  # when the trap runs inside the EXIT trap of a launch that failed by itself, before launch_failed ignores signals.
+  trap 'trap "" TERM INT HUP; signaled=1; trap - EXIT; (exit 143) || launch_failed' TERM INT HUP
   pick_agent_tty "${att_cands[@]}"
   load
   [[ $# -gt 0 ]] || set -- hello.txt

@@ -36,6 +36,9 @@
 #                     while the real `agent-tty snapshot` of the failure screen runs: launch exits 1, screen has text
 #   decoy-state       a symlink /tmp/vcn.* to a directory of this user, whose run.env would touch a marker, sorts after
 #                     the real state dirs: find_state does not pick it and stop_run does not run it
+#   own-dir           own_dir refuses a directory of another user (root's /) and accepts one of this user
+#   signal-gap        a launch that fails by itself, with SIGTERM, SIGINT and SIGHUP sent while launch_failed is held
+#                     before its first command: launch tears the run down (exit 143, its failure line, no state dir)
 #   cleanup-no-agent-tty  `vcn.sh cleanup` of a run that stopped before an agent-tty passed doctor, so run.env has no
 #                     ATT_BIN: it still removes the state dir
 # A good agent-tty is $VCN_AGENT_TTY when set, else the first agent-tty on PATH or in mise. The cases that start a run
@@ -220,6 +223,18 @@ if (held && !fs.existsSync(`${gate}/snapshot-reached`)) {
   while (fs.existsSync(`${gate}/hold-snapshot`)) Atomics.wait(cell, 0, 0, 50);
 }
 HOLD
+# A hook that BASH_ENV makes vcn.sh source. It holds launch_failed before its first command while $GATE/hold-gap
+# exists. That gap is a few microseconds wide: a signal reaches launch before launch_failed ignores signals, and no
+# stand-in can hold a command there.
+cat >"$TMP/hold-gap.bash" <<'HOLDGAP'
+set -T
+trap '
+  if [[ ${FUNCNAME[0]-} == launch_failed && -f ${GATE-}/hold-gap ]]; then
+    : >"$GATE/gap-reached"
+    while [[ -f $GATE/hold-gap ]]; do sleep 0.05; done
+  fi
+' DEBUG
+HOLDGAP
 chmod +x "$TMP/broken/agent-tty" "$TMP/shim/agent-tty" "$TMP/mise/mise" "$TMP/gate-bin/mkdir" "$TMP/gate-bin/rm" \
   "$TMP/gate-mktemp/mktemp" "$TMP/gate-cp/cp" "$TMP/slow/agent-tty"
 ln -s "$good" "$TMP/good/agent-tty"
@@ -402,7 +417,7 @@ signal_case() { # <case> <early|doctor>
     # Only the late trap runs launch_failed, whose cleanup ends with `agent-tty home forget`. The early trap only removes
     # the state dir. The line must reach launch's caller even though the trap runs while `agent-tty doctor` runs.
     [[ $where == early ]] || grep -qx 'home forget' "$gate/calls" || fail "$run" "launch did not run its cleanup, agent-tty calls: $(tr '\n' ',' <"$gate/calls")"
-    [[ $where == early ]] || grep -q '^vcn: launch failed' "$TMP/$run.txt" || fail "$run" "launch printed no failure line: $(cat "$TMP/$run.txt")"
+    [[ $where == early || $(grep -c '^vcn: launch failed' "$TMP/$run.txt") == 1 ]] || fail "$run" "launch did not print its failure line once: $(cat "$TMP/$run.txt")"
   done
   echo "ok $name: SIGTERM, SIGINT and SIGHUP made launch exit 143 and remove its state dir"
   cases=$((cases + 1))
@@ -579,6 +594,41 @@ signal_failed_case() {
   cases=$((cases + 1))
 }
 
+# A launch that fails by itself (its only agent-tty is broken) gets a signal while launch_failed is held before its
+# first command. The signal trap runs the teardown itself, once: launch exits 143, prints its failure line, leaves no
+# state dir.
+signal_gap_case() {
+  local name=signal-gap sig gate run
+  for sig in TERM INT HUP; do
+    run=$name-$sig gate=$TMP/gate-$name-$sig
+    mkdir "$gate"
+    : >"$gate/hold-gap"
+    start_launch "$run" "$good_path" GATE="$gate" BASH_ENV="$TMP/hold-gap.bash" VCN_AGENT_TTY="$TMP/broken/agent-tty"
+    wait_for "$run" "$gate/gap-reached"
+    find_state "$run"
+    release "$gate/hold-gap"
+    signal_group "$run" "$sig" "$st"
+    wait "$rel"
+    [[ $(grep -c '^vcn: launch failed' "$TMP/$run.txt") == 1 ]] || fail "$run" "launch did not print its failure line once: $(cat "$TMP/$run.txt")"
+  done
+  echo "ok $name: SIGTERM, SIGINT and SIGHUP before launch_failed ignored them made launch tear the run down once"
+  cases=$((cases + 1))
+}
+
+# own_dir must refuse a directory that another user owns. Root owns /, so it stands in for another user. A host whose /
+# this user owns has no stand-in, and the case is skipped.
+own_dir_case() {
+  local name=own-dir
+  if [[ -O / ]]; then
+    echo "skip $name: this user owns /, so no directory stands in for another user"
+    return 0
+  fi
+  ! own_dir / || fail "$name" "own_dir accepted /, which another user owns"
+  own_dir "$TMP" || fail "$name" "own_dir refused $TMP, which this user owns"
+  echo "ok $name: own_dir refused a directory of another user and accepted one of this user"
+  cases=$((cases + 1))
+}
+
 # find_state scans /tmp/vcn.*/run.env, and vcn.sh cleanup sources the run.env of the dir that stop_run gets. A symlink
 # to a directory of this user passes the owner test, so own_dir refuses it too. The decoy sorts after every real dir.
 decoy_case() {
@@ -621,11 +671,13 @@ signal_case signal-early early
 signal_case signal-doctor doctor
 signal_mktemp_case
 signal_twice_case
+own_dir_case
 decoy_case
 signal_storm_case
 signal_printed_case
 signal_outside_case
 signal_failed_case
+signal_gap_case
 cleanup_no_agent_tty_case
 sigterm_case
 echo "CASES $cases"
