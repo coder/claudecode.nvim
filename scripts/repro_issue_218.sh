@@ -165,19 +165,18 @@ stop_tree() {
   kill -KILL $live 2>/dev/null || true
 }
 # The socket directory of agent-tty home $1: /tmp/agent-tty/ and the first 8 hex digits of the
-# sha256 of the home path (agent-tty's sessionPaths.js). agent-tty resolves symbolic links in
-# the home path before it hashes, and TMPDIR can be a link (macOS), so the path is made
-# physical first (`cd -P`, no realpath needed). Prints nothing without a sha256 tool.
+# sha256 of the home path (agent-tty's sessionPaths.js). agent-tty resolves symbolic links in the
+# home path before it hashes, so $1 must be the physical path (AGENT_HOME is). Prints nothing
+# without a sha256 tool.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 socket_dir() {
-  local sum="" home
-  home="$(cd -P -- "$1" 2>/dev/null && pwd -P)" || home="$1"
+  local sum=""
   if command -v sha256sum >/dev/null 2>&1; then
-    sum="$(printf '%s' "$home" | sha256sum)"
+    sum="$(printf '%s' "$1" | sha256sum)"
   elif command -v shasum >/dev/null 2>&1; then
-    sum="$(printf '%s' "$home" | shasum -a 256)"
+    sum="$(printf '%s' "$1" | shasum -a 256)"
   elif command -v openssl >/dev/null 2>&1; then
-    sum="$(printf '%s' "$home" | openssl dgst -sha256 | sed 's/^.* //')"
+    sum="$(printf '%s' "$1" | openssl dgst -sha256 | sed 's/^.* //')"
   fi
   sum="${sum:0:8}"
   [[ "$sum" =~ ^[0-9a-f]{8}$ ]] && printf '/tmp/agent-tty/%s' "$sum"
@@ -309,7 +308,10 @@ if [[ -z "$WORK" ]]; then
   echo "ERROR: cannot create a directory under ${WORK_PARENT:-/}." >&2
   exit 1
 fi
-AGENT_HOME="$WORK/atty"
+# agent-tty resolves symbolic links in its home path (TMPDIR is a link on macOS) and keys the
+# socket directory and the registry on the result. So the home is the physical path from the
+# start, and the socket directory, the registry commands and the printed commands all use it.
+AGENT_HOME="$(cd -P -- "$WORK" 2>/dev/null && pwd -P || printf '%s' "$WORK")/atty"
 mkdir -p "$AGENT_HOME" # agent-tty requires its --home dir to exist before `create`
 ATTY=(agent-tty --home "$AGENT_HOME")
 EXITF="$WORK/nvim_exit.txt"
