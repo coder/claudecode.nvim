@@ -35,7 +35,7 @@ local CLOSE_REASONS = {
 ---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
 ---@field drained_bytes integer The bytes libuv had written to the socket when `sample_write_progress` last saw progress
 ---@field last_drain number Timestamp of the last `sample_write_progress` check that found the write queue empty or smaller
----@field write_stalled boolean|nil True after an observation after a fresh poll found no write progress. The next such observation drops the client
+---@field write_stalled boolean|nil True after a ping tick found no write progress. The next such tick asks for a look after the next poll, and only that look drops the client
 ---@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
 
 ---Create a new WebSocket client
@@ -280,7 +280,6 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
         -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
         client.last_pong = vim.loop.now()
-        client.last_drain = client.last_pong
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
           on_open(client)
@@ -499,12 +498,12 @@ end
 
 ---Check that a client still reads what the server writes to it. The keepalive cannot tell: a Claude whose reader is
 ---stuck can still answer each ping, while replies and pings pile up in libuv's write queue, in Neovim's memory.
----Call it once per ping tick, in the check callback of a poll phase that began after the tick (`tcp.lua`): libuv had
----its chance to report that the socket is writable again. An observation that finds progress, or an empty queue,
----clears the count. The first that finds none sets it, and the second returns false, so one observation is never the
----whole evidence.
+---Call it once per ping tick. A tick can run before libuv reported the bytes that Claude read during a main-loop block,
+---so a tick never drops a client. A tick that finds progress, or an empty queue, clears the count. The first that finds
+---none sets it, and the second returns false. `tcp.lua` then looks once more right after the next poll, and only that
+---look drops the client.
 ---@param client WebSocketClient The client object
----@return boolean reading False when this observation, and the one before it, found no write progress
+---@return boolean reading False when this tick, and the one before it, found no write progress
 function M.is_client_reading(client)
   if M.sample_write_progress(client) then
     client.write_stalled = nil

@@ -809,6 +809,43 @@ describe("The lifecycle of a WebSocket connection", function()
     end)
 
     it(
+      "counts the second wake tick in a row like any tick, so that a loop that stays blocked keeps no stalled client",
+      function()
+        local tick, _, client = stalled_client()
+
+        clock = clock + 600000 -- a wake tick: the first of its run
+        tick()
+        assert.is_nil(client.write_stalled, "the first wake tick kept the count")
+        assert.is_not_nil(server.clients[client.id])
+
+        clock = clock + 600000 -- the loop was blocked again, for more than 1.5 intervals: no sleep this time
+        tick()
+        assert.is_true(client.write_stalled, "the second wake tick in a row did not count")
+        assert.is_not_nil(server.clients[client.id])
+
+        clock = clock + 600000
+        tick() -- the second tick in a row without progress: the poll confirms it
+        assert.is_nil(server.clients[client.id], "a run of wake ticks kept a stalled client")
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+      end
+    )
+
+    it("starts a new run of wake ticks after a tick that came in time", function()
+      local tick, _, client, handle = stalled_client()
+
+      clock = clock + 600000
+      tick() -- wake tick, the first of its run
+      answer_and(tick, 1)(handle) -- a tick in time: the first without progress
+      assert.is_true(client.write_stalled)
+
+      clock = clock + 600000
+      tick() -- a wake tick again, and the first of a new run: it starts a fresh window
+
+      assert.is_nil(client.write_stalled, "a wake tick after a tick in time kept the count")
+      assert.is_not_nil(server.clients[client.id])
+    end)
+
+    it(
       "reports the time since the last progress, not since before the sleep, when it drops the client after a wake",
       function()
         local logger = require("claudecode.logger")
@@ -833,12 +870,25 @@ describe("The lifecycle of a WebSocket connection", function()
     describe("with the check and idle handles of a confirmation", function()
       ---Arm a confirmation: a client whose second tick in a row found no progress.
       local function pending_confirmation()
-        local tick, raw_tick, client, handle = stalled_client()
+        local tick, raw_tick, client, handle, writes = stalled_client()
         answer_and(tick, 1)(handle)
         answer_and(raw_tick, 1)(handle)
         assert.equals(1, #checks)
         assert.equals(1, #idles)
-        return client, handle
+        return client, handle, writes
+      end
+
+      ---Run `poll` with the info lines of the logger collected.
+      local function logged_info_during(run)
+        local logger = require("claudecode.logger")
+        local lines, saved_one_line = {}, logger.one_line
+        logger.one_line = function(_, _, text)
+          table.insert(lines, text)
+        end
+        local ok, err = pcall(run)
+        logger.one_line = saved_one_line
+        assert(ok, err)
+        return lines
       end
 
       it("arms an idle handle with the check handle, and closes both once the check ran", function()
@@ -868,6 +918,46 @@ describe("The lifecycle of a WebSocket connection", function()
         end)
 
         assert.is_true(checks[1].closed and idles[1].closed)
+      end)
+
+      it("removes the handles of a confirmation from the pending ones once it ran", function()
+        pending_confirmation()
+        assert.is_not_nil(next(server.pending_polls), "an armed confirmation is not listed")
+
+        poll()
+
+        assert.is_nil(next(server.pending_polls), "a finished confirmation stays listed until stop_server")
+      end)
+
+      it("skips a client that broke the protocol in the poll of its confirmation, and logs no stall", function()
+        local client, handle, writes = pending_confirmation()
+
+        local lines = logged_info_during(function()
+          poll(function()
+            handle._read_cb(nil, frame.create_frame(frame.OPCODE.BINARY, "x", true, true))
+          end)
+        end)
+
+        assert.same({}, lines, "a client that already left was logged as not reading")
+        assert.spy(callbacks.on_disconnect).was_called(1)
+        assert.equals("Client error: Binary messages not supported", callbacks.on_disconnect.calls[1].vals[3])
+        assert.equals(1003, close_status(writes[#writes]), "the Close frame of the protocol error was replaced")
+        assert.is_false(handle:is_closing(), "the confirmation closed the socket before its Close frame was written")
+        assert.is_nil(server.clients[client.id])
+      end)
+
+      it("skips a client that hung up in the poll of its confirmation, and logs no stall", function()
+        local client, handle = pending_confirmation()
+
+        local lines = logged_info_during(function()
+          poll(function()
+            handle._read_cb(nil, nil) -- Claude hangs up: the poll reads the EOF
+          end)
+        end)
+
+        assert.same({}, lines, "a client that already left was logged as not reading")
+        assert.spy(callbacks.on_disconnect).was_called(1)
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "EOF")
       end)
 
       it("closes the handles of a confirmation in stop_server, and the confirmation never runs", function()

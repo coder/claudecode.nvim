@@ -482,6 +482,8 @@ end
 function M.start_ping_timer(server, interval)
   interval = interval or 30000 -- 30 seconds
   local last_run = vim.loop.now()
+  -- True when the tick before this one found the machine woken from sleep: see `fresh_start` below.
+  local woke_before = false
 
   local timer = vim.loop.new_timer()
   if not timer then
@@ -501,6 +503,12 @@ function M.start_ping_timer(server, interval)
     -- Detect potential system sleep: timer interval was significantly exceeded
     -- Allow 50% grace period (e.g., 45s instead of 30s) to account for system load
     local is_wake_from_sleep = elapsed > (interval * 1.5)
+    -- A wake tick gives each client a fresh stall window: Claude had no chance yet to read after the sleep, so the stall
+    -- count starts again and this tick judges nothing. A second wake tick in a row is no sleep, because the loop stays
+    -- blocked for more than 1.5 intervals each time. It counts like any tick, or a stalled client would be kept for as
+    -- long as that goes on.
+    local fresh_start = is_wake_from_sleep and not woke_before
+    woke_before = is_wake_from_sleep
 
     if is_wake_from_sleep then
       -- After system sleep/wake, reset all client pong and write-progress timestamps to prevent false timeouts
@@ -514,10 +522,12 @@ function M.start_ping_timer(server, interval)
       )
       for _, client in pairs(server.clients) do
         if client.state == "connected" then
-          -- The alive check below finds the fresh pong and clears `pong_overdue`. The stall count starts again too.
+          -- The alive check below finds the fresh pong and clears `pong_overdue`.
           client.last_pong = now
-          client.last_drain = now
-          client.write_stalled = nil
+          if fresh_start then
+            client.last_drain = now
+            client.write_stalled = nil
+          end
         end
       end
     end
@@ -525,8 +535,8 @@ function M.start_ping_timer(server, interval)
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
         -- Every tick samples the write queue, so that "two ticks in a row" are consecutive ticks, whether the client
-        -- answered or not. The wake tick does not: Claude had no chance yet to read after the sleep.
-        local reading = is_wake_from_sleep or client_manager.is_client_reading(client)
+        -- answered or not. A tick that starts a fresh stall window does not.
+        local reading = fresh_start or client_manager.is_client_reading(client)
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, timeout) then
           client.pong_overdue = nil
