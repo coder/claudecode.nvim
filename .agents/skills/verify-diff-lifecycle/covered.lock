@@ -146,7 +146,7 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua d6e881211c59f191
+file lua/claudecode/server/init.lua 4a6b53438a2fdbbb
 block server_stop            4dae0bf675cf2cc1
 block on_disconnect          9110ffdfd72d4ea6
 block handle_request         b74ff7dc2e55a2b8
@@ -185,8 +185,8 @@ file lua/claudecode/tools/close_all_diff_tabs.lua 30e0534fd21df6e6
 block close_all_tool         8a83fdac94646751
 site lua/claudecode/tools/close_all_diff_tabs.lua: local closed_count = diff.close_all_diffs("closeAllDiffTabs tool", client and client.id or nil) @ local function handler(params, client)
 == lua/claudecode/tools/close_tab.lua
-file lua/claudecode/tools/close_tab.lua 99cd77f278667fed
-block close_tab_tool         e9d6c3aae4615ac7
+file lua/claudecode/tools/close_tab.lua aff040c045ea79ac
+block close_tab_tool         ef7d036aa65228f1
 site lua/claudecode/tools/close_tab.lua: if diff_module_ok and diff.close_diff_by_tab_name then @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: local closed = diff.close_diff_by_tab_name(tab_name, client and client.id or nil) @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: log.error("close_tab", "Failed to load diff module or close_diff_by_tab_name not available") @ local function handler(params, client)
@@ -201,8 +201,8 @@ file lua/claudecode/tools/get_open_editors.lua 96392f05d7af7521
 == lua/claudecode/tools/get_workspace_folders.lua
 file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 == lua/claudecode/tools/init.lua
-file lua/claudecode/tools/init.lua f33aada98120acbe
-block handle_invoke          0999461f45a3444b
+file lua/claudecode/tools/init.lua 13b5734fe1eedc10
+block handle_invoke          7fcec136b1c3f695
 == lua/claudecode/tools/open_diff.lua
 file lua/claudecode/tools/open_diff.lua 1637b47e7a5d6c35
 block open_diff_tool         f4bee70e46ded9af
