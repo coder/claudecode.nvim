@@ -104,6 +104,8 @@ describe("the shape of a tools/call", function()
     { label = "a number", arguments = "5" },
     { label = "a boolean", arguments = "true" },
     { label = "a string", arguments = '"x"' },
+    { label = "a list", arguments = "[1]" },
+    { label = "an empty list", arguments = "[]" },
   }) do
     it("answers -32602 naming arguments for " .. case.label .. " as arguments", function()
       send(tools_call('{"name":"getOpenEditors","arguments":' .. case.arguments .. "}"))

@@ -6,6 +6,9 @@ local tools = require("claudecode.tools.init") -- Added: Require the tools modul
 
 local MCP_PROTOCOL_VERSION = "2024-11-05"
 
+-- Neovim 0.10 renamed vim.tbl_islist to vim.islist.
+local islist = vim.islist or vim.tbl_islist
+
 local M = {}
 
 ---@class ServerState
@@ -345,7 +348,7 @@ function M.register_handlers()
         invalid = "params (an object is required)"
       elseif type(params.name) ~= "string" then
         invalid = "name (a string is required)"
-      elseif params.arguments ~= nil and type(params.arguments) ~= "table" then
+      elseif params.arguments ~= nil and (type(params.arguments) ~= "table" or islist(params.arguments)) then
         invalid = "arguments (an object is required)"
       end
       if invalid then

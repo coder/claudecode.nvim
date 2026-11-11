@@ -65,7 +65,7 @@ describe("tools/call debug log", function()
       end,
     })
 
-    local result = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "readEnvFile", arguments = {} })
+    local result = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "readEnvFile" })
 
     assert.same({ content = { { type = "text", text = secret } } }, result)
     local log = message_history()
@@ -81,7 +81,7 @@ describe("tools/call debug log", function()
       end,
     })
 
-    local _, err = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "failsWithData", arguments = {} })
+    local _, err = server.state.handlers["tools/call"]({ id = "client-1" }, { name = "failsWithData" })
 
     assert.same({ code = -32000, message = "File operation error", data = secret }, err)
     local log = message_history()
