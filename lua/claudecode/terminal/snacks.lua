@@ -581,7 +581,7 @@ local function wrapper_options(buf, config)
     win_opts.wo = win_opts.wo or {}
     win_opts.wo.winbar = win_opts.position == "float" and "" or "1: %{get(b:, 'term_title', '')}"
   end
-  win_opts.keys, win_opts.bo = built.keys, nil
+  win_opts.keys = built.keys
   -- The anchor of a float that is relative to a window. Without one, Snacks takes the window that is current when it
   -- creates the wrapper, so keep the stored one while it exists, and drop one that is gone (the window closed).
   if win_opts.win ~= nil and not (type(win_opts.win) == "number" and vim.api.nvim_win_is_valid(win_opts.win)) then
@@ -606,7 +606,9 @@ end
 ---@return table instance
 local function wrap_terminal(buf, config)
   local instance = Snacks.win(wrapper_options(buf, config))
-  -- The style sets a filetype. The buffer has its own already, and setting it again would fire FileType again.
+  -- The style sets a filetype, and the window options that the terminal started with (an older version's, built from
+  -- the config) can hold `bo` too. The buffer has its own filetype already, and setting it again would fire FileType
+  -- again. Snacks.win reads `bo` only when it shows a window, so this resets it before that.
   instance.opts.bo = {}
   -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
   -- buffer of a scratch instance when it closes, and this terminal buffer was started by Snacks.terminal.

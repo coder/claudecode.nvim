@@ -69,6 +69,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
         width = win_opts.width,
         relative = win_opts.relative,
         win = win_opts.win,
+        -- What Snacks resolves too: the keys, the callbacks and the buffer options. A buffer variable cannot keep them.
+        bo = win_opts.bo or { filetype = "snacks_terminal" },
+        keys = win_opts.keys,
+        on_buf = win_opts.on_buf,
+        on_win = function() end,
       },
     }
     state.keyed[key] = term
@@ -591,6 +596,23 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.are.equal(claude.buf, wrapped.buf)
     end)
 
+    -- A buffer variable cannot keep a function, nor a table that mixes list and map keys (a key of Snacks does), and the
+    -- wrapper takes its keys and its buffer options from the style and the config. So the first start stores none.
+    it("stores the window options without the keys, the callbacks and the buffer options", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      assert.is_not_nil(claude.opts.keys, "the instance has keys")
+      assert.is_not_nil(claude.opts.bo, "the instance has buffer options")
+
+      local stored = state.buffers[claude.buf].vars.claudecode_snacks_window
+
+      assert.are.equal("right", stored.position)
+      assert.is_nil(stored.keys)
+      assert.is_nil(stored.bo)
+      assert.is_nil(stored.on_buf)
+      assert.is_nil(stored.on_win)
+    end)
+
     it("is wiped when the wrapped instance closes", function()
       snacks_provider.open("claude", {}, config, true)
       local claude = started[1]
@@ -689,6 +711,60 @@ describe("claudecode.terminal.snacks after a module reload", function()
 
       assert.is_true(state.windows[own].config.hide)
       assert.is_false(state.windows[other].config.hide)
+    end)
+
+    -- The buffer variable names a window, and the window may still exist without being the float's backdrop. The adoption
+    -- must not hide a window that is no backdrop one z-index below the float, with a backdrop buffer.
+    describe("when the variable names a window that is no backdrop of the float", function()
+      local claude, other
+
+      -- A float with a backdrop that the first start named, a reload, and a hide through an entry.
+      local function hide_after_reload(float_config, other_config, other_filetype)
+        snacks_provider.open("claude", {}, config, true)
+        claude = started[1]
+        state.windows[claude.win].config = float_config
+        local buf = state.next_bufnr
+        state.next_bufnr = state.next_bufnr + 1
+        state.buffers[buf] = { jobid = 0, vars = {}, filetype = other_filetype }
+        other = new_window(buf)
+        state.windows[other].config = other_config
+        state.buffers[claude.buf].vars.claudecode_snacks_backdrop = other
+        reload_snacks()
+
+        snacks_provider.simple_toggle("claude", {}, config) -- adopts and hides the float
+        assert.is_true(state.windows[claude.win].config.hide, "the float is hidden")
+      end
+
+      it("leaves a window alone that sits at another z-index", function()
+        hide_after_reload(
+          { relative = "editor", zindex = 50, hide = false },
+          { relative = "editor", zindex = 40, hide = false },
+          "snacks_win_backdrop"
+        )
+
+        assert.is_false(state.windows[other].config.hide)
+      end)
+
+      it("leaves a window alone that shows no backdrop buffer", function()
+        hide_after_reload(
+          { relative = "editor", zindex = 50, hide = false },
+          { relative = "editor", zindex = 49, hide = false },
+          "markdown"
+        )
+
+        assert.is_false(state.windows[other].config.hide)
+      end)
+
+      -- A split has no z-index, so it has no backdrop to find.
+      it("leaves a window alone when the terminal's window has no z-index", function()
+        hide_after_reload(
+          { relative = "editor", hide = false },
+          { relative = "editor", zindex = 49, hide = false },
+          "snacks_win_backdrop"
+        )
+
+        assert.is_false(state.windows[other].config.hide)
+      end)
     end)
 
     it("is wrapped in the terminal style, so that q hides it and does not close it", function()
@@ -1107,6 +1183,21 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end
         assert.is_true(#state.events_registered > 0)
       end)
+
+      -- `_on` and `fixbuf` are internals of Snacks. A Snacks without one of them must not break the hide and the show.
+      for _, missing in ipairs({ "_on", "fixbuf" }) do
+        it("skips the registration when Snacks has no " .. missing, function()
+          assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+          snacks_provider._get_terminal_for_test()[missing] = nil
+
+          snacks_provider.simple_toggle("claude", {}, config) -- hides
+          snacks_provider.simple_toggle("claude", {}, config) -- shows it in a new window
+
+          assert.are.equal(1, windows_showing(claude.buf))
+          assert.are.equal(0, #state.autocmds)
+          assert.are.equal(0, #state.events_registered)
+        end)
+      end
 
       it("registers them once, however often it hides and shows", function()
         for _ = 1, 3 do
