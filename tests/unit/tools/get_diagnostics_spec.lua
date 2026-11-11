@@ -166,6 +166,14 @@ describe("Tool: get_diagnostics", function()
     assert_contains(err.data, "Diagnostics not available in this editor version/configuration.")
   end)
 
+  it("should check uri before it checks that diagnostics are available", function()
+    _G.vim.diagnostic.get = nil
+    local success, err = pcall(get_diagnostics_handler, { uri = true })
+    expect(success).to_be_false()
+    expect(err.code).to_be(-32602)
+    expect(err.data).to_be("Invalid parameter: uri (a string is required)")
+  end)
+
   it("should error if vim.diagnostic is not available", function()
     local old_diagnostic = _G.vim.diagnostic
     _G.vim.diagnostic = nil

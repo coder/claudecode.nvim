@@ -89,6 +89,10 @@ end
 ---@param params table The input parameters for the tool
 ---@return table diagnostics MCP-compliant response with diagnostics data
 local function handler(params)
+  if params.uri ~= nil and type(params.uri) ~= "string" then
+    error({ code = -32602, message = "Invalid params", data = "Invalid parameter: uri (a string is required)" })
+  end
+
   if not vim.lsp or not vim.diagnostic or not vim.diagnostic.get then
     error({
       code = -32000,
@@ -103,10 +107,6 @@ local function handler(params)
 
   local diagnostics
   local fallback_path
-
-  if params.uri ~= nil and type(params.uri) ~= "string" then
-    error({ code = -32602, message = "Invalid params", data = "Invalid parameter: uri (a string is required)" })
-  end
 
   if not params.uri then
     logger.debug("getDiagnostics", "Getting diagnostics for all open buffers")
