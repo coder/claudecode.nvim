@@ -13,6 +13,8 @@
 #                     reaches every call site, which the two cases above do not)
 #   no-caller-source  no doc or script of the skill except vcn.sh (and this proof) tells a caller to source a
 #                     run.env
+#   doc-vars          a doc of the skill that expands PORT, SID, NVIM_PID or NODE_DIR sets it in the same file, because
+#                     a fresh shell has none of them
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
 #   load-symlink      a run.env that is a symlink (to a file this user owns) is refused, not sourced
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
@@ -729,6 +731,30 @@ callers_case() {
   cases=$((cases + 1))
 }
 
+# A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A doc that expands one of them must set it
+# in the same file with `VAR=$(`, because a fresh shell has none. The patterns are checked first on lines that must and
+# must not match, among them `$CLAUDE_CODE_SSE_PORT`, which is not `$PORT`.
+doc_vars_case() {
+  local name=doc-vars skill file var uses_re sets_re missing=""
+  skill=$(dirname "$V")/..
+  for var in PORT SID NVIM_PID NODE_DIR; do
+    uses_re='\$\{?'$var'([^A-Za-z0-9_]|$)'
+    sets_re='(^|[^A-Za-z0-9_$])'$var'=\$\('
+    grep -qE "$uses_re" <<<"see \"\$$var.lock\" and \${$var}" || fail "$name" "the use pattern misses \$$var"
+    ! grep -qE "$uses_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the use pattern matches a longer name"
+    grep -qE "$sets_re" <<<"$var=\$(basename \"\$L\"/*.lock .lock)" || fail "$name" "the set pattern misses an assignment of $var"
+    ! grep -qE "$sets_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the set pattern matches text that sets nothing"
+    for file in "$skill"/SKILL.md "$skill"/features/*.md; do
+      if grep -qE "$uses_re" "$file" && ! grep -qE "$sets_re" "$file"; then
+        missing+=" ${file#"$skill"/}:$var"
+      fi
+    done
+  done
+  [[ -z $missing ]] || fail "$name" "a doc expands a variable that it does not set:$missing"
+  echo "ok $name: every doc that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
+  cases=$((cases + 1))
+}
+
 # The run.env of a run that an older vcn.sh started has no JQ_BIN. A command that needs jq must resolve it again.
 jq_old_run_case() {
   local name=jq-old-run dir out rc=0
@@ -806,6 +832,7 @@ cleanup_no_agent_tty_case
 setsid_resolved_case
 bare_tools_case
 callers_case
+doc_vars_case
 jq_old_run_case
 load_symlink_case
 signal_symlink_case
