@@ -25,6 +25,7 @@ Preconditions:
 
 - A fresh baseline launch with `hello.txt` open and `$V doctor` all `ok`. Use a fresh launch: the steps expect the rejected client to be `client_2` and start a new client named `b`. After Stop, the run cannot return to the baseline.
 - In each bash call, also set `S=.agents/skills/verify-claudecode-nvim/scripts`, `L=$VCN_STATE/claude/ide`, and `M='split(execute("messages"), "\n")[-1]'`, the last `:messages` line. Wait for each message with `$V until "$M" '<line>'`.
+- The steps use `PORT`, `NVIM_PID` and `NODE_DIR`. Set them with `PORT=$(basename "$L"/*.lock .lock)` (only while the server runs, so before Stop), `NVIM_PID=$($V expr 'getpid()')` and `NODE_DIR=$(dirname "$(mise which node 2>/dev/null || command -v node)")`.
 
 Steps:
 
