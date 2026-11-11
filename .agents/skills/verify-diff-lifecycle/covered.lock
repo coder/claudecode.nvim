@@ -1,5 +1,5 @@
 == lua/claudecode/config.lua
-file lua/claudecode/config.lua b4eaec92b6d04b40
+file lua/claudecode/config.lua 787fa0432d1d77d7
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 55d26ea362173afa
 == lua/claudecode/diff.lua
@@ -126,7 +126,7 @@ site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, 
 == lua/claudecode/health.lua
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua f7c7fff32489cedd
+file lua/claudecode/init.lua fc28de832b4056df
 block user_close_all         10e024fd8ada1c16
 site lua/claudecode/init.lua: local pending = diff.close_pending_diffs("user command") @ function M._create_commands()
 site lua/claudecode/init.lua: local rejected = diff.close_rejected_diffs("user command") @ function M._create_commands()
@@ -140,14 +140,14 @@ file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
 file lua/claudecode/selection.lua 4d6678af786fa69f
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua d630d84ea8ce44a7
+file lua/claudecode/server/client.lua b8165df16f194471
 block create_client          24fa2a266b76e6ad
 == lua/claudecode/server/frame.lua
 file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua ce476ac6b5d73219
+file lua/claudecode/server/init.lua a9c0d153b61e3078
 block server_stop            4dae0bf675cf2cc1
 block on_disconnect          a0ce86cede4af786
 block handle_request         b74ff7dc2e55a2b8
@@ -180,21 +180,21 @@ file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
 file lua/claudecode/terminal/snacks.lua 339e6215cb20f702
 == lua/claudecode/tools/check_document_dirty.lua
-file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
+file lua/claudecode/tools/check_document_dirty.lua 8aae0e85c2f4d383
 == lua/claudecode/tools/close_all_diff_tabs.lua
 file lua/claudecode/tools/close_all_diff_tabs.lua 30e0534fd21df6e6
 block close_all_tool         8a83fdac94646751
 site lua/claudecode/tools/close_all_diff_tabs.lua: local closed_count = diff.close_all_diffs("closeAllDiffTabs tool", client and client.id or nil) @ local function handler(params, client)
 == lua/claudecode/tools/close_tab.lua
-file lua/claudecode/tools/close_tab.lua aff040c045ea79ac
-block close_tab_tool         ef7d036aa65228f1
+file lua/claudecode/tools/close_tab.lua 618774daacc97337
+block close_tab_tool         d0cf81a189eb29d5
 site lua/claudecode/tools/close_tab.lua: if diff_module_ok and diff.close_diff_by_tab_name then @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: local closed = diff.close_diff_by_tab_name(tab_name, client and client.id or nil) @ local function handler(params, client)
 site lua/claudecode/tools/close_tab.lua: log.error("close_tab", "Failed to load diff module or close_diff_by_tab_name not available") @ local function handler(params, client)
 == lua/claudecode/tools/get_current_selection.lua
 file lua/claudecode/tools/get_current_selection.lua 5fb9ade5d26239ae
 == lua/claudecode/tools/get_diagnostics.lua
-file lua/claudecode/tools/get_diagnostics.lua e60d903c8042f813
+file lua/claudecode/tools/get_diagnostics.lua 8b617a9f222b2aae
 == lua/claudecode/tools/get_latest_selection.lua
 file lua/claudecode/tools/get_latest_selection.lua ca8dfa01572dc62b
 == lua/claudecode/tools/get_open_editors.lua
@@ -202,17 +202,17 @@ file lua/claudecode/tools/get_open_editors.lua 96392f05d7af7521
 == lua/claudecode/tools/get_workspace_folders.lua
 file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 == lua/claudecode/tools/init.lua
-file lua/claudecode/tools/init.lua 13b5734fe1eedc10
-block handle_invoke          7fcec136b1c3f695
+file lua/claudecode/tools/init.lua 76b2b584a0799874
+block handle_invoke          d70cbd96c9ab5655
 == lua/claudecode/tools/open_diff.lua
-file lua/claudecode/tools/open_diff.lua 1637b47e7a5d6c35
-block open_diff_tool         f4bee70e46ded9af
+file lua/claudecode/tools/open_diff.lua d4050352cb09dfb9
+block open_diff_tool         1a0e157e8e0a9452
 == lua/claudecode/tools/open_file.lua
-file lua/claudecode/tools/open_file.lua 6c7154d5427af9df
+file lua/claudecode/tools/open_file.lua b277cbe8b86ac7c8
 == lua/claudecode/tools/save_document.lua
-file lua/claudecode/tools/save_document.lua df68d71e47300988
+file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua 8028e6f291700f28
+file lua/claudecode/types.lua dbd0dcb8b70c8107
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua c4a21fe74858afe2
 == lua/claudecode/visual_commands.lua
