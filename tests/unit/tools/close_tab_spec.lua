@@ -61,6 +61,20 @@ describe("close_tab", function()
     )
   end)
 
+  for _, case in ipairs({
+    { label = "a boolean", value = true },
+    { label = "a number", value = 5 },
+    { label = "a table", value = { "plain-tab" } },
+  }) do
+    it("answers a tab_name that is " .. case.label .. " with the invalid-params error", function()
+      local response = tools.handle_invoke(client, { name = "close_tab", arguments = { tab_name = case.value } })
+
+      assert.same({
+        error = { code = -32602, message = "Invalid params", data = "Missing required parameter: tab_name" },
+      }, response)
+    end)
+  end
+
   it("never deletes a buffer the user opened", function()
     vim._mock.add_buffer(user_buffer, "/tmp/project/README.md", "# readme")
 

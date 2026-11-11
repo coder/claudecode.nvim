@@ -35,7 +35,7 @@ describe("openDiff in a new tab: mode", function()
       vim.fn.mkdir(_G.dir, "p")
       vim.fn.writefile({ "alpha", "beta" }, _G.dir .. "/a.txt")
       vim.fn.writefile({ "one", "two" }, _G.dir .. "/b.txt")
-      vim.cmd("edit " .. _G.dir .. "/a.txt")
+      vim.cmd("edit " .. vim.fn.fnameescape(_G.dir .. "/a.txt"))
 
       vim.cmd("botright vsplit")
       _G.terminal_buf = vim.api.nvim_create_buf(false, true)

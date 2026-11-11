@@ -201,7 +201,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     local command = "cd "
       .. quote(dir)
-      .. " && PATH="
+      .. " && TMPDIR="
+      .. quote(dir:match("^(.*)/[^/]+$"))
+      .. " PATH="
       .. quote(dir .. "/bin")
       .. ':"$PATH" STUB_DIR='
       .. quote(dir)
@@ -249,7 +251,41 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local log = assert(io.open(dir .. "/timeout_args"))
     local args = log:read("*a")
     log:close()
-    assert.are.equal("-k 5s 30s\n", args)
+    assert.are.equal("-k 5s 40s\n", args)
+  end)
+
+  -- plenary's test_file ends a file at 50s on its own: exit 1, no TIMEOUT line, and its nvim left running.
+  local PLENARY_FILE_TIMEOUT_SECONDS = 50
+
+  ---@return integer kill_grace_seconds
+  ---@return integer limit_seconds
+  local function timeout_limits()
+    local log = assert(io.open(dir .. "/timeout_args"))
+    local args = log:read("*a")
+    log:close()
+    local grace, limit = args:match("^%-k (%d+)s (%d+)s\n$")
+    assert(grace and limit, args)
+    return tonumber(grace), tonumber(limit)
+  end
+
+  it("stops a file before plenary's own per-file timeout can", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local grace, limit = timeout_limits()
+    assert.is_true(limit + grace < PLENARY_FILE_TIMEOUT_SECONDS, "limit " .. limit .. "s, grace " .. grace .. "s")
+  end)
+
+  it("names in its TIMEOUT line the limit it gave timeout", function()
+    local status, output = run_script({
+      { name = "hang_spec.lua", exit = 124, output = hung_output("hang_spec.lua") },
+    })
+
+    assert.are.equal("1", status, output)
+    local _, limit = timeout_limits()
+    assert.is_truthy(output:find("nvim did not exit within " .. limit .. "s", 1, true), output)
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
@@ -265,7 +301,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local log = assert(io.open(dir .. "/timeout_args"))
     local args = log:read("*a")
     log:close()
-    assert.are.equal("-k 5s 30s\n-k 1s 30s\n-k 5s 30s\n", args)
+    assert.are.equal("-k 5s 40s\n-k 1s 40s\n-k 5s 40s\n", args)
   end)
 
   it("runs command_args_spec.lua like every other file", function()
@@ -468,29 +504,29 @@ describe("scripts/run_integration_tests_individually.sh", function()
     pending(name)
   end
 
-  it_in_wide_digit_locale("fails a file whose count is a wide digit and still runs the next file", function()
-    local status, output, ran = run_script({
-      { name = "a_spec.lua", exit = 0, output = summary(3, "１", 0) },
-      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
-    }, wide_digit_locale)
+  for index, count_name in ipairs({ "Success:", "Failed :", "Errors :" }) do
+    for _, wide in ipairs({
+      { text = "is a wide digit", count = "１" },
+      { text = "has a wide digit after an ASCII digit", count = "1１" },
+    }) do
+      local counts = { 3, 0, 0 }
+      counts[index] = wide.count
+      it_in_wide_digit_locale(
+        "fails a file whose " .. count_name .. " count " .. wide.text .. " and still runs the next file",
+        function()
+          local status, output, ran = run_script({
+            { name = "a_spec.lua", exit = 0, output = summary(unpack(counts)) },
+            { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+          }, wide_digit_locale)
 
-    assert.are.equal("1", status, output)
-    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
-    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
-    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
-  end)
-
-  it_in_wide_digit_locale("fails a file whose count has a wide digit after an ASCII digit", function()
-    local status, output, ran = run_script({
-      { name = "a_spec.lua", exit = 0, output = summary(3, "1１", 0) },
-      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
-    }, wide_digit_locale)
-
-    assert.are.equal("1", status, output)
-    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
-    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
-    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
-  end)
+          assert.are.equal("1", status, output)
+          assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
+          assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+          assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
+        end
+      )
+    end
+  end
 
   it("fails a file whose summary counts a failure although nvim exited 0", function()
     local status, output = run_script({

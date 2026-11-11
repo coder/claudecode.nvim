@@ -93,7 +93,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   it("writes one CR per line break of a CRLF proposal to a dos file", function()
     local path = dir .. "/crlf.txt"
     write_bytes(path, "alpha\r\nbeta\r\n")
-    vim.cmd.edit(path)
+    vim.cmd.edit(vim.fn.fnameescape(path))
     assert.equal("dos", vim.bo.fileformat)
     accept_then_client_exits(path, "alpha\r\nBETA accepted\r\n")
 
@@ -105,7 +105,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   it("writes one CR per line break to a dos file when the proposal mixes CRLF and LF breaks", function()
     local path = dir .. "/mixed.txt"
     write_bytes(path, "alpha\r\nbeta\r\n")
-    vim.cmd.edit(path)
+    vim.cmd.edit(vim.fn.fnameescape(path))
     assert.equal("dos", vim.bo.fileformat)
     accept_then_client_exits(path, "alpha\r\nBETA accepted\ngamma\r\n")
 
@@ -118,7 +118,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
     local path = dir .. "/readonly.txt"
     write_bytes(path, "alpha\n")
     vim.fn.setfperm(path, "r--r--r--")
-    vim.cmd.edit(path)
+    vim.cmd.edit(vim.fn.fnameescape(path))
     assert.is_true(vim.bo.readonly)
     accept_then_client_exits(path, "alpha accepted\n")
 
@@ -134,7 +134,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   it("writes CRLF line breaks to a dos file when the proposal has only LF breaks", function()
     local path = dir .. "/lf.txt"
     write_bytes(path, "alpha\r\nbeta\r\n")
-    vim.cmd.edit(path)
+    vim.cmd.edit(vim.fn.fnameescape(path))
     assert.equal("dos", vim.bo.fileformat)
     accept_then_client_exits(path, "alpha\nBETA accepted\n")
 
@@ -146,7 +146,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   it("writes one BOM when the proposal for a 'bomb' file starts with one", function()
     local path = dir .. "/bom.txt"
     write_bytes(path, "\239\187\191alpha\n")
-    vim.cmd.edit(path)
+    vim.cmd.edit(vim.fn.fnameescape(path))
     assert.is_true(vim.bo.bomb)
     accept_then_client_exits(path, "\239\187\191alpha accepted\n")
 
@@ -176,7 +176,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   it("tells the user to change 'fileencoding' when the file's encoding cannot hold the accepted text", function()
     local path = dir .. "/latin1.txt"
     write_bytes(path, "caf\233\n")
-    vim.cmd.edit(path)
+    vim.cmd.edit(vim.fn.fnameescape(path))
     assert.equal("latin1", vim.bo.fileencoding)
     accept_then_client_exits(path, "café costs 5 €\n")
 
@@ -271,7 +271,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
       vim.cmd("ClaudeCodeCloseAllDiffs")
 
       assert.equal("saved", diff._get_active_diffs()[tab].status)
-      local step = notes[#notes]:match("open it with :(%S+ %S+) %(answer the swap file prompt")
+      local step = notes[#notes]:match("open it with :(split .-) %(answer the swap file prompt")
       assert.is_not_nil(step, notes[#notes])
       assert.equal(diff_win, vim.api.nvim_get_current_win(), "the user is still in the diff window")
       swap_answered = true
