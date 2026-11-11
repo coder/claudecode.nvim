@@ -578,8 +578,8 @@ NoTerminalSelection == latest = None \/ latest.buf # Term
 HeldUntilMoved ==
   (Settled /\ InFile /\ mode = "n" /\ hold # None /\ ~holdLoose /\ hold.ver = ver[hold.buf]) => latest = hold
 
-(* Once events settle, Claude holds a released selection only while the cursor has not *)
-(* moved since you released it.                                                       *)
+(* Once events settle in a file, Claude holds a released selection only while the cursor *)
+(* has not moved since you released it.                                                 *)
 HeldEndsWhenMoved == (Settled /\ InFile /\ mode = "n" /\ hold = None) => latest \notin VisValues
 
 (* Once events settle in a file, Claude's selection is in that file. *)
