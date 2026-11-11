@@ -86,17 +86,28 @@ describe("the diff's terminal window in a diff tab that stays open", function()
         assert.is_false(after.ran, "no BufLeave may fire: the terminal stays, so the provider has none to show again")
       end)
 
-      it("closes the terminal window when the user hid the terminal before the diff opened", function()
-        open_in_last_tab(layout, { hide_original_terminal = true })
+      it(
+        "closes the terminal window and its WinClosed autocmd when the user hid the terminal before the diff",
+        function()
+          open_in_last_tab(layout, { hide_original_terminal = true })
+          local function terminal_window_autocmds()
+            return child.call([[
+            local pattern = tostring(_G.diff_terminal_win)
+            return #vim.api.nvim_get_autocmds({ group = "ClaudeCodeMCPDiff", event = "WinClosed", pattern = pattern })
+          ]])
+          end
+          assert.equal(1, terminal_window_autocmds())
 
-        child.close_diff("first diff")
-        local state = child.state()
+          child.close_diff("first diff")
+          local state = child.state()
 
-        assert.equal("n", state.mode)
-        assert.is_false(terminal_window_is_open())
-        assert.equal(1, child.leftovers().windows)
-        assert.equal(0, child.leftovers().handlers)
-      end)
+          assert.equal("n", state.mode)
+          assert.is_false(terminal_window_is_open())
+          assert.equal(1, child.leftovers().windows)
+          assert.equal(0, child.leftovers().handlers)
+          assert.equal(0, terminal_window_autocmds(), "the window is gone, so its WinClosed autocmd must go too")
+        end
+      )
 
       it("keeps the terminal window when the only other window that shows it is a float parked with hide", function()
         if vim.fn.has("nvim-0.10") ~= 1 then
