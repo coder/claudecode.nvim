@@ -76,7 +76,7 @@ return {
 
     -- Connection Management
     -- connection_wait_delay = 600, -- Wait time after Claude's handshake before sending queued @ mentions (ms)
-    -- connection_timeout = 10000, -- Max time queued @ mentions wait for Claude Code to connect (ms)
+    -- connection_timeout = 10000, -- Time Claude Code has to connect before queued @ mentions time out (ms)
     -- queue_timeout = 5000, -- Unused, still accepted: queued @ mentions wait up to connection_timeout
 
     -- Diff Integration

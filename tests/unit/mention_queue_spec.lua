@@ -894,43 +894,113 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
-  it(
-    "D: a Claude that gets ready just at the deadline is too late: you see one error, and Claude gets nothing",
-    function()
-      send("/project/a.lua")
-      run(9000)
-      local claude = claude_connects()
-      claude.upgrade()
-      -- The handshake completes at 10 s, so the flush for this Claude is due at the deadline, 10.6 s.
-      at(1000, claude.handshake_written)
-      run(2000)
-
-      assert.same({}, claude.received())
-      assert.same({ 10600 }, error_times)
-      assert.matches("Send timeout %- clearing 1 queued", errors[1])
-      assert_no_lua_error()
-    end
-  )
-
-  it("C: a flush that the deadline cancelled does not send a mention sent right after the deadline", function()
+  it("D: a Claude that gets ready just at the deadline gets the mention", function()
     send("/project/a.lua")
     run(9000)
     local claude = claude_connects()
     claude.upgrade()
-    -- The handshake completes at 10 s, so the flush for this Claude is due at the deadline of a.lua, 10.6 s. On the
-    -- main loop, after the deadline's callback cancelled that flush and before the flush's callback runs, you send b.lua.
+    -- The handshake completes at 10 s, so Claude is ready at the deadline, 10.6 s, and the flush is due then too.
     at(1000, claude.handshake_written)
-    at(1600, function()
-      vim.schedule(function()
-        send("/project/b.lua")
-      end)
-    end)
-    run(1600)
-    assert.same({}, claude.received(), "b.lua waits the 50 ms after its send")
+    run(2000)
 
-    run(100)
-    assert.same({ "b.lua" }, names(claude.received()))
+    assert.same({ "a.lua" }, names(claude.received()))
+    assert.same({}, errors)
+    assert_no_lua_error()
+  end)
+
+  ---Send `count` mentions at once, as a tree add of that many files does, and return their names in order.
+  local function send_many(count)
+    local sent = {}
+    for index = 1, count do
+      send("/project/f" .. index .. ".lua")
+      sent[index] = "f" .. index .. ".lua"
+    end
+    return sent
+  end
+
+  for _, handshake_at in ipairs({ 8000, 9800 }) do
+    it(
+      ("F1: 100 mentions sent at once all reach a Claude whose handshake comes %d ms later"):format(handshake_at),
+      function()
+        local sent = send_many(100)
+        run(handshake_at)
+        local claude = claude_connects()
+        claude.handshake()
+        -- Claude is ready connection_wait_delay later, and the queue drains to it, 25 ms apart, past the deadline.
+        run(5000)
+
+        assert.same(sent, names(claude.received()))
+        assert.same({}, errors)
+        assert.same({}, claudecode.state.mention_queue)
+        assert.is_nil(claudecode.state.mention_timer)
+        assert.is_nil(claudecode.state.connection_timer)
+        assert_no_lua_error()
+      end
+    )
+  end
+
+  ---The count in the error that cleared the queue.
+  local function cleared_count(message)
+    return tonumber((assert(message:match("clearing (%d+) queued"), message)))
+  end
+
+  it("F1: when a ready Claude leaves in the middle of the queue, the rest leave at their deadline", function()
+    send_many(100)
+    run(8000)
+    local claude = claude_connects()
+    claude.handshake()
+    run(1000)
+    claude.drop()
+    local got = #claude.received()
+    assert.is_true(got > 0 and got < 100, "Claude got " .. got)
+    run(5000)
+
     assert.same({ 10600 }, error_times)
+    assert.matches("Connection timeout", errors[1])
+    assert.equals(100 - got, cleared_count(errors[1]))
+    assert.same({}, claudecode.state.mention_queue)
+    assert.is_nil(claudecode.state.connection_timer)
+  end)
+
+  it("F1: when a ready Claude leaves after the deadline, the rest leave at the next flush", function()
+    send_many(100)
+    run(9800)
+    local claude = claude_connects()
+    claude.handshake()
+    run(1200)
+    claude.drop()
+    local got = #claude.received()
+    assert.is_true(got > 0 and got < 100, "Claude got " .. got)
+    run(5000)
+
+    assert.equals(1, #error_times)
+    assert.is_true(error_times[1] > 11000 and error_times[1] <= 11025, "the error came at " .. error_times[1])
+    assert.matches("Connection timeout", errors[1])
+    assert.equals(100 - got, cleared_count(errors[1]))
+    assert.same({}, claudecode.state.mention_queue)
+    assert.is_nil(claudecode.state.connection_timer)
+  end)
+
+  it("F1: when a ready Claude leaves after the deadline while another waits, the rest leave at once", function()
+    send_many(100)
+    run(9800)
+    local first = claude_connects()
+    first.handshake()
+    run(1100)
+    -- A second Claude connects at 10.9 s and is ready only at 11.5 s.
+    local second = claude_connects()
+    second.handshake()
+    run(100)
+    first.drop()
+    local got = #first.received()
+    assert.is_true(got > 0 and got < 100, "the first Claude got " .. got)
+    run(5000)
+
+    assert.equals(1, #error_times)
+    assert.is_true(error_times[1] > 11000 and error_times[1] <= 11025, "the error came at " .. error_times[1])
+    assert.matches("Send timeout", errors[1])
+    assert.equals(100 - got, cleared_count(errors[1]))
+    assert.same({}, claudecode.state.mention_queue)
     assert_no_lua_error()
   end)
 
