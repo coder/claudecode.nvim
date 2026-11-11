@@ -730,9 +730,10 @@ code_units() {
     END { if (fenced) print "%%unit%%"; printf "%s%%%%unit%%%%\n", spans }' "$1"
 }
 
-# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it.
+# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it. A unit that sources a
+# run.env sets every variable of the run, so it needs no `VAR=$(`.
 units_missing() {
-  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\('
+  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\(|(^|[^[:alnum:]_.-])(source|\.)[[:space:]]+[^;#]*run\.env'
   while IFS= read -r line; do
     if [[ $line != "%%unit%%" ]]; then
       unit+=$line$'\n'
@@ -764,6 +765,10 @@ doc_vars_case() {
     ! units_missing "$sample" "$var" || fail "$name" "a block that sets $var before it expands it was flagged"
     printf 'Set `%s=$(x)` first, then `echo "$%s"`.\n' "$var" "$var" >"$sample"
     ! units_missing "$sample" "$var" || fail "$name" "inline code that sets $var for inline code that expands it was flagged"
+    printf 'Run `source "$VCN_STATE/run.env"; echo "$%s"`.\n\n```bash\n. "$VCN_STATE/run.env"\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "a recipe that sources a run.env was flagged for $var"
+    printf 'Run `echo "$%s"`, as in `grep run.env x`.\n' "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a recipe that only names a run.env passed for $var"
     for file in "$skill"/SKILL.md "$skill"/features/*.md; do
       ! units_missing "$file" "$var" || missing+=" ${file#"$skill"/}:$var"
     done
