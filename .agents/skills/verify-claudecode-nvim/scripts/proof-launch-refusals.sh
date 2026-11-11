@@ -15,6 +15,8 @@
 #   tmp-missing    TMPDIR does not exist, under a sticky dir where another user could make it after the checks
 #   tmp-dotdot     TMPDIR has a .. part after a symlink (G/L/../y)
 #   tmp-dot        TMPDIR has a . part
+#   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
+#   out-space      the same above VERIFY_OUT
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
@@ -121,6 +123,16 @@ mkdir -m 700 "$TMP/dd" "$TMP/dd/y" "$TMP/dd/real"
 ln -s "$TMP/dd/real" "$TMP/dd/L"
 refused tmp-dotdot "TMPDIR=$TMP/dd/L/../y has a . or .. part" TMPDIR="$TMP/dd/L/../y" VERIFY_OUT="$TMP/tmp-out"
 refused tmp-dot "TMPDIR=$TMP/dd/./y has a . or .. part" TMPDIR="$TMP/dd/./y" VERIFY_OUT="$TMP/tmp-out"
+# A dir that others can write is refused whatever its name ends in. A twin symlink with the name cut at the trailing
+# space sits next to it: a walk that read the name back from a line of stat output tested the twin and passed it.
+mkdir -m 700 "$TMP/sp"
+mkdir -m 777 "$TMP/sp/q "
+ln -s "$TMP/sp" "$TMP/sp/q"
+mkdir -m 700 "$TMP/sp/q /tmp" "$TMP/sp/q /out-parent"
+refused tmp-space "TMPDIR: $TMP/sp/q , above the state dir, is writable by others and not sticky" \
+  TMPDIR="$TMP/sp/q /tmp" VERIFY_OUT="$TMP/tmp-out"
+refused out-space "refusing evidence dir: $TMP/sp/q , above the evidence dir, is writable by others and not sticky" \
+  VERIFY_OUT="$TMP/sp/q /out-parent/out"
 refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"

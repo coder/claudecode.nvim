@@ -52,11 +52,10 @@ env_line() { printf '%s=%q\n' "$1" "$2"; }
 # symlink that another user made at a freed name. stat without -L describes a symlink itself.
 unsafe_state() {
   local uid mode real
-  # A trailing newline of a path would be cut from the substitution, so the x guards it. A path with a symlink or a . or ..
-  # part could be pointed elsewhere by another user after the check, and source and rm -rf would follow it.
-  real=$(realpath -e -- "$1" 2>/dev/null; printf x)
-  real=${real%x}
-  real=${real%$'\n'}
+  # A path with a symlink or a . or .. part could be pointed elsewhere by another user after the check, and source and rm -rf
+  # would follow it. realpath -z ends the path with a NUL, so read keeps a newline at its end, which a substitution would cut.
+  real=""
+  IFS= read -r -d "" real < <(realpath -ez -- "$1" 2>/dev/null) || true
   if [[ $real != "$1" ]]; then
     echo "it is not its own resolved path (${real:-it does not exist})"
     return
@@ -370,15 +369,11 @@ unsafe_dir() {
 
 # Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the dirs above it as given
 # and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the message (default: the
-# evidence dir). The x after each realpath keeps a trailing newline of a name.
+# evidence dir).
 unsafe_above() {
-  local logical resolved why
-  logical=$(realpath -sm -- "$1/.."; printf x)
-  logical=${logical%x}
-  logical=${logical%$'\n'}
-  resolved=$(realpath -m -- "$1/.."; printf x)
-  resolved=${resolved%x}
-  resolved=${resolved%$'\n'}
+  local logical="" resolved="" why
+  IFS= read -r -d "" logical < <(realpath -smz -- "$1/..") || true
+  IFS= read -r -d "" resolved < <(realpath -mz -- "$1/..") || true
   why=$(unsafe_walk "$logical" "${2-the evidence dir}")
   if [[ -z $why && $resolved != "$logical" ]]; then
     why=$(unsafe_walk "$resolved" "${2-the evidence dir}")
@@ -518,7 +513,8 @@ cmd_launch() {
   [[ /$tmpdir/ != */./* && /$tmpdir/ != */../* ]] || die "TMPDIR=$tmpdir has a . or .. part"
   # Resolve once and use only the result, so the check below and mktemp see the same path. A dir that is missing now could
   # be made by another user after the check and before mktemp.
-  tmpdir=$(realpath -e -- "$tmpdir" 2>/dev/null) && [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
+  IFS= read -r -d "" tmpdir < <(realpath -ez -- "$tmpdir" 2>/dev/null) || tmpdir=""
+  [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
   # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
   why=$(unsafe_walk "$tmpdir" "the state dir")
