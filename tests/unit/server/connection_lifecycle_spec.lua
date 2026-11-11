@@ -1270,6 +1270,20 @@ describe("The lifecycle of a WebSocket connection", function()
       end
     )
 
+    -- The fake timers run only when a test calls their callback, so no other test reads `delay`. A deadline that first
+    -- runs at once cuts off a Claude that is still reading, and one that first runs after three windows keeps the queue
+    -- three times as long as the bound says. Real sockets showed both (verifier probes at a 3 s interval).
+    it("first runs the deadline one window after the frame, not at once and not later", function()
+      start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      tcp.send_to_client(server, client.id, reply)
+      handle._read_cb(nil, binary())
+
+      local deadline = close_deadline()
+
+      assert.equals(2 * interval, deadline.delay, "the deadline does not first run one window after the frame")
+    end)
+
     it("waits while Claude reads, and the write callback then closes the socket and ends the deadline", function()
       start_ping_timer()
       local client, writes, handle = connect_and_upgrade()
