@@ -51,8 +51,8 @@ NVIM_PID=""
 NODE_PID=""
 # shellcheck disable=SC2329
 cleanup() {
+  trap '' TERM INT HUP # a further signal must not end the cleanup
   local pid
-  trap '' TERM INT HUP # a second signal must not end the cleanup
   for pid in $NODE_PID $NVIM_PID; do
     kill "$pid" 2>/dev/null || true
     for _ in {1..30}; do
@@ -64,12 +64,13 @@ cleanup() {
   [[ -z $RUN ]] || rm -rf -- "$RUN"
 }
 trap cleanup EXIT
-trap 'exit 143' TERM
-trap 'exit 130' INT
-trap 'exit 129' HUP
+# Each handler ignores the three signals before it exits, so a further signal cannot end the cleanup that it starts.
+trap 'trap "" TERM INT HUP; exit 143' TERM
+trap 'trap "" TERM INT HUP; exit 130' INT
+trap 'trap "" TERM INT HUP; exit 129' HUP
 
 RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)" || die "cannot make a temp dir under /tmp"
-REAL="$(cd "$RUN" && pwd -P)" || die "cannot enter the temp dir $RUN"
+REAL="$(cd "$RUN" 2>/dev/null && pwd -P)" || die "cannot enter the temp dir $RUN"
 RUN="$REAL"
 mkdir "$RUN/work" "$RUN/tmp" || die "cannot make the dirs in $RUN"
 # What nvim gets, and nothing else. The checker gets nothing.
@@ -89,6 +90,7 @@ env -i "$NODE" --version >/dev/null 2>&1 ||
   -c "lua require('claudecode').setup({ terminal = { provider = 'none' }, track_selection = false })" \
   -c "lua vim.fn.timer_start(500, function() if wire_gone() then vim.cmd('qa!') end end, { ['repeat'] = -1 })" >"$RUN/nvim.out" 2>&1 &
 NVIM_PID=$!
+disown "$NVIM_PID" # bash prints no `Killed` line for it when it dies
 
 shopt -s nullglob
 for _ in {1..100}; do
