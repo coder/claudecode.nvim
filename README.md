@@ -358,9 +358,10 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       -- Auto-enter terminal mode when the plugin opens or focuses the Claude terminal
       -- (e.g. :ClaudeCodeFocus). With the snacks provider it also enters terminal mode
       -- whenever the window gains focus, e.g. via <C-w>l. With native, <C-w>l back into
-      -- the terminal stays in Normal mode, except while a diff opened in a new tab
-      -- (diff_opts.open_in_new_tab) shows the terminal. Set to false to stay in Normal
-      -- mode with either provider and preserve your scroll position; press `i` to type.
+      -- the terminal stays in Normal mode, except after a diff opened in a new tab
+      -- (diff_opts.open_in_new_tab) has put the terminal in its tab, until that terminal
+      -- window closes, even if it shows another buffer by then. Set to false to stay in
+      -- Normal mode with either provider and preserve your scroll position; press `i` to type.
       -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
       auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
@@ -567,8 +568,8 @@ The plugin maps no key that leaves terminal mode or moves between windows, so yo
   Normal mode, and `<C-w>h` and the other window commands work. To type to Claude Code again, press `i` in the Claude
   window. When you come back to it from another window with the default `terminal.auto_insert = true`, `:ClaudeCodeFocus`
   enters terminal mode with either provider. `<C-w>l` and the other window commands do so only with `snacks`, or with
-  `native` while a diff opened in a new tab (`diff_opts.open_in_new_tab`) shows the terminal. With `auto_insert = false`,
-  none of them do.
+  `native` after a diff opened in a new tab (`diff_opts.open_in_new_tab`) has put the terminal in its tab, until that
+  terminal window closes, even if it shows another buffer by then. With `auto_insert = false`, none of them do.
 - A shorter key is a mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer Filetype above). It exists on
   the Claude buffer only, so other terminals keep their keys, and a single `<Esc>` still goes to Claude Code.
 
@@ -609,7 +610,7 @@ replaces a mapping from your autocmd.
 If `<C-h>` and the others clash with tmux or a navigation plugin, use `<A-h>` and the others instead (write `"<A-"`
 for `"<C-"` in the first block). On macOS, `<A-h>` fires only when your terminal sends Option as Meta, and many
 terminals need that turned on first (see Claude Code's
-[Option key setup](https://code.claude.com/docs/en/terminal-config.md#enable-option-key-shortcuts-on-macos)). These keys
+[Option key setup](https://code.claude.com/docs/en/terminal-config#enable-option-key-shortcuts-on-macos)). These keys
 move between Neovim windows only. To move between tmux panes as well, use vim-tmux-navigator: map the key to
 `<C-\><C-n><Cmd>TmuxNavigateLeft<CR>` (and `TmuxNavigateDown`, `TmuxNavigateUp`, `TmuxNavigateRight`) in place of
 `<C-\><C-n><C-w>h`.
