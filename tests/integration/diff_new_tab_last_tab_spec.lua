@@ -29,12 +29,24 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
           assert.equal(2, leftovers.windows)
           assert.equal(0, leftovers.handlers)
           assert.is_true(leftovers.job_running)
+          assert.is_false(
+            child.call([[return vim.api.nvim_win_is_valid(_G.diff_terminal_win)]]),
+            "the diff's terminal window must close"
+          )
+        end
+
+        local function remember_terminal_window()
+          child.call([[
+            local diff_data = assert(require("claudecode.diff")._get_active_diffs()["first diff"])
+            _G.diff_terminal_win = diff_data.terminal_win_in_new_tab
+          ]])
         end
 
         it("leaves Normal mode in a buffer that is not the diff, without the diff's terminal handler", function()
           child.start({ layout = layout, show_terminal_again = true })
           child.open_diff("a.txt", "first diff")
           assert.equal(1, child.close_first_tab().tabs)
+          remember_terminal_window()
 
           child.close_diff("first diff")
 
@@ -47,6 +59,7 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
           child.focus_terminal_in_tab()
           child.leave_terminal_mode()
           assert.equal("terminal", child.close_first_tab().buftype)
+          remember_terminal_window()
 
           child.close_diff("first diff")
 
