@@ -864,9 +864,14 @@ async function testUnreleasedDraftFenceGuard() {
       name,
     );
   };
-  const real = readFileSync(join(__dirname, "..", "CHANGELOG.md"), "utf8");
+  // The real changelog, from its release 0.4.0 on, under an empty draft. A released section never changes, but the top
+  // of the live file does: a staged draft or a newer release changes how Prettier wraps the text. The tests must not
+  // depend on a state that the file only reaches later, so they read no more than the released sections.
   const realHead = "# Changelog\n\n## [Unreleased]\n";
-  assert.ok(real.startsWith(realHead), "the real changelog starts as expected");
+  const live = readFileSync(join(__dirname, "..", "CHANGELOG.md"), "utf8");
+  const oldest = "## [0.4.0] - 2026-11-09\n";
+  assert.ok(live.includes(`\n${oldest}`), "the real changelog has 0.4.0");
+  const real = `${realHead}\n${live.slice(live.indexOf(`\n${oldest}`) + 1)}`;
 
   // A draft fence that CommonMark does not close runs to the end of the text, and it holds every older release
   // below it. The updater must not write a changelog without that release, whatever shape the fence has.
@@ -1138,6 +1143,12 @@ async function testUnreleasedDraftFenceGuard() {
     update(`${head}Example:\n\n    \`\`\`js\n    x\n${previous}`),
     released,
     "an indented code block is not a fence",
+  );
+  // A first release has a draft with no fence and no older release below it. The draft is the rest of the text.
+  assert.equal(
+    update(`${head}### Added\n\n- Added x\n`),
+    entryOnly,
+    "a first release whose draft has no fence",
   );
 
   // The real changelog keeps every release in all three endings, and the draft is replaced by the entry.
