@@ -340,21 +340,57 @@ describe("The lifecycle of a WebSocket connection", function()
       end
     )
 
-    -- libuv reads at most what the socket holds in one poll. When the loop blocked, Claude kept writing, and a pong that
-    -- Claude sent can wait behind more unread data than the socket holds: the poll that follows the block does not
-    -- reach it, and the ping looks as old as the block.
+    -- A machine that sleeps between a tick and its poll stops Neovim and Claude together. When they wake, the loop polls
+    -- before Claude answers, and the ping looks as old as the sleep. A block that long is a wake, as it is for a tick.
     it("judges nothing when the loop blocked for longer than 1.5 intervals between the tick and its poll", function()
       local tick = start_ping_timer()
       local client, _, handle = connect_and_upgrade()
 
       clock = clock + interval
       tick()
-      clock = clock + 3 * interval -- an idle or prepare callback blocks before the poll
-      poll() -- Claude's pong waits behind 300 KB that the poll does not finish reading
+      clock = clock + 3 * interval -- a callback blocks before the poll, or the machine sleeps
+      poll() -- Claude has not answered yet
 
       assert.is_not_nil(server.clients[client.id], "the check judged a ping that the block made look old")
       poll(handle, pong())
       assert.is_not_nil(server.clients[client.id])
+      assert.spy(callbacks.on_disconnect).was_not_called()
+    end)
+
+    it(
+      "does not drop a Claude that sends a large message before its pong, whichever block comes before the poll",
+      function()
+        local tick = start_ping_timer()
+        local client, _, handle = connect_and_upgrade()
+        local big = frame.create_frame(frame.OPCODE.TEXT, string.rep("x", 300000), true, true)
+
+        clock = clock + interval
+        tick()
+        poll()
+        clock = clock + 1.4 * interval
+        tick() -- the ping of the first tick is 1.4 intervals old, and its pong waits behind the large message
+        clock = clock + 1.4 * interval
+        poll(handle, big:sub(1, 65536)) -- the poll reads the first part: the ping is 2.8 intervals old, within the gap of the tick
+
+        assert.is_not_nil(server.clients[client.id], "the check dropped a Claude that was sending")
+        poll(handle, big:sub(65537) .. pong())
+        assert.is_not_nil(server.clients[client.id])
+        assert.spy(callbacks.on_disconnect).was_not_called()
+      end
+    )
+
+    it("does not drop a client that writes data but never answers a ping", function()
+      local tick = start_ping_timer()
+      local client, _, handle = connect_and_upgrade()
+      local request = frame.create_frame(frame.OPCODE.TEXT, "{}", true, true)
+
+      for _ = 1, 8 do
+        clock = clock + interval
+        tick()
+        poll(handle, request)
+      end
+
+      assert.is_not_nil(server.clients[client.id], "a client that writes is alive")
       assert.spy(callbacks.on_disconnect).was_not_called()
     end)
 
@@ -504,15 +540,14 @@ describe("The lifecycle of a WebSocket connection", function()
 
     it("does not drop a client that is closing", function()
       local tick = start_ping_timer()
-      local client, writes, handle = connect_and_upgrade()
+      local client, writes = connect_and_upgrade()
       tick_four_times(tick)
-      scheduled = {} -- on_close waits for the loop
-      handle._read_cb(nil, frame.create_frame(frame.OPCODE.CLOSE, "\3\232", true, true))
+      require("claudecode.server.client").close_client(client, 1001, "going away") -- the Close frame waits to be written
       assert.equals("closing", client.state)
       local written = #writes
       poll()
 
-      assert.equals(written, #writes, "a Close frame followed the reply to Claude's Close frame")
+      assert.equals(written, #writes, "a Close frame followed the Close frame that was queued")
       assert.spy(callbacks.on_disconnect).was_not_called()
     end)
   end)

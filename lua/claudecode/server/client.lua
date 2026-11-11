@@ -30,7 +30,7 @@ local CLOSE_REASONS = {
 ---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
----@field ping_unanswered_since number|nil Loop time of the oldest ping sent since the last pong was read. nil when none
+---@field ping_unanswered_since number|nil Loop time of the oldest ping sent since bytes were last read from the client
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -283,7 +283,6 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
       client.tcp_handle:write(pong_frame)
     elseif opcode == frame.OPCODE.PONG then
       client.last_pong = vim.loop.now()
-      client.ping_unanswered_since = nil
     end
   end
   client.buffer = client.buffer:sub(offset)

@@ -215,6 +215,10 @@ function M._handle_new_connection(server)
       return
     end
 
+    -- Any bytes show that Claude is alive and writing. A pong can wait behind more unread data than the socket holds,
+    -- and one poll does not reach it, so the keepalive does not wait for the pong itself.
+    client.ping_unanswered_since = nil
+
     -- Process incoming data
     client_manager.process_data(client, data, function(cl, message)
       server.on_message(cl, message)
@@ -381,16 +385,16 @@ function M.stop_server(server)
   end
 end
 
----Drop each of `clients` whose oldest ping has gone unanswered for `limit` ms, once Neovim has read their sockets. The
+---Drop each of `clients` that sent nothing since its oldest ping, for `limit` ms, once Neovim has read their sockets. The
 ---judgment runs in a libuv check handle, which libuv runs after the poll phase that reads the sockets, so every byte
 ---that reached a socket before the loop time of the check has been read. A timer tick cannot judge: libuv can run it
 ---before it reads the pong that Claude sent. That happens after a block in a check callback or an I/O read callback,
 ---and, with libuv 1.44 (bundled in Neovim 0.8), after a block in any callback. libuv 1.44 also runs the timers again at
 ---the end of a pass, so two ticks can run with no read between them. `vim.schedule` is no help either: Neovim runs its
 ---callbacks between two passes, so it can run one before the read.
----The check judges only if its loop time is at most `gap` after the tick. After a longer block, a pong that Claude sent
----can wait behind more unread data than the socket holds, and one poll does not reach it. The next tick finds the same
----gap, takes it for a wake and starts over.
+---The check judges only if its loop time is at most `gap` after the tick. After a longer block Neovim and Claude can
+---have slept together, and Claude has had no time to answer: the next tick finds the same gap, takes it for a wake and
+---starts over.
 ---@param server TCPServer The server object
 ---@param clients WebSocketClient[] The clients that the ping timer pinged in one tick
 ---@param limit number Age in milliseconds of the oldest unanswered ping at which a client is dropped
@@ -435,9 +439,10 @@ end
 ---Start a periodic ping task to keep connections alive.
 ---A tick pings every connected client and never drops one. A client whose oldest ping is `interval * 2.5` old is
 ---dropped at the first read of its socket after a tick [drop_unanswered_after_read], if the loop ran that read within
----`interval * 1.5` of the tick. A block longer than that restarts the count (the next tick is a wake). A Claude that
----never answers is dropped after the third tick that follows its first unanswered ping: the half interval keeps timer
----jitter from moving the drop.
+---`interval * 1.5` of the tick. A block longer than that restarts the count (the next tick is a wake). Any bytes read
+---from a client clear its stamp, so a Claude that sends anything, also a large message before its pong, is not dropped.
+---A Claude that sends nothing is dropped after the third tick that follows its first unanswered ping: the half
+---interval keeps timer jitter from moving the drop.
 ---@param server TCPServer The server object
 ---@param interval number Ping interval in milliseconds (default: 30000)
 ---@return table? timer The timer handle, or nil if creation failed
