@@ -721,19 +721,24 @@ bare_tools_case() {
 # span (all of them in a doc are checked together, because a bullet cites one assignment for the steps below it). Prose
 # outside the backticks is not a recipe: it can name an assignment that no recipe runs.
 # code_units <file>: prints each fenced block, then the inline code spans outside the blocks, each unit ended by a line
-# that holds only %%unit%%.
+# that holds only %%unit%%. A block or a span that sources a run.env sets every variable of the run by itself, so it is left
+# out: it needs no `VAR=$(`, and it gives none to the other recipes.
 code_units() {
-  awk '/^```/ { if (fenced) print "%%unit%%"; fenced = !fenced; next }
-    fenced { print; next }
+  awk 'function sources(text) { return text ~ /(^|[^A-Za-z0-9_.-])(source|\.)[ \t]+[^;#]*run\.env/ }
+    /^```/ { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%"; block = "" } fenced = !fenced; next }
+    fenced { block = block $0 "\n"; next }
     { line = $0
-      while (match(line, /`[^`]+`/)) { spans = spans substr(line, RSTART + 1, RLENGTH - 2) "\n"; line = substr(line, RSTART + RLENGTH) } }
-    END { if (fenced) print "%%unit%%"; printf "%s%%%%unit%%%%\n", spans }' "$1"
+      while (match(line, /`[^`]+`/)) {
+        span = substr(line, RSTART + 1, RLENGTH - 2)
+        if (!sources(span)) spans = spans span "\n"
+        line = substr(line, RSTART + RLENGTH)
+      } }
+    END { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%" } printf "%s%%%%unit%%%%\n", spans }' "$1"
 }
 
-# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it. A unit that sources a
-# run.env sets every variable of the run, so it needs no `VAR=$(`.
+# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it.
 units_missing() {
-  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\(|(^|[^[:alnum:]_.-])(source|\.)[[:space:]]+[^;#]*run\.env'
+  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\('
   while IFS= read -r line; do
     if [[ $line != "%%unit%%" ]]; then
       unit+=$line$'\n'
@@ -769,6 +774,8 @@ doc_vars_case() {
     ! units_missing "$sample" "$var" || fail "$name" "a recipe that sources a run.env was flagged for $var"
     printf 'Run `echo "$%s"`, as in `grep run.env x`.\n' "$var" >"$sample"
     units_missing "$sample" "$var" || fail "$name" "a recipe that only names a run.env passed for $var"
+    printf 'Run `source "$VCN_STATE/run.env"` first, then `echo "$%s"`.\n' "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a source in one inline recipe set $var for another recipe"
     for file in "$skill"/SKILL.md "$skill"/features/*.md; do
       ! units_missing "$file" "$var" || missing+=" ${file#"$skill"/}:$var"
     done
