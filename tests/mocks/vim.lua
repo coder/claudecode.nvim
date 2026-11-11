@@ -59,9 +59,10 @@ if _G.spy == nil then
   }
 end
 
----A function, or a value whose metatable has a `__call` function, as Neovim's vim.wait accepts.
+---A function, or a value whose metatable has a `__call` function, as Neovim's vim.wait accepts. Neovim reads the real
+---metatable even when `__metatable` hides it, so this uses `debug.getmetatable`.
 local function is_callable(value)
-  local metatable = getmetatable(value)
+  local metatable = debug.getmetatable(value)
   return type(value) == "function" or (type(metatable) == "table" and type(metatable.__call) == "function")
 end
 
@@ -926,11 +927,11 @@ local vim = {
 
   -- Additional missing vim functions
   wait = function(timeout, condition, interval, fast_only)
-    assert(timeout == nil or type(timeout) == "number", "vim.wait: timeout must be a number")
+    assert(timeout == nil or tonumber(timeout), "vim.wait: timeout must be a number")
     assert(condition == nil or is_callable(condition), "vim.wait: condition must be callable")
-    assert(interval == nil or type(interval) == "number", "vim.wait: interval must be a number")
-    timeout = timeout or 1000
-    interval = interval or 10
+    assert(interval == nil or tonumber(interval), "vim.wait: interval must be a number")
+    timeout = tonumber(timeout) or 1000
+    interval = tonumber(interval) or 10
 
     local polls = math.floor(timeout / math.max(interval, 1)) + 1
     for _ = 1, polls do

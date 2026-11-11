@@ -86,6 +86,31 @@ describe("tests.mocks.vim wait", function()
     assert.are.equal(3, polls)
   end)
 
+  it("calls a callable whose metatable is protected with __metatable, as Neovim does", function()
+    local polls = 0
+    local condition = setmetatable({}, {
+      __metatable = "locked",
+      __call = function()
+        polls = polls + 1
+        return polls == 2
+      end,
+    })
+
+    assert.is_true(mock_vim.wait(1000, condition, 10))
+    assert.are.equal(2, polls)
+  end)
+
+  it("takes a timeout and an interval that are numeric strings, as Neovim does", function()
+    local polls = 0
+
+    mock_vim.wait("105", function()
+      polls = polls + 1
+      return false
+    end, "10")
+
+    assert.are.equal(11, polls)
+  end)
+
   it("returns false without a condition", function()
     assert.is_false(mock_vim.wait(50))
   end)
@@ -138,7 +163,7 @@ describe("tests.mocks.vim wait", function()
     end)
 
     it("rejects a timeout that is not a number", function()
-      local err = wait_error("100", function()
+      local err = wait_error("soon", function()
         return true
       end)
 
@@ -148,7 +173,7 @@ describe("tests.mocks.vim wait", function()
     it("rejects an interval that is not a number", function()
       local err = wait_error(100, function()
         return true
-      end, "10")
+      end, "often")
 
       assert.is_truthy(err:find("vim.wait: interval must be a number", 1, true))
     end)

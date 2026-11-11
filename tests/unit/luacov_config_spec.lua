@@ -136,10 +136,42 @@ describe(".luacov", function()
       assert.is_true(runner.file_included("/w/claudecode.nvim/lua/claudecode/init.lua"))
     end)
 
-    it("is not mistaken for a checkout that sits in the temp folder under a name like claudecode.nvim", function()
-      local root = "/tmp/claudecode.nvim"
+    it("is not counted when TMPDIR ends in two slashes", function()
+      local runner = load_runner("/w/claudecode.nvim", "/w/claudecode.nvim", "/var/folders/ab/T//")
 
-      assert_plugin_only(load_runner(root, root), root)
+      assert.is_false(runner.file_included(copy_path("/var/folders/ab/T")))
+    end)
+
+    it("is not mistaken for a checkout whose folder name only looks like a temp folder", function()
+      for _, root in ipairs({
+        "/tmp/claudecode.nvim",
+        "/tmp/claudecode.nvim123",
+        "/tmp/claudecode.nvim-2",
+        "/tmp/claudecode-review",
+        "/x/tmp/claudecode.Ab1234",
+      }) do
+        local runner = load_runner(root, root)
+
+        assert_plugin_only(runner, root)
+        assert.is_false(runner.file_included(copy_path("/tmp")))
+      end
+    end)
+
+    it("keeps the files of a checkout that sits in a folder like the ones the temp copies are in", function()
+      local roots = {
+        "/tmp/claudecode.Ab1234",
+        "/tmp/claudecode.Ab1234/sub/repo",
+      }
+      for _, root in ipairs(roots) do
+        assert_plugin_only(load_runner(root, root), root)
+      end
+
+      assert_plugin_only(load_runner("/home/u/link", "/tmp/claudecode.Ab1234"), "/tmp/claudecode.Ab1234")
+      assert_plugin_only(load_runner("/tmp/claudecode.Ab1234", "/data/real/claudecode.nvim"), "/tmp/claudecode.Ab1234")
+      assert_plugin_only(
+        load_runner("/var/folders/ab/T/claudecode.Ab1234", "/var/folders/ab/T/claudecode.Ab1234", "/var/folders/ab/T/"),
+        "/var/folders/ab/T/claudecode.Ab1234"
+      )
     end)
   end)
 end)
