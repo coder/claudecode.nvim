@@ -38,8 +38,11 @@
 # directory is removed on exit. So are the agent-tty session, its entry in agent-tty's
 # per-user home registry, and its empty socket directory under /tmp/agent-tty (the
 # session's home is a fresh temp directory, so none of them belongs to another run).
-# Computing that directory needs sha256sum, shasum or openssl. Without one, cleanup removes
-# only the directory that `inspect` names, and an exited session has no path there.
+# agent-tty keys the socket directory and the registry on the physical path of its home, so the
+# script uses that path for every agent-tty command, and TMPDIR can be a link. The script
+# computes the socket directory from the home (sha256sum, shasum or openssl). Without one of
+# the three, the cleanup removes only the directory that `inspect` names, and an exited session
+# has no path there, so its empty socket directory stays.
 # SIGTERM, SIGINT and SIGHUP run the same cleanup, and the cleanup ignores further signals,
 # so every step in it has a deadline. It stops the Neovim that is restoring plugins and
 # that Neovim's child processes (SIGTERM, then SIGKILL after about 5 s). A Neovim that gets
@@ -51,11 +54,13 @@
 # call in the cleanup runs in its own process group (bash job control) and has a deadline
 # (30 s, and 60 s for `destroy`), because Node resets a signal that the cleanup ignores, and
 # a second signal to the script's process group would kill the call. A call that a deadline
-# stops prints a warning on the stderr that the script started with. A stopped `list`,
-# `inspect` or `destroy` can leave a session running, so the agent-tty home, its registry
-# entry and the temp directory stay. The warning prints the commands that list and remove
-# them. A stopped `home forget` leaves only the registry entry after the home is removed,
-# and its warning prints the command that removes that entry.
+# stops, or that exits with a non-zero status, prints a warning on the stderr that the script
+# started with. If that call is `list`, `inspect` or `destroy`, a session can still be
+# running, so the agent-tty home, its registry entry, the temp directory and the socket
+# directory stay, and the warning prints the commands that list and remove them. A `home
+# forget` that fails or is stopped leaves only the registry entry after the home is removed,
+# and its warning prints the command that removes that entry. The temp directory is removed
+# only if this run's `mkdir` made it.
 # Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
@@ -295,9 +300,9 @@ cleanup() {
     [[ -n "$stopped" ]] || atty_cleanup 30 home forget "$AGENT_HOME" --json >/dev/null || forget_stopped=1
   fi
   if [[ -n "$stopped" ]]; then
-    # A session of this run can still be running, and only the run's own home lists it. So the
-    # home and its registry entry stay, and the warning says how to find the session and how to
-    # remove everything.
+    # A call stopped or failed, so a session of this run can still be running, and only the run's
+    # own home lists it. So the home and its registry entry stay, and the warning says how to
+    # find the session and how to remove everything.
     q_home="$(printf '%q' "$AGENT_HOME")"
     q_work="$(printf '%q' "$WORK")"
     q_socks=""
