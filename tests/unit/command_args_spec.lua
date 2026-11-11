@@ -43,6 +43,7 @@ describe("ClaudeCode command arguments with a mock vim", function()
     end
 
     vim.o = {
+      eventignore = "",
       columns = 120,
       lines = 30,
     }
