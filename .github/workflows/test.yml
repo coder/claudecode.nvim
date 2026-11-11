@@ -31,38 +31,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Build deps: PUC Lua builds from source, and the test rocks compile C modules.
-      # `Acquire::Retries` retries within seconds, which an outage of minutes outlasts. Skip apt when the image has
-      # the packages, else retry update and install as one unit. `apt-get update` exits 0 when a mirror is
-      # unreachable, so only the install fails during an outage.
-      - name: Install build dependencies
-        run: |
-          packages=(build-essential libreadline-dev unzip)
-          installed() {
-            local package
-            for package in "${packages[@]}"; do
-              dpkg -s "$package" 2> /dev/null | grep -q "^Status: install ok installed" || return 1
-            done
-          }
-          if installed; then
-            echo "Already installed: ${packages[*]}"
-            exit 0
-          fi
-
-          apt=(sudo apt-get -o Acquire::Retries=3)
-          waits=(30 90)
-          for attempt in 1 2 3; do
-            if "${apt[@]}" update && "${apt[@]}" install -y "${packages[@]}"; then
-              exit 0
-            fi
-            if [ "$attempt" -le "${#waits[@]}" ]; then
-              echo "apt attempt $attempt of 3 failed, trying again in ${waits[attempt-1]}s"
-              sleep "${waits[attempt-1]}"
-            fi
-          done
-          echo "::error::apt-get could not install ${packages[*]} in 3 attempts"
-          exit 1
-
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
