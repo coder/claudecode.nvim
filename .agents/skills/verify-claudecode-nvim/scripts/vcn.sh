@@ -22,7 +22,8 @@
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
 # VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
 # TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path to an
-#              existing directory, and neither it nor a dir above it may be writable by others without the sticky bit.
+#              existing directory with no . or .. part, and neither it nor a dir above it may be writable by others without
+#              the sticky bit. Launch resolves <dir> once, so VCN_STATE has no symlink in it.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -44,11 +45,37 @@ bin() {
 
 env_line() { printf '%s=%q\n' "$1" "$2"; }
 
+# load sources run.env, so $VCN_STATE must be a dir that only this user can write, in a place where no other user can swap
+# it. After that one check nothing in it can change under another user's hand, and source reads the file that was checked.
+# A stale VCN_STATE can name a dir or symlink that another user made at a freed name. stat without -L describes a symlink
+# itself. Prints why $1 is unsafe, or nothing.
+unsafe_state() {
+  local uid mode type
+  read -r uid mode type < <(stat -c '%u %a %F' -- "$1" 2>/dev/null) || {
+    echo "it does not exist"
+    return
+  }
+  if [[ $type != directory ]]; then
+    echo "it is not a directory ($type)"
+  elif ((uid != EUID)); then
+    echo "it is owned by another user"
+  elif (((8#$mode & 8#022) != 0)); then
+    echo "it is group- or world-writable"
+  else
+    unsafe_above "$1" "the state dir"
+  fi
+}
+
 load() {
+  local why
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
   [[ -f $VCN_STATE/run.env ]] || die "no run at $VCN_STATE (already cleaned up?)"
-  # run.env is sourced, so it must be a file this user made: a stale VCN_STATE can name a dir that another user made since.
-  [[ ! -L $VCN_STATE/run.env && -O $VCN_STATE/run.env ]] || die "refusing $VCN_STATE/run.env: it is a symlink or owned by another user"
+  # launch calls load many times: once the check has passed, nothing changes under another user's hand, so it runs once.
+  if [[ ${state_checked-} != "$VCN_STATE" ]]; then
+    why=$(unsafe_state "$VCN_STATE")
+    [[ -z $why ]] || die "refusing state dir $VCN_STATE: $why"
+    state_checked=$VCN_STATE
+  fi
   [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
@@ -337,23 +364,30 @@ unsafe_dir() {
 # dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the
 # message (default: the evidence dir).
 unsafe_above() {
-  local dir mode uid what=${2-the evidence dir}
-  for dir in "$(realpath -sm -- "$1/..")" "$(realpath -m -- "$1/..")"; do
+  local dir mode uid name what=${2-the evidence dir} logical resolved chains dirs
+  logical=$(realpath -sm -- "$1/..")
+  resolved=$(realpath -m -- "$1/..")
+  chains=("$logical")
+  [[ $resolved == "$logical" ]] || chains+=("$resolved")
+  for dir in "${chains[@]}"; do
+    dirs=()
     while :; do
-      if [[ -e $dir || -L $dir ]]; then
-        read -r mode uid < <(stat -c '%a %u' -- "$dir")
-        if ((uid != 0 && uid != EUID)); then
-          echo "$dir, above $what, is owned by another user"
-          return
-        fi
-        if [[ ! -L $dir ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
-          echo "$dir, above $what, is writable by others and not sticky"
-          return
-        fi
-      fi
+      dirs+=("$dir")
       [[ $dir != / ]] || break
-      dir=$(dirname -- "$dir")
+      dir=${dir%/*}
+      dir=${dir:-/}
     done
+    # One stat for the whole chain: a dir that does not exist prints nothing.
+    while read -r mode uid name; do
+      if ((uid != 0 && uid != EUID)); then
+        echo "$name, above $what, is owned by another user"
+        return
+      fi
+      if [[ ! -L $name ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
+        echo "$name, above $what, is writable by others and not sticky"
+        return
+      fi
+    done < <(stat -c '%a %u %n' -- "${dirs[@]}" 2>/dev/null)
   done
 }
 
@@ -417,7 +451,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_cands node_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
+  local nvim_exe att_cands node_exe tmpdir state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
   if [[ -n ${VCN_NVIM-} ]]; then
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
@@ -450,12 +484,16 @@ cmd_launch() {
   if [[ -n $out && -e $out && ! -d $out ]]; then
     die "$out is not a directory; pick a fresh VERIFY_OUT"
   fi
-  [[ ${TMPDIR:-/tmp} == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
-  # A dir that is missing now could be made by another user after the check below and before mktemp.
-  [[ -d ${TMPDIR:-/tmp} ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
+  tmpdir=${TMPDIR:-/tmp}
+  [[ $tmpdir == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
+  # A . or .. after a symlink would hide that symlink from unsafe_above, as it does for VERIFY_OUT.
+  [[ /$tmpdir/ != */./* && /$tmpdir/ != */../* ]] || die "TMPDIR=$tmpdir has a . or .. part"
+  # Resolve once and use only the result, so the check below and mktemp see the same path. A dir that is missing now could
+  # be made by another user after the check and before mktemp.
+  tmpdir=$(realpath -e -- "$tmpdir" 2>/dev/null) && [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
   # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
-  why=$(unsafe_above "${TMPDIR:-/tmp}/vcn" "the state dir")
+  why=$(unsafe_above "$tmpdir/vcn" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
@@ -464,7 +502,7 @@ cmd_launch() {
   trap 'signaled=1' TERM INT HUP
   state=$(
     trap '' TERM INT HUP
-    exec mktemp -d "${TMPDIR:-/tmp}/vcn.XXXXXX"
+    exec mktemp -d "$tmpdir/vcn.XXXXXX"
   )
   trap 'trap "" TERM INT HUP; rm -rf -- "$state"; exit 143' TERM INT HUP
   [[ -z $signaled ]] || {

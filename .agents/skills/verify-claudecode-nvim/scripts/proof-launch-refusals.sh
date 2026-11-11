@@ -13,6 +13,8 @@
 #   tmp-world      TMPDIR, where launch makes its state dir, is world-writable and not sticky
 #   tmp-above-world  a dir above TMPDIR is world-writable and not sticky
 #   tmp-missing    TMPDIR does not exist, under a sticky dir where another user could make it after the checks
+#   tmp-dotdot     TMPDIR has a .. part after a symlink (G/L/../y)
+#   tmp-dot        TMPDIR has a . part
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
@@ -22,6 +24,7 @@
 # and that it accepts:
 #   out-dash       a relative VERIFY_OUT that starts with "-", run from another directory
 #   tmp-sticky     a world-writable TMPDIR with the sticky bit, like /tmp: the state dir is made there
+#   tmp-link       TMPDIR is a symlink to that dir: the state dir is made in the dir, not through the symlink
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 #   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700 and
 #                  without an ACL, so every evidence file is 0600
@@ -30,7 +33,8 @@
 # deleted when every case passes, and kept with its path printed when one fails.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-TMP=$(mktemp -d)
+# Resolved, because launch prints the state dir under the resolved path of TMPDIR.
+TMP=$(realpath -- "$(mktemp -d)")
 init_out=""
 finish() {
   local rc=$?
@@ -112,6 +116,11 @@ mkdir "$TMP/tmp-shared"
 chmod 1777 "$TMP/tmp-shared"
 refused tmp-missing "TMPDIR=$TMP/tmp-shared/later is not an existing directory" \
   TMPDIR="$TMP/tmp-shared/later" VERIFY_OUT="$TMP/tmp-out"
+# A . or .. part after a symlink would hide the symlink from the walk above TMPDIR. L is a symlink to a dir under G.
+mkdir -m 700 "$TMP/dd" "$TMP/dd/y" "$TMP/dd/real"
+ln -s "$TMP/dd/real" "$TMP/dd/L"
+refused tmp-dotdot "TMPDIR=$TMP/dd/L/../y has a . or .. part" TMPDIR="$TMP/dd/L/../y" VERIFY_OUT="$TMP/tmp-out"
+refused tmp-dot "TMPDIR=$TMP/dd/./y has a . or .. part" TMPDIR="$TMP/dd/./y" VERIFY_OUT="$TMP/tmp-out"
 refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-proof
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
@@ -160,6 +169,13 @@ state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
 VCN_STATE=$state "$vcn" cleanup >/dev/null
 [[ $state == "$TMP/tmp-sticky"/vcn.* ]] || fail "tmp-sticky: launch made its state dir $state outside TMPDIR"
 echo "PASS tmp-sticky: launch made its state dir in the sticky $TMP/tmp-sticky"
+# Launch resolves TMPDIR once, so a symlink to the sticky dir gives the same state dir path, with no symlink in it.
+ln -s "$TMP/tmp-sticky" "$TMP/tmp-link"
+err=$(env -u XUM_SCRATCH_DIR TMPDIR="$TMP/tmp-link" VERIFY_OUT="$TMP/tmp-link-out" "$vcn" launch 2>&1) || fail "tmp-link: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+VCN_STATE=$state "$vcn" cleanup >/dev/null
+[[ $state == "$TMP/tmp-sticky"/vcn.* ]] || fail "tmp-link: launch made its state dir $state, not in $TMP/tmp-sticky"
+echo "PASS tmp-link: TMPDIR=$TMP/tmp-link gave the state dir $state, with no symlink in its path"
 
 # private <case> <dir>: a run with VERIFY_OUT=dir works, and after cleanup dir is 0700 and holds only 0600 files.
 private() {
