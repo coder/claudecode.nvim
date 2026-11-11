@@ -1327,6 +1327,7 @@ local vim = {
     now = function()
       return os.time() * 1000
     end,
+    update_time = function() end,
     timer_stop = function(timer)
       return true
     end,
