@@ -963,7 +963,7 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
-Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff. A diff does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes. `:ClaudeCodeSend`, `:ClaudeCodeAdd` and `:ClaudeCodeTreeAdd` also call `ensure_visible()` after a send to a connected Claude (they call `open` instead with `focus_after_send`, or when Claude is not connected).
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff. A diff does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes, if a window of the terminal was visible in any tab when the diff opened. `:ClaudeCodeSend`, `:ClaudeCodeAdd` and `:ClaudeCodeTreeAdd` also call `ensure_visible()` after a send to a connected Claude (they call `open` instead with `focus_after_send`, or when Claude is not connected).
 
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 
