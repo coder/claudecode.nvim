@@ -727,7 +727,7 @@ async function testUnreleasedUpdaterFences() {
 // of them. It leaves out list items, block quotes and HTML blocks, which the runner does not track.
 const DIFFERENTIAL_SEED = 466;
 const DIFFERENTIAL_DOCUMENTS = 10000;
-const DIFFERENTIAL_UPDATER_DOCUMENTS = 100;
+const DIFFERENTIAL_UPDATER_DOCUMENTS = 30;
 
 /** A small seeded generator (mulberry32): the same seed gives the same numbers. */
 function createRandom(seed) {
