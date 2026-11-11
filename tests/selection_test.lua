@@ -2729,6 +2729,35 @@ describe("Range Selection Tests", function()
           _G.vim._buffers[3] = nil
         end)
 
+        -- update_selection runs this check in the Claude terminal and does nothing else there. If the held selection was
+        -- read in a buffer that the plugin took for the terminal afterwards, the check used to call update_selection,
+        -- which called the check again, until the stack overflowed.
+        it("does not recurse when the buffer of the held selection became the Claude terminal itself", function()
+          ticks = { [1] = 5, [2] = 5 }
+          _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
+            return ticks[bufnr]
+          end
+          selection.enable(mock_server)
+          start_selecting(5)
+          release_selection(1, 5, 4)
+          settle()
+          mock_server.last_broadcast = nil
+
+          -- A terminal provider adopts the buffer: its name now says Claude. Then its text changes.
+          _G.vim.test.add_buffer(1, "term://x//1:claude", { "beta gamma" })
+          ticks[1] = 6
+
+          assert.has_no.errors(function()
+            fire_autocmd("TextChanged")
+            fire_autocmd("CursorMoved")
+            selection.update_selection()
+            selection.update_selection()
+          end)
+          assert.is_nil(mock_server.last_broadcast) -- nothing in the Claude terminal reaches Claude
+          assert.is_nil(selection.state.cursor_at_flush)
+          assert.is_nil(selection.state.last_active_visual_selection)
+        end)
+
         it("checks once after a burst of changes, such as a :%s", function()
           hold_alpha_and_enter_the_terminal()
           local original_schedule = _G.vim.schedule

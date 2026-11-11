@@ -121,7 +121,8 @@ local function demote_if_selection_text_changed()
     return false
   end
   local current_buf = vim.api.nvim_get_current_buf()
-  local from_terminal = read.bufnr ~= current_buf and M.is_claude_terminal_buffer(current_buf)
+  local in_terminal = M.is_claude_terminal_buffer(current_buf)
+  local from_terminal = read.bufnr ~= current_buf and in_terminal
   if read.bufnr ~= current_buf and not from_terminal then
     return false
   end
@@ -141,7 +142,9 @@ local function demote_if_selection_text_changed()
         M.send_selection_update(cursor)
       end
     end
-  else
+  elseif not in_terminal then
+    -- update_selection does nothing in the Claude terminal except call this function, so it must not come back here
+    -- from it. The selection's buffer is the terminal when the plugin adopted it after the selection was read.
     M.update_selection()
   end
   return true
