@@ -49,6 +49,11 @@ const UNRELEASED_HEADING_PATTERN = /^#{2,3} \[?Unreleased\]?[ \t]*$/;
 // An H1 or H2 heading ends the Unreleased section; H3 stays inside it because
 // hand-staged drafts use Keep-a-Changelog `### Added`-style subsections.
 const NEXT_SECTION_PATTERN = /^##? /;
+// A release heading: an H1 or H2 that starts with a dotted version number, with or without brackets and a `v`
+// (`## [0.3.0] - date`, `## 0.3.0`, `## v0.3.0`). The version is captured. `## [Unreleased]` and `## Usage` do not
+// match. `normalizeCommuniqueBody` strips a wider set (any H1 to H3 that starts with a digit). This pattern wants a
+// dotted version so that a heading like `## 3 reasons` is not mistaken for a release.
+const RELEASE_HEADING_PATTERN = /^##? \[?v?(\d+(?:\.\d+)+)/;
 const TITLE_PATTERN = /^# .+$/;
 // CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
 // one rule (see `splitLines`), so a fence pattern never sees a bare CR inside a
@@ -305,42 +310,40 @@ function findLineOutsideFences(lines, start, predicate) {
 }
 
 /**
- * Throws when a code fence that never closes hides a section. `updateContent` drops everything after the
- * Unreleased heading when no next section stands outside a fence. A fence that runs to the end of the text (it has
- * no closer, or its closer is shorter, uses the other marker, or has text after it) swallows every older release, and
- * the new changelog would silently lose them. A line that starts with `# ` or `## `, the runner's own section
- * boundary, inside such a fence is the sign of that loss. A fence that closes, or one that holds no such line, keeps
- * the old behavior: the draft is dropped and nothing else is lost.
+ * Throws when `output`, the text that `updateContent` is about to return, has lost a release heading of `lines`, the
+ * text that it got. `updateContent` drops the Unreleased draft and keeps everything from the next section on. A code
+ * fence in the draft that does not close where the maintainer meant (it has no closer, or a closer that CommonMark
+ * rejects, or Prettier closed it at the end of the file) puts the older releases inside the draft, so they go too.
+ * Whatever the cause, a changelog that loses an older release must not be written. Lines are matched by version, so a
+ * heading that Prettier rewrites still counts, and a version that occurs twice must occur twice. Fences are not
+ * tracked here, so a release heading that a draft shows in a code example counts as lost.
  */
-function assertNoSectionInUnclosedFence(lines) {
+function assertKeepsReleaseHeadings(lines, output) {
   assert.ok(Array.isArray(lines), "lines must be an array");
+  assert.equal(typeof output, "string", "output must be a string");
 
-  let openFence = null;
-  let openedAt = -1;
-  for (let i = 0; i < lines.length; i += 1) {
-    const wasOpen = openFence !== null;
-    openFence = nextOpenFence(openFence, lines[i] ?? "");
-    if (!wasOpen && openFence !== null) {
-      openedAt = i;
+  const kept = new Map();
+  for (const line of splitLines(output).lines) {
+    const version = RELEASE_HEADING_PATTERN.exec(line)?.[1];
+    if (version !== undefined) {
+      kept.set(version, (kept.get(version) ?? 0) + 1);
     }
   }
-  if (openFence === null) {
-    return;
+  const seen = new Map();
+  for (let i = 0; i < lines.length; i += 1) {
+    const version = RELEASE_HEADING_PATTERN.exec(lines[i])?.[1];
+    if (version === undefined) {
+      continue;
+    }
+    seen.set(version, (seen.get(version) ?? 0) + 1);
+    if (seen.get(version) > (kept.get(version) ?? 0)) {
+      throw new Error(
+        `The updated changelog would lose the release heading on line ${i + 1} (${JSON.stringify(lines[i].slice(0, 80))}). ` +
+          "A code fence in the Unreleased draft that does not close where you meant is the usual cause, and Prettier closes a fence that is still open at the end of the file. " +
+          "Check the draft's code fences: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs.",
+      );
+    }
   }
-  assert.notEqual(openedAt, -1, "an open fence has an opener");
-
-  const hiddenAt = lines.findIndex(
-    (line, i) => i > openedAt && NEXT_SECTION_PATTERN.test(line),
-  );
-  if (hiddenAt === -1) {
-    return;
-  }
-  const show = (line) => JSON.stringify(line.slice(0, 80));
-  throw new Error(
-    `The Unreleased section has a code fence that never closes. Line ${openedAt + 1} opens it (${show(lines[openedAt])}), ` +
-      `and line ${hiddenAt + 1} (${show(lines[hiddenAt])}) would start the next section. It stands inside the fence, so the updater would drop it and everything after it. ` +
-      "Close the fence: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs.",
-  );
 }
 
 function resolvePrettierBin(env = process.env, fileExists = existsSync) {
@@ -392,6 +395,11 @@ class UnreleasedAwareChangelog {
     const { lines } = splitLines(content ?? "");
     const existing = lines.join("\n");
     const entry = this.changelogEntry.trim();
+    // No text that loses an older release is returned, so none is written.
+    const checked = (output) => {
+      assertKeepsReleaseHeadings(lines, output);
+      return output;
+    };
 
     const unreleasedIndex = findLineOutsideFences(lines, 0, (line) =>
       UNRELEASED_HEADING_PATTERN.test(line),
@@ -403,13 +411,8 @@ class UnreleasedAwareChangelog {
         unreleasedIndex + 1,
         (line) => NEXT_SECTION_PATTERN.test(line),
       );
-      if (nextIndex === -1) {
-        // The draft is the last thing in the text, so nothing below the new entry survives. Make sure that no
-        // fence that never closes hid an older release.
-        assertNoSectionInUnclosedFence(lines);
-      }
       const rest = nextIndex === -1 ? "" : lines.slice(nextIndex).join("\n");
-      return formatChangelogMarkdown(joinSections(head, entry, rest));
+      return checked(formatChangelogMarkdown(joinSections(head, entry, rest)));
     }
 
     // Self-heal a missing Unreleased anchor so Communique has draft space on
@@ -419,12 +422,16 @@ class UnreleasedAwareChangelog {
     );
     if (titleIndex !== -1) {
       const head = `${lines.slice(0, titleIndex + 1).join("\n")}\n\n## [Unreleased]`;
-      return formatChangelogMarkdown(
-        joinSections(head, entry, lines.slice(titleIndex + 1).join("\n")),
+      return checked(
+        formatChangelogMarkdown(
+          joinSections(head, entry, lines.slice(titleIndex + 1).join("\n")),
+        ),
       );
     }
-    return formatChangelogMarkdown(
-      joinSections("# Changelog\n\n## [Unreleased]", entry, existing),
+    return checked(
+      formatChangelogMarkdown(
+        joinSections("# Changelog\n\n## [Unreleased]", entry, existing),
+      ),
     );
   }
 }
