@@ -32,7 +32,7 @@
 
 ## Code Shape
 
-- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Close such a window without `force`, so that Neovim refuses when unsaved work would be lost. Issue #528 has the cases.
+- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Deleting a buffer can close each window that shows it, so the same rule holds for those windows. Close a window that the plugin made without `force`: Neovim then refuses when the close would lose a modified buffer. Neovim does not refuse for a `buftype=nofile` buffer, so a close without `force` is still not safe for a window that the plugin cannot show it made. Issue #528 has the cases.
 
 ## Testing Guidelines
 
