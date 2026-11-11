@@ -1136,8 +1136,11 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   resolves it by accepting or rejecting it. The plugin also rejects a pending diff when the server stops
   [lua/claudecode/server/init.lua:M.stop], when the client that opened it disconnects
   [lua/claudecode/server/init.lua:M.start], or when a new diff reuses its `tab_name`
-  [lua/claudecode/diff.lua:M.open_diff_blocking]. A diff that resolves before `openDiff` yields, for example from a
-  `ClaudeCodeDiffOpened` handler, is answered at once [lua/claudecode/diff.lua:M.open_diff_blocking].
+  [lua/claudecode/diff.lua:M.open_diff_blocking]. Claude's `close_tab` and `closeAllDiffTabs` calls also reject a
+  pending diff [lua/claudecode/diff.lua:M.close_diff_by_tab_name]. A diff that resolves before `openDiff` yields, for example from a
+  `ClaudeCodeDiffOpened` handler, is answered at once [lua/claudecode/diff.lua:M.open_diff_blocking]. When Neovim exits,
+  the `ClaudeCodeMCPDiff` `VimLeavePre` autocmd removes every diff before the `ClaudeCodeShutdown` autocmd stops the
+  server, so a pending `openDiff` gets no answer [lua/claudecode/diff.lua:M.\_cleanup_all_active_diffs].
 
 ### Global Side Effects
 

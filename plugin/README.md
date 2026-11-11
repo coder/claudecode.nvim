@@ -54,9 +54,11 @@ when `require("claudecode").setup()` runs. The main module lives in
   scheduling, and the `pcall(require, "claudecode")` run synchronously while
   the file is sourced. The deferred `setup` call runs later, after the current
   script finishes. `[plugin/claudecode.lua:vim.defer_fn]`
-- Commands from auto-setup do not exist while startup scripts run. In a
+- Commands from auto-setup do not exist while startup scripts run, unless a
+  script waits for events, for example with `:sleep` or `vim.wait()`. In a
   headless check on Neovim 0.12.3, `:ClaudeCode` was missing when the `-c`
-  startup commands ran, and present after the deferred callback ran.
+  startup commands and `VimEnter` ran, and present after the deferred callback
+  ran.
   `[plugin/claudecode.lua:vim.defer_fn]`
 - The deferred `require("claudecode").setup(...)` call is not wrapped in
   `pcall`. An error from loading the module or from `M.setup` surfaces from the
