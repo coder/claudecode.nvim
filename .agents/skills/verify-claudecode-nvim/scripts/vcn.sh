@@ -82,10 +82,12 @@ If a failure names pty.node, that agent-tty lacks node-pty's native build, as a 
 }
 
 pick_agent_tty() {
-  local cand why tried=""
+  local cand why doctor tried=""
   for cand in "$@"; do
     ATT_BIN=$cand
-    att doctor --json >"$OUT/agent-tty-doctor.json" 2>"$VCN_STATE/doctor.err" || true
+    # A substitution, so a signal's trap runs with launch's own stderr and not with doctor's redirections.
+    doctor=$(att doctor --json 2>"$VCN_STATE/doctor.err") || true
+    printf '%s\n' "$doctor" >"$OUT/agent-tty-doctor.json"
     if jq -e '.result.ok == true' "$OUT/agent-tty-doctor.json" >/dev/null 2>&1; then
       env_line ATT_BIN "$cand" >>"$VCN_STATE/run.env"
       return 0
@@ -228,22 +230,36 @@ server_under_tui() {
   if [[ ${NVIM_08-0} == 1 ]]; then [[ $NVIM_PID == "$TUI_PID" ]]; else [[ $(ppid "$NVIM_PID") == "$TUI_PID" ]]; fi
 }
 
+# cleanup fast: for a signal, whose sender wants launch gone. It skips the evidence (a screenshot and a video), which
+# takes many seconds on a loaded host.
 cmd_cleanup() {
+  local fast=${1-} kill_at=30
   if [[ -z ${VCN_STATE-} || ! -f $VCN_STATE/run.env ]]; then
     echo "vcn: nothing to clean at ${VCN_STATE-<unset>}"
     return 0
   fi
   load
   [[ $VCN_STATE == /tmp/vcn.* ]] || die "refusing to delete unexpected state dir $VCN_STATE"
+  local i var pids=()
+  if [[ $fast == fast ]]; then
+    kill_at=1
+    for var in $(compgen -v CLIENT_PID); do
+      if ours "${!var}"; then kill "${!var}" 2>/dev/null || true; fi
+    done
+    mapfile -t pids < <(tagged)
+    # Every PID here carries this run's tag, so it is ours.
+    ((${#pids[@]} == 0)) || kill "${pids[@]}" 2>/dev/null || true
+  fi
   # agent-tty still renders a session whose nvim exited, so the evidence step runs for any session.
   if [[ -n ${SID-} ]]; then
-    (cmd_capture final) >/dev/null || echo "vcn: could not save final.screen.txt" >&2
-    (cmd_screenshot final) >/dev/null || echo "vcn: could not save final.png" >&2
-    nv 'execute("messages")' >"$OUT/messages.txt" 2>/dev/null || true
-    (cmd_record session) >/dev/null || echo "vcn: could not save session.webm" >&2
+    if [[ $fast != fast ]]; then
+      (cmd_capture final) >/dev/null || echo "vcn: could not save final.screen.txt" >&2
+      (cmd_screenshot final) >/dev/null || echo "vcn: could not save final.png" >&2
+      nv 'execute("messages")' >"$OUT/messages.txt" 2>/dev/null || true
+      (cmd_record session) >/dev/null || echo "vcn: could not save session.webm" >&2
+    fi
     att destroy "$SID" --json >/dev/null 2>&1 || att destroy "$SID" --force --json >/dev/null 2>&1 || true
   fi
-  local i var pids=()
   for var in $(compgen -v CLIENT_PID); do
     if ours "${!var}"; then kill "${!var}" 2>/dev/null || true; fi
   done
@@ -251,7 +267,7 @@ cmd_cleanup() {
     mapfile -t pids < <(tagged)
     ((${#pids[@]} == 0)) && break
     # Every PID here carries this run's tag, so it is ours.
-    if ((i == 30)); then kill "${pids[@]}" 2>/dev/null || true; fi
+    if ((i == kill_at)); then kill "${pids[@]}" 2>/dev/null || true; fi
     sleep 0.1
   done
   ((${#pids[@]} == 0)) || die "processes from this run still alive: ${pids[*]}"
@@ -332,12 +348,19 @@ unsafe_above() {
   done
 }
 
+# Exit status 143 means a signal (the traps below make it so). A second signal must not stop the teardown halfway.
 launch_failed() {
   local rc=$?
   ((rc == 0)) && return 0
-  echo "vcn: launch failed (VCN_STATE=$VCN_STATE)${SID:+; screen saved to $OUT/launch-failure.screen.txt}; tearing the run down" >&2
-  (cmd_capture launch-failure) >/dev/null 2>&1 || true
-  cmd_cleanup >&2 || true
+  trap '' TERM INT HUP
+  if ((rc == 143)); then
+    echo "vcn: launch failed (VCN_STATE=$VCN_STATE); tearing the run down" >&2
+    cmd_cleanup fast >&2 || true
+  else
+    echo "vcn: launch failed (VCN_STATE=$VCN_STATE)${SID:+; screen saved to $OUT/launch-failure.screen.txt}; tearing the run down" >&2
+    (cmd_capture launch-failure) >/dev/null 2>&1 || true
+    cmd_cleanup >&2 || true
+  fi
   exit "$rc"
 }
 
@@ -416,8 +439,19 @@ cmd_launch() {
     die "$out is not a directory; pick a fresh VERIFY_OUT"
   fi
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
-  state=$(mktemp -d /tmp/vcn.XXXXXX)
-  trap 'rm -rf -- "$state"; exit 143' TERM INT HUP
+  # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
+  # die between making the dir and printing its name.
+  signaled=""
+  trap 'signaled=1' TERM INT HUP
+  state=$(
+    trap '' TERM INT HUP
+    exec mktemp -d /tmp/vcn.XXXXXX
+  )
+  trap 'trap "" TERM INT HUP; rm -rf -- "$state"; exit 143' TERM INT HUP
+  [[ -z $signaled ]] || {
+    rm -rf -- "$state"
+    exit 143
+  }
   out=${out:-$guard/$(date -u +%Y%m%dT%H%M%SZ)-${state##*.}}
   if [[ -e $out ]] && [[ -n $(ls -A "$out") ]]; then
     rmdir "$state"
@@ -529,9 +563,9 @@ cmd_launch() {
     "$nvim_exe" --version | head -n 1
     echo "agent-tty $(att version --json | jq -r .result.cliVersion)"
   } >>"$OUT/run.env"
-  trap - EXIT TERM INT HUP
   echo "VCN_STATE=$state"
   echo "OUT=$OUT"
+  trap - EXIT TERM INT HUP
 }
 
 case ${1-} in
