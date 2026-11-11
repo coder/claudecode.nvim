@@ -2,11 +2,12 @@
 -- protocol. Before #455 the client stayed in server.clients, in state "closing", for as long as Claude did not read:
 -- is_claude_connected() stayed true and on_disconnect (the diff cleanup) did not run.
 -- Promise: a client the plugin closes is reported once and leaves server.clients at once, and its Close frame is still
--- delivered before its socket closes.
+-- delivered before its socket closes, as long as Claude reads within one keepalive window (two ticks). After that window
+-- with no progress the deadline of close_client closes the socket and drops the frame.
 -- Model path: Accept, Read (upgrade request), WriteDone (101), ClaudeStopsReading, PluginSendsLarge, Read (the bad
 -- frame: close_client queues its Close frame, on_error reports the client), then Claude reads again.
 local H = dofile(vim.fs.dirname(debug.getinfo(1, "S").source:sub(2)) .. "/harness.lua")
-local INTERVAL = 200 -- ms; the keepalive drops a silent connected client after about 3 ticks (600 ms)
+local INTERVAL = 500 -- ms; the Close frame has one keepalive window (2 ticks, 1000 ms) before its deadline closes the socket
 
 local plugin = H.start_plugin(INTERVAL)
 H.log("plugin: server on port %d, ping timer every %d ms", plugin.port, INTERVAL)
@@ -47,7 +48,7 @@ claude.send(H.frame.OPCODE.BINARY, "not text")
 H.wait(1000, function()
   return #plugin.disconnects > 0
 end)
-local wait_ms = 10 * INTERVAL
+local wait_ms = INTERVAL -- half of the window: the client left long ago, and the socket is still open
 H.wait(wait_ms)
 local listed = plugin.srv.state.server.clients[client.id] == client
 local status = plugin.srv.get_status()
@@ -71,7 +72,7 @@ H.check(
   "require('claudecode').is_claude_connected() = " .. tostring(require("claudecode").is_claude_connected())
 )
 H.check(
-  "its socket stays open for the Close frame, which waits in libuv's queue",
+  "its socket stays open for the Close frame, which waits in libuv's queue, for half a keepalive window",
   not client.tcp_handle:is_closing() and client.tcp_handle:get_write_queue_size() > 0,
   string.format(
     "is_closing()=%s, %d bytes in libuv's write queue",
@@ -80,7 +81,7 @@ H.check(
   )
 )
 
--- Claude reads again: the queued writes and the Close frame go out, and only then does the socket close.
+-- Claude reads again within the window: the queued writes and the Close frame go out, and only then does the socket close.
 claude.start_reading()
 H.wait(10000, function()
   return claude.count(H.frame.OPCODE.CLOSE) > 0 and client.tcp_handle:is_closing()

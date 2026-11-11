@@ -37,8 +37,8 @@ CONSTANTS
   \* this model found"). They are TRUE in every run, so that a removed guard breaks the rule that its bug broke.
   WindowFullOnProtocolClose, \* the plugin can read a frame that breaks the protocol while Claude's window is full
   StopBeforeOnClose,         \* the server can stop between a Close frame from Claude and its scheduled on_close
-  StaleLoopTime,             \* a tick can run in a pass of the main loop whose earlier callback blocked for longer than the limit:
-                             \* libuv caches the loop time when the pass starts, so the tick sees no gap
+  StaleLoopTime,             \* a tick can run in a pass of the main loop whose earlier callback blocked or slept for longer than the
+                             \* limit: libuv caches the loop time when the pass starts, so the tick sees no gap
   PollMissesPong,            \* a poll can read the first frame of a client and stop: Claude wrote a large message while Neovim was
                              \* blocked, and its pong waits behind more unread data than the socket holds
   SleepInWindow,             \* the machine can sleep between a tick and the poll that precedes its check: Neovim and Claude stop
@@ -56,12 +56,12 @@ CONSTANTS
   RejectClosesSocket,     \* client.lua: the write callback of a rejected handshake closes the handle
   ProtocolReportsAtOnce,  \* client.lua fail_connection: a protocol error runs close_client, then on_error, without waiting for the write
   StopWaitsForCloseWrite, \* tcp.lua stop_server only calls close_client; the Close write callback closes the handle
-  KeepaliveReaps,         \* tcp.lua drop_unanswered_after_read closes and disconnects a connected client whose oldest ping is old
-  JudgesAfterRead,        \* tcp.lua: only the callback of a libuv check handle that the tick starts drops a client, never the tick
-  StampsRealTime,         \* tcp.lua ping timer: calls vim.loop.update_time() before it stamps a ping with vim.loop.now()
+  KeepaliveReaps,         \* tcp.lua judge_silence drops (drop_client) a connected client whose oldest ping is old
+  JudgesAfterRead,        \* tcp.lua: only the callback that after_next_poll runs after a libuv check handle drops a client, never the tick
+  ClockFreshAtTick,       \* tcp.lua ping timer: calls vim.loop.update_time() before it reads the clock for the wake test, the stamp and the gap
   StampKeepsOldestPing,   \* tcp.lua ping timer: a ping that finds a stamp leaves it, so the stamp is the oldest unanswered ping
   BytesClearStamp,        \* tcp.lua read callback: any bytes read from a client clear client.ping_unanswered_since
-  GapSkip,                \* tcp.lua drop_unanswered_after_read: the check judges nothing when its loop time is more than interval * 1.5
+  GapSkip,                \* tcp.lua ping timer: the callback judges nothing when its loop time is more than interval * 1.5
                           \* after its tick
   WakeClearsStamp         \* tcp.lua ping timer: after a tick gap above interval * 1.5, each client's stamp is cleared
 
@@ -233,26 +233,29 @@ Callback(w, c, e) ==
 RECURSIVE RunAll(_, _, _)
 RunAll(w, c, es) == IF es = <<>> THEN w ELSE RunAll(Callback(w, c, Head(es)), c, Tail(es))
 
-(* tcp.lua drop_unanswered_after_read, for one client: close_client(1011), then _disconnect_client(1006). The   *)
+(* tcp.lua drop_client, for one client: close_client(1011), abandon_close_frame, _disconnect_client(1006). The   *)
 (* ghost falseTimeout records a client whose Claude never stopped answering.                                     *)
 Drop(w, c) ==
   Disconnect(CloseClient([w EXCEPT !.falseTimeout = @ \/ peer[c] = "live"], c, "keepalive", FALSE), c)
 
 (* One client of the ping timer's loop. mode: "normal", "wake" (the tick gap was above interval * 1.5, so the    *)
 (* clock jumped past the limit: Neovim or the machine was suspended or blocked) or "stale" (an earlier callback   *)
-(* of the pass blocked for longer than the limit, and libuv's cached loop time hides it: a stamp from the cached   *)
-(* time is that old). A tick pings a connected client and stamps the oldest unanswered ping, and it starts the     *)
-(* check handle. Without JudgesAfterRead it also drops the client at once, as the code did before.                 *)
+(* of the pass blocked or slept for longer than the limit, and libuv's cached loop time hides it). A stale tick is  *)
+(* a wake that only a tick with a fresh clock (ClockFreshAtTick) sees: without it the stamps keep the age of the   *)
+(* sleep and a ping that finds no stamp is stamped with the old cached time. A tick pings a connected client and   *)
+(* stamps the oldest unanswered ping, and it starts the check handle. Without JudgesAfterRead it also drops the    *)
+(* client at once, as the code did before.                                                                          *)
 TickOne(w, c, mode) ==
   IF ~w.listed[c] THEN w
-  ELSE LET w0 == IF mode # "wake" THEN w
-                 ELSE IF WakeClearsStamp THEN [w EXCEPT !.stamped[c] = FALSE]
-                 ELSE [w EXCEPT !.age[c] = Limit]
+  ELSE LET sees == mode = "wake" \/ (mode = "stale" /\ ClockFreshAtTick)
+           w0 == IF sees THEN (IF WakeClearsStamp THEN [w EXCEPT !.stamped[c] = FALSE] ELSE [w EXCEPT !.age[c] = Limit])
+                 ELSE IF mode = "stale" THEN [w EXCEPT !.age[c] = Limit]
+                 ELSE w
        IN IF w0.st[c] # "connected" THEN w0
           ELSE LET w1 == Write(w0, c, "ping")
                    w2 == IF w1.stamped[c] /\ StampKeepsOldestPing THEN [w1 EXCEPT !.age[c] = Min(@ + 1, Limit)]
                          ELSE [w1 EXCEPT !.stamped[c] = TRUE,
-                                         !.age[c] = IF mode = "stale" /\ ~StampsRealTime THEN Limit ELSE 0]
+                                         !.age[c] = IF mode = "stale" /\ ~ClockFreshAtTick THEN Limit ELSE 0]
                    w3 == [w2 EXCEPT !.pend[c] = TRUE]
                IN IF ~JudgesAfterRead /\ KeepaliveReaps /\ w3.age[c] >= Limit THEN Drop(w3, c) ELSE w3
 
@@ -276,7 +279,7 @@ DrainAll(w, S, qs, n) ==
            r == DrainOne(w, c, qs[c], n)
        IN DrainAll(r.w, S \ {c}, [qs EXCEPT ![c] = r.q], n)
 
-(* tcp.lua drop_unanswered_after_read, the check callback, for one client: it drops a client that is still listed and *)
+(* tcp.lua judge_silence, run by the check callback, for one client: it drops a client that is still listed and      *)
 (* connected and whose stamp is old enough.                                                                             *)
 CheckOne(w, c) ==
   IF ~w.pend[c] THEN w
@@ -430,12 +433,13 @@ TimerTicksAfterGap ==
   /\ sleeps' = IF jumped THEN sleeps ELSE sleeps + 1
   /\ UNCHANGED <<peer, inq, sent, serverUp>>
 
-(* tcp.lua start_ping_timer callback in a pass whose earlier callback blocked for longer than the limit: libuv's *)
-(* cached loop time hides the block from the tick, and the ping it sends is stamped with the old time unless the  *)
-(* tick calls vim.loop.update_time() first.                                                                       *)
+(* tcp.lua start_ping_timer callback in a pass whose earlier callback blocked for longer than the limit, or in    *)
+(* which the machine slept (Claude slept with Neovim, so no answer is due): libuv runs the timers of a pass with  *)
+(* the loop time of its start, so the tick sees no gap and does not clear the stamps, and a ping that finds no     *)
+(* stamp is stamped with the old time, unless the tick calls vim.loop.update_time() first (ClockFreshAtTick).     *)
 TimerTicksStale ==
   /\ StaleLoopTime
-  /\ serverUp /\ ~jumped /\ sleeps < MaxSleeps /\ AnsweredBeforeTick
+  /\ serverUp /\ ~jumped /\ sleeps < MaxSleeps
   /\ SetW(TickAll(W, Conns, "stale"))
   /\ sleeps' = sleeps + 1
   /\ UNCHANGED <<peer, inq, sent, serverUp>>
@@ -451,7 +455,7 @@ MachineSleeps ==
   /\ UNCHANGED <<peer, inq, sent, serverUp>>
 
 (* libuv's poll phase reads up to n frames per client that reached a socket before it, then runs the check handles *)
-(* that the ticks started: tcp.lua drop_unanswered_after_read. A check whose loop time jumped since its tick judges   *)
+(* that the ticks started: tcp.lua after_next_poll runs judge_silence. A check whose loop time jumped since its tick judges *)
 (* nothing (GapSkip). Claude can answer after the poll, and the poll does not read what Claude sends after it.       *)
 PollStep(n) ==
   /\ \E c \in Conns : pend[c]
