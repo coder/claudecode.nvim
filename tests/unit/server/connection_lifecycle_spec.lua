@@ -1126,12 +1126,14 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.is_true(client.write_stalled)
 
       handle._read_cb(nil, pong)
+      forget_handles()
       clock = clock + 1.5 * interval + 1
       tick()
+      poll() -- the poll after the tick: a confirmation would find no progress and drop the client
 
       assert.is_nil(client.write_stalled, "a gap above 1.5 intervals kept the count")
       assert.is_not_nil(server.clients[client.id], "a gap above 1.5 intervals counted against the client")
-      assert.equals(0, #checks, "a wake tick asked for a confirmation")
+      assert.spy(callbacks.on_disconnect).was_not_called()
     end)
 
     it("judges only the clients that answered at the tick", function()
