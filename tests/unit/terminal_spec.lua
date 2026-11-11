@@ -1099,6 +1099,39 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         mock_native_provider.open:was_called()
       end)
 
+      -- `setup` rejects these values, but `terminal.defaults` is public, so a caller can store one. `get_provider` then
+      -- warns that it defaults to the native provider, and it must.
+      describe("when terminal.defaults.provider holds a value that setup rejects", function()
+        ---The warnings raised while `open` picks the provider.
+        local function warnings_from_open()
+          terminal_wrapper.open()
+          local warnings = {}
+          for _, call in ipairs(vim.notify.calls) do
+            table.insert(warnings, call.refs[1])
+          end
+          return warnings
+        end
+
+        it("defaults to the native provider for an unknown name, as the warning says", function()
+          terminal_wrapper.defaults.provider = "bogus"
+
+          assert.are.same({ "Invalid provider configured: bogus. Defaulting to 'native'." }, warnings_from_open())
+          mock_native_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+        end)
+
+        it("defaults to the native provider for a value of another type, as the warning says", function()
+          terminal_wrapper.defaults.provider = 42
+
+          assert.are.same(
+            { "Invalid provider type: number. Must be string or table. Defaulting to 'native'." },
+            warnings_from_open()
+          )
+          mock_native_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+        end)
+      end)
+
       it("should reject providers missing required functions", function()
         local incomplete_provider = {
           setup = function() end,
