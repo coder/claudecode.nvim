@@ -11,6 +11,9 @@
 #                     forget`, all through the setsid that mise names
 #   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
 #                     reaches every call site, which the two cases above do not)
+#   doc-vars          a code block, or the inline code of a doc, that expands PORT, SID, NVIM_PID or NODE_DIR sets it in
+#                     the same block (or the same doc, for inline code), because a fresh shell has none of them. Prose
+#                     that names an assignment sets nothing.
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
 #   state-resolved    a VCN_STATE with a . or .. part, a symlink in its path, or a symlink as its last part is refused, not
 #                     sourced
@@ -712,14 +715,94 @@ setsid_resolved_case() {
 }
 
 # jq-resolved and setsid-resolved reach only the calls that a launch makes. This case reads the source: any word jq or
-# setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it. The
-# pattern is checked on a known bare call first, so a pattern that finds nothing cannot pass.
+# setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it.
 bare_tools_case() {
-  local name=no-bare-tools hits word_re='(^|[^[:alnum:]_./$-])(jq|setsid)($|[^[:alnum:]_-])'
-  grep -qE "$word_re" <<<'  x=$(y | jq -r .z)' || fail "$name" "the pattern misses a known bare jq"
-  hits=$(grep -nE "$word_re" "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '=\$\(bin (jq|setsid)\)$' || true)
-  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare jq or setsid: $(tr '\n' ' ' <<<"$hits")"
+  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])' form
+  local strip_re='(JQ_BIN|SETSID_BIN)=\$\(bin (jq|setsid)\)'
+  local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
+  while IFS= read -r site; do
+    for form in "" /usr/bin/ ./; do
+      bare=${site//"$jq_ref"/${form}jq}
+      bare=${bare//"$setsid_ref"/${form}setsid}
+      grep -qE "$word_re" <<<"$bare" || fail "$name" "the pattern misses this call written as a bare or path-qualified call: $bare"
+    done
+    sites=$((sites + 1))
+  done < <(grep -E '"\$(JQ_BIN|SETSID_BIN)"' "$V" | grep -v 'env_line JQ_BIN')
+  ((sites > 0)) || fail "$name" "vcn.sh has no call through \$JQ_BIN or \$SETSID_BIN to check the pattern against"
+  sed -E "s/$strip_re//" <<<'jq --version; JQ_BIN=$(bin jq)' | grep -qE "$word_re" || fail "$name" "a bare jq on a line that ends with the resolution would pass"
+  hits=$(grep -n '' "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | sed -E "s/$strip_re//" | grep -E "$word_re" || true)
+  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
+  cases=$((cases + 1))
+}
+
+# A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A recipe that expands one of them must set
+# it with `VAR=$(`, because a fresh shell has none. A recipe is a fenced code block (checked on its own) or an inline code
+# span (all of them in a doc are checked together, because a bullet cites one assignment for the steps below it). Prose
+# outside the backticks is not a recipe: it can name an assignment that no recipe runs.
+# code_units <file>: prints each fenced block, then the inline code spans outside the blocks, each unit ended by a line
+# that holds only %%unit%%. A block or a span that sources a run.env sets every variable of the run by itself, so it is left
+# out: it needs no `VAR=$(`, and it gives none to the other recipes.
+code_units() {
+  awk 'function sources(text) { return text ~ /(^|[^A-Za-z0-9_.-])(source|\.)[ \t]+[^;#]*run\.env/ }
+    /^```/ { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%"; block = "" } fenced = !fenced; next }
+    fenced { block = block $0 "\n"; next }
+    { line = $0
+      while (match(line, /`[^`]+`/)) {
+        span = substr(line, RSTART + 1, RLENGTH - 2)
+        if (!sources(span)) spans = spans span "\n"
+        line = substr(line, RSTART + RLENGTH)
+      } }
+    END { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%" } printf "%s%%%%unit%%%%\n", spans }' "$1"
+}
+
+# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it.
+units_missing() {
+  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\('
+  while IFS= read -r line; do
+    if [[ $line != "%%unit%%" ]]; then
+      unit+=$line$'\n'
+      continue
+    fi
+    if grep -qE "$uses_re" <<<"$unit" && ! grep -qE "$sets_re" <<<"$unit"; then
+      return 0
+    fi
+    unit=""
+  done < <(code_units "$1")
+  return 1
+}
+
+doc_vars_case() {
+  local name=doc-vars skill file var uses_re sets_re sample missing=""
+  skill=$(dirname "$V")/..
+  sample=$TMP/doc-vars-sample.md
+  for var in PORT SID NVIM_PID NODE_DIR; do
+    uses_re='\$\{?'$var'([^A-Za-z0-9_]|$)'
+    sets_re='(^|[^A-Za-z0-9_$])'$var'=\$\('
+    grep -qE "$uses_re" <<<"see \"\$$var.lock\" and \${$var}" || fail "$name" "the use pattern misses \$$var"
+    ! grep -qE "$uses_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the use pattern matches a longer name"
+    grep -qE "$sets_re" <<<"$var=\$(basename \"\$L\"/*.lock .lock)" || fail "$name" "the set pattern misses an assignment of $var"
+    ! grep -qE "$sets_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the set pattern matches text that sets nothing"
+    # Prose that names the assignment must not satisfy a block that uses the variable, and a block that sets it must.
+    printf 'Set it with %s=$(x) before.\n\n```bash\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a block that expands $var and sets it only in prose passed"
+    printf 'Prose.\n\n```bash\n%s=$(x)\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "a block that sets $var before it expands it was flagged"
+    printf 'Set `%s=$(x)` first, then `echo "$%s"`.\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "inline code that sets $var for inline code that expands it was flagged"
+    printf 'Run `source "$VCN_STATE/run.env"; echo "$%s"`.\n\n```bash\n. "$VCN_STATE/run.env"\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "a recipe that sources a run.env was flagged for $var"
+    printf 'Run `echo "$%s"`, as in `grep run.env x`.\n' "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a recipe that only names a run.env passed for $var"
+    printf 'Run `source "$VCN_STATE/run.env"` first, then `echo "$%s"`.\n' "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a source in one inline recipe set $var for another recipe"
+    for file in "$skill"/SKILL.md "$skill"/features/*.md; do
+      ! units_missing "$file" "$var" || missing+=" ${file#"$skill"/}:$var"
+    done
+  done
+  rm -f -- "$sample"
+  [[ -z $missing ]] || fail "$name" "a recipe expands a variable that it does not set:$missing"
+  echo "ok $name: every recipe that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
   cases=$((cases + 1))
 }
 
@@ -1077,6 +1160,7 @@ signal_gap_case
 cleanup_no_agent_tty_case
 setsid_resolved_case
 bare_tools_case
+doc_vars_case
 jq_old_run_case
 state_resolved_case
 state_slash_case
