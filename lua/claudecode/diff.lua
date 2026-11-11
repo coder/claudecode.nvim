@@ -782,6 +782,19 @@ local function setup_new_buffer(
   return new_win
 end
 
+---The buffer that has this name, if there is one. Both names are normalized, because Neovim can write a path with
+---other separators than the one the plugin built.
+---@param name string
+---@return integer? buf
+local function buffer_named(name)
+  local wanted = vim.fs.normalize(name)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.fs.normalize(vim.api.nvim_buf_get_name(buf)) == wanted then
+      return buf
+    end
+  end
+end
+
 ---What a native diff changed, so a failure in a later step can undo it.
 ---@class NativeDiffProgress
 ---@field win_before integer the window that was current before the diff
@@ -801,8 +814,10 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
 
   -- Split off a window, and remember it: a rollback closes these windows and no other.
   local function split()
+    -- A handler can switch to another tab, so the windows of the tab that was current are listed by its handle.
+    local tab = vim.api.nvim_get_current_tabpage()
     local before = {}
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
       before[win] = true
     end
     -- A WinNew or WinEnter handler that raises does so after the window exists, so the window is recorded first.
@@ -810,7 +825,7 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     -- A handler can also open or enter a window of its own, so the split is not always the current window. Window ids
     -- rise in the order that windows are created, so the lowest new one is the split.
     local created
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
       if not before[win] and (not created or win < created) then
         created = win
       end
@@ -855,7 +870,14 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
   split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
-  progress.proposed_buf = vim.api.nvim_get_current_buf()
+  -- The steps below work on the current buffer. A BufEnter or FileType handler can leave another one current without
+  -- raising, so the proposal is found by its name, and the diff stops when it is not current: the rename and the
+  -- options must not reach a buffer of the user's, and the rollback must wipe the proposal and nothing else.
+  local current_buf = vim.api.nvim_get_current_buf()
+  progress.proposed_buf = buffer_named(tmp_file) or current_buf
+  if progress.proposed_buf ~= current_buf then
+    error("ClaudeCode: an autocmd left another buffer current while the proposal was opened", 0)
+  end
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
@@ -888,17 +910,6 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     end,
     once = true,
   })
-end
-
----The buffer that has this name, if there is one.
----@param name string
----@return integer? buf
-local function buffer_named(name)
-  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_get_name(buf) == name then
-      return buf
-    end
-  end
 end
 
 ---Undo a native diff that failed halfway: the diff mode of the original, the buffer of the proposal, the windows that
