@@ -114,6 +114,7 @@ describe("The cleanup after a Claude client disconnects", function()
 
     refusal = nil
     run_queued(timers)
+    run_queued(scheduled)
     assert.same({ { client.id, "client disconnected" } }, closed)
     assert.same({}, timers)
   end)

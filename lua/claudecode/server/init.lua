@@ -80,9 +80,10 @@ function M.start(config, auth_token)
       )
 
       -- Close diffs this client opened but never resolved (issue #248) -- only if
-      -- the diff module is in use. Scheduled, because this runs in a libuv callback.
+      -- the diff module is in use. Scheduled, because this runs in a libuv callback. A client without a completed
+      -- handshake ran no tool, so it owns no diff.
       local diff = package.loaded["claudecode.diff"]
-      if diff then
+      if diff and client.handshake_complete then
         local client_id = client.id
         vim.schedule(function()
           utils.when_windows_allowed(function()
