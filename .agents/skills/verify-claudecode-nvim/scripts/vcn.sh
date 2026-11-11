@@ -381,9 +381,9 @@ unsafe_above() {
 
 # stat prints one record per dir, mode, owner and type and no name, so no path is ever read back from a line of text:
 # a name with a trailing space, a tab or a newline would be cut, and a twin symlink with the shorter name tested in its
-# place.
+# place. The type is the raw mode in hex (%f): GNU stat translates the label that %F prints.
 unsafe_walk() {
-  local dir=$1 what=$2 mode uid type rec i=0 dirs=() existing=()
+  local dir=$1 what=$2 mode uid raw rec i=0 dirs=() existing=()
   while :; do
     dirs+=("$dir")
     [[ $dir != / ]] || break
@@ -394,18 +394,18 @@ unsafe_walk() {
     if [[ -e $dir || -L $dir ]]; then existing+=("$dir"); fi
   done
   while IFS= read -r rec; do
-    read -r mode uid type <<<"$rec"
+    read -r mode uid raw <<<"$rec"
     dir=${existing[i]-}
     i=$((i + 1))
     if ((uid != 0 && uid != EUID)); then
       echo "$dir, above $what, is owned by another user"
       return
     fi
-    if [[ $type != "symbolic link" ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
+    if (((16#$raw & 16#f000) != 16#a000)) && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
       echo "$dir, above $what, is writable by others and not sticky"
       return
     fi
-  done < <(stat -c '%a %u %F' -- "${existing[@]}" 2>/dev/null)
+  done < <(stat -c '%a %u %f' -- "${existing[@]}" 2>/dev/null)
   if ((i != ${#existing[@]})); then
     echo "$1, above $what, could not be read in full"
   fi
@@ -523,7 +523,7 @@ cmd_launch() {
   trap 'signaled=1' TERM INT HUP
   state=$(
     trap '' TERM INT HUP
-    exec mktemp -d "$tmpdir/vcn.XXXXXX"
+    exec mktemp -d "${tmpdir%/}/vcn.XXXXXX"
   )
   trap 'trap "" TERM INT HUP; rm -rf -- "$state"; exit 143' TERM INT HUP
   [[ -z $signaled ]] || {

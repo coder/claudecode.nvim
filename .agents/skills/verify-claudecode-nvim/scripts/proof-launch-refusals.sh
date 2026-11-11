@@ -15,6 +15,7 @@
 #   tmp-missing    TMPDIR does not exist, under a sticky dir where another user could make it after the checks
 #   tmp-dotdot     TMPDIR has a .. part after a symlink (G/L/../y)
 #   tmp-dot        TMPDIR has a . part
+#   tmp-root       TMPDIR is /: launch gives mktemp /vcn.XXXXXX, not //vcn.XXXXXX (a mktemp shim stops launch and prints it)
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
 #   out-space      the same above VERIFY_OUT
 #   out-above-resolved  a symlink above VERIFY_OUT points into a dir that others can write: only the resolved path shows it
@@ -31,6 +32,7 @@
 #   tmp-sticky     a world-writable TMPDIR with the sticky bit, like /tmp: the state dir is made there
 #   tmp-link       TMPDIR is a symlink to that dir: the state dir is made in the dir, not through the symlink
 #   tmp-vcn-entry  a symlink named vcn in a sticky TMPDIR, pointing into a dir that others can write: launch still works
+#   out-link-locale  VERIFY_OUT under a symlink, with a stat that prints translated file types: launch still works
 #   out-acl        a 0500 VERIFY_OUT with a default ACL: launch makes it 0700 without the ACL, so every evidence file is 0600
 #   out-made       a new VERIFY_OUT two levels below a dir with a default ACL: launch creates both dirs 0700 and
 #                  without an ACL, so every evidence file is 0600
@@ -126,6 +128,12 @@ mkdir -m 700 "$TMP/dd" "$TMP/dd/y" "$TMP/dd/real"
 ln -s "$TMP/dd/real" "$TMP/dd/L"
 refused tmp-dotdot "TMPDIR=$TMP/dd/L/../y has a . or .. part" TMPDIR="$TMP/dd/L/../y" VERIFY_OUT="$TMP/tmp-out"
 refused tmp-dot "TMPDIR=$TMP/dd/./y has a . or .. part" TMPDIR="$TMP/dd/./y" VERIFY_OUT="$TMP/tmp-out"
+# GNU mktemp keeps a // in its template, and load refuses a VCN_STATE that is not its own resolved path, so the state dir that
+# a TMPDIR of / made would be refused and left behind. The shim records the template and stops launch.
+mkdir "$TMP/mktemp-bin"
+printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-bin/mktemp"
+chmod +x "$TMP/mktemp-bin/mktemp"
+refused tmp-root "mktemp shim: template=/vcn.XXXXXX" PATH="$TMP/mktemp-bin:$PATH" TMPDIR=/ VERIFY_OUT="$TMP/tmp-out"
 # A twin symlink with the name cut at the trailing space sits next to it: a walk that read the name back from a line of
 # stat output tested the twin and passed it.
 mkdir -m 700 "$TMP/sp"
@@ -212,6 +220,19 @@ state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
 VCN_STATE=$state "$vcn" cleanup >/dev/null
 [[ $state == "$TMP/tmp-vcnentry"/vcn.* ]] || fail "tmp-vcn-entry: launch made its state dir $state, not in $TMP/tmp-vcnentry"
 echo "PASS tmp-vcn-entry: a symlink named vcn in a sticky TMPDIR did not change the checked chain"
+
+# GNU stat prints a translated label for %F ("lien symbolique" for "symbolic link"), so a walk that compared that label
+# refused a symlink above VERIFY_OUT. The shim translates the labels the way a French locale does.
+mkdir -m 700 "$TMP/ll" "$TMP/ll/real" "$TMP/stat-bin"
+ln -s "$TMP/ll/real" "$TMP/ll/link"
+printf '#!/bin/sh\n"%s" "$@" | sed -e "s/symbolic link/lien symbolique/" -e "s/^directory$/repertoire/"\n' "$(command -v stat)" >"$TMP/stat-bin/stat"
+chmod +x "$TMP/stat-bin/stat"
+[[ $(PATH="$TMP/stat-bin:$PATH" stat -c %F "$TMP/ll/link") == "lien symbolique" ]] || fail "out-link-locale: the stat shim does not translate"
+err=$(env -u XUM_SCRATCH_DIR PATH="$TMP/stat-bin:$PATH" VERIFY_OUT="$TMP/ll/link/out" "$vcn" launch 2>&1) || fail "out-link-locale: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+VCN_STATE=$state "$vcn" cleanup >/dev/null
+[[ -d $TMP/ll/real/out ]] || fail "out-link-locale: launch made no evidence dir in $TMP/ll/real/out"
+echo "PASS out-link-locale: launch with VERIFY_OUT=$TMP/ll/link/out worked with a stat that prints translated file types"
 
 # private <case> <dir>: a run with VERIFY_OUT=dir works, and after cleanup dir is 0700 and holds only 0600 files.
 private() {
