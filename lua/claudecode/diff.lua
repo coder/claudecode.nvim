@@ -805,9 +805,10 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
       before[win] = true
     end
-    create_split()
-    -- A WinEnter or WinNew handler can open or enter a window of its own, so the split is not always the current
-    -- window. Window ids rise in the order that windows are created, so the lowest new one is the split.
+    -- A WinNew or WinEnter handler that raises does so after the window exists, so the window is recorded first.
+    local split_ok, split_failure = pcall(create_split)
+    -- A handler can also open or enter a window of its own, so the split is not always the current window. Window ids
+    -- rise in the order that windows are created, so the lowest new one is the split.
     local created
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
       if not before[win] and (not created or win < created) then
@@ -816,6 +817,14 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     end
     if created then
       table.insert(progress.created_wins, created)
+    end
+    if not split_ok then
+      error(split_failure, 0)
+    end
+    -- The steps that follow work in the current window, so a handler that moved the cursor must not make them load
+    -- the original and the proposal into a window that is not the split.
+    if created and vim.api.nvim_get_current_win() ~= created then
+      vim.api.nvim_set_current_win(created)
     end
   end
 
@@ -834,10 +843,11 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     end
   end
 
+  -- A window of the user's own diff can be reused, and a rollback must not end that diff. The question comes before
+  -- the edit: it copies the window options of another window that shows the file, diff mode among them.
+  local was_diff = vim.api.nvim_win_get_option(vim.api.nvim_get_current_win(), "diff")
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  -- A window of the user's own diff can be reused, and diffthis then changes nothing: a rollback must not end it.
   local old_win = vim.api.nvim_get_current_win()
-  local was_diff = vim.api.nvim_win_get_option(old_win, "diff")
   vim.cmd("diffthis")
   if not was_diff then
     progress.diffed_win = old_win
@@ -880,6 +890,17 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
   })
 end
 
+---The buffer that has this name, if there is one.
+---@param name string
+---@return integer? buf
+local function buffer_named(name)
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if vim.api.nvim_buf_get_name(buf) == name then
+      return buf
+    end
+  end
+end
+
 ---Undo a native diff that failed halfway: the diff mode of the original, the buffer of the proposal, the windows that
 ---the diff split off, and the temp file. The cleanup autocmd of a finished diff is registered last, so nothing else
 ---would remove them. Every step is protected, so an autocmd that errors in one (an OptionSet handler, for instance)
@@ -892,13 +913,21 @@ local function undo_native_diff(tmp_file, progress)
       vim.cmd("diffoff")
     end)
   end
-  if progress.proposed_buf and vim.api.nvim_buf_is_valid(progress.proposed_buf) then
-    pcall(vim.api.nvim_buf_delete, progress.proposed_buf, { force = true })
+  local function wipe(buf)
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
   end
-  -- Wiping the buffer keeps the window that is current, and a split that edit never filled is still there too.
+  wipe(progress.proposed_buf)
+  -- The temp file's name can still belong to a buffer: the proposal, when an autocmd raised while `edit` loaded it and
+  -- the buffer was never recorded, or the unlisted buffer that Neovim keeps for the old name after the rename.
+  wipe(buffer_named(tmp_file))
+  -- Wiping the buffer keeps the window that is current, and a split that edit never filled is still there too. The
+  -- close is not forced: an autocmd can have put a buffer of the user's own in the split, and a forced close wipes
+  -- unsaved text when that buffer has 'bufhidden' set to wipe. Such a window stays.
   for _, win in ipairs(progress.created_wins) do
     if vim.api.nvim_win_is_valid(win) then
-      pcall(vim.api.nvim_win_close, win, true)
+      pcall(vim.api.nvim_win_close, win, false)
     end
   end
   if progress.win_before and vim.api.nvim_win_is_valid(progress.win_before) then
