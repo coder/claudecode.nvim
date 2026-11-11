@@ -65,7 +65,7 @@ describe("The cleanup after a Claude client disconnects", function()
     end
   end
 
-  local function claude_connects()
+  local function connect()
     tcp._handle_new_connection(server.state.server)
     local client = assert(server.state.server.clients["client_" .. _G.claudecode_clients_created])
     local handle, closing = client.tcp_handle, false
@@ -80,7 +80,12 @@ describe("The cleanup after a Claude client disconnects", function()
     function handle:is_closing()
       return closing
     end
-    handle._read_cb(nil, upgrade)
+    return client
+  end
+
+  local function claude_connects()
+    local client = connect()
+    client.tcp_handle._read_cb(nil, upgrade)
     assert.equals("connected", client.state)
     return client
   end
@@ -110,6 +115,20 @@ describe("The cleanup after a Claude client disconnects", function()
     refusal = nil
     run_queued(timers)
     assert.same({ { client.id, "client disconnected" } }, closed)
+    assert.same({}, timers)
+  end)
+
+  it("starts no cleanup and no retry timer for a connection that closes before its handshake", function()
+    local client = connect()
+    refusal = "E11: Invalid in command-line window; <CR> executes, CTRL-C quits"
+
+    client.tcp_handle._read_cb(nil, nil)
+    run_queued(scheduled)
+    refusal = nil
+    run_queued(timers)
+    run_queued(scheduled)
+
+    assert.same({}, closed)
     assert.same({}, timers)
   end)
 end)
