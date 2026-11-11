@@ -53,6 +53,6 @@ describe("the suite under an odd TMPDIR", function()
     local output = run_child(outer, "reltmp", "tests/unit/integration_runner_spec.lua", "passes when every file prints")
 
     assert.is_truthy(output:find("status=0", 1, true), output)
-    assert.is_truthy(output:find("1 success", 1, true), output)
+    assert.are.equal(1, tonumber(output:match("(%d+) success")), output)
   end)
 end)
