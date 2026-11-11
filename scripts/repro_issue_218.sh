@@ -38,6 +38,8 @@
 # directory is removed on exit. So are the agent-tty session, its entry in agent-tty's
 # per-user home registry, and its empty socket directory under /tmp/agent-tty (the
 # session's home is a fresh temp directory, so none of them belongs to another run).
+# Computing that directory needs sha256sum, shasum or openssl. Without one, cleanup removes
+# only the directory that `inspect` names, and an exited session has no path there.
 # SIGTERM, SIGINT and SIGHUP run the same cleanup, and the cleanup ignores further signals,
 # so every step in it has a deadline. It stops the Neovim that is restoring plugins and
 # that Neovim's child processes (SIGTERM, then SIGKILL after about 5 s). A Neovim that gets
@@ -49,9 +51,11 @@
 # call in the cleanup runs in its own process group (bash job control) and has a deadline
 # (30 s, and 60 s for `destroy`), because Node resets a signal that the cleanup ignores, and
 # a second signal to the script's process group would kill the call. A call that a deadline
-# stops prints a warning on the stderr that the script started with. A session of this run
-# can then still be running, so the agent-tty home, its registry entry and the temp
-# directory stay, and the warning prints the commands that list and remove them.
+# stops prints a warning on the stderr that the script started with. A stopped `list`,
+# `inspect` or `destroy` can leave a session running, so the agent-tty home, its registry
+# entry and the temp directory stay. The warning prints the commands that list and remove
+# them. A stopped `home forget` leaves only the registry entry after the home is removed,
+# and its warning prints the command that removes that entry.
 # Plugins are installed into stdpath("data") of the
 # fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
 # issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
@@ -161,16 +165,19 @@ stop_tree() {
   kill -KILL $live 2>/dev/null || true
 }
 # The socket directory of agent-tty home $1: /tmp/agent-tty/ and the first 8 hex digits of the
-# sha256 of the home path (agent-tty's sessionPaths.js). Prints nothing without a sha256 tool.
+# sha256 of the home path (agent-tty's sessionPaths.js). agent-tty resolves symbolic links in
+# the home path before it hashes, and TMPDIR can be a link (macOS), so the path is made
+# physical first (`cd -P`, no realpath needed). Prints nothing without a sha256 tool.
 # shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
 socket_dir() {
-  local sum=""
+  local sum="" home
+  home="$(cd -P -- "$1" 2>/dev/null && pwd -P)" || home="$1"
   if command -v sha256sum >/dev/null 2>&1; then
-    sum="$(printf '%s' "$1" | sha256sum)"
+    sum="$(printf '%s' "$home" | sha256sum)"
   elif command -v shasum >/dev/null 2>&1; then
-    sum="$(printf '%s' "$1" | shasum -a 256)"
+    sum="$(printf '%s' "$home" | shasum -a 256)"
   elif command -v openssl >/dev/null 2>&1; then
-    sum="$(printf '%s' "$1" | openssl dgst -sha256 | sed 's/^.* //')"
+    sum="$(printf '%s' "$home" | openssl dgst -sha256 | sed 's/^.* //')"
   fi
   sum="${sum:0:8}"
   [[ "$sum" =~ ^[0-9a-f]{8}$ ]] && printf '/tmp/agent-tty/%s' "$sum"
