@@ -266,6 +266,15 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     end
   )
 
+  it("runs no command when the window showed the buffer before the swap and still does", function()
+    shown[SPLIT_WIN] = TERM_BUF
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
+
+    assert.same({}, commands)
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+  end)
+
   it("leaves a buffer alone that another autocmd put into the window in place of the buffer", function()
     live_buffers[7] = true
 
