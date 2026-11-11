@@ -152,7 +152,7 @@ site lua/claudecode/selection.lua: watch_selection_buffer(buf) @ local function 
 site lua/claudecode/selection.lua: watch_selection_buffer(bufnr) @ local function record_selection_read(bufnr)
 site lua/claudecode/selection.lua: watched_buffers = {}, @ M.state = {
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua d6e881211c59f191
+file lua/claudecode/server/init.lua 4a6b53438a2fdbbb
 block broadcast              fc69234ae8ed7cf0
 block on_connect             76ac805b2bc6ad4f
 == lua/claudecode/tools/get_current_selection.lua
