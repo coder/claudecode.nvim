@@ -511,6 +511,19 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.are.equal(0, running_count())
     end)
 
+    -- Without auto_close the earlier copy registered no TermClose handler, so nothing but the wrapped instance wipes it.
+    it("is wiped when the wrapped instance closes, also without auto_close", function()
+      snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
+      local claude = started[1]
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+
+      snacks_provider.close()
+
+      assert.is_false(vim.api.nvim_buf_is_valid(claude.buf))
+      assert.are.equal(0, running_count())
+    end)
+
     -- An older version wrote neither variable. The entry's config then decides the window options and auto_close.
     for _, auto_close in ipairs({ true, false }) do
       it("from an older version follows the configured auto_close (" .. tostring(auto_close) .. ")", function()
