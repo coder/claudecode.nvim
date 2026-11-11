@@ -460,6 +460,56 @@ local function adopted_config(buf, config)
   return merged
 end
 
+---The backdrop of a float, as Snacks made it: a window one z-index below the float, with a buffer of filetype
+---snacks_win_backdrop. The returned table has what the cc_* functions use of a Snacks backdrop (`win`) and what Snacks'
+---own close calls (`close`).
+---@param win number|nil The float
+---@return table|nil backdrop
+local function find_backdrop(win)
+  if not (win and vim.api.nvim_win_is_valid(win)) then
+    return nil
+  end
+  local zindex = vim.api.nvim_win_get_config(win).zindex
+  if not zindex then
+    return nil
+  end
+  for _, other in ipairs(vim.api.nvim_list_wins()) do
+    if
+      vim.api.nvim_win_get_config(other).zindex == zindex - 1
+      and vim.bo[vim.api.nvim_win_get_buf(other)].filetype == "snacks_win_backdrop"
+    then
+      return {
+        win = other,
+        close = function(self)
+          local closing = self.win
+          self.win = nil
+          if closing and vim.api.nvim_win_is_valid(closing) then
+            local buf = vim.api.nvim_win_get_buf(closing)
+            pcall(vim.api.nvim_win_close, closing, true)
+            pcall(vim.api.nvim_buf_delete, buf, { force = true })
+          end
+        end,
+      }
+    end
+  end
+  return nil
+end
+
+---Brings an adopted instance up to date with what has happened since the last entry: the window that shows its
+---buffer, the backdrop of that window (an adopted float keeps the one that its first start made), and the entry's
+---config.
+---@param instance table
+---@param config table|nil
+local function sync_adopted(instance, config)
+  instance.win = vim.fn.win_findbuf(instance.buf)[1]
+  if not (instance.backdrop and instance.backdrop.win and vim.api.nvim_win_is_valid(instance.backdrop.win)) then
+    instance.backdrop = find_backdrop(instance.win)
+  end
+  if config then
+    instance._cc.config = adopted_config(instance.buf, config)
+  end
+end
+
 ---A Snacks instance for the Claude that an earlier copy of this module started (before a reload). The Claude buffer
 ---keeps its mark, but Snacks.terminal.list() cannot hand out its instance: Snacks keys an instance by its command,
 ---directory, env and count, and clears the key when any buffer with that key is wiped, so it can lose a running Claude.
@@ -486,9 +536,9 @@ local function wrap_terminal(buf, config)
   -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
   -- buffer of a scratch instance when it closes, and this terminal buffer was started by Snacks.terminal.
   instance.buf, instance.scratch_buf = buf, buf
-  instance.win = vim.fn.win_findbuf(buf)[1]
   patch_instance(instance, adopted_config(buf, config))
   instance.adopted = true
+  sync_adopted(instance, nil)
   return instance
 end
 
@@ -497,14 +547,12 @@ end
 ---window may or may not show it.
 ---@param config table|nil The config of the entry, when it has one
 local function adopt_existing_terminal(config)
+  -- The entry's config first: an older version wrote no auto_close, and forget_ended_terminal needs the entry's.
+  if terminal and terminal.adopted and terminal:buf_valid() then
+    sync_adopted(terminal, config)
+  end
   forget_ended_terminal()
   if terminal and terminal:buf_valid() then
-    if terminal.adopted then
-      terminal.win = vim.fn.win_findbuf(terminal.buf)[1]
-      if config then
-        terminal._cc.config = adopted_config(terminal.buf, config)
-      end
-    end
     return
   end
   -- A terminal gets its mark only after its start succeeded, so the one that M.open is starting is not adopted here.
@@ -678,6 +726,11 @@ function M.close()
   -- An exited Claude (auto_close = false) has nothing to wait for.
   if jobid > 0 and vim.fn.jobwait({ jobid }, 0)[1] == -1 then
     closing._cc.closing = true
+    if closing.adopted then
+      -- The TermClose handler belongs to the instance that started this Claude, and it cannot see `closing` on this
+      -- one. Without the mark it does not report the stop as a failure.
+      vim.b[closing_bufnr][OWNED_MARK] = nil
+    end
     local exited = false
     vim.api.nvim_create_autocmd("TermClose", {
       buffer = closing_bufnr,

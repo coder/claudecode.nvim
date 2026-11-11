@@ -152,7 +152,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
           -- Neovim raises for a buffer that is not valid, and for a name that is not a number.
           local buf = state.buffers[bufnr]
           assert(buf, "Invalid buffer id: " .. tostring(bufnr))
-          return { channel = buf.jobid, buftype = "terminal" }
+          return { channel = buf.jobid, buftype = "terminal", filetype = buf.filetype }
         end,
       }),
       tbl_deep_extend = function(_, ...)
@@ -281,8 +281,21 @@ describe("claudecode.terminal.snacks after a module reload", function()
           state.windows[win].buf = bufnr
         end,
         nvim_win_set_height = function() end,
-        nvim_win_get_config = function()
-          return { relative = "" }
+        nvim_win_get_config = function(win)
+          local w = state.windows[win]
+          return w and w.config or { relative = "" }
+        end,
+        nvim_win_set_config = function(win, win_config)
+          local w = state.windows[win]
+          w.config = vim.tbl_deep_extend("force", w.config or { relative = "" }, win_config)
+        end,
+        nvim_list_wins = function()
+          local wins = {}
+          for win in pairs(state.windows) do
+            table.insert(wins, win)
+          end
+          table.sort(wins)
+          return wins
         end,
         nvim_get_current_win = function()
           return state.current_win
@@ -524,6 +537,71 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.are.equal(0, running_count())
     end)
 
+    -- The TermClose handler belongs to the instance that started the Claude, and it cannot see `closing` on the wrapped
+    -- one. Without the mark, it reports the stop of close as a failure.
+    it("is not reported as a failure when close stops it", function()
+      vim.v.event.status = 129
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+
+      snacks_provider.close()
+
+      assert.are.equal(0, running_count())
+      assert.are.same({}, logged_errors)
+    end)
+
+    -- Snacks makes a backdrop window for a float, one z-index below it. The wrapped instance finds it again, so that a
+    -- hide and a show reach it too.
+    for _, hidden_first in ipairs({ false, true }) do
+      it(
+        "hides and shows the backdrop of an adopted float (hidden before the reload=" .. tostring(hidden_first) .. ")",
+        function()
+          snacks_provider.open("claude", {}, config, true)
+          local claude = started[1]
+          local float = claude.win
+          state.windows[float].config = { relative = "editor", zindex = 50, hide = false }
+          local backdrop_buf = state.next_bufnr
+          state.next_bufnr = state.next_bufnr + 1
+          state.buffers[backdrop_buf] = { jobid = 0, vars = {}, filetype = "snacks_win_backdrop" }
+          local backdrop = new_window(backdrop_buf)
+          state.windows[backdrop].config = { relative = "editor", zindex = 49, hide = false }
+          claude.backdrop = { win = backdrop }
+          if hidden_first then
+            snacks_provider.simple_toggle("claude", {}, config)
+            assert.is_true(state.windows[backdrop].config.hide)
+          end
+          reload_snacks()
+
+          snacks_provider.simple_toggle("claude", {}, config)
+          local after_first_toggle = hidden_first
+          assert.are.equal(after_first_toggle, not state.windows[float].config.hide)
+          assert.are.equal(after_first_toggle, not state.windows[backdrop].config.hide)
+
+          snacks_provider.simple_toggle("claude", {}, config)
+          assert.are.equal(not after_first_toggle, not state.windows[float].config.hide)
+          assert.are.equal(not after_first_toggle, not state.windows[backdrop].config.hide)
+        end
+      )
+    end
+
+    -- A configless entry (get_active_bufnr) can adopt an older terminal first. The next entry's config must apply before the
+    -- check for an ended job.
+    it("from an older version is forgotten by the config of the entry after a configless adoption", function()
+      snacks_provider.open("claude", {}, config, true)
+      local claude = started[1]
+      state.buffers[claude.buf].vars.claudecode_snacks_auto_close = nil
+      state.buffers[claude.buf].vars.claudecode_snacks_window = nil
+      reload_snacks()
+      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      state.running_jobs[state.buffers[claude.buf].jobid] = nil
+
+      snacks_provider.open("claude", {}, config, true)
+
+      assert.are.equal(2, #started)
+    end)
+
     -- An older version wrote neither variable. The entry's config then decides the window options and auto_close.
     for _, auto_close in ipairs({ true, false }) do
       it("from an older version follows the configured auto_close (" .. tostring(auto_close) .. ")", function()
@@ -543,6 +621,29 @@ describe("claudecode.terminal.snacks after a module reload", function()
         assert.are.equal(auto_close and 2 or 1, #started)
       end)
     end
+  end)
+
+  -- Codex round 3: the plugin reloads, no entry adopts the running Claude, it exits, an entry in the gap starts a new
+  -- one, and the next reload must find that one.
+  it("finds the Claude that an entry started in the gap, when no entry had adopted the exited one", function()
+    snacks_provider.open("claude", {}, config, true)
+    local claude = started[1]
+    local handler = state.buffers[claude.buf].snacks_term_close
+    reload_snacks()
+    state.running_jobs[state.buffers[claude.buf].jobid] = nil
+
+    snacks_provider.open("claude", {}, config, true)
+    handler()
+    while #state.scheduled > 0 do
+      table.remove(state.scheduled, 1)()
+    end
+    assert.are.equal(2, #started)
+
+    reload_snacks()
+    assert.are.equal(started[2].buf, snacks_provider.get_active_bufnr())
+    snacks_provider.open("claude", {}, config, true)
+    assert.are.equal(2, #started)
+    assert.are.equal(1, running_count())
   end)
 
   it("keeps the tracked terminal when another marked terminal appears", function()
