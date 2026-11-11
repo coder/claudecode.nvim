@@ -242,11 +242,14 @@ local function remember_backdrop(term)
   vim.b[term.buf][BACKDROP_VAR] = backdrop and backdrop.win or nil
 end
 
----Registers what Snacks' Win:show registers when it opens a window: the instance's own events (the close of the
----backdrop, the resize), and the BufWinEnter handler that moves a file that you open in the terminal's window to another
----window (`fixbuf`). An adopted wrapper never ran Win:show, and cc_show re-creates a split without it, so nothing else
----registers them, and an `:edit` in the re-created window would replace Claude's buffer. Win:show clears the augroup
----first, so a later Snacks show does not double them. An instance that `snacks` started registered them at its first show.
+---Registers what Snacks' Win:show registers when it opens a window: the instance's events that do not belong to one
+---window (the resize of the backdrop and of the window), and the BufWinEnter handler that moves a file that you open in the
+---terminal's window to another window (`fixbuf`). A wrapper starts without a Win:show, and cc_show re-creates a split
+---without one (a float goes through Win:show, which registers them), so nothing else registers them, and an `:edit` in the
+---re-created window would replace Claude's buffer. The WinClosed event is bound to the id of one window, and an instance
+---that `snacks` started never has it for a window that cc_show re-created, so the wrapper registers none: Snacks' handler
+---would move the cursor to the previous window (`wincmd p`) when the window closes, where main leaves it to Neovim. Win:show
+---clears the augroup first, so a later Snacks show does not double them.
 ---@param term table Snacks terminal instance
 local function register_window_events(term)
   if term._cc.events_registered or type(term._on) ~= "function" or type(term.fixbuf) ~= "function" then
@@ -255,7 +258,9 @@ local function register_window_events(term)
   term._cc.events_registered = true
   term.augroup = vim.api.nvim_create_augroup("snacks_win_" .. term.id, { clear = true })
   for _, event in ipairs(term.events or {}) do
-    term:_on(event.event, event)
+    if not event.win then
+      term:_on(event.event, event)
+    end
   end
   vim.api.nvim_create_autocmd("BufWinEnter", {
     group = term.augroup,

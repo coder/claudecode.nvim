@@ -396,9 +396,10 @@ describe("claudecode.terminal.snacks after a module reload", function()
         -- Win:show registers these when it opens a window, and an instance that never showed has not.
         state.next_snacks_id = (state.next_snacks_id or 0) + 1
         term.id = state.next_snacks_id
-        term.events = { { event = "WinClosed" }, { event = "WinResized" } }
-        function term:_on(event)
-          table.insert(state.events_registered, { term = self, event = event })
+        -- Win.new records these. The close event is bound to a window (`win = true`), the resize is not.
+        term.events = { { event = "WinClosed", win = true }, { event = "WinResized" } }
+        function term:_on(event, opts)
+          table.insert(state.events_registered, { term = self, event = event, opts = opts })
         end
         function term:fixbuf() end
         function term:map()
@@ -819,6 +820,15 @@ describe("claudecode.terminal.snacks after a module reload", function()
       assert.are.equal(hide_key, wrapped.keys.claude_hide)
       assert.are.equal(wrapped, state.buffers[claude.buf].mapped_by)
       assert.are.equal(hide_key, state.buffers[claude.buf].mapped_keys.claude_hide)
+      -- The terminal style sets a filetype. The upgrade must not keep it, or the next update of the window (a resize, a
+      -- re-created float) would set it on the Claude buffer.
+      assert.are.same({}, wrapped.opts.bo)
+
+      -- The upgrade happens once. A later entry with a config does not build another instance's options.
+      assert.are.equal(2, #state.wrapped)
+      snacks_provider.simple_toggle("claude", {}, configured)
+      snacks_provider.simple_toggle("claude", {}, configured)
+      assert.are.equal(2, #state.wrapped)
     end)
 
     -- An older version stored no window options, so a configless adoption has no size. The next entry's config gives it.
@@ -1080,9 +1090,22 @@ describe("claudecode.terminal.snacks after a module reload", function()
         assert.are.equal(1, #state.autocmds)
         assert.are.equal(wrapper.augroup, state.autocmds[1].group)
         assert.is_true(state.autocmds[1].nested)
-        assert.are.equal(#wrapper.events, #state.events_registered)
+        assert.are.equal(1, #state.events_registered)
         assert.are.equal(wrapper, state.events_registered[1].term)
+        assert.are.equal("WinResized", state.events_registered[1].event)
         assert.are.equal(1, windows_showing(claude.buf))
+      end)
+
+      -- WinClosed is bound to the id of one window, and an instance that `snacks` started never has it for a window that
+      -- cc_show re-created. Snacks' handler moves the cursor to the previous window, where main leaves it to Neovim.
+      it("registers no event that is bound to a window", function()
+        snacks_provider.simple_toggle("claude", {}, config)
+        snacks_provider.simple_toggle("claude", {}, config)
+
+        for _, registered in ipairs(state.events_registered) do
+          assert.is_not_true(registered.opts.win, registered.event .. " is bound to a window")
+        end
+        assert.is_true(#state.events_registered > 0)
       end)
 
       it("registers them once, however often it hides and shows", function()
@@ -1092,7 +1115,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end
 
         assert.are.equal(1, #state.autocmds)
-        assert.are.equal(2, #state.events_registered)
+        assert.are.equal(1, #state.events_registered)
       end)
     end)
 
