@@ -21,6 +21,8 @@
 #                      passes `agent-tty doctor`).
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
 # VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
+# TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path to an
+#              existing directory, and neither it nor a dir above it may be writable by others without the sticky bit.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
@@ -45,19 +47,30 @@ env_line() { printf '%s=%q\n' "$1" "$2"; }
 load() {
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
   [[ -f $VCN_STATE/run.env ]] || die "no run at $VCN_STATE (already cleaned up?)"
+  # run.env is sourced, so it must be a file this user made: a stale VCN_STATE can name a dir that another user made since.
+  [[ ! -L $VCN_STATE/run.env && -O $VCN_STATE/run.env ]] || die "refusing $VCN_STATE/run.env: it is a symlink or owned by another user"
   [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
+  # A run that an older vcn.sh started has no JQ_BIN.
+  [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
 }
 
-# agent-tty needs Node 24+, so it runs on the repo's mise node.
-att() { PATH="$NODE_DIR:$PATH" "$ATT_BIN" --home "$ATT_HOME" "$@"; }
+# agent-tty needs Node 24+, so it runs on the repo's mise node. During a teardown (own_session set) it gets a session of
+# its own: Node resets the signals that its parent ignores, so `trap ''` does not reach it, and a signal sent to launch's
+# process group would end the call. A process in another session never gets that signal. It runs the setsid that launch
+# resolved (SETSID_BIN): a bare setsid could be another one on PATH, or none.
+att() {
+  local own=()
+  [[ -z ${own_session-} ]] || own=("$SETSID_BIN" -w)
+  PATH="$NODE_DIR:$PATH" ${own[@]+"${own[@]}"} "$ATT_BIN" --home "$ATT_HOME" "$@"
+}
 
 # Callers pass --json. A failed command answers ok:false.
 attj() {
   local out
   out=$(att "$@") || true
-  jq -e '.ok == true' <<<"$out" >/dev/null 2>&1 || die "agent-tty $1 failed: ${out:-no output}"
+  "$JQ_BIN" -e '.ok == true' <<<"$out" >/dev/null 2>&1 || die "agent-tty $1 failed: ${out:-no output}"
   printf '%s\n' "$out"
 }
 
@@ -88,11 +101,11 @@ pick_agent_tty() {
     # A substitution, so a signal's trap runs with launch's own stderr and not with doctor's redirections.
     doctor=$(att doctor --json 2>"$VCN_STATE/doctor.err") || true
     printf '%s\n' "$doctor" >"$OUT/agent-tty-doctor.json"
-    if jq -e '.result.ok == true' "$OUT/agent-tty-doctor.json" >/dev/null 2>&1; then
+    if "$JQ_BIN" -e '.result.ok == true' "$OUT/agent-tty-doctor.json" >/dev/null 2>&1; then
       env_line ATT_BIN "$cand" >>"$VCN_STATE/run.env"
       return 0
     fi
-    why=$(jq -r '[.result.checks[]?[]? | select(.status != "pass") | "\(.name): \(.message)"] | join("; ")' \
+    why=$("$JQ_BIN" -r '[.result.checks[]?[]? | select(.status != "pass") | "\(.name): \(.message)"] | join("; ")' \
       "$OUT/agent-tty-doctor.json" 2>/dev/null || true)
     # A candidate that dies before doctor prints anything leaves only stderr. Take the `Error:` line of a Node stack
     # trace (a source line with `new Error(` comes first) or a mise shim's `mise ERROR` line.
@@ -120,7 +133,7 @@ rtp_dirs() {
 settle() {
   local out
   out=$(att wait "$SID" --screen-stable-ms 300 --timeout 5000 --json 2>/dev/null) || true
-  jq -e '.ok == true and .result.timedOut == false' <<<"$out" >/dev/null 2>&1 ||
+  "$JQ_BIN" -e '.ok == true and .result.timedOut == false' <<<"$out" >/dev/null 2>&1 ||
     echo "vcn: screen did not settle within 5s; capturing it anyway" >&2
 }
 
@@ -142,11 +155,11 @@ chan() { printf '%s' "${VCN_CLIENT:+-$VCN_CLIENT}"; }
 
 client_pid_var() { printf 'CLIENT_PID%s' "${VCN_CLIENT:+_$VCN_CLIENT}"; }
 
-send() { jq -nc "$@" >>"$OUT/ws-out$(chan).jsonl"; }
+send() { "$JQ_BIN" -nc "$@" >>"$OUT/ws-out$(chan).jsonl"; }
 
 # await matches responses by id, so a reused id would return the earlier answer.
 cmd_rpc() {
-  jq -e --arg id "$1" 'select(.id == $id)' "$OUT/ws-out$(chan).jsonl" >/dev/null 2>&1 &&
+  "$JQ_BIN" -e --arg id "$1" 'select(.id == $id)' "$OUT/ws-out$(chan).jsonl" >/dev/null 2>&1 &&
     die "id $1 was already used by this client; pick a new id"
   send --arg id "$1" --arg m "$2" --argjson p "${3-"{}"}" '{jsonrpc:"2.0",id:$id,method:$m,params:$p}'
 }
@@ -156,7 +169,7 @@ cmd_await() {
   local deadline=$((SECONDS + secs))
   while :; do
     # fromjson? skips a line the client is still writing.
-    line=$(jq -cR --arg id "$id" 'fromjson? | select(.id == $id)' "$OUT/ws-in$(chan).jsonl" | head -n 1)
+    line=$("$JQ_BIN" -cR --arg id "$id" 'fromjson? | select(.id == $id)' "$OUT/ws-in$(chan).jsonl" | head -n 1)
     if [[ -n $line ]]; then
       echo "$line"
       return 0
@@ -188,9 +201,9 @@ cmd_keys() {
     fi
     [[ -n $arg ]] || die "keys got an empty argument"
     if ((!literal)) && [[ $arg =~ $KEY_RE || $arg =~ $MOD_CHAR_RE ]]; then
-      steps=$(jq -c --arg k "$arg" '. + [{sendKeys: [$k]}]' <<<"$steps")
+      steps=$("$JQ_BIN" -c --arg k "$arg" '. + [{sendKeys: [$k]}]' <<<"$steps")
     else
-      steps=$(jq -c --arg t "$arg" '. + [{type: $t}]' <<<"$steps")
+      steps=$("$JQ_BIN" -c --arg t "$arg" '. + [{type: $t}]' <<<"$steps")
     fi
   done
   attj batch "$SID" "$steps" --json >/dev/null
@@ -198,7 +211,7 @@ cmd_keys() {
 
 cmd_capture() {
   settle
-  attj snapshot "$SID" --format text --json | jq -r .result.text >"$OUT/$1.screen.txt"
+  attj snapshot "$SID" --format text --json | "$JQ_BIN" -r .result.text >"$OUT/$1.screen.txt"
   cat "$OUT/$1.screen.txt"
 }
 
@@ -206,7 +219,7 @@ cmd_capture() {
 cmd_screenshot() {
   local src
   settle
-  src=$(attj screenshot "$SID" --json | jq -r .result.artifactPath)
+  src=$(attj screenshot "$SID" --json | "$JQ_BIN" -r .result.artifactPath)
   cp "$src" "$OUT/$1.png"
   echo "$OUT/$1.png"
 }
@@ -233,23 +246,14 @@ server_under_tui() {
 # cleanup fast: for a signal, whose sender wants launch gone. It skips the evidence (a screenshot and a video), which
 # takes many seconds on a loaded host.
 cmd_cleanup() {
-  local fast=${1-} kill_at=30
+  local fast=${1-}
   if [[ -z ${VCN_STATE-} || ! -f $VCN_STATE/run.env ]]; then
     echo "vcn: nothing to clean at ${VCN_STATE-<unset>}"
     return 0
   fi
   load
-  [[ $VCN_STATE == /tmp/vcn.* ]] || die "refusing to delete unexpected state dir $VCN_STATE"
+  [[ $VCN_STATE =~ ^/(.*/)?vcn\.[A-Za-z0-9]{6}$ ]] || die "refusing to delete unexpected state dir $VCN_STATE"
   local i var pids=()
-  if [[ $fast == fast ]]; then
-    kill_at=1
-    for var in $(compgen -v CLIENT_PID); do
-      if ours "${!var}"; then kill "${!var}" 2>/dev/null || true; fi
-    done
-    mapfile -t pids < <(tagged)
-    # Every PID here carries this run's tag, so it is ours.
-    ((${#pids[@]} == 0)) || kill "${pids[@]}" 2>/dev/null || true
-  fi
   # agent-tty still renders a session whose nvim exited, so the evidence step runs for any session.
   if [[ -n ${SID-} ]]; then
     if [[ $fast != fast ]]; then
@@ -267,12 +271,16 @@ cmd_cleanup() {
     mapfile -t pids < <(tagged)
     ((${#pids[@]} == 0)) && break
     # Every PID here carries this run's tag, so it is ours.
-    if ((i == kill_at)); then kill "${pids[@]}" 2>/dev/null || true; fi
+    if ((i == 30)); then kill "${pids[@]}" 2>/dev/null || true; fi
     sleep 0.1
   done
   ((${#pids[@]} == 0)) || die "processes from this run still alive: ${pids[*]}"
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
-  att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
+  [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
+  # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the real path of the home) at its first
+  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. A symlink in TMPDIR makes the
+  # real path differ from ATT_HOME.
+  rmdir "/tmp/agent-tty/$(printf %s "$(realpath -m -- "$ATT_HOME")" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
   echo "vcn: cleanup ok, no processes left; evidence kept in $OUT"
@@ -289,21 +297,21 @@ cmd_doctor() {
     fi
   }
   not_prompt() { [[ -n $1 && $1 != r* ]]; }
-  session=$(att inspect "$SID" --json 2>/dev/null | jq -c .result.session 2>/dev/null || echo '{}')
+  session=$(att inspect "$SID" --json 2>/dev/null | "$JQ_BIN" -c .result.session 2>/dev/null || echo '{}')
   st=$(nv 'luaeval("vim.json.encode(require(\"claudecode.server.init\").get_status())")' 2>/dev/null || echo '{}')
   mode=$(nv 'mode(1)' 2>/dev/null || true)
   tok_nvim=$(nv "luaeval(\"vim.fn.sha256(require('claudecode').state.auth_token)\")" 2>/dev/null || true)
-  tok_lock=$(jq -j .authToken "$lock" 2>/dev/null | sha256sum | cut -d' ' -f1) || true
-  check "agent-tty session $SID is running" test "$(jq -r .status <<<"$session")" = running
-  tui_ok() { [[ $(jq -r .childPid <<<"$session") == "$TUI_PID" ]] && server_under_tui; }
+  tok_lock=$("$JQ_BIN" -j .authToken "$lock" 2>/dev/null | sha256sum | cut -d' ' -f1) || true
+  check "agent-tty session $SID is running" test "$("$JQ_BIN" -r .status <<<"$session")" = running
+  tui_ok() { [[ $("$JQ_BIN" -r .childPid <<<"$session") == "$TUI_PID" ]] && server_under_tui; }
   check "nvim server (pid $NVIM_PID) runs under the session's TUI (pid $TUI_PID)" tui_ok
   check "client ws-client.mjs (pid $CLIENT_PID) is alive" is_exe "$CLIENT_PID" "$NODE_DIR/node"
   check "nvim RPC answers as pid $NVIM_PID" test "$(nv 'getpid()' 2>/dev/null)" = "$NVIM_PID"
   check "nvim is not blocked in a prompt (mode '$mode')" not_prompt "$mode"
-  check "lock file $lock names nvim pid $NVIM_PID" test "$(jq -r .pid "$lock" 2>/dev/null)" = "$NVIM_PID"
-  check "plugin server is running on lock port $PORT" test "$(jq -r '"\(.running) \(.port)"' <<<"$st")" = "true $PORT"
+  check "lock file $lock names nvim pid $NVIM_PID" test "$("$JQ_BIN" -r .pid "$lock" 2>/dev/null)" = "$NVIM_PID"
+  check "plugin server is running on lock port $PORT" test "$("$JQ_BIN" -r '"\(.running) \(.port)"' <<<"$st")" = "true $PORT"
   check "lock authToken matches the server token" test -n "$tok_nvim" -a "$tok_nvim" = "$tok_lock"
-  check "a client finished the WebSocket handshake" test "$(jq '[.clients[]? | select(.handshake_complete)] | length' <<<"$st")" -ge 1
+  check "a client finished the WebSocket handshake" test "$("$JQ_BIN" '[.clients[]? | select(.handshake_complete)] | length' <<<"$st")" -ge 1
   echo "paths: VCN_STATE=$VCN_STATE OUT=$OUT WORK=$WORK"
   ((fails == 0))
 }
@@ -326,19 +334,20 @@ unsafe_dir() {
 }
 
 # Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the
-# dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing.
+# dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the
+# message (default: the evidence dir).
 unsafe_above() {
-  local dir mode uid
+  local dir mode uid what=${2-the evidence dir}
   for dir in "$(realpath -sm -- "$1/..")" "$(realpath -m -- "$1/..")"; do
     while :; do
       if [[ -e $dir || -L $dir ]]; then
         read -r mode uid < <(stat -c '%a %u' -- "$dir")
         if ((uid != 0 && uid != EUID)); then
-          echo "$dir, above the evidence dir, is owned by another user"
+          echo "$dir, above $what, is owned by another user"
           return
         fi
         if [[ ! -L $dir ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
-          echo "$dir, above the evidence dir, is writable by others and not sticky"
+          echo "$dir, above $what, is writable by others and not sticky"
           return
         fi
       fi
@@ -348,12 +357,14 @@ unsafe_above() {
   done
 }
 
-# Exit status 143 means a signal (the traps below make it so). A second signal must not stop the teardown halfway.
+# The fast cleanup runs for $signaled, not for status 143: a child that someone else killed with SIGTERM also gives 143.
+# A second signal must not stop the teardown halfway.
 launch_failed() {
   local rc=$?
   ((rc == 0)) && return 0
   trap '' TERM INT HUP
-  if ((rc == 143)); then
+  own_session=1
+  if [[ -n $signaled ]]; then
     echo "vcn: launch failed (VCN_STATE=$VCN_STATE); tearing the run down" >&2
     cmd_cleanup fast >&2 || true
   else
@@ -366,13 +377,13 @@ launch_failed() {
 
 # Start ws-client.mjs as the client VCN_CLIENT names, record its PID, and finish the MCP handshake.
 start_client() {
-  local setsid_exe=$1 ch init
+  local ch init
   ch=$(chan)
   : >>"$OUT/ws-out$ch.jsonl"
   : >>"$OUT/ws-in$ch.jsonl"
   # setsid: an agent's bash tool kills the background jobs of a call when the call ends, and the
   # client must outlive it. The client reads the token from the lock file, so it is not in argv.
-  VCN_RUN_TAG=$VCN_STATE "$setsid_exe" "$NODE_DIR/node" "$SKILL_DIR/scripts/ws-client.mjs" \
+  VCN_RUN_TAG=$VCN_STATE "$SETSID_BIN" "$NODE_DIR/node" "$SKILL_DIR/scripts/ws-client.mjs" \
     "$VCN_STATE/claude/ide/$PORT.lock" "$OUT/ws-out$ch.jsonl" "$OUT/ws-in$ch.jsonl" \
     </dev/null >/dev/null 2>>"$OUT/ws-client$ch.log" &
   env_line "$(client_pid_var)" "$!" >>"$VCN_STATE/run.env"
@@ -381,17 +392,17 @@ start_client() {
   send --arg v "${VCN_INIT_JSONRPC:-2.0}" \
     '{jsonrpc:$v,id:"init",method:"initialize",params:{protocolVersion:"2025-06-18",capabilities:{},clientInfo:{name:"vcn",version:"0"}}}'
   init=$(cmd_await init 10)
-  jq -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
+  "$JQ_BIN" -e '.result.protocolVersion | type == "string"' <<<"$init" >/dev/null || die "initialize failed: $init"
   send '{jsonrpc:"2.0",method:"notifications/initialized"}'
 }
 
 cmd_connect() {
-  local var setsid_exe
+  local var
   [[ -n ${VCN_CLIENT-} ]] || die "connect needs VCN_CLIENT=<name> for the new client"
   var=$(client_pid_var)
   [[ -z ${!var-} ]] || die "client $VCN_CLIENT was already started in this run"
-  setsid_exe=$(bin setsid)
-  start_client "$setsid_exe"
+  SETSID_BIN=$(bin setsid)
+  start_client
   echo "client $VCN_CLIENT connected; its messages are in $OUT/ws-out$(chan).jsonl and $OUT/ws-in$(chan).jsonl"
 }
 
@@ -406,7 +417,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_cands node_exe setsid_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
+  local nvim_exe att_cands node_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
   if [[ -n ${VCN_NVIM-} ]]; then
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
@@ -420,8 +431,9 @@ cmd_launch() {
   mapfile -t att_cands <<<"$att_cands"
   VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
-  setsid_exe=$(bin setsid)
-  bin jq >/dev/null
+  # Every call runs these paths, not the bare names: another setsid or jq earlier on PATH could differ or fail.
+  SETSID_BIN=$(bin setsid)
+  JQ_BIN=$(bin jq)
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
   if [[ -n ${VERIFY_OUT-} ]]; then
     # A trailing slash would make -L test the symlink's target.
@@ -438,6 +450,13 @@ cmd_launch() {
   if [[ -n $out && -e $out && ! -d $out ]]; then
     die "$out is not a directory; pick a fresh VERIFY_OUT"
   fi
+  [[ ${TMPDIR:-/tmp} == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
+  # A dir that is missing now could be made by another user after the check below and before mktemp.
+  [[ -d ${TMPDIR:-/tmp} ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
+  # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
+  # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
+  why=$(unsafe_above "${TMPDIR:-/tmp}/vcn" "the state dir")
+  [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
   # die between making the dir and printing its name.
@@ -445,7 +464,7 @@ cmd_launch() {
   trap 'signaled=1' TERM INT HUP
   state=$(
     trap '' TERM INT HUP
-    exec mktemp -d /tmp/vcn.XXXXXX
+    exec mktemp -d "${TMPDIR:-/tmp}/vcn.XXXXXX"
   )
   trap 'trap "" TERM INT HUP; rm -rf -- "$state"; exit 143' TERM INT HUP
   [[ -z $signaled ]] || {
@@ -517,12 +536,15 @@ cmd_launch() {
     env_line NVIM_BIN "$nvim_exe"
     env_line NVIM_08 "$nvim_08"
     env_line NODE_DIR "$(dirname "$node_exe")"
+    env_line JQ_BIN "$JQ_BIN"
   } >"$state/run.env"
   export VCN_STATE=$state
   load
   trap launch_failed EXIT
-  # A signal ends bash with $? still 0 in the EXIT trap, and launch_failed then skips its cleanup: make it an exit.
-  trap 'exit 143' TERM INT HUP
+  # A signal ends bash with $? still 0 in the EXIT trap, so this trap acts on it: it ignores the signals, drops the
+  # EXIT trap, and runs launch_failed itself with status 143. An exit here would end the shell before the teardown
+  # when the trap runs inside the EXIT trap of a launch that failed by itself, before launch_failed ignores signals.
+  trap 'trap "" TERM INT HUP; signaled=1; trap - EXIT; (exit 143) || launch_failed' TERM INT HUP
   pick_agent_tty "${att_cands[@]}"
   load
   [[ $# -gt 0 ]] || set -- hello.txt
@@ -533,11 +555,11 @@ cmd_launch() {
     XDG_CONFIG_HOME="$state/home/.config" XDG_DATA_HOME="$state/home/.local/share" \
     XDG_STATE_HOME="$state/home/.local/state" XDG_CACHE_HOME="$state/home/.cache" \
     CLAUDE_CONFIG_DIR="$state/claude" VCN_REPO="$REPO" VCN_SETUP="${VCN_SETUP-}" VCN_RTP="${VCN_RTP-}" \
-    "$nvim_exe" --listen "$NVIM_SOCK" -u "$SKILL_DIR/scripts/init.lua" "$@" | jq -r .result.sessionId)
+    "$nvim_exe" --listen "$NVIM_SOCK" -u "$SKILL_DIR/scripts/init.lua" "$@" | "$JQ_BIN" -r .result.sessionId)
   env_line SID "$sid" >>"$state/run.env"
   load
   # The session's process is the nvim TUI. It runs the nvim server, which answers RPC, as its child.
-  { read -r tui && read -r sock; } < <(attj inspect "$SID" --json | jq -r '.result.session.childPid, .result.host.rpcSocketPath')
+  { read -r tui && read -r sock; } < <(attj inspect "$SID" --json | "$JQ_BIN" -r '.result.session.childPid, .result.host.rpcSocketPath')
   {
     env_line TUI_PID "$tui"
     env_line ATT_SOCK "$sock"
@@ -549,7 +571,7 @@ cmd_launch() {
   server_under_tui || die "nvim server $NVIM_PID does not run under the session's TUI process $TUI_PID"
   for i in $(seq 100); do
     for f in "$state"/claude/ide/*.lock; do
-      [[ -f $f ]] && jq -e --argjson p "$NVIM_PID" '.pid == $p' "$f" >/dev/null 2>&1 && lock=$f
+      [[ -f $f ]] && "$JQ_BIN" -e --argjson p "$NVIM_PID" '.pid == $p' "$f" >/dev/null 2>&1 && lock=$f
     done
     [[ -n $lock ]] && break
     sleep 0.1
@@ -557,11 +579,11 @@ cmd_launch() {
   [[ -n $lock ]] || die "no lock file for pid $NVIM_PID in $state/claude/ide"
   env_line PORT "$(basename "$lock" .lock)" >>"$state/run.env"
   load
-  start_client "$setsid_exe"
+  start_client
   cp "$state/run.env" "$OUT/run.env"
   {
     "$nvim_exe" --version | head -n 1
-    echo "agent-tty $(att version --json | jq -r .result.cliVersion)"
+    echo "agent-tty $(att version --json | "$JQ_BIN" -r .result.cliVersion)"
   } >>"$OUT/run.env"
   echo "VCN_STATE=$state"
   echo "OUT=$OUT"
@@ -587,7 +609,7 @@ doctor | keys | expr | until | rpc | tool | await | capture | screenshot | recor
     ;;
   until) cmd_until "$@" ;;
   rpc) cmd_rpc "$@" ;;
-  tool) cmd_rpc "$1" tools/call "$(jq -nc --arg n "$2" --argjson a "${3-"{}"}" '{name:$n,arguments:$a}')" ;;
+  tool) cmd_rpc "$1" tools/call "$("$JQ_BIN" -nc --arg n "$2" --argjson a "${3-"{}"}" '{name:$n,arguments:$a}')" ;;
   await) cmd_await "$@" ;;
   capture) cmd_capture "$1" ;;
   screenshot) cmd_screenshot "$1" ;;
