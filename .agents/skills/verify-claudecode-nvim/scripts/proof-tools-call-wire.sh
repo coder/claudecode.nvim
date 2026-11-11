@@ -6,11 +6,12 @@
 # Prints one `ok:` or `FAIL:` line per case and ends with `COUNT tools-call-wire cases=<n> failed=<n> leaks=<n>`.
 # Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
 # its table holds.
-# VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be a real binary: a version-manager shim does
-# not start with an empty environment. nvim and the checker start with an empty environment. nvim gets only
-# PATH=/usr/bin:/bin, WIRE_PARENT, WIRE_TREE, WIRE_CWD, and HOME, TMPDIR, XDG_CONFIG_HOME, XDG_DATA_HOME,
-# XDG_STATE_HOME, XDG_CACHE_HOME and CLAUDE_CONFIG_DIR in the run dir. It runs with terminal.provider = "none", so no
-# `claude` starts. The checker gets no variable.
+# VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be the Neovim binary itself or a wrapper that
+# runs it with exec, because nvim must be a direct child of this script, and not a version-manager shim, which does not
+# start with an empty environment. nvim and the checker start with an empty environment. When nvim and node are the
+# binaries themselves, nvim gets only PATH=/usr/bin:/bin, WIRE_PARENT, WIRE_TREE, WIRE_CWD, and HOME, TMPDIR,
+# XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME, XDG_CACHE_HOME and CLAUDE_CONFIG_DIR in the run dir, and the checker
+# gets no variable. nvim runs with terminal.provider = "none", so no `claude` starts.
 set -euo pipefail
 umask 077
 
@@ -66,9 +67,9 @@ trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
 
-RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)"
-RUN="$(cd "$RUN" && pwd -P)"
-mkdir "$RUN/work" "$RUN/tmp"
+RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)" || die "cannot make a temp dir under /tmp"
+RUN="$(cd "$RUN" && pwd -P)" || die "cannot enter the temp dir $RUN"
+mkdir "$RUN/work" "$RUN/tmp" || die "cannot make the dirs in $RUN"
 # What nvim gets, and nothing else. The checker gets nothing.
 NVIM_ENV=(env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" WIRE_TREE="$TREE" WIRE_CWD="$RUN/work" HOME="$RUN/home"
   TMPDIR="$RUN/tmp" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" XDG_STATE_HOME="$RUN/state"
@@ -77,19 +78,25 @@ NVIM_ENV=(env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" WIRE_TREE="$TREE" WIRE_CWD=
   die "$NVIM does not start with an empty environment (a version-manager shim?): set VCN_NVIM to a real Neovim binary"
 env -i "$NODE" --version >/dev/null 2>&1 ||
   die "$NODE does not start with an empty environment (a version-manager shim?): put a real node first on PATH"
-# nvim quits by itself when this script is gone, SIGKILL included: it checks its parent every half second. Its server
-# stop closes the socket, which ends the checker, and removes the lock file.
+# nvim must be a direct child of this script: it checks its parent before the plugin starts, and quits with an error
+# when the parent is not this script (a wrapper without exec). It then quits by itself when this script is gone, SIGKILL
+# included: it checks its parent every half second. Its server stop closes the socket, which ends the checker, and
+# removes the lock file.
 "${NVIM_ENV[@]}" "$NVIM" --headless -u NONE -i NONE \
-  --cmd 'lua vim.opt.rtp:prepend(vim.env.WIRE_TREE); vim.api.nvim_set_current_dir(vim.env.WIRE_CWD)' \
+  --cmd 'lua function wire_gone() return (vim.uv or vim.loop).os_getppid() ~= tonumber(vim.env.WIRE_PARENT) end; if wire_gone() then io.stderr:write("wire-probe: this nvim is not a direct child of the launcher\n"); vim.cmd("cquit 3") end; vim.opt.rtp:prepend(vim.env.WIRE_TREE); vim.api.nvim_set_current_dir(vim.env.WIRE_CWD)' \
   -c "lua require('claudecode').setup({ terminal = { provider = 'none' }, track_selection = false })" \
-  -c "lua vim.fn.timer_start(500, function() if (vim.uv or vim.loop).os_getppid() ~= tonumber(vim.env.WIRE_PARENT) then vim.cmd('qa!') end end, { ['repeat'] = -1 })" >"$RUN/nvim.out" 2>&1 &
+  -c "lua vim.fn.timer_start(500, function() if wire_gone() then vim.cmd('qa!') end end, { ['repeat'] = -1 })" >"$RUN/nvim.out" 2>&1 &
 NVIM_PID=$!
 
 shopt -s nullglob
 for _ in {1..100}; do
   locks=("$RUN"/claude/ide/*.lock)
   [[ ${#locks[@]} -eq 0 ]] || break
-  kill -0 "$NVIM_PID" 2>/dev/null || why "nvim exited before it wrote a lock file"
+  if ! kill -0 "$NVIM_PID" 2>/dev/null; then
+    ! grep -q "not a direct child" "$RUN/nvim.out" ||
+      die "$NVIM runs Neovim as a child (a wrapper without exec?): set VCN_NVIM to the Neovim binary itself"
+    why "nvim exited before it wrote a lock file"
+  fi
   sleep 0.1
 done
 [[ ${#locks[@]} -gt 0 ]] || why "nvim wrote no lock file in 10 s"

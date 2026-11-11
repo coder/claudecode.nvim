@@ -19,12 +19,11 @@ if (!cwd) {
   process.exit(2);
 }
 
-// Normalization. The path rewrite below applies to a string on its own. The cwd goes first, so a run dir under the real
-// home folder is not a leak: getWorkspaceFolders names the cwd on purpose. A string that holds a JSON object or list,
-// a tool's text item, is decoded first, so its paths are plain text. Two readers use this: the leak rule reads every
-// key and every string of a frame as it came off the wire, one by one, and nothing is merged or rebuilt before it
-// (`leakIn`). The comparison with the table reads a rebuilt copy (`normalize`), which does not rewrite keys, so
-// two keys that the rewrite would make equal never pass as a correct answer.
+// Normalization. The path rewrite below applies to a text on its own. The cwd goes first, so a run dir under the real
+// home folder is not a leak: getWorkspaceFolders names the cwd on purpose. Two readers use it. The leak rule reads the
+// text of each frame as the wire sent it (see ws.onmessage). The comparison with the table reads a rebuilt copy of the
+// answer (`normalize`), which decodes a text item that holds JSON and rewrites strings but not keys, so two keys that the
+// rewrite would make equal never pass as a correct answer.
 const PLACEHOLDERS = [
   [cwd, "$CWD"],
   [tree, "$TREE"],
@@ -140,18 +139,6 @@ const normalize = (value) => {
   }
   return value;
 };
-// Every key and every string of a frame, at every depth, as the frame has them. A string that holds JSON is decoded.
-const strings = (value) => {
-  if (typeof value === "string") {
-    const decoded = parse(value);
-    return decoded === value ? [value] : strings(decoded);
-  }
-  if (!value || typeof value !== "object") return [];
-  return Object.entries(value).flatMap(([key, item]) => [
-    ...strings(key),
-    ...strings(item),
-  ]);
-};
 // An answer as the table states it: the error, or the result with its one text item.
 const view = ({ error, result }) => {
   const [item] = result?.content?.length === 1 ? result.content : [];
@@ -193,16 +180,17 @@ async function main() {
   let leaks = 0;
   let wake = () => {};
   ws.onmessage = ({ data }) => {
+    // The leak rule and the token rule read the text of the frame as the wire sent it. An escaped slash, a run of
+    // backslashes and a slash at any depth of nesting, is read as a slash. Then the path rewrite applies. No parse and
+    // no rebuild comes before them.
+    const text = rewrite(String(data).replace(/\\+\//g, "/"));
+    if (holdsToken(text) || LEAK.test(text)) {
+      leaks++;
+      leak ??= text;
+    }
     const frame = parse(String(data));
     if (typeof frame !== "object") {
       return die(new Error("the server sent a frame that is not JSON"));
-    }
-    const hit = strings(frame).find(
-      (text) => holdsToken(text) || LEAK.test(rewrite(text)),
-    );
-    if (hit !== undefined) {
-      leaks++;
-      leak ??= rewrite(hit);
     }
     if (frame?.id === want) {
       answer ??= normalize(frame);
@@ -255,7 +243,8 @@ async function main() {
       problem ? `FAIL: ${name}: ${show(problem).slice(0, 240)}` : `ok: ${name}`,
     );
   }
-  // A frame that comes after the last answer is read too.
+  // A frame that comes within 200 ms after the last answer is read too, and counted once.
+  leak = null;
   await new Promise((resolve) => setTimeout(resolve, 200));
   if (leak) {
     failed++;
