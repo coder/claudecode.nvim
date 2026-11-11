@@ -384,9 +384,10 @@ end
 ---Drop each of `clients` whose oldest ping has gone unanswered for `limit` ms, once Neovim has read their sockets. The
 ---judgment runs in a libuv check handle, which libuv runs after the poll phase that reads the sockets, so every byte
 ---that reached a socket before the loop time of the check has been read. A timer tick cannot judge: libuv can run it
----before it reads the pong that Claude sent, after a block of the main loop in any callback, and Neovim 0.8 (libuv
----1.44) runs the timers again at the end of a pass, so two ticks can run with no read between them. `vim.schedule` is
----no help either: Neovim can run it before the read.
+---before it reads the pong that Claude sent. That happens after a block in a check callback or an I/O read callback,
+---and, with libuv 1.44 (bundled in Neovim 0.8), after a block in any callback. libuv 1.44 also runs the timers again at
+---the end of a pass, so two ticks can run with no read between them. `vim.schedule` is no help either: Neovim runs its
+---callbacks between two passes, so it can run one before the read.
 ---@param server TCPServer The server object
 ---@param clients WebSocketClient[] The clients that the ping timer pinged in one tick
 ---@param limit number Age in milliseconds of the oldest unanswered ping at which a client is dropped
