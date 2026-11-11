@@ -1350,22 +1350,12 @@ local function window_shows(win, buffer)
   return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == buffer
 end
 
----Close the proposal window unless the user switched it to another buffer. A kept window gives back what the diff set
----in it. In the split layout that is 'diff', which `:edit` clears only when the new buffer is in no other diff window,
----so `:edit #` back to the file's own buffer leaves it on.
+---Close the proposal window unless the user switched it to another buffer.
 ---@param diff_data table
 function M._close_proposal_window(diff_data)
   local win = diff_data.new_window
   if window_shows(win, diff_data.new_buffer) then
     pcall(vim.api.nvim_win_close, win, true)
-  elseif win and diff_data.layout == "unified" then
-    if diff_data.signcolumn then
-      pcall(vim.api.nvim_set_option_value, "signcolumn", diff_data.signcolumn, { win = win })
-    end
-  elseif win then
-    pcall(vim.api.nvim_win_call, win, function()
-      vim.cmd("diffoff")
-    end)
   end
 end
 
@@ -1432,6 +1422,13 @@ function M._cleanup_diff_state(tab_name, reason)
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close new diff window if still open (only if not in a new tab)
     M._close_proposal_window(diff_data)
+    -- `:edit` clears 'diff' only when the new buffer is in no other diff window, so a kept window that went back to the
+    -- file's own buffer (`:edit #`) is still in diff mode. A window that shows another buffer has left it.
+    if window_shows(diff_data.new_window, diff_data.original_buffer) then
+      pcall(vim.api.nvim_win_call, diff_data.new_window, function()
+        vim.cmd("diffoff")
+      end)
+    end
 
     -- Close the fallback window we created when no editor window existed (issue #231); it's reused
     -- as the original pane, so target_window_created_by_plugin below doesn't cover it.
@@ -1448,8 +1445,7 @@ function M._cleanup_diff_state(tab_name, reason)
         pcall(vim.api.nvim_win_close, diff_data.target_window, false)
       end
 
-      -- If the target window is still around, ensure diff mode is off.
-      if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+      if window_shows(diff_data.target_window, diff_data.original_buffer) then
         vim.api.nvim_win_call(diff_data.target_window, function()
           vim.cmd("diffoff")
         end)
