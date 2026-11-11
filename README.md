@@ -963,7 +963,7 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
-Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float(tab)` hides the terminal when it is a visible floating window, and when `tab` is not nil only when that window is in `tab`. It returns `true` when it did. The plugin calls it with the diff's tab when a diff opens in the tab of a floating terminal, so the float does not cover the diff. The plugin does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes, as it did before.
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float(tab)` hides the terminal when it is a visible floating window, and when `tab` is not nil only when that window is in `tab`. It returns `true` when it did. The plugin calls it with the diff's tab when a diff opens in the tab of a floating terminal, so the float does not cover the diff. The plugin does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes.
 
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 

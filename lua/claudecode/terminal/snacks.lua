@@ -675,7 +675,7 @@ function M.get_active_bufnr()
 end
 
 ---Hide the terminal when it is a visible float, so that it does not cover a diff. A split stays as it is: a
----diff makes room for it. A float in another tab than `tab` stays too: it does not cover a diff in `tab`.
+---diff makes room for it. A float in another tab than `tab` stays too.
 ---@param tab number? Hide the float only when it is in this tab. Any tab when nil.
 ---@return boolean hidden Whether a float was hidden
 function M.hide_float(tab)

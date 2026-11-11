@@ -428,7 +428,7 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(0, #visible_floats(), "the float does not cover the diff in the second tab")
   end)
 
-  it("leaves the float the provider tracks in another tab visible when a second float of the terminal is in the diff's tab", function()
+  it("keeps the float the provider tracks in another tab when a second float is in the diff's tab", function()
     setup_diff({ layout = "vertical" })
     local diff_tab = vim.api.nvim_get_current_tabpage()
     vim.api.nvim_win_close(float.win, true)
@@ -451,7 +451,7 @@ describe("openDiff with a floating Claude terminal", function()
 
     assert.same({ diff_tab }, float.hide_tab_args, "the diff asks the provider to hide a float in its own tab")
     assert.equal(0, float.hide_calls, "the provider tracks no float in the diff's tab")
-    assert.equal(1, #visible_floats(tracked_tab), "the unrelated float in the second tab stays")
+    assert.equal(1, #visible_floats(tracked_tab), "the float the provider tracks in the second tab stays")
     assert.equal(1, #visible_floats(diff_tab), "the plugin hides only the float it tracks")
   end)
 
