@@ -577,6 +577,17 @@ local vim = {
       return { "row", leaves }
     end,
 
+    -- The windows that show a buffer, in every tab.
+    win_findbuf = function(bufnr)
+      local found = {}
+      for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_get_buf(win) == bufnr then
+          found[#found + 1] = win
+        end
+      end
+      return found
+    end,
+
     -- Every code point is one cell wide here. Real Neovim gives most CJK characters two.
     strdisplaywidth = function(text)
       return select(2, text:gsub("[^\128-\191]", ""))
@@ -1010,6 +1021,19 @@ local vim = {
       if vim._buffers[bufnr] then
         vim._buffers[bufnr].b_vars = vars
       end
+    end,
+  }),
+
+  w = setmetatable({}, {
+    __index = function(_, winid)
+      -- Return window-local variables for the given window
+      if vim._windows[winid] then
+        if not vim._windows[winid].w_vars then
+          vim._windows[winid].w_vars = {}
+        end
+        return vim._windows[winid].w_vars
+      end
+      return {}
     end,
   }),
 
