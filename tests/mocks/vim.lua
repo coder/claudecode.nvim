@@ -1268,9 +1268,9 @@ local vim = {
         end,
       }
     end,
-    -- Prepare and check handles run a callback before and after the poll phase of each loop iteration. The mock never
-    -- runs them.
-    new_prepare = function()
+    -- Check handles run a callback right after the poll phase of a loop iteration, and idle handles keep that poll from
+    -- waiting. The mock never runs them.
+    new_idle = function()
       return {
         start = function(self, callback)
           return true

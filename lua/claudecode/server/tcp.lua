@@ -14,7 +14,7 @@ local M = {}
 ---@field on_disconnect function Callback for client disconnections
 ---@field on_error fun(err_msg: string) Callback for the server's own errors, not a client's
 ---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress: twice the ping interval, set by `start_ping_timer`
----@field stall_check table|nil The prepare and check handles of the stall observations, and the clients one waits for: set by `start_ping_timer`, closed by `stop_server`
+---@field pending_polls table<table, boolean>|nil The check and idle handles of each stall judgement that waits for the next poll: closed by `stop_server`
 
 -- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
@@ -380,98 +380,86 @@ function M.get_clients_info(server)
   return clients
 end
 
----Create the prepare and check handles for the stall observations of the ping timer, unless the server has them.
----libuv runs a prepare callback before it polls its sockets and a check callback after, in each loop iteration. Neither
----handle keeps the loop awake, and neither runs until a tick arms it.
+---Run `fn` once, right after libuv polls its sockets the next time. libuv reports that a socket is writable again
+---only in a poll phase, and it runs a check handle right after each poll phase, in every libuv version. A ping tick
+---that Neovim runs after a main-loop block inside an I/O callback can run before that poll, so it cannot see the bytes
+---that Claude read during the block: what runs here can. An idle handle keeps that poll from waiting for a timer or a
+---socket. Both handles are closed once `fn` ran. `stop_server` closes those that did not run yet.
 ---@param server TCPServer The server object
----@return boolean ok False when libuv could not create a handle
-local function create_poll_handles(server)
-  if server.stall_check then
-    return true
-  end
-  local prepare = vim.loop.new_prepare()
+---@param fn function
+---@return boolean armed False when libuv could not create a handle, and `fn` will not run
+local function after_next_poll(server, fn)
   local check = vim.loop.new_check()
-  if not prepare or not check then
-    if prepare then
-      prepare:close()
-    end
+  local idle = vim.loop.new_idle()
+  if not check or not idle then
     if check then
       check:close()
     end
+    if idle then
+      idle:close()
+    end
     return false
   end
-  server.stall_check = { prepare = prepare, check = check }
+  local handles = { check, idle }
+  server.pending_polls = server.pending_polls or {}
+  server.pending_polls[handles] = true
+  idle:start(function() end)
+  check:start(function()
+    server.pending_polls[handles] = nil
+    for _, handle in ipairs(handles) do
+      handle:stop()
+      handle:close()
+    end
+    fn()
+  end)
   return true
 end
 
----Close the handles of the stall observations. A pending observation never runs.
+---Close the handles of the polls that `fn` did not run after yet.
 ---@param server TCPServer The server object
-local function close_poll_handles(server)
-  local stall_check = server.stall_check
-  if not stall_check then
-    return
-  end
-  server.stall_check = nil
-  for _, handle in ipairs({ stall_check.prepare, stall_check.check }) do
-    handle:stop()
-    if not handle:is_closing() then
-      handle:close()
+local function close_pending_polls(server)
+  local pending = server.pending_polls
+  server.pending_polls = nil
+  for handles in pairs(pending or {}) do
+    for _, handle in ipairs(handles) do
+      handle:stop()
+      if not handle:is_closing() then
+        handle:close()
+      end
     end
   end
 end
 
----Observe the write queue of each connected client, and drop a client that answered its ping at the tick and whose
----queue made no progress at two observations in a row. A Claude whose reader is stuck can still answer each ping, so
----only its write queue shows it. The queue is Neovim's memory: it goes with the client.
+---Drop a client that answered its ping and whose write queue made no progress at two ticks in a row, unless the next
+---poll shows progress. A Claude whose reader is stuck can still answer each ping, so only its write queue shows it.
+---The queue is Neovim's memory: it goes with the client. The tick can run before libuv reported the bytes that Claude
+---read during a block, so the stall is judged once more right after the next poll, and only that judgement drops.
 ---@param server TCPServer The server object
----@param answering table<WebSocketClient, boolean> The clients that were alive at the tick that asked for this
-local function observe_write_queues(server, answering)
-  for _, client in pairs(server.clients) do
-    if client.state == "connected" and not client_manager.is_client_reading(client) and answering[client] then
-      local time_since_drain = math.floor((vim.loop.now() - client.last_drain) / 1000)
-      local queued_kb = math.floor(client.tcp_handle:get_write_queue_size() / 1024)
-      require("claudecode.logger").one_line(
-        "info",
-        "server",
-        string.format("Closed %s: not reading for %ds, %d KB queued", client.id, time_since_drain, queued_kb)
-      )
-      drop_client(server, client, "Not reading", "Write queue stalled")
+---@param client WebSocketClient The client whose queue made no progress at two ticks in a row
+local function confirm_stall(server, client)
+  after_next_poll(server, function()
+    if server.clients[client.id] ~= client or client.state ~= "connected" then
+      return
     end
-  end
-end
-
----Ask for an observation of the write queues after a fresh poll. A main-loop block inside an I/O callback can make a
----tick run before libuv reported the bytes that Claude read during the block, because libuv reports a socket that is
----writable again only in a poll phase. The tick arms the prepare handle, which runs at the start of the next poll
----phase, and its callback arms the check handle, which runs after that poll phase: so the observation follows a poll
----phase that began after the tick, however late the tick came.
----@param server TCPServer The server object
----@param answering table<WebSocketClient, boolean> The clients that were alive at the tick
-local function request_observation(server, answering)
-  local stall_check = server.stall_check
-  if stall_check.answering then
-    -- The observation of an earlier tick has not run yet. It serves this tick too.
-    for client in pairs(answering) do
-      stall_check.answering[client] = true
+    if client_manager.sample_write_progress(client) then
+      client.write_stalled = nil
+      return
     end
-    return
-  end
-  stall_check.answering = answering
-  stall_check.prepare:start(function()
-    stall_check.prepare:stop()
-    stall_check.check:start(function()
-      stall_check.check:stop()
-      local waiting = stall_check.answering
-      stall_check.answering = nil
-      observe_write_queues(server, waiting)
-    end)
+    local time_since_drain = math.floor((vim.loop.now() - client.last_drain) / 1000)
+    local queued_kb = math.floor(client.tcp_handle:get_write_queue_size() / 1024)
+    require("claudecode.logger").one_line(
+      "info",
+      "server",
+      string.format("Closed %s: not reading for %ds, %d KB queued", client.id, time_since_drain, queued_kb)
+    )
+    drop_client(server, client, "Not reading", "Write queue stalled")
   end)
 end
 
 ---Stop the TCP server
 ---@param server TCPServer The server object
 function M.stop_server(server)
-  close_poll_handles(server)
+  close_pending_polls(server)
 
   -- Close all clients
   for _, client in pairs(server.clients) do
@@ -497,11 +485,6 @@ function M.start_ping_timer(server, interval)
 
   local timer = vim.loop.new_timer()
   if not timer then
-    server.on_error("Failed to create ping timer")
-    return nil
-  end
-  if not create_poll_handles(server) then
-    timer:close()
     server.on_error("Failed to create ping timer")
     return nil
   end
@@ -539,21 +522,24 @@ function M.start_ping_timer(server, interval)
       end
     end
 
-    local answering = {}
-    local any_connected = false
     for _, client in pairs(server.clients) do
       if client.state == "connected" then
-        any_connected = true
+        -- Every tick samples the write queue, so that "two ticks in a row" are consecutive ticks, whether the client
+        -- answered or not. The wake tick does not: Claude had no chance yet to read after the sleep.
+        local reading = is_wake_from_sleep or client_manager.is_client_reading(client)
         -- Check if client is alive (local connections, so use standard timeout)
         if client_manager.is_client_alive(client, timeout) then
           client.pong_overdue = nil
-          answering[client] = true
           client_manager.send_ping(client, "ping")
+          -- Only a client that answered is dropped for a stall, and only after the next poll confirms it.
+          if not reading then
+            confirm_stall(server, client)
+          end
         elseif not client.pong_overdue then
           -- A tick that Neovim runs late after a block can come before the loop has read the pong of the last ping.
           -- The first tick that finds no pong for two intervals pings again. The next one finds the pong that was read
           -- in between, or drops the client. A client without a pong gets this second chance whatever its write queue
-          -- shows: the stall rule below judges only a client that answered.
+          -- shows: the stall rule above judges only a client that answered.
           client.pong_overdue = true
           client_manager.send_ping(client, "ping")
         else
@@ -567,12 +553,6 @@ function M.start_ping_timer(server, interval)
           drop_client(server, client, "Keepalive timeout", "Connection timeout")
         end
       end
-    end
-
-    -- The write queues are observed after the next poll phase, not here: see `request_observation`. The wake tick
-    -- makes no observation, because Claude had no chance yet to read after the sleep.
-    if any_connected and not is_wake_from_sleep and server.stall_check then
-      request_observation(server, answering)
     end
 
     last_run = now
