@@ -20,6 +20,7 @@ end
 
 describe("Diff split window cleanup", function()
   local diff
+  local replaced = {}
   local dir, test_old_file
   setup(function()
     dir = temp_dir.new()
@@ -61,6 +62,10 @@ describe("Diff split window cleanup", function()
   end)
 
   after_each(function()
+    for i = #replaced, 1, -1 do
+      replaced[i]()
+    end
+    replaced = {}
     os.remove(test_old_file)
     if diff and diff._cleanup_all_active_diffs then
       diff._cleanup_all_active_diffs("test teardown")
@@ -162,9 +167,9 @@ describe("Diff split window cleanup", function()
   local function replace(tbl, name, make)
     local real = tbl[name]
     tbl[name] = make(real)
-    finally(function()
+    replaced[#replaced + 1] = function()
       tbl[name] = real
-    end)
+    end
   end
 
   local function fail_when_the_filetype_is_set()
