@@ -786,7 +786,7 @@ end
 ---@class NativeDiffProgress
 ---@field win_before integer the window that was current before the diff
 ---@field created_wins integer[] the windows that the diff split off, in the tab where it opens
----@field old_win integer? the window that holds the original, once it is in diff mode
+---@field diffed_win integer? the window where this diff turned diff mode on, which is not one that already had it
 ---@field proposed_buf integer? the buffer of the proposal's temp file
 
 ---Open the original and the proposal side by side, in diff mode. Raises when a step fails: a swap file for the original
@@ -801,8 +801,22 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
 
   -- Split off a window, and remember it: a rollback closes these windows and no other.
   local function split()
+    local before = {}
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      before[win] = true
+    end
     create_split()
-    table.insert(progress.created_wins, vim.api.nvim_get_current_win())
+    -- A WinEnter or WinNew handler can open or enter a window of its own, so the split is not always the current
+    -- window. Window ids rise in the order that windows are created, so the lowest new one is the split.
+    local created
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+      if not before[win] and (not created or win < created) then
+        created = win
+      end
+    end
+    if created then
+      table.insert(progress.created_wins, created)
+    end
   end
 
   local target_win = find_main_editor_window()
@@ -821,8 +835,13 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+  -- A window of the user's own diff can be reused, and diffthis then changes nothing: a rollback must not end it.
+  local old_win = vim.api.nvim_get_current_win()
+  local was_diff = vim.api.nvim_win_get_option(old_win, "diff")
   vim.cmd("diffthis")
-  progress.old_win = vim.api.nvim_get_current_win()
+  if not was_diff then
+    progress.diffed_win = old_win
+  end
   split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
@@ -868,8 +887,8 @@ end
 ---@param tmp_file string
 ---@param progress NativeDiffProgress
 local function undo_native_diff(tmp_file, progress)
-  if progress.old_win and vim.api.nvim_win_is_valid(progress.old_win) then
-    pcall(vim.api.nvim_win_call, progress.old_win, function()
+  if progress.diffed_win and vim.api.nvim_win_is_valid(progress.diffed_win) then
+    pcall(vim.api.nvim_win_call, progress.diffed_win, function()
       vim.cmd("diffoff")
     end)
   end

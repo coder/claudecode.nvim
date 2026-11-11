@@ -211,4 +211,53 @@ describe("legacy open_diff when a step fails after the temp file was written", f
       assert.are.same(files, temp_files())
     end
   end)
+
+  -- A WinEnter handler opens a window of its own while the diff splits, so the split is not the current window when
+  -- split() returns. The proposal then loads in the window of the handler and leaves with its buffer. The split of the
+  -- diff, which has diff mode on and the original in it, must not stay behind.
+  it("closes its own split when a WinEnter handler opened a window while it split", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    local squatter = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(squatter, path .. " (New)")
+    local files, windows = temp_files(), window_count()
+    local fired = false
+    fterr_group = vim.api.nvim_create_augroup("ClaudeCodeDiffLegacyCleanupSpec", { clear = true })
+    vim.api.nvim_create_autocmd("WinEnter", {
+      group = fterr_group,
+      callback = function()
+        if not fired then
+          fired = true
+          vim.cmd("botright new")
+        end
+      end,
+    })
+
+    local ok, err = pcall(diff.open_diff, path, path, "local a = 2\n", "winenter")
+
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("E95", 1, true), tostring(err))
+    assert.are.same(files, temp_files())
+    assert.are.equal(windows, window_count(), "no window of the diff is left")
+    assert.are.equal(0, diff_windows(), "no window is left in diff mode")
+  end)
+
+  -- Two windows already show the file in the user's own diff, so the diff reuses one of them: edit and diffthis change
+  -- nothing there. A failure afterwards must leave that diff alone.
+  it("leaves a diff of the user's own alone when it reuses one of its windows", function()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.cmd("vsplit")
+    vim.cmd("windo diffthis")
+    local squatter = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_buf_set_name(squatter, path .. " (New)")
+    local files, windows, diffing = temp_files(), window_count(), diff_windows()
+    assert.are.equal(2, diffing)
+
+    local ok, err = pcall(diff.open_diff, path, path, "local a = 2\n", "user diff")
+
+    assert.is_false(ok)
+    assert.is_truthy(tostring(err):find("E95", 1, true), tostring(err))
+    assert.are.same(files, temp_files())
+    assert.are.equal(windows, window_count())
+    assert.are.equal(diffing, diff_windows(), "the user's diff is still on in both windows")
+  end)
 end)
