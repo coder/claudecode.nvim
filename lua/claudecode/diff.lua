@@ -661,8 +661,9 @@ end
 ---@param old_file_path string
 ---@param is_new_file boolean
 ---@param existing_buffer NvimBuf|nil
+---@param created DiffCreated
 ---@return NvimBuf original_buf
-local function load_original_buffer(original_win, old_file_path, is_new_file, existing_buffer)
+local function load_original_buffer(original_win, old_file_path, is_new_file, existing_buffer, created)
   if is_new_file then
     local empty_buffer = vim.api.nvim_create_buf(false, true)
     if not empty_buffer or empty_buffer == 0 then
@@ -670,6 +671,7 @@ local function load_original_buffer(original_win, old_file_path, is_new_file, ex
       logger.error("diff", error_msg)
       error({ code = -32000, message = "Buffer creation failed", data = error_msg })
     end
+    created.buffers[#created.buffers + 1] = empty_buffer
 
     local ok, err = pcall(function()
       vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
@@ -708,6 +710,7 @@ end
 ---@param tab_name string
 ---@param terminal_win_in_new_tab NvimWin|nil
 ---@param target_win_for_meta NvimWin
+---@param created DiffCreated
 ---@return NvimWin new_win
 local function setup_new_buffer(
   original_win,
@@ -716,13 +719,16 @@ local function setup_new_buffer(
   old_file_path,
   tab_name,
   terminal_win_in_new_tab,
-  target_win_for_meta
+  target_win_for_meta,
+  created
 )
   vim.api.nvim_set_current_win(original_win)
+  created.diff_windows[#created.diff_windows + 1] = original_win
   vim.cmd("diffthis")
 
   create_split()
   local new_win = vim.api.nvim_get_current_win()
+  created.windows[#created.windows + 1] = new_win
   vim.api.nvim_win_set_buf(new_win, new_buf)
 
   local original_ft = detect_filetype(old_file_path, original_buf)
@@ -1254,6 +1260,7 @@ M._register_diff_autocmds = register_diff_autocmds
 ---@param is_new_file boolean Whether this is a new file (doesn't exist yet)
 ---@param terminal_win_in_new_tab NvimWin|nil Terminal window in new tab if created
 ---@param existing_buffer NvimBuf|nil Existing buffer for the file if already loaded
+---@param created DiffCreated Gets what this makes, as it makes it, so that the caller can undo it if a later step fails
 ---@return DiffLayoutInfo layout Info about the created diff layout
 function M._create_diff_view_from_window(
   target_window,
@@ -1262,7 +1269,8 @@ function M._create_diff_view_from_window(
   tab_name,
   is_new_file,
   terminal_win_in_new_tab,
-  existing_buffer
+  existing_buffer,
+  created
 )
   local original_buffer_created_by_plugin = false
   local target_window_created_by_plugin = false
@@ -1289,6 +1297,7 @@ function M._create_diff_view_from_window(
         or filetype == "snacks_layout_box"
       then
         create_split()
+        created.windows[#created.windows + 1] = vim.api.nvim_get_current_win()
       end
 
       target_window = vim.api.nvim_get_current_win()
@@ -1305,6 +1314,7 @@ function M._create_diff_view_from_window(
     vim.api.nvim_set_current_win(target_window)
     create_split()
     original_window = vim.api.nvim_get_current_win()
+    created.windows[#created.windows + 1] = original_window
     target_window_created_by_plugin = true
   else
     original_window = choice.original_win
@@ -1320,7 +1330,7 @@ function M._create_diff_view_from_window(
       original_buffer_created_by_plugin = true
     end
     -- Load the original-side buffer into the chosen window
-    original_buffer = load_original_buffer(original_window, old_file_path, is_new_file, existing_buffer)
+    original_buffer = load_original_buffer(original_window, old_file_path, is_new_file, existing_buffer, created)
   end
 
   -- Set up the proposed buffer and finalize the diff layout
@@ -1331,7 +1341,8 @@ function M._create_diff_view_from_window(
     old_file_path,
     tab_name,
     terminal_win_in_new_tab,
-    target_window
+    target_window,
+    created
   )
 
   return {
@@ -1513,6 +1524,7 @@ function M._setup_blocking_diff(params, resolution_callback)
   local new_buffer = nil
   local window_sizes = nil
   local cursor_origin = nil
+  local created = { windows = {}, buffers = {}, diff_windows = {} }
   -- Same rationale for the open_in_new_tab path: display_terminal_in_new_tab() runs `:tabnew`
   -- early, so a failure before registration would strand that tab. Hoist its handle (and the tab
   -- we came from, to refocus) so the error handler can close it and switch back. Issue #262.
@@ -1698,7 +1710,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       tab_name,
       is_new_file,
       terminal_win_in_new_tab,
-      existing_buffer
+      existing_buffer,
+      created
     )
 
     local autocmd_ids = register_diff_autocmds(tab_name, new_buffer)
@@ -1771,12 +1784,30 @@ function M._setup_blocking_diff(params, resolution_callback)
     else
       -- Errored before the diff state was registered, so the state-based cleanup can't run. Close
       -- the fallback split we may have created (its bufhidden=wipe scratch self-cleans) and delete
-      -- the proposed buffer; neither is owned by a registered diff.
+      -- the proposed buffer; neither is owned by a registered diff. The same goes for what
+      -- _create_diff_view_from_window made before it or a later step failed.
       if fallback_window and vim.api.nvim_win_is_valid(fallback_window) then
         pcall(vim.api.nvim_win_close, fallback_window, true)
       end
       if new_buffer and vim.api.nvim_buf_is_valid(new_buffer) then
         pcall(vim.api.nvim_buf_delete, new_buffer, { force = true })
+      end
+      for _, win in ipairs(created.windows) do
+        if vim.api.nvim_win_is_valid(win) then
+          vim.api.nvim_win_close(win, true)
+        end
+      end
+      for _, win in ipairs(created.diff_windows) do
+        if vim.api.nvim_win_is_valid(win) then
+          vim.api.nvim_win_call(win, function()
+            vim.cmd("diffoff")
+          end)
+        end
+      end
+      for _, buf in ipairs(created.buffers) do
+        if vim.api.nvim_buf_is_valid(buf) then
+          vim.api.nvim_buf_delete(buf, { force = true })
+        end
       end
       restore_cursor(window_sizes, cursor_origin)
       restore_window_sizes(window_sizes)
@@ -2362,6 +2393,11 @@ return M
 ---@field target_window_created_by_plugin boolean
 ---@field original_buffer NvimBuf
 ---@field original_buffer_created_by_plugin boolean
+
+---@class DiffCreated
+---@field windows NvimWin[] Windows the setup split off, to close if it fails
+---@field buffers NvimBuf[] Buffers the setup made besides the proposed one, to delete if it fails
+---@field diff_windows NvimWin[] Windows the setup turned diff mode on in, to turn it off in if it fails
 
 ---@class DiffWindowChoice
 ---@field decision DiffWindowDecision

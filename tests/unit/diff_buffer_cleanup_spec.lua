@@ -140,7 +140,16 @@ describe("Diff Buffer Cleanup Edge Cases", function()
       mock_vim._simulate_buffer_creation_failure = true
 
       local success, error_result = pcall(function()
-        return diff_module._create_diff_view_from_window(1001, "/test/new_file.lua", 2001, "test-diff", true)
+        return diff_module._create_diff_view_from_window(
+          1001,
+          "/test/new_file.lua",
+          2001,
+          "test-diff",
+          true,
+          nil,
+          nil,
+          { windows = {}, buffers = {}, diff_windows = {} }
+        )
       end)
 
       expect(success).to_be_false()
@@ -155,7 +164,16 @@ describe("Diff Buffer Cleanup Edge Cases", function()
       mock_vim._simulate_buffer_creation_failure = false -- Ensure buffer creation succeeds
 
       local success, error_result = pcall(function()
-        return diff_module._create_diff_view_from_window(1001, "/test/new_file.lua", 2001, "test-diff", true)
+        return diff_module._create_diff_view_from_window(
+          1001,
+          "/test/new_file.lua",
+          2001,
+          "test-diff",
+          true,
+          nil,
+          nil,
+          { windows = {}, buffers = {}, diff_windows = {} }
+        )
       end)
 
       expect(success).to_be_false()
@@ -176,7 +194,16 @@ describe("Diff Buffer Cleanup Edge Cases", function()
       mock_vim._simulate_buffer_delete_failure = true
 
       local success, error_result = pcall(function()
-        return diff_module._create_diff_view_from_window(1001, "/test/new_file.lua", 2001, "test-diff", true)
+        return diff_module._create_diff_view_from_window(
+          1001,
+          "/test/new_file.lua",
+          2001,
+          "test-diff",
+          true,
+          nil,
+          nil,
+          { windows = {}, buffers = {}, diff_windows = {} }
+        )
       end)
 
       expect(success).to_be_false()
