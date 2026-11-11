@@ -10,7 +10,9 @@
 #                     fails by itself still saves its failure screen and the final evidence, and runs `agent-tty home
 #                     forget`, all through the setsid that mise names
 #   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
-#                     reaches every call site, which the two cases above do not)
+#                     reaches every call site, which the two cases above do not), and the pattern it reads with finds
+#                     every real call site written as a bare call
+#   no-caller-source  no doc or script of the skill except vcn.sh tells a caller to source a run.env
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
 #   load-symlink      a run.env that is a symlink (to a file this user owns) is refused, not sourced
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
@@ -693,13 +695,36 @@ setsid_resolved_case() {
 
 # jq-resolved and setsid-resolved reach only the calls that a launch makes. This case reads the source: any word jq or
 # setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it. The
-# pattern is checked on a known bare call first, so a pattern that finds nothing cannot pass.
+# pattern is checked first against every real call site, each written back as a bare call, so a pattern that finds
+# nothing, or only some forms of a call (after a pipe, in $(...), after &&, at the start of a line), cannot pass.
 bare_tools_case() {
-  local name=no-bare-tools hits word_re='(^|[^[:alnum:]_./$-])(jq|setsid)($|[^[:alnum:]_-])'
-  grep -qE "$word_re" <<<'  x=$(y | jq -r .z)' || fail "$name" "the pattern misses a known bare jq"
+  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_./$-])(jq|setsid)($|[^[:alnum:]_-])'
+  local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
+  while IFS= read -r site; do
+    bare=${site//"$jq_ref"/jq}
+    bare=${bare//"$setsid_ref"/setsid}
+    grep -qE "$word_re" <<<"$bare" || fail "$name" "the pattern misses this call written as a bare call: $bare"
+    sites=$((sites + 1))
+  done < <(grep -E '"\$(JQ_BIN|SETSID_BIN)"' "$V" | grep -v 'env_line JQ_BIN')
+  ((sites > 0)) || fail "$name" "vcn.sh has no call through \$JQ_BIN or \$SETSID_BIN to check the pattern against"
   hits=$(grep -nE "$word_re" "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '=\$\(bin (jq|setsid)\)$' || true)
   [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare jq or setsid: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
+  cases=$((cases + 1))
+}
+
+# bash runs every line of a file it sources, as the caller, and nothing checks the file before that. Only vcn.sh sources a
+# run.env, in load. Any doc or script of the skill that has the word source (or a dot) before a run.env fails this case.
+# The pattern is checked first on the forms the docs used to have.
+callers_case() {
+  local name=no-caller-source hits sample skill source_re='((^|[;&|(`[:space:]])source|(^|[;&|(])[[:space:]]*\.)[[:space:]]+[^#]*run\.env'
+  skill=$(dirname "$V")/..
+  for sample in 'source "$VCN_STATE/run.env"' '. "$VCN_STATE/run.env"' 'export VCN_STATE=x; source "$VCN_STATE/run.env"; V=y' 'To watch, run `source "$VCN_STATE/run.env"; agent-tty` in a terminal.'; do
+    grep -qE "$source_re" <<<"$sample" || fail "$name" "the pattern misses a known source of run.env: $sample"
+  done
+  hits=$(grep -rnE "$source_re" "$skill" --include='*.sh' --include='*.md' --exclude=vcn.sh --exclude='proof-*.sh' || true)
+  [[ -z $hits ]] || fail "$name" "a doc or script sources a run.env: $(tr '\n' ' ' <<<"$hits" | cut -c1-400)"
+  echo "ok $name: only vcn.sh sources a run.env"
   cases=$((cases + 1))
 }
 
@@ -779,6 +804,7 @@ signal_gap_case
 cleanup_no_agent_tty_case
 setsid_resolved_case
 bare_tools_case
+callers_case
 jq_old_run_case
 load_symlink_case
 signal_symlink_case

@@ -2,15 +2,15 @@
 # Checks that `:wq`, `:x` and `ZZ` close the proposal window, a second `:w` neither fails nor answers again, no buffer
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
 # that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
-# after the `:e` stays. Needs VCN_STATE from a fresh launch:
+# after the `:e` stays. Needs VCN_STATE and OUT, the two values a fresh launch prints:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
 # `PASS` or `FAIL: <count> of <total> checks failed` last. Evidence lands in $OUT as diff-close-save-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
+: "${VCN_STATE:?export VCN_STATE and OUT, the two values launch printed}" "${OUT:?export VCN_STATE and OUT, the two values launch printed}"
+WORK=$VCN_STATE/work
 target=${1:-existing}
 [[ $target == existing || $target == new ]] || {
   echo "usage: journey-diff-close-save.sh [existing|new]" >&2

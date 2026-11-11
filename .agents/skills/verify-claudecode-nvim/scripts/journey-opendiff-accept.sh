@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# openDiff accept via :w, from a fresh `vcn.sh launch` (hello.txt open). Needs VCN_STATE.
+# openDiff accept via :w, from a fresh `vcn.sh launch` (hello.txt open). Needs VCN_STATE and OUT, the two values launch prints.
 # Evidence lands in $OUT as opendiff-accept-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
+: "${VCN_STATE:?export VCN_STATE and OUT, the two values launch printed}" "${OUT:?export VCN_STATE and OUT, the two values launch printed}"
+WORK=$VCN_STATE/work
 FILE="$WORK/hello.txt"
 TAB="✻ [Claude Code] hello.txt (vcn) ⧉"
 PROPOSED=$'alpha\nBETA\ngamma\n'

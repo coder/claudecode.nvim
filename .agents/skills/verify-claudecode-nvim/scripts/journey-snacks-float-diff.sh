@@ -3,8 +3,8 @@ set -euo pipefail
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 V="$SCRIPTS/vcn.sh"
 OBSERVE="$SCRIPTS/observe-windows.lua"
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
+: "${VCN_STATE:?export VCN_STATE and OUT, the two values launch printed}" "${OUT:?export VCN_STATE and OUT, the two values launch printed}"
+WORK=$VCN_STATE/work
 TAB="✻ [Claude Code] hello.txt (float) ⧉"
 
 fail() {
