@@ -104,6 +104,10 @@ local function handler(params)
   local diagnostics
   local fallback_path
 
+  if params.uri ~= nil and type(params.uri) ~= "string" then
+    error({ code = -32602, message = "Invalid params", data = "Invalid parameter: uri (a string is required)" })
+  end
+
   if not params.uri then
     logger.debug("getDiagnostics", "Getting diagnostics for all open buffers")
     diagnostics = vim.diagnostic.get(nil)
