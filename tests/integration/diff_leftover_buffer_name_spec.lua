@@ -471,6 +471,38 @@ describe("openDiff with a leftover diff buffer under its name", function()
     )
   end
 
+  it("keeps a user's window when its handler closed the window that the split created", function()
+    vim.fn.writefile({ "x" }, dir .. "/other.txt")
+    vim.fn.writefile({ "original" }, dir .. "/reload.txt")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    local _, tools = load_plugin()
+    local user_win, user_buf
+    vim.api.nvim_create_autocmd("WinNew", {
+      once = true,
+      callback = function()
+        local plugin_win = vim.api.nvim_get_current_win()
+        vim.cmd("noautocmd belowright split")
+        user_win = vim.api.nvim_get_current_win()
+        user_buf = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(user_buf, dir .. "/user-work.txt")
+        vim.api.nvim_win_set_buf(user_win, user_buf)
+        vim.bo[user_buf].bufhidden = "wipe"
+        vim.api.nvim_buf_set_lines(user_buf, 0, -1, false, { "UNSAVED USER WORK" })
+        vim.api.nvim_win_close(plugin_win, true)
+      end,
+    })
+
+    local call
+    silence_notify(function()
+      call = open_diff(tools, "proposed\n")
+    end)
+
+    assert.is_nil(call._deferred)
+    assert.is_truthy(vim.inspect(call.error):find("E37", 1, true), vim.inspect(call.error))
+    assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
+    assert.same({ "UNSAVED USER WORK" }, vim.api.nvim_buf_get_lines(user_buf, 0, -1, false))
+  end)
+
   it("closes the split window when a handler raises after the original buffer loaded into it", function()
     vim.fn.writefile({ "x" }, dir .. "/other.txt")
     vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))

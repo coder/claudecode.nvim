@@ -1407,6 +1407,7 @@ function M._create_diff_view_from_window(
   if choice.decision == "split" then
     vim.api.nvim_set_current_win(target_window)
     local tab = vim.api.nvim_win_get_tabpage(target_window)
+    local cloned = vim.api.nvim_win_get_buf(target_window)
     local before = {}
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
       before[win] = true
@@ -1414,9 +1415,10 @@ function M._create_diff_view_from_window(
     create_split()
     original_window = vim.api.nvim_get_current_win()
     target_window_created_by_plugin = true
-    -- The split's own window is the first new one. A user's WinNew handler can open and enter more.
+    -- The split's own window is the first new one that shows the clone. A user's WinNew handler can close it, or open
+    -- and enter more windows.
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      if not before[win] and (not split_window or win < split_window) then
+      if not before[win] and vim.api.nvim_win_get_buf(win) == cloned and (not split_window or win < split_window) then
         split_window = win
       end
     end
