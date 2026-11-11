@@ -4,9 +4,6 @@ describe("claudecode.terminal.native toggle behavior", function()
   local logger_spy
 
   before_each(function()
-    -- Set up the package path for tests
-    package.path = "./lua/?.lua;" .. package.path
-
     -- Clean up any loaded modules
     package.loaded["claudecode.terminal.native"] = nil
     package.loaded["claudecode.logger"] = nil
