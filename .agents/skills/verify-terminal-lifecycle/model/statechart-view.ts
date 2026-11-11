@@ -4,7 +4,9 @@ const terms = (v: any) => Object.keys(v.job).sort();
 const running = (v: any) => terms(v).filter((t) => v.job[t] === "running");
 // The terminal that the provider in use tracks (terminal.lua get_provider decides which one).
 const tracked = (v: any) => {
-  const snacksUp = v.seen; // check.sh reads SnacksAvailabilityCached TRUE at 3cac7ef
+  // The model's SnacksUp is `seen` while SnacksAvailabilityCached is TRUE (check.sh reads TRUE at 3cac7ef) and `loadable`
+  // while it is FALSE. The view cannot read a constant, so it takes `seen`, and `state` names a state where the two differ.
+  const snacksUp = v.seen;
   const prov = v.cfg.provider === "native" || !snacksUp ? "native" : "snacks";
   const t = prov === "native" ? v.ntrack : v.strack;
   return t === none ? null : t;
@@ -47,6 +49,10 @@ export const title = "The Claude terminal (claudecode.nvim)";
 export const state = (v: any) => {
   const extra: string[] = [];
   if (v.reloaded) extra.push("after a reload");
+  if (v.seen !== v.loadable)
+    extra.push(
+      "snacks.nvim became loadable after the module loaded (SnacksAvailabilityCached decides which provider runs)",
+    );
   if (v.queue.length > 0) extra.push("exit cleanup queued");
   return [claude(v), ...extra].join(", ");
 };

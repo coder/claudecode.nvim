@@ -239,13 +239,13 @@ snacks_stops_native() {
     grep -qE 'owned\.stop_other\(owned\.NATIVE_MARK, "native"\)' <<<"$snacks_stop_native"
 }
 fact[SnacksStopsNativeClaude]=$(as_bool snacks_stops_native)
-# snacks.lua reads require("snacks") once, when terminal.lua's load_provider first requires it, and load_provider
-# keeps the module. So the provider that "auto" or "snacks" resolves to does not change until a reload.
+# snacks.lua reads require("snacks") once, when the module loads, and load_provider gets that module through require,
+# which keeps it. So the provider that "auto" or "snacks" resolves to does not change until a reload. (load_provider
+# also keeps the module in its own table. That is a second cache, and the fact does not need it.)
 snacks_availability_cached() {
   grep -qxE 'local snacks_available, Snacks = pcall\(require, "snacks"\)' "$SNACKS" &&
     grep -qE '^  return snacks_available and Snacks and Snacks\.terminal ~= nil$' <<<"$snacks_available" &&
-    in_order '^  if not providers\[provider_name\] then$' '^      providers\[provider_name\] = provider$' \
-      '^  return providers\[provider_name\]$' <<<"$load_provider" &&
+    grep -qE 'pcall\(require, "claudecode\.terminal\." \.\. provider_name\)' <<<"$load_provider" &&
     in_order '^  elseif defaults\.provider == "auto" then$' '^    local snacks_provider = load_provider\("snacks"\)$' \
       '^    if snacks_provider and snacks_provider\.is_available\(\) then$' <<<"$get_provider"
 }

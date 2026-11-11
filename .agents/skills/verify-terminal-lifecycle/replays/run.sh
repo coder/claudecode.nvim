@@ -15,11 +15,15 @@ replay=${1:?usage: replays/run.sh <replay>.lua}
   exit 2
 }
 nvim=${NVIM:-nvim}
+command -v "$nvim" >/dev/null || {
+  echo "ERROR: no Neovim at $nvim (set NVIM=<path to nvim>)" >&2
+  exit 2
+}
 rtp=$repo
 # snacks-*.lua start with snacks.nvim on the runtimepath; auto-*.lua add it themselves, later.
 if [[ $replay == snacks-* || $replay == auto-* ]]; then
-  [[ -n ${SNACKS_NVIM:-} && -f $SNACKS_NVIM/lua/snacks/init.lua ]] || {
-    echo "ERROR: $replay needs SNACKS_NVIM=<snacks.nvim checkout>" >&2
+  [[ -n ${SNACKS_NVIM:-} && -f $SNACKS_NVIM/lua/snacks/init.lua && -f $SNACKS_NVIM/lua/snacks/terminal.lua ]] || {
+    echo "ERROR: $replay needs SNACKS_NVIM=<snacks.nvim checkout with Snacks.terminal>" >&2
     exit 2
   }
   [[ $replay == auto-* ]] || rtp=$rtp,$SNACKS_NVIM
