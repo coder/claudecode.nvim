@@ -242,6 +242,30 @@ local function remember_backdrop(term)
   vim.b[term.buf][BACKDROP_VAR] = backdrop and backdrop.win or nil
 end
 
+---Registers what Snacks' Win:show registers when it opens a window: the instance's own events (the close of the
+---backdrop, the resize), and the BufWinEnter handler that moves a file that you open in the terminal's window to another
+---window (`fixbuf`). An adopted wrapper never ran Win:show, and cc_show re-creates a split without it, so nothing else
+---registers them, and an `:edit` in the re-created window would replace Claude's buffer. Win:show clears the augroup
+---first, so a later Snacks show does not double them. An instance that `snacks` started registered them at its first show.
+---@param term table Snacks terminal instance
+local function register_window_events(term)
+  if term._cc.events_registered or type(term._on) ~= "function" or type(term.fixbuf) ~= "function" then
+    return
+  end
+  term._cc.events_registered = true
+  term.augroup = vim.api.nvim_create_augroup("snacks_win_" .. term.id, { clear = true })
+  for _, event in ipairs(term.events or {}) do
+    term:_on(event.event, event)
+  end
+  vim.api.nvim_create_autocmd("BufWinEnter", {
+    group = term.augroup,
+    nested = true,
+    callback = function()
+      return term:fixbuf()
+    end,
+  })
+end
+
 -- Re-apply the Snacks-managed window-local options/vars that are lost when a
 -- split window is closed and recreated (minimal style turns off number/sign
 -- column, sets winhighlight, etc.), so the re-shown split matches the original.
@@ -397,6 +421,9 @@ local function cc_show(term, focus, config)
   end
   term.closed = false
   reapply_snacks_window_state(term, new_win)
+  if term.adopted then
+    register_window_events(term)
+  end
   if focus then
     maybe_start_insert(term, config)
   elseif vim.api.nvim_win_is_valid(original_win) then
@@ -550,6 +577,11 @@ local function wrapper_options(buf, config)
     win_opts.wo.winbar = win_opts.position == "float" and "" or "1: %{get(b:, 'term_title', '')}"
   end
   win_opts.keys, win_opts.bo = built.keys, nil
+  -- The anchor of a float that is relative to a window. Without one, Snacks takes the window that is current when it
+  -- creates the wrapper, so keep the stored one while it exists, and drop one that is gone (the window closed).
+  if win_opts.win ~= nil and not (type(win_opts.win) == "number" and vim.api.nvim_win_is_valid(win_opts.win)) then
+    win_opts.win = nil
+  end
   win_opts.buf, win_opts.show = buf, false
   -- The terminal style gives the keys of a Snacks terminal (q hides it). Without it, the generic `q = "close"` would
   -- wipe the buffer and stop Claude.
@@ -712,7 +744,11 @@ function M.open(cmd_string, env_table, config, focus)
     vim.b[term_instance.buf][AUTO_CLOSE_VAR] = config.auto_close and true or false
     -- The resolved options of the instance (the terminal style, position, size, window options), not the ones passed.
     local window = plain(term_instance.opts or opts.win)
-    window.keys, window.on_buf, window.on_win, window.bo, window.win = nil, nil, nil, nil, nil
+    window.keys, window.on_buf, window.on_win, window.bo = nil, nil, nil, nil
+    -- Only a float that is relative to a window has an anchor. The wrapper keeps it while that window exists.
+    if window.relative ~= "win" then
+      window.win = nil
+    end
     -- A table that mixes list and map keys cannot be stored. The adoption then uses the entry's config.
     pcall(function()
       vim.b[term_instance.buf][WINDOW_VAR] = window

@@ -59,8 +59,18 @@ describe("claudecode.terminal.snacks after a module reload", function()
     state.buffers[bufnr] = { jobid = jobid, vars = {}, key = key }
     state.running_jobs[jobid] = true
     local win_opts = opts.win or {}
-    local term =
-      { buf = bufnr, key = key, opts = { wo = {}, w = {}, position = win_opts.position, width = win_opts.width } }
+    local term = {
+      buf = bufnr,
+      key = key,
+      opts = {
+        wo = {},
+        w = {},
+        position = win_opts.position,
+        width = win_opts.width,
+        relative = win_opts.relative,
+        win = win_opts.win,
+      },
+    }
     state.keyed[key] = term
     function term:buf_valid()
       return self.buf ~= nil and vim.api.nvim_buf_is_valid(self.buf)
@@ -84,6 +94,10 @@ describe("claudecode.terminal.snacks after a module reload", function()
     term.hide, term.show, term.toggle = function() end, function() end, function() end
     -- Snacks maps the keys of an instance to the buffer when it shows the window, and each map calls `self:hide()` on
     -- that instance.
+    -- Win:show registered these at the first show of the instance.
+    term.id, term.events = bufnr, { { event = "WinClosed" } }
+    function term:_on() end
+    function term:fixbuf() end
     state.buffers[bufnr].mapped_by = term
     state.buffers[bufnr].mapped_keys = {}
     for name, spec in pairs(opts.win.keys or {}) do
@@ -116,6 +130,8 @@ describe("claudecode.terminal.snacks after a module reload", function()
       windows = {},
       terminals = {},
       wrapped = {}, -- every Snacks.win call
+      events_registered = {}, -- every Snacks.win:_on call
+      autocmds = {}, -- every BufWinEnter autocmd
       keyed = {},
       running_jobs = {},
       exiting_jobs = {},
@@ -279,7 +295,14 @@ describe("claudecode.terminal.snacks after a module reload", function()
           state.buffers[bufnr] = nil
           state.running_jobs[jobid] = nil
         end,
+        nvim_create_augroup = function(name)
+          state.next_augroup = (state.next_augroup or 0) + 1
+          return state.next_augroup
+        end,
         nvim_create_autocmd = function(event, opts)
+          if event == "BufWinEnter" then
+            table.insert(state.autocmds, { event = event, group = opts.group, nested = opts.nested })
+          end
           if event == "TermClose" and opts.buffer and state.buffers[opts.buffer] then
             state.buffers[opts.buffer].on_term_close = opts.callback
           elseif event == "TermClose" and not opts.buffer then
@@ -370,6 +393,14 @@ describe("claudecode.terminal.snacks after a module reload", function()
         -- Snacks resolves the keys when it creates the instance, and maps them to the buffer (each map closes over the
         -- instance that maps it) when it shows a window or when `map` is called.
         term.keys = opts.keys
+        -- Win:show registers these when it opens a window, and an instance that never showed has not.
+        state.next_snacks_id = (state.next_snacks_id or 0) + 1
+        term.id = state.next_snacks_id
+        term.events = { { event = "WinClosed" }, { event = "WinResized" } }
+        function term:_on(event)
+          table.insert(state.events_registered, { term = self, event = event })
+        end
+        function term:fixbuf() end
         function term:map()
           assert(self:buf_valid(), "Snacks.win:map needs a valid buffer")
           state.buffers[self.buf].mapped_by = self
@@ -1014,6 +1045,98 @@ describe("claudecode.terminal.snacks after a module reload", function()
         reload_snacks()
 
         assert.are.equal(unmarked, adopted_window())
+      end)
+    end)
+
+    -- Snacks' Win:show registers the instance's events and a BufWinEnter handler that moves a file that you open in the
+    -- terminal's window to another window. A wrapper never ran Win:show, and a split is re-created natively, so the
+    -- wrapper registers them at the first re-creation. Without them an :edit in the window replaced Claude's buffer.
+    it("registers no window events for a terminal that the provider started, which did at its first show", function()
+      snacks_provider.open("claude", {}, config, true)
+
+      snacks_provider.simple_toggle("claude", {}, config)
+      snacks_provider.simple_toggle("claude", {}, config)
+
+      assert.are.equal(0, #state.autocmds)
+      assert.are.equal(0, #state.events_registered)
+    end)
+
+    describe("when the wrapper re-creates a split", function()
+      local claude
+
+      before_each(function()
+        snacks_provider.open("claude", {}, config, true)
+        claude = started[1]
+        reload_snacks()
+      end)
+
+      it("registers the Snacks events and the BufWinEnter handler of the wrapper", function()
+        snacks_provider.simple_toggle("claude", {}, config) -- adopts, and hides
+        assert.are.equal(0, #state.autocmds)
+
+        snacks_provider.simple_toggle("claude", {}, config) -- shows it in a new window
+
+        local wrapper = snacks_provider._get_terminal_for_test()
+        assert.are.equal(1, #state.autocmds)
+        assert.are.equal(wrapper.augroup, state.autocmds[1].group)
+        assert.is_true(state.autocmds[1].nested)
+        assert.are.equal(#wrapper.events, #state.events_registered)
+        assert.are.equal(wrapper, state.events_registered[1].term)
+        assert.are.equal(1, windows_showing(claude.buf))
+      end)
+
+      it("registers them once, however often it hides and shows", function()
+        for _ = 1, 3 do
+          snacks_provider.simple_toggle("claude", {}, config)
+          snacks_provider.simple_toggle("claude", {}, config)
+        end
+
+        assert.are.equal(1, #state.autocmds)
+        assert.are.equal(2, #state.events_registered)
+      end)
+    end)
+
+    -- A float that is relative to a window has an anchor, and Snacks takes the current window when it has none.
+    describe("when the window options hold the anchor of a float", function()
+      local function float_config(anchor)
+        return vim.tbl_deep_extend(
+          "force",
+          config,
+          { snacks_win_opts = { position = "float", relative = "win", win = anchor } }
+        )
+      end
+
+      it("keeps the anchor while that window exists", function()
+        local anchor = new_window(nil)
+        snacks_provider.open("claude", {}, float_config(anchor), true)
+        reload_snacks()
+
+        snacks_provider.open("claude", {}, float_config(anchor), true)
+
+        assert.are.equal(anchor, state.wrapped[1].config.win)
+      end)
+
+      it("drops the anchor when that window is gone", function()
+        local anchor = new_window(nil)
+        snacks_provider.open("claude", {}, float_config(anchor), true)
+        reload_snacks()
+        state.windows[anchor] = nil
+
+        snacks_provider.open("claude", {}, float_config(anchor), true)
+
+        assert.is_nil(state.wrapped[1].config.win)
+      end)
+
+      it("stores no anchor for a float that is not relative to a window", function()
+        local anchor = new_window(nil)
+        local editor = vim.tbl_deep_extend(
+          "force",
+          config,
+          { snacks_win_opts = { position = "float", relative = "editor", win = anchor } }
+        )
+        snacks_provider.open("claude", {}, editor, true)
+        local claude = started[1]
+        assert.is_nil(state.buffers[claude.buf].vars.claudecode_snacks_window.win)
       end)
     end)
 
