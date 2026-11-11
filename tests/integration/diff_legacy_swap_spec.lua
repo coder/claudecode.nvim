@@ -10,7 +10,7 @@ end
 
 describe("legacy open_diff and a swap file for its proposal", function()
   local diff = require("claudecode.diff")
-  local dir, swap_dir, path, saved_directory
+  local dir, swap_dir, path, saved_directory, saved_cache_home
 
   before_each(function()
     dir = vim.fn.tempname()
@@ -20,6 +20,9 @@ describe("legacy open_diff and a swap file for its proposal", function()
     vim.fn.writefile({ "local a = 1" }, path)
     saved_directory = vim.o.directory
     vim.o.directory = swap_dir .. "//"
+    -- The legacy diff writes its proposal under stdpath("cache"); keep that out of the real cache folder.
+    saved_cache_home = vim.env.XDG_CACHE_HOME
+    vim.env.XDG_CACHE_HOME = dir .. "/cache"
     diff.setup({ diff_opts = {} })
   end)
 
@@ -28,6 +31,7 @@ describe("legacy open_diff and a swap file for its proposal", function()
     vim.cmd("silent! only")
     vim.cmd("silent! %bwipeout!")
     vim.o.directory = saved_directory
+    vim.env.XDG_CACHE_HOME = saved_cache_home
     vim.fn.delete(dir, "rf")
   end)
 
