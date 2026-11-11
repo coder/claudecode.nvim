@@ -6,7 +6,8 @@
 # Prints one `ok:` or `FAIL:` line per case and ends with `COUNT tools-call-wire cases=<n> failed=<n> leaks=<n>`.
 # Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
 # its table holds, or the tree, the work folder or the home folder path holds a double quote, a backslash or a control
-# character (the checker refuses it: the leak rule could not find such a path in a frame).
+# character (the checker refuses it: the leak rule could not find such a path in a frame. A backslash in the tree path
+# can make nvim fail first: exit 2 too).
 # VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be the Neovim binary itself or a wrapper that
 # runs it with exec, because nvim must be a direct child of this script, and not a version-manager shim, which does not
 # start with an empty environment. nvim and the checker start with an empty environment. When nvim and node are the
@@ -59,7 +60,6 @@ cleanup() {
       sleep 0.1
     done
     kill -KILL "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
   done
   [[ -z $RUN ]] || rm -rf -- "$RUN"
 }

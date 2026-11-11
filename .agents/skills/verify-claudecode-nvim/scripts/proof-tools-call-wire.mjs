@@ -210,7 +210,10 @@ async function main() {
   };
   ws.onclose = () => stop("the server closed the connection");
   await new Promise((resolve) => {
-    ws.onopen = resolve;
+    ws.onopen = () => {
+      ws.onerror = null; // after the handshake, onclose reports a lost connection
+      resolve();
+    };
     ws.onerror = () => stop("WebSocket handshake failed");
   });
 
