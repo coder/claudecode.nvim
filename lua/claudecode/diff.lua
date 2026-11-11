@@ -1018,7 +1018,8 @@ end
 ---Global that is set while a setup runs. A user handler that runs the event loop (vim.wait) inside a setup can start a
 ---second openDiff before the first one registers its diff, and the first setup can have named buffers by then that no
 ---active diff owns. The second one skips the rename and runs as it did without it. It is a global and not a module
----local because a plugin reload inside the setup gives the new module no memory of the running one.
+---local because a plugin reload inside the setup gives the new module no memory of the running one. The rename also
+---waits for a moment when nothing is live: a setup that finds an active diff, in any layout, runs as it did without it.
 local SETUP_RUNNING = "claudecode_diff_setup_running"
 
 ---Rename a buffer without BufFilePre and BufFilePost. A handler that runs the event loop in either one can start a
@@ -1649,7 +1650,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    if not nested_setup then
+    if not nested_setup and next(active_diffs) == nil then
       rename_orphaned_diff_buffers(tab_name, params.old_file_path)
     end
 

@@ -853,6 +853,25 @@ describe("openDiff with a leftover diff buffer under its name", function()
     )
   end
 
+  it("keeps the E95 error for a leftover buffer while a diff of another tab name is open", function()
+    local _, tools = load_plugin()
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    local old = buffers_named("(proposed)")[1]
+    close_old_diff_windows()
+    local diff
+    diff, tools = load_plugin()
+    vim.fn.writefile({ "other" }, dir .. "/other.txt")
+    assert.is_true(open_diff(tools, "other changed\n", "other tab", dir .. "/other.txt")._deferred)
+
+    local call = open_diff(tools, "second\n")
+
+    assert.is_nil(call._deferred)
+    assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+    assert.equal(vim.fn.fnamemodify(tab_name .. " (proposed)", ":p"), vim.api.nvim_buf_get_name(old))
+    assert.equal(tab_name, vim.b[old].claudecode_diff_tab_name)
+    assert.is_nil(diff._get_active_diffs()[tab_name])
+  end)
+
   it("renames a leftover buffer without BufFilePre and BufFilePost", function()
     local _, tools = load_plugin()
     assert.is_true(open_diff(tools, "first\n")._deferred)
