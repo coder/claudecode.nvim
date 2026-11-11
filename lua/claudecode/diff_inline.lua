@@ -411,9 +411,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
     vim.api.nvim_win_set_buf(diff_win, buf)
   end)
 
-  -- Configure window for sign column display
-  local got_signcolumn, previous_signcolumn = pcall(vim.api.nvim_get_option_value, "signcolumn", { win = diff_win })
-  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { win = diff_win })
+  -- Without scope = "local", Neovim also sets the window's default, which a buffer opened later in the window inherits.
+  pcall(vim.api.nvim_set_option_value, "signcolumn", "yes", { scope = "local", win = diff_win })
 
   -- Equalize window widths
   guard_inline_setup(function()
@@ -491,7 +490,6 @@ function M.setup_inline_diff(params, resolution_callback, config)
       new_file_contents = params.new_file_contents,
       new_buffer = buf,
       new_window = diff_win,
-      signcolumn = got_signcolumn and previous_signcolumn or nil,
       target_window = editor_win,
       fallback_window = fallback_window,
       window_sizes = window_sizes,

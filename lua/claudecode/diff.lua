@@ -1358,11 +1358,7 @@ function M._close_proposal_window(diff_data)
   local win = diff_data.new_window
   if window_shows(win, diff_data.new_buffer) then
     pcall(vim.api.nvim_win_close, win, true)
-  elseif win and diff_data.layout == "unified" then
-    if diff_data.signcolumn then
-      pcall(vim.api.nvim_set_option_value, "signcolumn", diff_data.signcolumn, { win = win })
-    end
-  elseif win then
+  elseif win and diff_data.layout ~= "unified" then
     pcall(vim.api.nvim_win_call, win, function()
       vim.cmd("diffoff")
     end)

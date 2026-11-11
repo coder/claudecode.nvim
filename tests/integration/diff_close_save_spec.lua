@@ -226,6 +226,32 @@ describe("closing and saving a proposed diff", function()
             )
             assert.equal(1, #answers, "one answer for one openDiff")
           end)
+
+          it("keeps the 'signcolumn' that the user set in the window that :edit switched" .. suffix, function()
+            local other = dir .. "/other.txt"
+            vim.o.signcolumn = "no"
+            local state = propose({ on_new_file_reject = reject_mode })
+            run_in(state.new_window, "edit " .. vim.fn.fnameescape(other))
+            wait_for_answers(1)
+            run_in(state.new_window, "setlocal signcolumn=yes:2")
+
+            close_tab()
+            settle()
+
+            assert.equal(state.new_window, window_showing(other), "close_tab keeps the user's window")
+            assert.equal(
+              "yes:2",
+              vim.api.nvim_get_option_value("signcolumn", { win = state.new_window }),
+              "the user's own 'signcolumn' stays"
+            )
+
+            run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
+            assert.equal(
+              "no",
+              vim.api.nvim_get_option_value("signcolumn", { win = state.new_window }),
+              "a buffer that the window shows later gets the window's default, not the diff's 'yes' or the user's value"
+            )
+          end)
         end
       end)
     end

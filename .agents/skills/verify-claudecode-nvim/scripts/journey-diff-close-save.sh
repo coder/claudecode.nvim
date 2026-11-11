@@ -72,6 +72,7 @@ kept_window_out_of_diff_mode() { [[ $(kept_windows '&diff') == '2|hello.txt|0,0'
 # `:b hello.txt` would give the window its old 'signcolumn' back by itself, so this step goes to a file that was never
 # in the window. The unified layout sets 'signcolumn' to `yes` in its window.
 kept_window_sign_column_back() { [[ $(kept_windows '&signcolumn') == '2|other.txt|auto,auto' ]]; }
+kept_window_own_sign_column() { [[ $("$V" expr "bufname() . '|' . &signcolumn") == 'other.txt|yes:2' ]]; }
 
 "$V" doctor >"$OUT/diff-close-save-doctor.txt" || {
   echo "FAIL: doctor failed: $(cat "$OUT/diff-close-save-doctor.txt")" >&2
@@ -130,6 +131,17 @@ check ":e answers DIFF_REJECTED" answered reject-other DIFF_REJECTED
 close_diff reject-other || true
 "$V" capture diff-close-save-reject-other >/dev/null
 check "close_tab keeps the user's window on other.txt, with its own sign column" kept_window_sign_column_back
+"$V" keys ':only' Enter
+back_to_one_window || true
+
+step "The user sets a sign column of its own in the window that :e switched to other.txt"
+open_diff reject-own-sign
+"$V" keys ':e other.txt' Enter
+check ":e answers DIFF_REJECTED" answered reject-own-sign DIFF_REJECTED
+"$V" keys ':setlocal signcolumn=yes:2' Enter
+close_diff reject-own-sign || true
+"$V" capture diff-close-save-reject-own-sign >/dev/null
+check "close_tab leaves the sign column that the user set" kept_window_own_sign_column
 
 if ((failures == 0)); then
   echo "PASS diff-close-save ($target): $checks checks; evidence in $OUT"
