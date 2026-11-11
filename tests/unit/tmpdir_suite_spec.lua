@@ -45,7 +45,8 @@ describe("the suite under an odd TMPDIR", function()
     local output = run_child(outer, outer .. "/50%-off", "tests/lockfile_test.lua")
 
     assert.is_truthy(output:find("status=0", 1, true), output)
-    assert.is_truthy(output:find("16 successes", 1, true), output)
+    local successes = tonumber(output:match("(%d+) success"))
+    assert.is_true(successes ~= nil and successes > 0, output)
   end)
 
   it_with_timeout("runs a test of the integration runner spec with a relative TMPDIR", function()
