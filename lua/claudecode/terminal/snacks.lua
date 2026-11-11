@@ -348,12 +348,10 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
-  -- A BufLeave autocmd of the buffer the split showed can enter another window inside the call, and Neovim then loads the
-  -- terminal into that window, so BufLeave is ignored for the call.
   if focus then
-    utils.win_set_buf_without_events(new_win, term.buf, { "BufLeave" })
+    utils.win_set_buf_in_split(new_win, term.buf)
   else
-    utils.win_set_buf_without_events(new_win, term.buf, { "BufEnter", "BufLeave" })
+    utils.win_set_buf_in_split(new_win, term.buf, utils.win_set_buf_without_bufenter)
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native
@@ -361,6 +359,10 @@ local function cc_show(term, focus, config)
   term.closed = false
   reapply_snacks_window_state(term, new_win)
   if focus then
+    -- A BufLeave autocmd that entered another window left the cursor there, and the insert starts where the cursor is.
+    if vim.api.nvim_win_is_valid(new_win) then
+      vim.api.nvim_set_current_win(new_win)
+    end
     maybe_start_insert(term, config)
   elseif vim.api.nvim_win_is_valid(original_win) then
     vim.api.nvim_set_current_win(original_win)

@@ -115,7 +115,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
           end
         end,
       }),
-      o = { columns = 120, lines = 40, eventignore = "" },
+      o = { columns = 120, lines = 40 },
       v = { event = { status = 0 } },
       w = setmetatable({}, {
         __index = function(t, win)
@@ -237,6 +237,14 @@ describe("claudecode.terminal.snacks after a module reload", function()
         end,
         nvim_win_close = function(win)
           state.windows[win] = nil
+        end,
+        nvim_list_wins = function()
+          local wins = {}
+          for win in pairs(state.windows) do
+            table.insert(wins, win)
+          end
+          table.sort(wins)
+          return wins
         end,
         nvim_win_get_buf = function(win)
           return state.windows[win] and state.windows[win].buf

@@ -11,6 +11,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local next_win_id
   local next_buf_id
   local pending_insert
+  local insert_win
   local bufenter_handlers
   local bufenter_ignored_during_set_buf
   local eventignore_during_set_buf
@@ -24,18 +25,22 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     return id
   end
 
-  -- Neovim 0.12: a `-BufEnter` entry un-ignores the event wherever it stands in the list.
-  local function ignores_bufenter()
+  -- Neovim 0.12: a `-<event>` entry un-ignores the event wherever it stands in the list.
+  local function ignores(event)
     local ignored = false
     for entry in vim.o.eventignore:gmatch("[^,]+") do
       entry = entry:lower()
-      if entry == "-bufenter" then
+      if entry == "-" .. event then
         return false
-      elseif entry == "bufenter" or entry == "all" then
+      elseif entry == event or entry == "all" then
         ignored = true
       end
     end
     return ignored
+  end
+
+  local function ignores_bufenter()
+    return ignores("bufenter")
   end
 
   local function open_win(term)
@@ -55,6 +60,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     next_win_id = 1000
     next_buf_id = 1
     pending_insert = false
+    insert_win = nil
     bufenter_handlers = {}
     bufenter_ignored_during_set_buf = nil
     eventignore_during_set_buf = nil
@@ -89,8 +95,12 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       },
       cmd = function(c)
         c = tostring(c)
+        local win, buf = c:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
         if c == "startinsert" then
           pending_insert = true
+          insert_win = current_win
+        elseif win then
+          windows[tonumber(win)].buf = tonumber(buf)
         elseif c:find("split") then
           current_win = make_window(500, "")
         end
@@ -152,6 +162,16 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         end,
         nvim_win_close = function(w)
           windows[w].valid = false
+        end,
+        nvim_list_wins = function()
+          local wins = {}
+          for w, win in pairs(windows) do
+            if win.valid then
+              table.insert(wins, w)
+            end
+          end
+          table.sort(wins)
+          return wins
         end,
         nvim_win_get_buf = function(w)
           return windows[w] and windows[w].buf
@@ -447,10 +467,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     end)
 
     local cases = {
-      { value = "CursorHold", during = "CursorHold,BufEnter,BufLeave" },
-      { value = "all,-BufEnter", during = "all,BufEnter,BufLeave" },
-      { value = "-bufenter,CursorHold", during = "CursorHold,BufEnter,BufLeave" },
-      { value = "all,-bufleave", during = "all,BufEnter,BufLeave" },
+      { value = "CursorHold", during = "CursorHold,BufEnter" },
+      { value = "all,-BufEnter", during = "all,BufEnter" },
+      { value = "-bufenter,CursorHold", during = "CursorHold,BufEnter" },
     }
     for _, case in ipairs(cases) do
       it("holds " .. case.during .. " during the call and comes back to " .. case.value, function()
@@ -466,17 +485,6 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       end)
     end
 
-    it("ignores only BufLeave for a focused show, so the BufEnter handlers of the terminal still run", function()
-      local cfg = config()
-      open_then_hide(cfg)
-      vim.o.eventignore = "CursorHold"
-
-      snacks_provider.open("claude", {}, cfg, true)
-
-      assert.are.equal("CursorHold,BufLeave", eventignore_during_set_buf)
-      assert.are.equal("CursorHold", vim.o.eventignore)
-    end)
-
     it("is back to the caller's value when the unfocused show fails", function()
       local cfg = config()
       open_then_hide(cfg)
@@ -489,6 +497,66 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       end)
 
       assert.are.equal("", vim.o.eventignore)
+    end)
+  end)
+
+  describe("a BufLeave autocmd of the user's that enters their window during the swap", function()
+    -- Neovim then loads the buffer into the user's window, and the split keeps the buffer it showed. The autocmd does
+    -- not run while 'eventignore' holds BufLeave.
+    local function redirect_swaps_to_the_user_window()
+      vim.api.nvim_win_set_buf = function(win, buf)
+        if ignores("bufleave") then
+          windows[win].buf = buf
+          return
+        end
+        windows[source_win].buf = buf
+        current_win = source_win
+      end
+    end
+
+    it("keeps the user's window as it was and shows the terminal in the new split, with focus", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      redirect_swaps_to_the_user_window()
+
+      snacks_provider.open("claude", {}, cfg, true)
+
+      assert.are.equal(500, windows[source_win].buf)
+      assert.are.equal(term.buf, windows[term.win].buf)
+    end)
+
+    it("leaves the cursor in the terminal window and starts the insert there, with focus", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      redirect_swaps_to_the_user_window()
+
+      snacks_provider.open("claude", {}, cfg, true)
+
+      assert.are.equal(term.win, current_win)
+      assert.are.equal(term.win, insert_win)
+    end)
+
+    it("keeps the user's window as it was and the caller in it, without focus", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      redirect_swaps_to_the_user_window()
+
+      snacks_provider.open("claude", {}, cfg, false)
+
+      assert.are.equal(500, windows[source_win].buf)
+      assert.are.equal(term.buf, windows[term.win].buf)
+      assert.are.equal(source_win, current_win)
+      assert.is_false(pending_insert)
+    end)
+
+    it("does not hold BufLeave back for a focused show, so it writes no 'eventignore'", function()
+      local cfg = config()
+      open_then_hide(cfg)
+      vim.o.eventignore = "CursorHold"
+
+      snacks_provider.open("claude", {}, cfg, true)
+
+      assert.are.equal("CursorHold", eventignore_during_set_buf)
     end)
   end)
 end)

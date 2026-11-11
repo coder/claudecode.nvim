@@ -28,27 +28,21 @@ function M.map_terminal_suspend(bufnr)
   vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
 end
 
----Show `buf` in `win` while `events` are in 'eventignore'. 'eventignore' is back to the caller's value afterwards, also
----when the call raises.
+---Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
+---`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
+---'eventignore' is back to the caller's value afterwards, also when the call raises.
 ---@param win number
 ---@param buf number
----@param events string[] Event names such as "BufEnter" and "BufLeave"
-function M.win_set_buf_without_events(win, buf, events)
+function M.win_set_buf_without_bufenter(win, buf)
   local saved = vim.o.eventignore
-  -- A `-<event>` entry wins wherever it stands in the list, so it goes for the call.
-  local undone = {}
-  for _, event in ipairs(events) do
-    undone["-" .. event:lower()] = true
-  end
+  -- A `-BufEnter` entry wins wherever it stands in the list.
   local ignored = {}
   for entry in saved:gmatch("[^,]+") do
-    if not undone[entry:lower()] then
+    if entry:lower() ~= "-bufenter" then
       table.insert(ignored, entry)
     end
   end
-  for _, event in ipairs(events) do
-    table.insert(ignored, event)
-  end
+  table.insert(ignored, "BufEnter")
   vim.o.eventignore = table.concat(ignored, ",")
   local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
   vim.o.eventignore = saved
@@ -57,12 +51,56 @@ function M.win_set_buf_without_events(win, buf, events)
   end
 end
 
----Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
----`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
+---`nvim_win_set_buf` with no autocmd and no option write: `:noautocmd` sets 'eventignore' inside Neovim, and no
+---`OptionSet` autocmd sees that.
 ---@param win number
 ---@param buf number
-function M.win_set_buf_without_bufenter(win, buf)
-  M.win_set_buf_without_events(win, buf, { "BufEnter" })
+local function win_set_buf_without_autocmds(win, buf)
+  vim.cmd(string.format("noautocmd call nvim_win_set_buf(%d, %d)", win, buf))
+end
+
+---Show `buf` in `win`, a split that was just made for it, by calling `set_buf(win, buf)`. When a `BufLeave` autocmd of
+---the buffer that `win` showed enters another window inside the call, Neovim loads `buf` into that window, even
+---though the call names `win`. This puts that window's own buffer back and shows `buf` in `win`. All autocmds run as for
+---a plain `nvim_win_set_buf`. Only the two repairing swaps run under `:noautocmd`.
+---@param win number
+---@param buf number
+---@param set_buf? fun(win: number, buf: number) The swap that is to show `buf` in `win` (default `nvim_win_set_buf`)
+function M.win_set_buf_in_split(win, buf, set_buf)
+  local windows = vim.api.nvim_list_wins()
+  local shown_before = {}
+  for _, other in ipairs(windows) do
+    shown_before[other] = vim.api.nvim_win_get_buf(other)
+  end
+
+  local swap = set_buf or vim.api.nvim_win_set_buf
+  swap(win, buf)
+
+  local redirected = {}
+  for _, other in ipairs(windows) do
+    if
+      other ~= win
+      and vim.api.nvim_win_is_valid(other)
+      and shown_before[other] ~= buf
+      and vim.api.nvim_win_get_buf(other) == buf
+    then
+      table.insert(redirected, other)
+    end
+  end
+  if #redirected == 0 then
+    return
+  end
+
+  -- A window whose buffer is gone stays as it is. Then `buf` stays in it, as on a plain `nvim_win_set_buf`.
+  for _, other in ipairs(redirected) do
+    local previous = shown_before[other]
+    if not vim.api.nvim_buf_is_valid(previous) or not pcall(win_set_buf_without_autocmds, other, previous) then
+      return
+    end
+  end
+  if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) ~= buf then
+    win_set_buf_without_autocmds(win, buf)
+  end
 end
 
 local held_for_windows = {}

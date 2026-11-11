@@ -96,7 +96,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       schedule = function(fn)
         fn()
       end,
-      o = { columns = 120, lines = 40, eventignore = "" },
+      o = { columns = 120, lines = 40 },
       w = setmetatable({}, {
         __index = function(t, win)
           rawset(t, win, rawget(t, win) or {})
@@ -186,6 +186,16 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
           if windows[w] then
             windows[w].valid = false
           end
+        end,
+        nvim_list_wins = function()
+          local wins = {}
+          for w, win in pairs(windows) do
+            if win.valid then
+              table.insert(wins, w)
+            end
+          end
+          table.sort(wins)
+          return wins
         end,
         nvim_win_get_buf = function(w)
           return windows[w] and windows[w].buf

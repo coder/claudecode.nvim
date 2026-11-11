@@ -66,76 +66,184 @@ describe("claudecode.utils.win_set_buf_without_bufenter", function()
   end)
 end)
 
-describe("claudecode.utils.win_set_buf_without_events", function()
+describe("claudecode.utils.win_set_buf_in_split", function()
   local utils = require("claudecode.utils")
-  local real_set_buf
-  local calls
+  local USER_WIN, SPLIT_WIN = 1000, 1001
+  local USER_BUF, TERM_BUF = 5, 9
+  local original = {}
+  local shown
+  local live_buffers
+  local commands
+  local option_writes
+
+  local function stub(table_, name, value)
+    original[#original + 1] = { table_, name, table_[name] }
+    table_[name] = value
+  end
 
   before_each(function()
-    real_set_buf = vim.api.nvim_win_set_buf
-    calls = {}
-    vim.o.eventignore = ""
-    vim.api.nvim_win_set_buf = function(win, buf)
-      table.insert(calls, { win = win, buf = buf, eventignore = vim.o.eventignore })
-    end
+    original = {}
+    shown = { [USER_WIN] = USER_BUF, [SPLIT_WIN] = USER_BUF }
+    live_buffers = { [USER_BUF] = true, [TERM_BUF] = true }
+    commands = {}
+    option_writes = 0
+
+    stub(vim.api, "nvim_list_wins", function()
+      local wins = {}
+      for win in pairs(shown) do
+        table.insert(wins, win)
+      end
+      table.sort(wins)
+      return wins
+    end)
+    stub(vim.api, "nvim_win_get_buf", function(win)
+      return shown[win]
+    end)
+    stub(vim.api, "nvim_win_is_valid", function(win)
+      return shown[win] ~= nil
+    end)
+    stub(vim.api, "nvim_buf_is_valid", function(buf)
+      return live_buffers[buf] == true
+    end)
+    stub(vim.api, "nvim_win_set_buf", function(win, buf)
+      shown[win] = buf
+    end)
+    stub(vim, "cmd", function(command)
+      table.insert(commands, command)
+      local win, buf = command:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
+      assert(win, "unexpected command: " .. command)
+      shown[tonumber(win)] = tonumber(buf)
+    end)
+    stub(
+      vim,
+      "o",
+      setmetatable({}, {
+        __index = function()
+          return ""
+        end,
+        __newindex = function()
+          option_writes = option_writes + 1
+        end,
+      })
+    )
   end)
 
   after_each(function()
-    vim.api.nvim_win_set_buf = real_set_buf
-    vim.o.eventignore = ""
-  end)
-
-  it("sets the buffer in the window", function()
-    utils.win_set_buf_without_events(1001, 7, { "BufLeave" })
-
-    assert.equal(1, #calls)
-    assert.equal(1001, calls[1].win)
-    assert.equal(7, calls[1].buf)
-  end)
-
-  it("ignores every event it is given for the call and gives 'eventignore' back", function()
-    utils.win_set_buf_without_events(1001, 7, { "BufEnter", "BufLeave" })
-
-    assert.equal("BufEnter,BufLeave", calls[1].eventignore)
-    assert.equal("", vim.o.eventignore)
-  end)
-
-  it("keeps the other events the user ignores", function()
-    vim.o.eventignore = "CursorHold,WinEnter"
-
-    utils.win_set_buf_without_events(1001, 7, { "BufLeave" })
-
-    assert.equal("CursorHold,WinEnter,BufLeave", calls[1].eventignore)
-    assert.equal("CursorHold,WinEnter", vim.o.eventignore)
-  end)
-
-  it("drops a -bufleave entry for the call, because it would beat a later BufLeave", function()
-    vim.o.eventignore = "all,-bufleave,CursorHold"
-
-    utils.win_set_buf_without_events(1001, 7, { "BufLeave" })
-
-    assert.equal("all,CursorHold,BufLeave", calls[1].eventignore)
-    assert.equal("all,-bufleave,CursorHold", vim.o.eventignore)
-  end)
-
-  it("drops the - entries of the given events only", function()
-    vim.o.eventignore = "all,-bufenter"
-
-    utils.win_set_buf_without_events(1001, 7, { "BufLeave" })
-
-    assert.equal("all,-bufenter,BufLeave", calls[1].eventignore)
-  end)
-
-  it("gives 'eventignore' back and raises the same error when the buffer cannot be set", function()
-    vim.api.nvim_win_set_buf = function()
-      error("E5555: Invalid window id", 0)
+    for index = #original, 1, -1 do
+      local table_, name, value = unpack(original[index])
+      table_[name] = value
     end
-    vim.o.eventignore = "CursorHold"
+  end)
 
-    local ok, err = pcall(utils.win_set_buf_without_events, 1001, 7, { "BufLeave" })
+  ---A BufLeave autocmd of the user's enters their window inside the swap, and Neovim loads the buffer into that window.
+  local function swap_redirected_to_user_window(_, buf)
+    shown[USER_WIN] = buf
+  end
+
+  it("shows the buffer in the window with nvim_win_set_buf and runs no command", function()
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
+
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+    assert.equal(USER_BUF, shown[USER_WIN])
+    assert.same({}, commands)
+  end)
+
+  it("uses the swap it is given in place of nvim_win_set_buf", function()
+    local given = {}
+    vim.api.nvim_win_set_buf = function()
+      error("nvim_win_set_buf must not run")
+    end
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win, buf)
+      table.insert(given, { win, buf })
+      shown[win] = buf
+    end)
+
+    assert.same({ { SPLIT_WIN, TERM_BUF } }, given)
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("puts the other window's buffer back, then shows the buffer in its own window, both without autocmds", function()
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+    assert.same({
+      "noautocmd call nvim_win_set_buf(1000, 5)",
+      "noautocmd call nvim_win_set_buf(1001, 9)",
+    }, commands)
+    assert.equal(USER_BUF, shown[USER_WIN])
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("puts back every window that lost its buffer", function()
+    shown[1002] = 6
+    live_buffers[6] = true
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+      shown[USER_WIN] = buf
+      shown[1002] = buf
+    end)
+
+    assert.equal(USER_BUF, shown[USER_WIN])
+    assert.equal(6, shown[1002])
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("writes no option", function()
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+    assert.equal(0, option_writes)
+  end)
+
+  it("leaves a window alone that already showed the buffer before the swap", function()
+    shown[USER_WIN] = TERM_BUF
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF)
+
+    assert.same({}, commands)
+    assert.equal(TERM_BUF, shown[USER_WIN])
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("leaves the buffer where Neovim put it when the other window's buffer is gone", function()
+    live_buffers[USER_BUF] = nil
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+    assert.same({}, commands)
+    assert.equal(TERM_BUF, shown[USER_WIN])
+    assert.equal(USER_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("leaves the buffer where Neovim put it when putting the other window's buffer back fails", function()
+    vim.cmd = function()
+      error("E37: No write since last change")
+    end
+
+    local ok = pcall(utils.win_set_buf_in_split, SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+    assert.is_true(ok)
+    assert.equal(TERM_BUF, shown[USER_WIN])
+    assert.equal(USER_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("does not show the buffer in a window that an autocmd closed", function()
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+      shown[USER_WIN] = buf
+      shown[SPLIT_WIN] = nil
+    end)
+
+    assert.same({ "noautocmd call nvim_win_set_buf(1000, 5)" }, commands)
+    assert.is_nil(shown[SPLIT_WIN])
+  end)
+
+  it("raises the error of the swap and repairs nothing", function()
+    local ok, err = pcall(utils.win_set_buf_in_split, SPLIT_WIN, TERM_BUF, function(_, buf)
+      shown[USER_WIN] = buf
+      error("E5555: a BufLeave autocmd failed", 0)
+    end)
 
     assert.is_false(ok)
-    assert.equal("E5555: Invalid window id", err)
-    assert.equal("CursorHold", vim.o.eventignore)
+    assert.equal("E5555: a BufLeave autocmd failed", err)
+    assert.same({}, commands)
   end)
 end)

@@ -283,7 +283,6 @@ describe("claudecode.terminal.native toggle behavior", function()
         end
       end,
       o = {
-        eventignore = "",
         columns = 120,
         lines = 40,
       },
@@ -454,23 +453,6 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       -- Should have created terminal and have active buffer
       assert.is_not_nil(native_provider.get_active_bufnr())
-    end)
-
-    it("ignores BufLeave while it swaps the new buffer into the new split, and gives 'eventignore' back", function()
-      local real_set_buf = mock_vim.api.nvim_win_set_buf
-      local ignored = {}
-      mock_vim.api.nvim_win_set_buf = function(winid, bufnr)
-        table.insert(ignored, mock_vim.o.eventignore)
-        return real_set_buf(winid, bufnr)
-      end
-      mock_vim.fn.termopen = function()
-        return 12345
-      end
-
-      native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 })
-
-      assert.are.same({ "BufLeave" }, ignored)
-      assert.are.equal("", mock_vim.o.eventignore)
     end)
 
     it("should set filetype to claudecode on the terminal buffer", function()
@@ -939,36 +921,6 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal(initial_bufnr, native_provider.get_active_bufnr())
       assert.is_true(vsplit_called)
     end)
-
-    it(
-      "ignores BufLeave while it swaps the hidden terminal into the new split, and gives 'eventignore' back",
-      function()
-        mock_vim.fn.termopen = function()
-          return 12345
-        end
-        native_provider.open("claude", {}, { split_side = "right", split_width_percentage = 0.3 })
-        mock_vim.api.nvim_list_wins = function()
-          return { 1, 3 }
-        end
-        mock_vim.api.nvim_win_get_buf = function()
-          return 50
-        end
-        mock_vim.api.nvim_get_current_win = function()
-          return 4
-        end
-        local real_set_buf = mock_vim.api.nvim_win_set_buf
-        local ignored = {}
-        mock_vim.api.nvim_win_set_buf = function(winid, bufnr)
-          table.insert(ignored, mock_vim.o.eventignore)
-          return real_set_buf(winid, bufnr)
-        end
-
-        native_provider.toggle("claude", {}, { split_side = "right", split_width_percentage = 0.3 })
-
-        assert.are.same({ "BufLeave" }, ignored)
-        assert.are.equal("", mock_vim.o.eventignore)
-      end
-    )
   end)
 
   describe("toggle with visible terminal", function()

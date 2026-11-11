@@ -7,6 +7,8 @@ end
 
 -- Neovim loads a buffer into the window that a BufLeave autocmd entered while `nvim_win_set_buf` runs, even when the call
 -- names another window. A user autocmd of that kind must not make the provider put the terminal into the user's window.
+-- The provider lets every autocmd of its swaps run, so a BufLeave autosave of the user's still runs and no OptionSet
+-- autocmd sees a change of 'eventignore'.
 describe("the native terminal's swap into its own split", function()
   local chan
 
@@ -76,6 +78,49 @@ describe("the native terminal's swap into its own split", function()
     )
   end
 
+  ---Another plugin's BufEnter swaps a scratch buffer of its own into the split when the new terminal buffer is entered,
+  ---so the provider's repair swap runs. Only the BufLeave of that scratch buffer enters the user's window.
+  local function arm_repair_swap(every_time)
+    call(
+      [[
+      local every_time = ...
+      _G.runs = 0
+      local swapped = false
+      vim.api.nvim_create_autocmd("BufEnter", {
+        callback = function(ev)
+          if swapped or vim.api.nvim_buf_get_name(ev.buf) ~= "" or vim.bo[ev.buf].buftype ~= "" then
+            return
+          end
+          swapped = true
+          local scratch = vim.api.nvim_create_buf(true, true)
+          vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), scratch)
+          vim.api.nvim_create_autocmd("BufLeave", {
+            buffer = scratch,
+            once = not every_time,
+            callback = function()
+              _G.runs = _G.runs + 1
+              if vim.api.nvim_get_current_win() ~= _G.user_win then
+                vim.api.nvim_set_current_win(_G.user_win)
+              end
+            end,
+          })
+        end,
+      })
+    ]],
+      every_time
+    )
+  end
+
+  local function hide_terminal()
+    call([[
+      local terminal = require("claudecode.terminal")
+      terminal.open()
+      for _, win in ipairs(vim.fn.win_findbuf(terminal.get_active_terminal_bufnr())) do
+        vim.api.nvim_win_close(win, false)
+      end
+    ]])
+  end
+
   local function terminal_windows()
     return call([[
       local terminal = require("claudecode.terminal")
@@ -98,6 +143,7 @@ describe("the native terminal's swap into its own split", function()
     local windows = terminal_windows()
 
     assert.is_true(state.valid)
+    assert.is_true(state.runs >= 1, "the autocmd must have run during the swap, or the test proves nothing")
     assert.is_true(state.shows_user_buf, "the window of the user's file must keep showing it")
     assert.same(lines, state.lines)
     assert.equal(1, #windows, "the terminal must be in exactly one window")
@@ -119,12 +165,7 @@ describe("the native terminal's swap into its own split", function()
 
     it("shows a hidden terminal in its own split, with " .. autocmd .. " that enters the user's window", function()
       start_child()
-      call([[
-        require("claudecode.terminal").open()
-        for _, win in ipairs(vim.fn.win_findbuf(require("claudecode.terminal").get_active_terminal_bufnr())) do
-          vim.api.nvim_win_close(win, false)
-        end
-      ]])
+      hide_terminal()
       local lines = open_user_window()
       arm_bufleave_autocmd(every_time)
 
@@ -142,5 +183,113 @@ describe("the native terminal's swap into its own split", function()
 
       expect_user_window_kept(lines)
     end)
+
+    it(
+      "shows the new terminal in its own split when a BufEnter autocmd swapped another buffer into it, with " .. autocmd,
+      function()
+        start_child()
+        local lines = open_user_window()
+        arm_repair_swap(every_time)
+
+        call([[require("claudecode.terminal").ensure_visible()]])
+
+        expect_user_window_kept(lines)
+      end
+    )
   end
+
+  describe("a BufLeave autocmd of the user's file", function()
+    ---A file of the user's with an edit, and an autosave autocmd that runs when the cursor leaves it.
+    local function arm_autosave()
+      call([[
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, { "user edit" })
+        _G.autosaves = 0
+        vim.api.nvim_create_autocmd("BufLeave", {
+          pattern = "*.txt",
+          callback = function()
+            _G.autosaves = _G.autosaves + 1
+            vim.cmd("silent! update")
+          end,
+        })
+      ]])
+    end
+
+    local function expect_saved()
+      local state = call([[return { disk = vim.fn.readfile(_G.dir .. "/a.txt"), autosaves = _G.autosaves }]])
+      assert.same({ "user edit" }, state.disk, "the autosave must write the edit before the cursor leaves the file")
+      assert.is_true(state.autosaves >= 1)
+    end
+
+    it("still saves the file when a new terminal is opened with focus", function()
+      start_child()
+      arm_autosave()
+
+      call([[require("claudecode.terminal").open()]])
+
+      expect_saved()
+    end)
+
+    it("still saves the file when a hidden terminal is shown with focus", function()
+      start_child()
+      hide_terminal()
+      arm_autosave()
+
+      call([[require("claudecode.terminal").open()]])
+
+      expect_saved()
+    end)
+  end)
+
+  describe("an OptionSet autocmd of the user's for 'eventignore'", function()
+    ---A handler that fails, or that enters another window, would leave the swap in a state of its own: the provider
+    ---gives it no change of 'eventignore' to react to, so the test counts the runs.
+    local function arm_option_set_autocmd()
+      call([[
+        _G.option_sets = 0
+        vim.api.nvim_create_autocmd("OptionSet", {
+          pattern = "eventignore",
+          callback = function()
+            _G.option_sets = _G.option_sets + 1
+          end,
+        })
+      ]])
+    end
+
+    local function expect_no_option_write()
+      local state = call([[return { runs = _G.option_sets, eventignore = vim.o.eventignore }]])
+      assert.equal(0, state.runs, "the provider must not write 'eventignore'")
+      assert.equal("", state.eventignore)
+      assert.equal(1, #terminal_windows())
+    end
+
+    it("never runs while a new terminal is shown in its split", function()
+      start_child()
+      arm_option_set_autocmd()
+
+      call([[require("claudecode.terminal").ensure_visible()]])
+
+      expect_no_option_write()
+    end)
+
+    it("never runs while a hidden terminal is shown in its split", function()
+      start_child()
+      hide_terminal()
+      arm_option_set_autocmd()
+
+      call([[require("claudecode.terminal").ensure_visible()]])
+
+      expect_no_option_write()
+    end)
+
+    it("never runs while the repair swap shows the new terminal in its split", function()
+      start_child()
+      open_user_window()
+      arm_repair_swap(false)
+      arm_option_set_autocmd()
+
+      call([[require("claudecode.terminal").ensure_visible()]])
+
+      expect_no_option_write()
+    end)
+  end)
 end)
