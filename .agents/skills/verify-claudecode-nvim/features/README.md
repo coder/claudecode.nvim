@@ -5,7 +5,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Launch a fresh run with `.agents/skills/verify-claudecode-nvim/scripts/vcn.sh launch`. It opens `hello.txt` with the default config plus `terminal.provider = "none"`.
-- Start every bash call with `export VCN_STATE=<value launch printed>; source "$VCN_STATE/run.env"; V=.agents/skills/verify-claudecode-nvim/scripts/vcn.sh`.
+- Start every bash call with `export VCN_STATE='<VCN_STATE value launch printed>' OUT='<OUT value launch printed>'` (quoted as SKILL.md says); `WORK=$VCN_STATE/work; V=.agents/skills/verify-claudecode-nvim/scripts/vcn.sh`. Do not `source` a `run.env` in these calls (see SKILL.md).
 - `$WORK/hello.txt` is `alpha`, `beta`, `gamma` and `$WORK/other.txt` is `one`, `two`, `three`, `four`.
 - `$V doctor` reports nine `ok` lines, including `a client finished the WebSocket handshake`.
 - Never drive an nvim, agent-tty session, or lock file that this run did not start.

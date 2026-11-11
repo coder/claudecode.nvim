@@ -39,8 +39,6 @@ started=$("$V" launch "${launch_args[@]}")
 VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$started")
 export VCN_STATE
 trap '"$V" cleanup >/dev/null' EXIT
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
 
 total=0
 failed=0
