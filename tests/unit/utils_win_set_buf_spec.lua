@@ -227,14 +227,14 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     assert.equal(USER_BUF, shown[SPLIT_WIN])
   end)
 
-  it("does not show the buffer in a window that an autocmd closed", function()
+  it("repairs nothing when an autocmd closed the window that the swap was for", function()
     utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
       shown[USER_WIN] = buf
       shown[SPLIT_WIN] = nil
     end)
 
-    assert.same({ "noautocmd call nvim_win_set_buf(1000, 5)" }, commands)
-    assert.is_nil(shown[SPLIT_WIN])
+    assert.same({}, commands)
+    assert.equal(TERM_BUF, shown[USER_WIN])
   end)
 
   it("skips a window that an autocmd closed during the swap", function()
@@ -252,13 +252,48 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     }, commands)
   end)
 
-  it("does not swap again when the window shows the buffer after the other window got its own back", function()
-    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win, buf)
-      shown[USER_WIN] = buf
-      shown[win] = buf
+  it(
+    "leaves another window alone that an autocmd showed the buffer in on purpose, when the window got it too",
+    function()
+      utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win, buf)
+        shown[win] = buf
+        shown[USER_WIN] = buf
+      end)
+
+      assert.same({}, commands)
+      assert.equal(TERM_BUF, shown[USER_WIN])
+      assert.equal(TERM_BUF, shown[SPLIT_WIN])
+    end
+  )
+
+  it("leaves a buffer alone that another autocmd put into the window in place of the buffer", function()
+    live_buffers[7] = true
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(win)
+      shown[win] = 7
     end)
 
-    assert.same({ "noautocmd call nvim_win_set_buf(1000, 5)" }, commands)
+    assert.same({}, commands)
+    assert.equal(7, shown[SPLIT_WIN])
+  end)
+
+  it("shows the buffer in the window when the autocmd entered a window that already showed it", function()
+    shown[USER_WIN] = TERM_BUF
+
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function() end)
+
+    assert.same({ "noautocmd call nvim_win_set_buf(1001, 9)" }, commands)
+    assert.equal(TERM_BUF, shown[USER_WIN])
+    assert.equal(TERM_BUF, shown[SPLIT_WIN])
+  end)
+
+  it("shows the buffer in the window and keeps it in a window that the autocmd created", function()
+    utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, function(_, buf)
+      shown[1002] = buf
+    end)
+
+    assert.same({ "noautocmd call nvim_win_set_buf(1001, 9)" }, commands)
+    assert.equal(TERM_BUF, shown[1002])
     assert.equal(TERM_BUF, shown[SPLIT_WIN])
   end)
 

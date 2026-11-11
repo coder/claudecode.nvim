@@ -270,6 +270,94 @@ describe("the native terminal's swap into its own split", function()
     assert.same(runs.plain.log, runs.repaired.log)
   end)
 
+  describe("utils.win_set_buf_in_split in a real Neovim", function()
+    ---Runs the helper for a split that shows a file, with the terminal buffer to show, after `arrange` made windows and
+    ---autocmds. `arrange` gets the file buffer, the terminal buffer and the split, and returns the windows to report.
+    local function run(arrange)
+      start_child()
+      return call(
+        [[
+        local arrange = load(...)
+        local utils = require("claudecode.utils")
+        local file = vim.api.nvim_create_buf(true, false)
+        local terminal = vim.api.nvim_create_buf(true, false)
+        vim.cmd("tabnew")
+        vim.api.nvim_win_set_buf(0, file)
+        vim.cmd("vsplit")
+        local split = vim.api.nvim_get_current_win()
+        local reported = arrange(file, terminal, split)
+        utils.win_set_buf_in_split(split, terminal)
+        local result = { split = vim.api.nvim_win_get_buf(split) == terminal and "terminal" or "other" }
+        for name, win in pairs(reported) do
+          local buf = vim.api.nvim_win_get_buf(win)
+          result[name] = buf == terminal and "terminal" or (buf == file and "file" or "other")
+        end
+        return result
+      ]],
+        arrange
+      )
+    end
+
+    it("shows the terminal in the split when an autocmd entered a window that already showed it", function()
+      local result = run([[
+        local file, terminal = ...
+        local current = vim.api.nvim_get_current_win()
+        vim.cmd("tabnew")
+        vim.api.nvim_win_set_buf(0, terminal)
+        local other_tab = vim.api.nvim_get_current_win()
+        vim.api.nvim_set_current_win(current)
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = file,
+          once = true,
+          callback = function()
+            vim.api.nvim_set_current_win(other_tab)
+          end,
+        })
+        return { other_tab = other_tab }
+      ]])
+
+      assert.equal("terminal", result.split)
+      assert.equal("terminal", result.other_tab)
+    end)
+
+    it("shows the terminal in the split when an autocmd entered a window that it created", function()
+      local result = run([[
+        local file = ...
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = file,
+          once = true,
+          callback = function()
+            vim.cmd("new")
+          end,
+        })
+        return {}
+      ]])
+
+      assert.equal("terminal", result.split)
+    end)
+
+    it("leaves a window alone that a BufWinEnter autocmd of the terminal buffer showed it in on purpose", function()
+      local result = run([[
+        local file, terminal = ...
+        vim.cmd("vsplit")
+        local mirror = vim.api.nvim_get_current_win()
+        vim.cmd("wincmd p")
+        vim.api.nvim_win_set_buf(mirror, file)
+        vim.api.nvim_create_autocmd("BufWinEnter", {
+          buffer = terminal,
+          once = true,
+          callback = function()
+            vim.api.nvim_win_set_buf(mirror, terminal)
+          end,
+        })
+        return { mirror = mirror }
+      ]])
+
+      assert.equal("terminal", result.split)
+      assert.equal("terminal", result.mirror)
+    end)
+  end)
+
   describe("a BufLeave autocmd of the user's file", function()
     ---A file of the user's with an edit, and an autosave autocmd that runs when the cursor leaves it.
     local function arm_autosave()

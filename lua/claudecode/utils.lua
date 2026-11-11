@@ -61,36 +61,38 @@ end
 
 ---Show `buf` in `win`, a split that was just made for it, by calling `set_buf(win, buf)`. When a `BufLeave` autocmd of
 ---the buffer that `win` showed enters another window inside the call, Neovim loads `buf` into that window, even
----though the call names `win`. This puts that window's own buffer back and shows `buf` in `win`. All autocmds run as for
----a plain `nvim_win_set_buf`. Only the two repairing swaps run under `:noautocmd`.
+---though the call names `win`, and `win` keeps its buffer. This puts that window's own buffer back and shows `buf` in
+---`win`. A window that an autocmd created during the call has no earlier buffer to put back, so it keeps `buf`. All
+---autocmds run as for a plain `nvim_win_set_buf`. Nothing happens when `win` shows `buf` afterwards, or shows a buffer
+---that another autocmd put there. Only the repairing swaps run under `:noautocmd`.
 ---@param win number
 ---@param buf number
 ---@param set_buf? fun(win: number, buf: number) The swap that is to show `buf` in `win` (default `nvim_win_set_buf`)
 function M.win_set_buf_in_split(win, buf, set_buf)
-  local windows = vim.api.nvim_list_wins()
   local shown_before = {}
-  for _, other in ipairs(windows) do
+  for _, other in ipairs(vim.api.nvim_list_wins()) do
     shown_before[other] = vim.api.nvim_win_get_buf(other)
   end
 
   local swap = set_buf or vim.api.nvim_win_set_buf
   swap(win, buf)
 
-  local redirected = {}
-  for _, other in ipairs(windows) do
-    if
-      other ~= win
-      and vim.api.nvim_win_is_valid(other)
-      and shown_before[other] ~= buf
-      and vim.api.nvim_win_get_buf(other) == buf
-    then
-      table.insert(redirected, other)
-    end
+  if not vim.api.nvim_win_is_valid(win) then
+    return
   end
-  if #redirected == 0 then
+  local shown = vim.api.nvim_win_get_buf(win)
+  if shown == buf or shown ~= shown_before[win] then
     return
   end
 
+  -- `win` still shows its old buffer, so an autocmd redirected the swap.
+  local redirected = {}
+  for _, other in ipairs(vim.api.nvim_list_wins()) do
+    local previous = shown_before[other]
+    if other ~= win and previous ~= nil and previous ~= buf and vim.api.nvim_win_get_buf(other) == buf then
+      table.insert(redirected, other)
+    end
+  end
   -- A window whose buffer is gone stays as it is. Then `buf` stays in it, as on a plain `nvim_win_set_buf`.
   for _, other in ipairs(redirected) do
     local previous = shown_before[other]
@@ -98,9 +100,7 @@ function M.win_set_buf_in_split(win, buf, set_buf)
       return
     end
   end
-  if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) ~= buf then
-    win_set_buf_without_autocmds(win, buf)
-  end
+  win_set_buf_without_autocmds(win, buf)
 end
 
 local held_for_windows = {}
