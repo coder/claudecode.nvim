@@ -43,7 +43,7 @@ file lua/claudecode/server/handshake.lua 3eca35d572094a55
 block process_handshake      46341209ae5ab06a
 block extract_request        936e9a8b79d36106
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua ce476ac6b5d73219
+file lua/claudecode/server/init.lua a9c0d153b61e3078
 block server_start           69f261638f188c5f
 block server_stop            4dae0bf675cf2cc1
 site lua/claudecode/server/init.lua: M.state.ping_timer = tcp_server.start_ping_timer(server, 30000) -- Start ping timer to keep connections alive @ function M.start(config, auth_token)
