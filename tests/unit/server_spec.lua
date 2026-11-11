@@ -186,6 +186,7 @@ describe("WebSocket Server", function()
       server.state.server.clients[id] = {
         id = id,
         state = state,
+        queued_bytes = 0,
         tcp_handle = {
           write = function(_, data)
             table.insert(written, id)
@@ -220,6 +221,7 @@ describe("WebSocket Server", function()
       server.state.server.clients[id] = {
         id = id,
         state = "connected",
+        queued_bytes = 0,
         tcp_handle = {
           write = function(_, _, callback)
             if sync_error ~= nil then
