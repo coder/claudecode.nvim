@@ -808,41 +808,55 @@ describe("The lifecycle of a WebSocket connection", function()
       assert.equals(0, #checks)
     end)
 
-    it(
-      "counts the second wake tick in a row like any tick, so that a loop that stays blocked keeps no stalled client",
-      function()
-        local tick, _, client = stalled_client()
+    it("counts the two ticks after a wake tick, so that a run of wake ticks keeps no stalled client", function()
+      local tick, _, client = stalled_client()
 
-        clock = clock + 600000 -- a wake tick: the first of its run
-        tick()
-        assert.is_nil(client.write_stalled, "the first wake tick kept the count")
-        assert.is_not_nil(server.clients[client.id])
+      clock = clock + 600000 -- a wake tick: it starts a fresh stall window
+      tick()
+      assert.is_nil(client.write_stalled, "the wake tick kept the count")
+      assert.is_not_nil(server.clients[client.id])
 
-        clock = clock + 600000 -- the loop was blocked again, for more than 1.5 intervals: no sleep this time
-        tick()
-        assert.is_true(client.write_stalled, "the second wake tick in a row did not count")
-        assert.is_not_nil(server.clients[client.id])
+      clock = clock + 600000 -- the loop was blocked again, for more than 1.5 intervals: no sleep this time
+      tick()
+      assert.is_true(client.write_stalled, "the second wake tick in a row did not count")
+      assert.is_not_nil(server.clients[client.id])
 
-        clock = clock + 600000
-        tick() -- the second tick in a row without progress: the poll confirms it
-        assert.is_nil(server.clients[client.id], "a run of wake ticks kept a stalled client")
-        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
-      end
-    )
+      clock = clock + 600000
+      tick() -- the second tick in a row without progress: the poll confirms it
+      assert.is_nil(server.clients[client.id], "a run of wake ticks kept a stalled client")
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+    end)
 
-    it("starts a new run of wake ticks after a tick that came in time", function()
+    it("counts a wake tick that follows a tick in time, so that alternating ticks keep no stalled client", function()
       local tick, _, client, handle = stalled_client()
 
       clock = clock + 600000
-      tick() -- wake tick, the first of its run
+      tick() -- wake tick: a fresh stall window
       answer_and(tick, 1)(handle) -- a tick in time: the first without progress
       assert.is_true(client.write_stalled)
 
       clock = clock + 600000
-      tick() -- a wake tick again, and the first of a new run: it starts a fresh window
+      tick() -- a wake tick again, two ticks after the fresh window started: it counts
 
-      assert.is_nil(client.write_stalled, "a wake tick after a tick in time kept the count")
-      assert.is_not_nil(server.clients[client.id])
+      assert.is_nil(server.clients[client.id], "alternating wake ticks kept a stalled client")
+      assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Write queue stalled")
+    end)
+
+    it("starts a fresh stall window at a wake tick three ticks after the last one", function()
+      local tick, _, client, handle = stalled_client()
+
+      clock = clock + 600000
+      tick() -- wake tick: a fresh stall window
+      handle.drain(1)
+      answer_and(tick, 1)(handle)
+      handle.drain(1)
+      answer_and(tick, 1)(handle)
+
+      clock = clock + 600000
+      tick() -- a wake tick three ticks later: the machine slept again
+
+      assert.is_nil(client.write_stalled)
+      assert.equals(clock, client.last_drain, "the second sleep did not start a fresh window")
     end)
 
     it(
