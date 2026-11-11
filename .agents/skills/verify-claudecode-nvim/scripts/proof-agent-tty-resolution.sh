@@ -191,7 +191,7 @@ mkdir "$TMP/gate-bin" "$TMP/gate-mktemp" "$TMP/gate-cp" "$TMP/slow"
 cat >"$TMP/gate-bin/mkdir" <<MKDIR
 #!/bin/sh
 case "\$*" in
-"-p $priv/vcn."*"/home $priv/vcn."*"/claude $priv/vcn."*"/work")
+"-p $priv/vcn."*"/home $priv/vcn."*"/claude $priv/vcn."*"/work $priv/vcn."*"/tmp")
   if [ ! -f "\$GATE/reached" ]; then
     printf '%s\n' "\$2" | sed 's#/home\$##' >"\$GATE/state"
     : >"\$GATE/reached"
