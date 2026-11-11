@@ -777,7 +777,7 @@ snacks_win_opts = {
 
 </details>
 
-While a diff is open in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. The float stays hidden when the diff closes, and `:ClaudeCodeFocus` brings it back. A diff in its own tab (`open_in_new_tab`) leaves the float alone. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
+While a diff is open in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. The float stays hidden when the diff closes, and `:ClaudeCodeFocus` brings it back. A diff in its own tab (`open_in_new_tab`) leaves a visible float in the original tab alone while it is open. When that diff closes, the plugin shows the terminal in the original tab again if it was visible there when the diff opened, as it did before. That can show a float that another diff hid there. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
 
 For complete configuration options, see:
 
@@ -963,7 +963,7 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
-Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff. Nothing in the plugin shows the float again.
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff. The plugin does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes, as it did before.
 
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 

@@ -370,6 +370,42 @@ describe("openDiff with a floating Claude terminal", function()
     assert.equal(1, #visible_floats(first_tab), "the float in the first tab does not cover this diff")
   end)
 
+  for _, where in ipairs({ "same", "other" }) do
+    it("hides the float when a tiled window in the " .. where .. " tab also shows the terminal", function()
+      setup_diff({ layout = "vertical" })
+      local first_tab = vim.api.nvim_get_current_tabpage()
+      if where == "other" then
+        vim.cmd("tabnew")
+      end
+      vim.cmd("botright vsplit")
+      vim.api.nvim_win_set_buf(0, float.buf)
+      vim.api.nvim_set_current_tabpage(first_tab)
+      vim.cmd("wincmd t")
+      assert.equal(1, #visible_floats(first_tab), "the float starts visible")
+
+      open_diff("proposed.txt")
+
+      assert.equal(0, #visible_floats(first_tab), "no float covers the diff")
+    end)
+  end
+
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it("hides a float when a tiled window also shows its terminal buffer, with a " .. layout .. " diff", function()
+      setup_diff({ layout = layout })
+      vim.cmd("botright vsplit")
+      vim.api.nvim_win_set_buf(0, float.buf)
+      assert.equal(1, #visible_floats())
+
+      open_diff("proposed.txt")
+
+      assert.equal(0, #visible_floats(), "the tiled terminal window must not hide the floating terminal from the diff")
+      assert.equal(1, float.hide_calls)
+
+      close_tab("proposed.txt")
+      assert.equal(0, #visible_floats(), "nothing shows the float again")
+    end)
+  end
+
   it("hides a float the user re-created in another tab while an earlier diff is still open", function()
     setup_diff({ layout = "vertical" })
 
