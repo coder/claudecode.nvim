@@ -44,7 +44,7 @@ awk -v root="$root" '
       exit 1
     }
     if (repeated > 0) {
-      print "❌ luacov.report.out repeats a path (" repeated " extra rows, first `" first_repeated "`). Check `modules` in .luacov."
+      print "❌ luacov.report.out repeats a path (" repeated " extra rows, first `" first_repeated "`). A spec loads plugin files by a second path, such as a `./lua/?.lua` entry on package.path."
       exit 1
     }
     print "**Overall Coverage: " overall "**\n"
