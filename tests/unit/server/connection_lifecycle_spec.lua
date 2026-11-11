@@ -1026,6 +1026,21 @@ describe("The lifecycle of a WebSocket connection", function()
         assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "EOF")
       end)
 
+      it("skips a client whose socket failed to read in the poll of its confirmation, and logs no stall", function()
+        local client, handle = pending_confirmation()
+
+        local lines = logged_info_during(function()
+          poll(function()
+            handle._read_cb("ECONNRESET", nil) -- the poll reads the error of a reset connection
+          end)
+        end)
+
+        assert.same({}, lines, "a client that already left was logged as not reading")
+        assert.spy(callbacks.on_disconnect).was_called(1)
+        assert.spy(callbacks.on_disconnect).was_called_with(client, 1006, "Client read error: ECONNRESET")
+        assert.is_nil(server.clients[client.id])
+      end)
+
       it("closes the handles of a confirmation in stop_server, and the confirmation never runs", function()
         local client = pending_confirmation()
 
