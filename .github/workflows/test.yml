@@ -138,8 +138,8 @@ jobs:
           mkdir -p "$odd_tmp"
           TMPDIR="$odd_tmp" ./scripts/run_integration_tests_individually.sh
 
-      # The runner's Neovims open real diffs, whose temp files go under stdpath("cache"). A spec that uses the real
-      # cache folder instead of a temp one shows here.
+      # Only the legacy diff.open_diff writes temp files under stdpath("cache"). diff_legacy_swap_spec.lua points that
+      # at a temp folder, and a spec that uses the real cache folder shows here.
       - name: Check the integration tests left the real cache folder alone
         run: |
           cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvim"

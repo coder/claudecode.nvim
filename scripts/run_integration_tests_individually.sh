@@ -29,14 +29,23 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  local temp_output group_file
+  local temp_output group_file state_dir config_dir
   temp_output=$(mktemp)
   group_file=$(mktemp)
+  state_dir=$(mktemp -d)
+  config_dir=$(mktemp -d)
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
-  # plenary's test_file takes no options, so the Neovim it starts for a spec gets no -u and reads the developer's init
-  # file. Without -u, Neovim runs $VIMINIT instead, so it names tests/minimal_init.lua. The Neovim started here has -u.
-  if VIMINIT='luafile tests/minimal_init.lua' bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
+  # plenary's test_file takes no options, so the Neovim it starts for a spec gets no -u and would read the developer's
+  # init file. Without -u, Neovim runs $VIMINIT instead, so VIMINIT runs tests/minimal_init.lua, by an absolute path
+  # in a variable so a path with a space or % needs no escaping. VIMINIT and the variable reach every process the spec
+  # starts, and a Neovim there without -u runs minimal_init.lua too. The Neovim started here has -u.
+  # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
+  # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays.
+  if VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
+    CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
+    XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
+    bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
     nvim --headless -u tests/minimal_init.lua \
     -c "lua require('plenary.test_harness').test_file('$test_file')" \
     2>&1 | tee "$temp_output"; then
@@ -82,7 +91,7 @@ run_test_file() {
   fi
 
   # Cleanup
-  rm -f "$temp_output" "$group_file"
+  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir"
 }
 
 for test_file in tests/integration/*_spec.lua; do

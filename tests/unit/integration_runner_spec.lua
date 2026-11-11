@@ -42,6 +42,10 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
 })
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
+  'folders=missing',
+  'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
+  'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
+  '  "${XDG_STATE_HOME-unset}" "${XDG_CONFIG_HOME-unset}" "$folders" >> "$STUB_DIR/env_seen"',
   'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
   "  trap '' TERM",
   '  : > "$STUB_DIR/$name.ready"',
@@ -286,6 +290,68 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     local _, limit = timeout_limits()
     assert.is_truthy(output:find("nvim did not exit within " .. limit .. "s", 1, true), output)
+  end)
+
+  ---@return { viminit: string, minimal_init: string, state_home: string, config_home: string, folders: string }[] seen
+  ---One entry for each file the stub nvim ran
+  local function env_seen()
+    local seen = {}
+    local log = assert(io.open(dir .. "/env_seen"))
+    for line in log:lines() do
+      local viminit, minimal_init, state_home, config_home, folders =
+        line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      assert(viminit, line)
+      table.insert(seen, {
+        viminit = viminit,
+        minimal_init = minimal_init,
+        state_home = state_home,
+        config_home = config_home,
+        folders = folders,
+      })
+    end
+    log:close()
+    return seen
+  end
+
+  it("makes the Neovim that plenary starts for a spec run tests/minimal_init.lua by its absolute path", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()[1]
+    -- A Neovim without -u runs VIMINIT. Run it here with `vim.env` and `dofile` stood in for.
+    local command = assert(seen.viminit:match("^lua (.+)$"), "VIMINIT is a lua command, not " .. seen.viminit)
+    local loaded = {}
+    local chunk = assert(loadstring(command))
+    setfenv(chunk, {
+      vim = { env = { CLAUDECODE_MINIMAL_INIT = seen.minimal_init } },
+      dofile = function(path)
+        table.insert(loaded, path)
+      end,
+    })
+    chunk()
+    assert.are.same({ dir .. "/tests/minimal_init.lua" }, loaded)
+  end)
+
+  it("gives the Neovim of each file its own state and config folders and removes them afterwards", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+      { name = "b_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()
+    assert.are.equal(2, #seen)
+    assert.are_not.equal(seen[1].state_home, seen[2].state_home)
+    assert.are_not.equal(seen[1].config_home, seen[2].config_home)
+    for _, entry in ipairs(seen) do
+      assert.are_not.equal("unset", entry.state_home)
+      assert.are_not.equal("unset", entry.config_home)
+      assert.are_not.equal(entry.state_home, entry.config_home)
+      assert.are.equal("present", entry.folders, "both folders exist while the Neovim runs")
+      shell("test ! -e " .. quote(entry.state_home) .. " && test ! -e " .. quote(entry.config_home))
+    end
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()

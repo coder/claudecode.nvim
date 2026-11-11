@@ -276,6 +276,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
       assert.equal(diff_win, vim.api.nvim_get_current_win(), "the user is still in the diff window")
       swap_answered = true
       vim.cmd(step)
+      assert.equal(vim.fn.resolve(path), vim.fn.resolve(vim.api.nvim_buf_get_name(0)), "the step opens the file")
       vim.cmd("ClaudeCodeCloseAllDiffs")
       assert.is_nil(diff._get_active_diffs()[tab], notes[#notes])
       assert.are.same({ "alpha accepted" }, vim.api.nvim_buf_get_lines(vim.fn.bufnr(path), 0, -1, false))
