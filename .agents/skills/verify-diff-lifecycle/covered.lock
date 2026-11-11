@@ -139,7 +139,7 @@ file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
 file lua/claudecode/selection.lua 0fa651cc95e0af0d
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua 91136bdf47a3fa44
+file lua/claudecode/server/client.lua 4304e6496b5c4f32
 block create_client          24fa2a266b76e6ad
 == lua/claudecode/server/frame.lua
 file lua/claudecode/server/frame.lua 3c50766875878d56
@@ -161,7 +161,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 1df3b4b9596cd151
+file lua/claudecode/server/tcp.lua 7f24990371c22df3
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
