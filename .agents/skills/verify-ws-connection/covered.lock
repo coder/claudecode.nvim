@@ -1,16 +1,16 @@
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua f7c7fff32489cedd
+file lua/claudecode/init.lua fc28de832b4056df
 block main_start             7bf331d94d09a034
 block main_stop              d754def6d5865650
 site lua/claudecode/init.lua: local success, error = M.state.server.stop() @ function M.stop()
 site lua/claudecode/init.lua: server.stop() @ function M.start(show_startup_notification)
 site lua/claudecode/init.lua: server.stop() @ function M.start(show_startup_notification)
 == lua/claudecode/server/client.lua
-file lua/claudecode/server/client.lua d630d84ea8ce44a7
+file lua/claudecode/server/client.lua b8165df16f194471
 block create_client          24fa2a266b76e6ad
 block add_data_frame         69425d49d1ca87c9
-block process_data           d99d043c1aa1db51
-block send_message           322793c91d5c0455
+block process_data           309347512099d250
+block send_message           4224f2da335cf996
 block send_ping              d1b988ea53693ebd
 block fail_connection        70123c02ed0a9b33
 block close_client           1deaceaa4a8a1684
@@ -30,7 +30,6 @@ site lua/claudecode/server/client.lua: client.state = "upgrading" @ function M.p
 site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: client.tcp_handle:close() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
-site lua/claudecode/server/client.lua: client.tcp_handle:write(data, callback) @ local function write(client, data, callback)
 site lua/claudecode/server/client.lua: client.tcp_handle:write(data:sub(first, first + WRITE_PIECE_BYTES - 1), last_piece and callback or nil) @ local function write(client, data, callback)
 site lua/claudecode/server/client.lua: function M.close_client(client, code, reason) @ function M.close_client(client, code, reason)
 site lua/claudecode/server/client.lua: function M.send_ping(client, data) @ function M.send_ping(client, data)
@@ -38,6 +37,7 @@ site lua/claudecode/server/client.lua: handshake_complete = client.handshake_com
 site lua/claudecode/server/client.lua: handshake_complete = false, @ function M.create_client(tcp_handle, keepalive_timeout)
 site lua/claudecode/server/client.lua: last_pong = client.last_pong, @ function M.get_client_info(client)
 site lua/claudecode/server/client.lua: last_pong = vim.loop.now(), @ function M.create_client(tcp_handle, keepalive_timeout)
+site lua/claudecode/server/client.lua: return client.tcp_handle:write(data, callback) @ local function write(client, data, callback)
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 block process_handshake      46341209ae5ab06a
