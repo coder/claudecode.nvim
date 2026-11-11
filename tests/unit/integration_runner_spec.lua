@@ -101,6 +101,20 @@ local function shell(command)
   assert(status == 0 or status == true, "failed: " .. command)
 end
 
+-- In some locales a bash regex bracket range such as [0-9] also matches digits like the fullwidth １.
+---@return string|nil locale A common locale name in which it does, or nil when the host has none
+local function find_wide_digit_locale()
+  for _, name in ipairs({ "en_US.UTF-8", "en_US.utf8", "en_GB.UTF-8", "en_GB.utf8" }) do
+    local pipe =
+      assert(io.popen("LC_ALL=" .. name .. " /bin/bash -c '[[ １ =~ ^[0-9]$ ]]' 2> /dev/null && echo matched"))
+    local answer = pipe:read("*a")
+    pipe:close()
+    if answer:find("matched", 1, true) then
+      return name
+    end
+  end
+end
+
 local timeout_pipe = assert(io.popen("command -v timeout 2> /dev/null"))
 local real_timeout = timeout_pipe:read("*l")
 timeout_pipe:close()
@@ -169,10 +183,11 @@ describe("scripts/run_integration_tests_individually.sh", function()
   end)
 
   ---@param specs { name: string, exit: integer, output: string[], orphan: boolean|nil, ignore_term: boolean|nil }[]
+  ---@param locale string|nil The LC_ALL to run the script under
   ---@return string status
   ---@return string output
   ---@return string[] ran
-  local function run_script(specs)
+  local function run_script(specs, locale)
     for _, spec in ipairs(specs) do
       write(dir .. "/tests/integration/" .. spec.name, {})
       write(dir .. "/" .. spec.name .. ".out", spec.output)
@@ -192,6 +207,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       .. quote(dir)
       .. " REAL_TIMEOUT="
       .. quote(real_timeout)
+      .. (locale and " LC_ALL=" .. quote(locale) or "")
     local pipe = assert(io.popen(command .. " " .. quote(script) .. " 2>&1; echo status=$?"))
     local output = pipe:read("*a")
     pipe:close()
@@ -378,6 +394,18 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
   end)
 
+  it("fails a file whose success count has a leading zero and still runs the next file", function()
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary("08", 0, 0) },
+      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
+    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
+  end)
+
   it("fails a file whose count is not a number and still runs the next file", function()
     local status, output, ran = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(3, 0, "many") },
@@ -407,6 +435,44 @@ describe("scripts/run_integration_tests_individually.sh", function()
       { name = "a_spec.lua", exit = 0, output = summary(3, 0, "9223372036854775808") },
       { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
     })
+
+    assert.are.equal("1", status, output)
+    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
+    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
+  end)
+
+  it("takes a count of 999999999 as a count", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(999999999, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.is_truthy(output:find("Total Success: 999999999\nTotal Failed: 0\nTotal Errors: 0\n", 1, true), output)
+  end)
+
+  it("fails a file whose count has 10 digits and still runs the next file", function()
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1000000000, 0, 0) },
+      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
+    assert.is_truthy(output:find("FAILED: a_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - a_spec.lua\n\n", 1, true), output)
+  end)
+
+  local wide_digit_locale = find_wide_digit_locale()
+  local it_in_wide_digit_locale = wide_digit_locale and it or function(name)
+    pending(name)
+  end
+
+  it_in_wide_digit_locale("fails a file whose count is a wide digit and still runs the next file", function()
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(3, "１", 0) },
+      { name = "z_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    }, wide_digit_locale)
 
     assert.are.equal("1", status, output)
     assert.are.same({ "a_spec.lua", "z_spec.lua" }, ran)
@@ -458,6 +524,34 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
     assert.are.equal("0", status, output)
     assert.is_truthy(output:find("All integration tests passed!", 1, true), output)
+  end)
+
+  it("ignores a Failed : line that does not start the line", function()
+    local status, output = run_script({
+      { name = "note_spec.lua", exit = 0, output = concat(summary(2, 0, 0), { "note:Failed : 1" }) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.is_truthy(output:find("Total Success: 2\nTotal Failed: 0\nTotal Errors: 0\n", 1, true), output)
+  end)
+
+  it("ignores an Errors : line that does not start the line", function()
+    local status, output = run_script({
+      { name = "note_spec.lua", exit = 0, output = concat(summary(2, 0, 0), { "note:Errors : 1" }) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.is_truthy(output:find("Total Success: 2\nTotal Failed: 0\nTotal Errors: 0\n", 1, true), output)
+  end)
+
+  it("fails a file whose only Success: line does not start the line", function()
+    local status, output = run_script({
+      { name = "note_spec.lua", exit = 0, output = concat({ "note:Success: 3" }, without(summary(3, 0, 0), 1)) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: note_spec.lua: no plenary summary (nvim exit 0)", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - note_spec.lua", 1, true), output)
   end)
 
   it("fails a file whose last summary counts a failure after a clean one", function()
