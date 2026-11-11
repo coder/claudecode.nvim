@@ -12,6 +12,7 @@ describe("WebSocket client send_message", function()
     local written = {}
     local client = {
       state = "connected",
+      queued_bytes = 0,
       tcp_handle = {
         write = function(_, data)
           table.insert(written, data)
