@@ -48,6 +48,7 @@ describe("The lifecycle of a WebSocket connection", function()
         self.stopped = true
       end
       function timer:close()
+        assert(not self.closed, "handle is already closing")
         self.closed = true
       end
       table.insert(timers, timer)
