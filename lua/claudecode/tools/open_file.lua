@@ -503,7 +503,7 @@ end
 ---@param params table The input parameters for the tool
 ---@return table MCP-compliant response with content array
 local function handler(params)
-  if not params.filePath then
+  if type(params.filePath) ~= "string" then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
 

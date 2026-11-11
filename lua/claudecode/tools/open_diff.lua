@@ -38,7 +38,7 @@ local function handler(params, client)
   -- Validate required parameters
   local required_params = { "old_file_path", "new_file_path", "new_file_contents", "tab_name" }
   for _, param_name in ipairs(required_params) do
-    if not params[param_name] then
+    if type(params[param_name]) ~= "string" then
       error({
         code = -32602, -- Invalid params
         message = "Invalid params",

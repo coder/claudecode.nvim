@@ -204,7 +204,7 @@ describe("At Mention Edge Cases", function()
         end,
       }
       init_module.state.server = { broadcast = function() end }
-      init_module.state.config = { connection_timeout = 10000 }
+      init_module.state.config = { connection_timeout = 10000, connection_wait_delay = 600 }
       init_module.state.mention_queue = {}
       init_module.is_claude_connected = function()
         return false
