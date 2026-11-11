@@ -46,8 +46,16 @@ const LOCAL_PRETTIER_BIN = join(
 
 const execFileAsync = promisify(execFile);
 
-// The text of an Unreleased heading, as `headingText` reads it (`## [Unreleased]` and `## Unreleased`).
-const UNRELEASED_TEXT_PATTERN = /^\[?Unreleased\]?$/;
+// The lines that the update anchors on, and no others: an H2 or H3 at the start of a line, one space after the marks,
+// the text `[Unreleased]` or `Unreleased`, and nothing but blanks after it. These are the lines that the runner anchored
+// on before it used a parser, and `## [Unreleased]` and `## Unreleased` are the lines that Communique 1.1.3 reads a
+// draft under. The update drops the draft, so it must not drop a draft that Communique never read. Communique also
+// reads `## [Unreleased](...)`, which the runner never anchored on, and the runner anchored on `## [Unreleased` and
+// `## Unreleased]`, which Communique does not read, so neither is an anchor. Any other spelling is no anchor: bold,
+// emphasis or code, an escape, `[Unreleased][]`, two spaces or a tab after the marks, an indent, a closing `##`, a
+// setext heading, other text, or another case. Communique reads no draft under an H3 anchor either, so a non-empty one
+// is refused (see `assertDraftIsPlain`).
+const UNRELEASED_LINE_PATTERN = /^#{2,3} (?:\[Unreleased\]|Unreleased)[ \t]*$/;
 const TITLE_PATTERN = /^# .+$/;
 // The nodes that an Unreleased draft can hold. A heading is not one of them: only a subsection heading is allowed
 // (see `assertDraftIsPlain`). The update drops the draft, so it drops only what it reads.
@@ -65,6 +73,8 @@ const DRAFT_NODE_TYPES = new Set([
   "image",
   "html_inline",
 ]);
+// A list item line that holds a marker and nothing else (`-`, `*`, `+`, `1.`, `2)`, or `- -`).
+const EMPTY_ITEM_LINE_PATTERN = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]*)+$/;
 // CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
 // one rule (see `splitLines`), so a fence pattern never sees a bare CR inside a
 // line.
@@ -337,14 +347,20 @@ function parseBlocks(text) {
   return blocks;
 }
 
-/** The text of a heading: its inline literals, with every run of blanks as one space. */
+/**
+ * The text of a heading: its inline literals, with every run of blanks as one space. A link counts as its text in
+ * brackets, so `[0.3.0]` reads the same whether or not a link definition below it makes it a link.
+ */
 function headingText(heading) {
   assert.equal(heading.type, "heading", "node must be a heading");
   let text = "";
   const walker = heading.walker();
   for (let event = walker.next(); event; event = walker.next()) {
-    if (event.entering && event.node.literal !== null) {
-      text += event.node.literal;
+    const { entering, node } = event;
+    if (node.type === "link") {
+      text += entering ? "[" : "]";
+    } else if (entering && node.literal !== null) {
+      text += node.literal;
     }
   }
   return text.replace(/\s+/g, " ").trim();
@@ -361,20 +377,20 @@ function topLevelHeadings(text) {
 }
 
 /**
- * Where the Unreleased draft is in `text`, or null when there is no Unreleased heading. The anchor is the first
- * top-level heading of level 2 or 3 that reads `Unreleased` or `[Unreleased]`. The draft is the blocks after it, up to
- * the next top-level heading of the anchor's level or a higher one (an H1 or H2 after an H2 anchor), or to the end of
- * the text. An H3 under an H2 anchor is a subsection of the draft, whatever it says. `headEnd` is the last line of the
- * anchor and `restStart` the first line after the draft, both numbered from 1. `restStart` is null when the draft
- * runs to the end of the text.
+ * Where the Unreleased draft is in `lines`, or null when there is no Unreleased heading. The anchor is the first
+ * top-level heading of level 2 or 3 whose own line is one of the lines of `UNRELEASED_LINE_PATTERN`. The draft is the
+ * blocks after it, up to the next top-level heading of the anchor's level or a higher one (an H1 or H2 after an H2
+ * anchor), or to the end of the text. An H3 under an H2 anchor is a subsection of the draft, whatever it says. `level`
+ * is the level of the anchor. `headEnd` is the last line of the anchor and `restStart` the first line after the draft,
+ * both numbered from 1. `restStart` is null when the draft runs to the end of the text.
  */
-function findUnreleasedDraft(text) {
-  const blocks = parseBlocks(text);
+function findUnreleasedDraft(lines) {
+  assert.ok(Array.isArray(lines), "lines must be an array");
+  const blocks = parseBlocks(lines.join("\n"));
   const anchor = blocks.findIndex(
     (block) =>
       block.type === "heading" &&
-      (block.level === 2 || block.level === 3) &&
-      UNRELEASED_TEXT_PATTERN.test(headingText(block)),
+      UNRELEASED_LINE_PATTERN.test(lines[block.sourcepos[0][0] - 1]),
   );
   if (anchor === -1) {
     return null;
@@ -393,20 +409,31 @@ function findUnreleasedDraft(text) {
 }
 
 /**
- * Throws unless the Unreleased draft holds only paragraphs, lists, and headings one level below the anchor (H3 under an
- * H2 anchor), with their inline text. `updateContent` drops the draft, so it drops only what it reads. A code block, an
- * HTML block, a block quote, a thematic break or a heading of another level is refused, and so is a line that no
- * paragraph or heading holds (a link reference definition leaves no node). Each of these can end a section where a
- * reader of lines sees none, hide the lines after it, or hold an older release. The error names the line and the node
- * type, and it comes before anything is formatted. A code fence keeps the error of the fence check that came first.
- * `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it read. The cost: a draft with a
- * code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a maintainer edits it.
+ * Throws unless the Unreleased draft holds only paragraphs, lists and H3 headings, with their inline text.
+ * `updateContent` drops the draft, so it drops only what it reads. A code block, an HTML block, a block quote, a
+ * thematic break or a heading of another level is refused, and so is a line that no paragraph or heading holds (a link
+ * reference definition leaves no node). An empty list item is a marker alone, and it is read. Each of the refused
+ * shapes can end a section where a reader of lines sees none, hide the lines after it, or hold an older release. The
+ * error names the line and the node type, and it comes before anything is formatted. A code fence keeps the error of
+ * the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique reads a
+ * draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An empty
+ * draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it
+ * read. The cost: a draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused
+ * until a maintainer edits it.
  */
 function assertDraftIsPlain(lines, draft) {
   assert.ok(Array.isArray(lines), "lines must be an array");
   assert.ok(Array.isArray(draft.blocks), "draft must hold blocks");
   const shownLine = (line) =>
     JSON.stringify((lines[line - 1] ?? "").slice(0, 80));
+  if (draft.level !== 2 && draft.blocks.length > 0) {
+    const line = draft.blocks[0].sourcepos[0][0];
+    throw new Error(
+      `The Unreleased draft sits under a level ${draft.level} heading. Line ${line} starts it: ${shownLine(line)}. ` +
+        "Communique reads a draft only under `## [Unreleased]` or `## Unreleased`, so the update would drop text that nobody reconciled into the new entry. " +
+        "Move the draft under `## [Unreleased]`, or remove it.",
+    );
+  }
   const covered = new Set();
   for (const block of draft.blocks) {
     const walker = block.walker();
@@ -415,8 +442,7 @@ function assertDraftIsPlain(lines, draft) {
       if (!entering) {
         continue;
       }
-      const isSubsection =
-        node.type === "heading" && node.level === draft.level + 1;
+      const isSubsection = node.type === "heading" && node.level === 3;
       if (!isSubsection && !DRAFT_NODE_TYPES.has(node.type)) {
         // An inline node has no position: its block does.
         let positioned = node;
@@ -439,7 +465,7 @@ function assertDraftIsPlain(lines, draft) {
               : node.type;
         throw new Error(
           `The Unreleased draft has a node that the update does not read: ${kind}. Line ${line} starts it: ${shownLine(line)}. ` +
-            `The update drops the draft, so it reads only paragraphs, lists and level ${draft.level + 1} headings there. ` +
+            "The update drops the draft, so it reads only paragraphs, lists and level 3 headings there. " +
             "Move it out of the Unreleased draft.",
         );
       }
@@ -451,6 +477,12 @@ function assertDraftIsPlain(lines, draft) {
         ) {
           covered.add(line);
         }
+      } else if (
+        node.type === "item" &&
+        EMPTY_ITEM_LINE_PATTERN.test(lines[node.sourcepos[0][0] - 1] ?? "")
+      ) {
+        // The line of a marker with nothing after it holds no paragraph.
+        covered.add(node.sourcepos[0][0]);
       }
     }
   }
@@ -458,7 +490,7 @@ function assertDraftIsPlain(lines, draft) {
   for (let line = draft.headEnd + 1; line <= last; line += 1) {
     if (!/^[ \t]*$/.test(lines[line - 1] ?? "") && !covered.has(line)) {
       throw new Error(
-        `The Unreleased draft has a line that no paragraph, list item or heading holds. Line ${line}: ${shownLine(line)}. ` +
+        `The Unreleased draft has a line that no paragraph or heading holds. Line ${line}: ${shownLine(line)}. ` +
           "A link reference definition is one. The update drops the draft, so it refuses a line that it cannot read. " +
           "Move it out of the Unreleased draft.",
       );
@@ -490,24 +522,27 @@ function formatChangelogMarkdown(content) {
 }
 
 /**
- * Formats `markdown` and checks that the formatter kept the older releases. `kept` is the text of the changelog that
- * the update keeps below the new entry. Its top-level headings must be the last top-level headings of the formatted
- * text, with the same levels and text. A new entry with a code fence that never closes, for example, swallows the older
- * releases below it, and the formatter then closes the fence at the end of the text and writes them as code. A
- * formatter that moves a setext heading into a list item has the same result. The check refuses these before anything
- * is written. A heading inside a list item or a block quote is not a section, so it does not count.
+ * Formats `markdown` and checks that the formatter kept the headings of the text. `markdown` is the head of the
+ * changelog, the new `entry`, and the older releases `kept`. The last top-level headings of the formatted text must be,
+ * in this order and with the same levels and text, the top-level headings of the entry (read alone) and then those of
+ * the kept text (read alone). A new entry with a code fence or an HTML comment that never closes, for example, swallows
+ * the older releases below it, and the formatter then closes the fence at the end of the text and writes them as code.
+ * A formatter that moves a setext heading into a list item has the same result. A heading in the entry that repeats an
+ * older release does not hide the loss, because the count and the order must match too. The check refuses these
+ * before anything is written. A heading inside a list item or a block quote is not a section, so it does not count.
  */
-function formatKeepingHeadings(markdown, kept) {
+function formatKeepingHeadings(markdown, entry, kept) {
   assert.equal(typeof markdown, "string", "markdown must be a string");
+  assert.equal(typeof entry, "string", "entry must be a string");
   assert.equal(typeof kept, "string", "kept must be a string");
   const formatted = formatChangelogMarkdown(markdown);
-  const expected = topLevelHeadings(kept);
+  const expected = [...topLevelHeadings(entry), ...topLevelHeadings(kept)];
   const found = topLevelHeadings(formatted);
   const tail = found.slice(Math.max(0, found.length - expected.length));
   const changed = expected.findIndex((heading, i) => heading !== tail[i]);
   if (changed !== -1) {
     throw new Error(
-      "The update would change the older releases. After the formatter runs, the headings below the new entry are not the headings that were there: " +
+      "The update would change the older releases. After the formatter runs, the headings of the new entry and the older releases are not the headings that were there: " +
         `expected ${JSON.stringify(expected[changed])} but found ${JSON.stringify(tail[changed] ?? null)}. ` +
         "The new entry or the older releases hold Markdown that the formatter rewrites, such as a code fence that never closes, so the update refuses to write it.",
     );
@@ -520,11 +555,13 @@ function formatKeepingHeadings(markdown, kept) {
  * at the top, clears its draft body after Communique reconciles it into the
  * release entry, and inserts the new release directly below the anchor.
  *
- * The draft is read with commonmark.js. It is the blocks from the Unreleased heading to the next top-level heading of
- * the same level or a higher one, or to the end of the text. It can hold only paragraphs, lists and H3 headings (see
- * `assertDraftIsPlain`), and the update refuses anything else before it formats. An H3 heading directly under
- * `## [Unreleased]` is a subsection of the draft whatever it says, so `### [0.3.0]` there is dropped with the draft.
- * After the formatter runs, the headings of the older releases must be unchanged (see `formatKeepingHeadings`).
+ * The draft is read with commonmark.js. The anchor is a heading line that Communique reads a draft under (see
+ * `UNRELEASED_LINE_PATTERN`). The draft is the blocks from the anchor to the next top-level heading of the same level or
+ * a higher one, or to the end of the text. It can hold only paragraphs, lists and H3 headings (see
+ * `assertDraftIsPlain`), and the update refuses anything else before it formats. A draft under an H3 anchor is
+ * refused, because Communique reads none. An H3 heading directly under `## [Unreleased]` is a subsection of the draft
+ * whatever it says, so `### [0.3.0]` there is dropped with the draft. After the formatter runs, the headings of the new
+ * entry and the older releases must be unchanged (see `formatKeepingHeadings`).
  */
 class UnreleasedAwareChangelog {
   constructor(options) {
@@ -548,7 +585,7 @@ class UnreleasedAwareChangelog {
     const existing = lines.join("\n");
     const entry = this.changelogEntry.trim();
 
-    const draft = findUnreleasedDraft(existing);
+    const draft = findUnreleasedDraft(lines);
     if (draft !== null) {
       assertDraftIsPlain(lines, draft);
       const head = lines.slice(0, draft.headEnd).join("\n");
@@ -556,7 +593,11 @@ class UnreleasedAwareChangelog {
         draft.restStart === null
           ? ""
           : lines.slice(draft.restStart - 1).join("\n");
-      return formatKeepingHeadings(joinSections(head, entry, rest), rest);
+      return formatKeepingHeadings(
+        joinSections(head, entry, rest),
+        entry,
+        rest,
+      );
     }
 
     // Self-heal a missing Unreleased anchor so Communique has draft space on
@@ -567,10 +608,15 @@ class UnreleasedAwareChangelog {
     if (titleIndex !== -1) {
       const head = `${lines.slice(0, titleIndex + 1).join("\n")}\n\n## [Unreleased]`;
       const rest = lines.slice(titleIndex + 1).join("\n");
-      return formatKeepingHeadings(joinSections(head, entry, rest), rest);
+      return formatKeepingHeadings(
+        joinSections(head, entry, rest),
+        entry,
+        rest,
+      );
     }
     return formatKeepingHeadings(
       joinSections("# Changelog\n\n## [Unreleased]", entry, existing),
+      entry,
       existing,
     );
   }

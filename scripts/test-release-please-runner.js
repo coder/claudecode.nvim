@@ -1224,29 +1224,38 @@ function textThatMainWrites(text, entry) {
 
 /**
  * The error of `updateContent` for a draft that holds a node that it does not read (see `assertDraftIsPlain`). `kind`
- * is the commonmark.js node type, and `level` the level of the headings that the draft can hold.
+ * is the commonmark.js node type.
  */
-function nodeRefusal(lineNumber, line, kind, level = 3) {
+function nodeRefusal(lineNumber, line, kind) {
   return (
     `The Unreleased draft has a node that the update does not read: ${kind}. Line ${lineNumber} starts it: ${JSON.stringify(line.slice(0, 80))}. ` +
-    `The update drops the draft, so it reads only paragraphs, lists and level ${level} headings there. ` +
+    "The update drops the draft, so it reads only paragraphs, lists and level 3 headings there. " +
     "Move it out of the Unreleased draft."
   );
 }
 
-/** The error of `updateContent` for a line that no paragraph, list item or heading holds (a link definition). */
+/** The error of `updateContent` for a line that no paragraph or heading holds (a link definition). */
 function uncoveredRefusal(lineNumber, line) {
   return (
-    `The Unreleased draft has a line that no paragraph, list item or heading holds. Line ${lineNumber}: ${JSON.stringify(line.slice(0, 80))}. ` +
+    `The Unreleased draft has a line that no paragraph or heading holds. Line ${lineNumber}: ${JSON.stringify(line.slice(0, 80))}. ` +
     "A link reference definition is one. The update drops the draft, so it refuses a line that it cannot read. " +
     "Move it out of the Unreleased draft."
   );
 }
 
-/** The error of `updateContent` when the formatter changes the headings of the older releases. */
+/** The error of `updateContent` for a draft under an H3 heading, which Communique does not read. */
+function levelRefusal(level, lineNumber, line) {
+  return (
+    `The Unreleased draft sits under a level ${level} heading. Line ${lineNumber} starts it: ${JSON.stringify(line.slice(0, 80))}. ` +
+    "Communique reads a draft only under `## [Unreleased]` or `## Unreleased`, so the update would drop text that nobody reconciled into the new entry. " +
+    "Move the draft under `## [Unreleased]`, or remove it."
+  );
+}
+
+/** The error of `updateContent` when the formatter changes the headings of the new entry and the older releases. */
 function changedRefusal(expected, found) {
   return (
-    "The update would change the older releases. After the formatter runs, the headings below the new entry are not the headings that were there: " +
+    "The update would change the older releases. After the formatter runs, the headings of the new entry and the older releases are not the headings that were there: " +
     `expected ${JSON.stringify(expected)} but found ${JSON.stringify(found)}. ` +
     "The new entry or the older releases hold Markdown that the formatter rewrites, such as a code fence that never closes, so the update refuses to write it."
   );
@@ -1370,8 +1379,7 @@ async function testUnreleasedDraftStructure() {
   // 1. Refusals, before the formatter runs, raw and after the real prettier. The error names the line and the node.
   // Each case is { name, draft, error, line, formattedLine }: `error` builds the error from the line number and the
   // line that starts the node, and `formattedLine` is that line after prettier when prettier changes it.
-  const node = (kind, level) => (number, line) =>
-    nodeRefusal(number, line, kind, level);
+  const node = (kind) => (number, line) => nodeRefusal(number, line, kind);
   const refusedCases = [
     ...["####", "#####", "######"].map((marks) => ({
       name: `an H${marks.length} release heading under Unreleased`,
@@ -1592,7 +1600,7 @@ async function testUnreleasedDraftStructure() {
   const setext = "- Draft\n\n0.3.0\n-----\n\n- Previous\n";
   assert.throws(
     () => update(`${head}${setext}`),
-    { message: changedRefusal("2 0.3.0", "2 [0.4.0] - 2026-06-15") },
+    { message: changedRefusal("2 [0.4.0] - 2026-06-15", "2 [Unreleased]") },
     "a raw setext older release below the list of the new entry",
   );
   const formattedSetext = runner.formatChangelogMarkdown(`${head}${setext}`);
@@ -1630,31 +1638,14 @@ async function testUnreleasedDraftStructure() {
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.2.0] - 2025-06-18\n\n- Older\n",
     "an H3 release heading under Unreleased is part of the draft",
   );
-  // The draft of an H3 anchor ends at the next heading of level 3 or less, so the H3 releases stay. Its subsections
-  // are H4 headings.
+  // The draft of an H3 anchor ends at the next heading of level 3 or less, so the H3 releases stay. Communique reads no
+  // draft under an H3 anchor, so a non-empty one is refused (see `testUnreleasedAnchor`).
   assert.equal(
     update(
-      "# Changelog\n\n### [Unreleased]\n\n- Draft\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n### [0.2.0] - 2025-06-18\n\n- Older\n",
+      "# Changelog\n\n### [Unreleased]\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n### [0.2.0] - 2025-06-18\n\n- Older\n",
     ),
     "# Changelog\n\n### [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n### [0.2.0] - 2025-06-18\n\n- Older\n",
-    "an H3 anchor keeps every H3 release",
-  );
-  assert.equal(
-    update(
-      `# Changelog\n\n### [Unreleased]\n\n#### Added\n\n- Draft${previous}`,
-    ),
-    released.replace("## [Unreleased]", "### [Unreleased]"),
-    "an H3 anchor holds H4 subsections",
-  );
-  assert.throws(
-    () =>
-      withMissingFormatter(() =>
-        update(
-          `# Changelog\n\n### [Unreleased]\n\n###### Deep\n\n- Draft${previous}`,
-        ),
-      ),
-    { message: nodeRefusal(5, "###### Deep", "heading (level 6)", 4) },
-    "an H3 anchor holds H4 subsections only",
+    "an H3 anchor with no draft keeps every H3 release",
   );
 
   // 5. What stays out of the draft cannot hide a release. A fence that is indented by four or more spaces is code, and
@@ -1737,6 +1728,11 @@ async function testUnreleasedDraftStructure() {
       "inline code, HTML and links",
       "- Use `vim.paste` and <kbd>Ctrl</kbd>+<kbd>S</kbd> with [docs](https://example.com/a_b) and ![img](x.png)\n- <b>Bold</b> text and a bare https://example.com/x link\n",
     ],
+    ["an empty list item", "- One\n-\n- Three\n"],
+    ["an empty ordered list item", "1. One\n2.\n3. Three\n"],
+    ["empty lists", "-\n\n1.\n\n*\n"],
+    ["a nested empty list item", "- a\n\n  -\n"],
+    ["a marker with its text on the next line", "-\n  text\n"],
     [
       "emphasis, strong text and a hard break",
       "- **Bold** and *emphasis* and _more_\\\n  after a hard break\n- Line one  \n  line two\n",
@@ -1828,8 +1824,8 @@ async function testUnreleasedDraftStructure() {
     {
       name: "a formatter that indents the first older release by four spaces",
       body: "sed 's/^## \\[0.3.0\\]/    ## [0.3.0]/'",
-      expected: "2 [0.3.0] - 2025-09-15",
-      found: "2 [0.4.0] - 2026-06-15",
+      expected: "2 [0.4.0] - 2026-06-15",
+      found: "2 [Unreleased]",
     },
     {
       name: "a formatter that changes the level of an older release",
@@ -1846,8 +1842,8 @@ async function testUnreleasedDraftStructure() {
     {
       name: "a formatter that drops an older release heading",
       body: "grep -v '^## \\[0.2.0\\]'",
-      expected: "2 [0.3.0] - 2025-09-15",
-      found: "2 [0.4.0] - 2026-06-15",
+      expected: "2 [0.4.0] - 2026-06-15",
+      found: "2 [Unreleased]",
     },
   ];
   checkCases(refusedByFormatter, ({ body, expected, found }) => {
@@ -1861,10 +1857,7 @@ async function testUnreleasedDraftStructure() {
   // the older release, and the formatter writes it as code. The same holds for the real prettier.
   const oneRelease = `${head}- Draft${previous}`;
   const openEntry = "## [0.4.0] - 2026-06-15\n\n```md\nExample";
-  const swallowed = changedRefusal(
-    "2 [0.3.0] - 2025-09-15",
-    "2 [0.4.0] - 2026-06-15",
-  );
+  const swallowed = changedRefusal("2 [0.4.0] - 2026-06-15", "2 [Unreleased]");
   withFormatterScript("cat\nprintf '```\\n'", () =>
     assert.throws(() => update(oneRelease, openEntry), { message: swallowed }),
   );
@@ -1902,6 +1895,243 @@ async function testUnreleasedDraftStructure() {
       () => update(text, openEntry),
       { message: swallowed },
       `a new entry with an open fence, without an Unreleased heading: ${JSON.stringify(text)}`,
+    );
+  }
+
+  // The headings of the new entry count too, in order. A new entry that repeats an older release heading, or its own
+  // heading, in a form that the generator does not demote (an indent) and then opens a fence or a comment that never
+  // closes, hides the real older release inside the fence or the comment. The repeat must not stand in for it. This
+  // holds on all three paths, with the real prettier and with a formatter that prints its input.
+  const repeatedEntries = [
+    [
+      "a repeat of an older release, then a fence that never closes",
+      "## [0.4.0] - 2026-06-15\n\n- New\n\n ## [0.3.0] - 2025-09-15\n\n~~~text\nExample",
+    ],
+    [
+      "a repeat of an older release, then a comment that never closes",
+      "## [0.4.0] - 2026-06-15\n\n- New\n\n ## [0.3.0] - 2025-09-15\n\n<!-- notes",
+    ],
+    [
+      "a repeat of the entry heading, then a fence that never closes",
+      "## [0.4.0] - 2026-06-15\n\n- New\n\n ## [0.4.0] - 2026-06-15\n\n```text\nExample",
+    ],
+  ];
+  const olderTexts = [
+    ["with an Unreleased heading", `${head}- Draft${previous}`],
+    ["with a title and no Unreleased heading", `# Changelog${previous}`],
+    ["with no title", previous.trimStart()],
+  ];
+  const repeatedCases = [];
+  for (const [entryName, repeatedEntry] of repeatedEntries) {
+    for (const [pathName, text] of olderTexts) {
+      for (const formatter of ["prettier", "identity"]) {
+        repeatedCases.push({
+          name: `${entryName}, ${pathName}, ${formatter}`,
+          entry: repeatedEntry,
+          text,
+          formatter,
+        });
+      }
+    }
+  }
+  checkCases(repeatedCases, (testCase) => {
+    const run = () => update(testCase.text, testCase.entry);
+    assert.throws(
+      () =>
+        testCase.formatter === "identity" ? withIdentityFormatter(run) : run(),
+      { message: swallowed },
+    );
+  });
+  // A repeat that closes is not refused: the headings are the headings that were there.
+  assert.deepEqual(
+    topLevelHeadingsOf(
+      update(
+        oneRelease,
+        "## [0.4.0] - 2026-06-15\n\n- New\n\n ## [0.3.0] - 2025-09-15\n\n- A repeat",
+      ),
+    ),
+    [
+      "1 Changelog",
+      "2 [Unreleased]",
+      "2 [0.4.0] - 2026-06-15",
+      "2 [0.3.0] - 2025-09-15",
+      "2 [0.3.0] - 2025-09-15",
+    ],
+    "a closed repeat of an older release is not refused",
+  );
+  // A link definition below the older releases makes `[0.4.0]` a link in the formatted text. The heading of the entry
+  // reads the same with and without it.
+  const footer =
+    "[Unreleased]: https://example.com/u\n[0.4.0]: https://example.com/4\n[0.3.0]: https://example.com/3\n";
+  assert.equal(
+    update(`${head}- Draft${previous}\n${footer}`),
+    `${released}\n${footer}`,
+    "link definitions below the older releases",
+  );
+}
+
+/**
+ * Which heading lines the update anchors on. It drops the draft under the anchor, and Communique 1.1.3 reads a draft
+ * only under `## [Unreleased]`, `## Unreleased` and `## [Unreleased](...)`. A draft under another spelling would go
+ * with nothing to carry it into the new entry. So the update anchors on `## [Unreleased]` and `## Unreleased` (and the
+ * same two as an H3), as the runner did before it used a parser, and on no other spelling. Without an anchor the entry
+ * goes under the title, and the whole text stays.
+ */
+async function testUnreleasedAnchor() {
+  const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
+  const update = (content) =>
+    new runner.UnreleasedAwareChangelog({
+      changelogEntry: entry,
+    }).updateContent(content);
+  const older = "## [0.3.0] - 2025-09-15\n\n- Previous\n";
+  const title = "# Changelog";
+
+  // The lines that anchor. The draft goes, and the text that main wrote is the text that the update writes.
+  const anchors = [
+    "## [Unreleased]",
+    "## Unreleased",
+    "## [Unreleased]  ",
+    "## Unreleased\t ",
+  ];
+  withIdentityFormatter(() => {
+    for (const line of anchors) {
+      const text = `${title}\n\n${line}\n\n- Draft\n\n${older}`;
+      assert.equal(
+        update(text),
+        `${title}\n\n${line.trimEnd()}\n\n${entry}\n\n${older}`,
+        `the draft under ${JSON.stringify(line)} goes`,
+      );
+      assert.equal(
+        update(text),
+        textThatMainWrites(text, entry).written,
+        `main anchored on ${JSON.stringify(line)} too`,
+      );
+    }
+  });
+
+  // The lines that do not anchor, with a draft below each. The entry goes under the title, below a new anchor, and
+  // every line of the text stays. Main did not anchor on any of them but the last two, which Communique does not read,
+  // so main dropped the draft below those two.
+  const notAnchors = [
+    ["bold", "## **Unreleased**"],
+    ["emphasis with underscores", "## _Unreleased_"],
+    ["emphasis with a star", "## *Unreleased*"],
+    ["code", "## `Unreleased`"],
+    ["an escape", "## \\[Unreleased\\]"],
+    [
+      "a reference link",
+      "## [Unreleased][]",
+      "\n[Unreleased]: https://example.com/compare/v0.3.0...HEAD\n",
+    ],
+    ["a link", "## [Unreleased](https://example.com/compare/v0.3.0...HEAD)"],
+    ["two spaces after the marks", "##  [Unreleased]"],
+    ["a tab after the marks", "##\t[Unreleased]"],
+    ["an indent", " ## [Unreleased]"],
+    ["a closing sequence", "## [Unreleased] ##"],
+    ["a setext heading", "Unreleased\n----------"],
+    ["a bracketed setext heading", "[Unreleased]\n============"],
+    ["more text", "## Unreleased changes"],
+    ["text before", "## Not Unreleased"],
+    ["a date", "## [Unreleased] - 2026-06-15"],
+    ["another case", "## unreleased"],
+    ["capitals", "## [UNRELEASED]"],
+    ["an H1", "# [Unreleased]"],
+    ["an H4", "#### [Unreleased]"],
+    ["an open bracket", "## [Unreleased"],
+    ["a closing bracket", "## Unreleased]"],
+  ].map(([name, line, footer = ""]) => ({ name, line, footer }));
+  checkCases(notAnchors, ({ line, footer }) => {
+    const text = `${title}\n\n${line}\n\n- Draft\n\n${older}${footer}`;
+    withIdentityFormatter(() =>
+      assert.equal(
+        update(text),
+        `${title}\n\n## [Unreleased]\n\n${entry}\n\n${text.slice(title.length).trim()}\n`,
+        "the whole text stays below the new entry",
+      ),
+    );
+  });
+
+  // The first heading that anchors counts. A second Unreleased heading ends the draft and stays. A spelling that does
+  // not anchor, above an anchor, stays with its draft.
+  withIdentityFormatter(() => {
+    assert.equal(
+      update(
+        `${title}\n\n## [Unreleased]\n\n- First\n\n## Unreleased\n\n- Second\n\n${older}`,
+      ),
+      `${title}\n\n## [Unreleased]\n\n${entry}\n\n## Unreleased\n\n- Second\n\n${older}`,
+      "two Unreleased headings",
+    );
+    assert.equal(
+      update(
+        `${title}\n\n## **Unreleased**\n\n- A\n\n## [Unreleased]\n\n- B\n\n${older}`,
+      ),
+      `${title}\n\n## **Unreleased**\n\n- A\n\n## [Unreleased]\n\n${entry}\n\n${older}`,
+      "an Unreleased heading that does not anchor, above one that does",
+    );
+    assert.equal(
+      update(`${title}\n\n## [Unreleased]\n\n- Draft\n\n## [0.3.0]\n`),
+      `${title}\n\n## [Unreleased]\n\n${entry}\n\n## [0.3.0]\n`,
+      "an older release with no text",
+    );
+  });
+
+  // Communique reads no draft under an H3 anchor, so the update refuses a draft there, whatever it holds. A release
+  // heading of any level under the anchor is a draft too, so it is refused and not dropped. An empty draft is fine,
+  // and the releases below stay.
+  const levelCases = [];
+  for (const anchor of ["### [Unreleased]", "### Unreleased"]) {
+    for (const [name, draft] of [
+      ["a list", "- Draft"],
+      ["a paragraph", "Draft text."],
+      ["an H4 subsection", "#### Added\n\n- Draft"],
+      ["an H4 release", "#### [0.3.0] - 2025-09-15\n\n- ACTUAL_OLDER_BODY"],
+      ["a code block", "    code"],
+    ]) {
+      levelCases.push({
+        name: `${name} under ${anchor}`,
+        anchor,
+        draft,
+        first: draft.split("\n")[0],
+      });
+    }
+  }
+  const levelTexts = levelCases.map(
+    ({ anchor, draft }) =>
+      `${title}\n\n${anchor}\n\n${draft}\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
+  );
+  const levelFormatted = formatDocuments(levelTexts);
+  checkCases(levelCases, (testCase) => {
+    const index = levelCases.indexOf(testCase);
+    for (const [label, text] of [
+      ["raw", levelTexts[index]],
+      ["after prettier", levelFormatted[index]],
+    ]) {
+      const number = lineNumberOf(text, testCase.first);
+      assert.ok(number > 0, `${label}: the text holds the draft`);
+      assert.throws(
+        () => withMissingFormatter(() => update(text)),
+        { message: levelRefusal(3, number, testCase.first) },
+        label,
+      );
+    }
+  });
+  for (const anchor of ["### [Unreleased]", "### Unreleased"]) {
+    for (const [name, blanks] of [
+      ["no line", ""],
+      ["blank lines", "\n\n\n"],
+    ]) {
+      assert.equal(
+        update(
+          `${title}\n\n${anchor}\n${blanks}\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
+        ),
+        `${title}\n\n${anchor}\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
+        `${anchor} with ${name}: the releases stay`,
+      );
+    }
+    assert.equal(
+      update(`${title}\n\n${anchor}`),
+      `${title}\n\n${anchor}\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n`,
+      `${anchor} at the end of the text`,
     );
   }
 }
@@ -2427,7 +2657,12 @@ function generateDraftFragment(random, fragments) {
 
 /** Makes one document: [text, plain]. The lines end with LF, CR LF or CR. */
 function generateUpdaterDocument(random, fragments, lineCoverage) {
-  const lines = ["# Changelog", "", "## [Unreleased]", ""];
+  const lines = [
+    "# Changelog",
+    "",
+    random() < 0.3 ? "## Unreleased" : "## [Unreleased]",
+    "",
+  ];
   let plain = true;
   for (let count = Math.floor(random() * 4); count > 0; count -= 1) {
     const [fragment, isPlain] = generateDraftFragment(random, fragments);
@@ -2849,6 +3084,7 @@ async function main() {
   await testUnreleasedUpdaterFences();
   await testUnreleasedDraftFenceGuard();
   await testUnreleasedDraftStructure();
+  await testUnreleasedAnchor();
   await testFenceDifferential();
   await testUnreleasedUpdaterProperty();
   await testRunnerNeedsCommonmark();
