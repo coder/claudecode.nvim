@@ -85,10 +85,16 @@ describe("claudecode.terminal.snacks after a module reload", function()
     -- Snacks maps the keys of an instance to the buffer when it shows the window, and each map calls `self:hide()` on
     -- that instance.
     state.buffers[bufnr].mapped_by = term
+    state.buffers[bufnr].mapped_keys = {}
+    for name, spec in pairs(opts.win.keys or {}) do
+      state.buffers[bufnr].mapped_keys[name] = spec
+    end
     if opts.win.on_buf then
       opts.win.on_buf(term)
     end
     term.win = new_window(bufnr)
+    -- Snacks marks every window that it shows.
+    vim.w[term.win].snacks_win = { id = 1 }
     table.insert(state.terminals, term)
     table.insert(started, term)
     return term
@@ -367,7 +373,12 @@ describe("claudecode.terminal.snacks after a module reload", function()
         function term:map()
           assert(self:buf_valid(), "Snacks.win:map needs a valid buffer")
           state.buffers[self.buf].mapped_by = self
-          state.buffers[self.buf].mapped_keys = self.keys
+          -- A map only adds or replaces a key. Snacks never removes one.
+          local mapped = state.buffers[self.buf].mapped_keys or {}
+          for name, spec in pairs(self.keys or {}) do
+            mapped[name] = spec
+          end
+          state.buffers[self.buf].mapped_keys = mapped
         end
         table.insert(state.wrapped, term)
         return term
@@ -926,32 +937,98 @@ describe("claudecode.terminal.snacks after a module reload", function()
       end)
     end)
 
-    it("takes the window of the current tab when it adopts a terminal that two tabs show", function()
-      snacks_provider.open("claude", {}, config, true)
-      local claude = started[1]
-      state.current_tab = 2
-      local copy = new_window(claude.buf)
-      reload_snacks()
+    -- The adoption cannot know which window was the terminal's. A window that Snacks made carries the `snacks_win`
+    -- marker, and a copy that a diff tab shows (`nvim_win_set_buf`) does not.
+    describe("when the adoption chooses between windows", function()
+      local claude, real
 
-      assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+      before_each(function()
+        snacks_provider.open("claude", {}, config, true)
+        claude = started[1]
+        real = claude.win
+      end)
 
-      assert.are.equal(copy, snacks_provider._get_terminal_for_test().win)
+      local function adopted_window()
+        assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
+        return snacks_provider._get_terminal_for_test().win
+      end
+
+      -- A reload that runs in the diff tab, where a toggle follows: it hides the window that Snacks made, as an
+      -- instance that `snacks` started tracks it.
+      it("takes the window of Snacks over a copy in the current tab", function()
+        state.current_tab = 2
+        local copy = new_window(claude.buf)
+        reload_snacks()
+
+        assert.are.equal(real, adopted_window())
+
+        snacks_provider.simple_toggle("claude", {}, config)
+        assert.is_false(vim.api.nvim_win_is_valid(real))
+        assert.is_true(vim.api.nvim_win_is_valid(copy))
+      end)
+
+      it("takes the window of Snacks in another tab when the current tab shows none, and an open focuses it", function()
+        state.current_tab = 2
+        reload_snacks()
+
+        assert.are.equal(real, adopted_window())
+
+        snacks_provider.open("claude", {}, config, true)
+
+        assert.are.equal(real, state.current_win)
+        assert.are.equal(1, windows_showing(claude.buf))
+        assert.are.equal(1, #started)
+      end)
+
+      it("takes the window of Snacks in the current tab first", function()
+        state.current_tab = 2
+        local other = new_window(claude.buf)
+        vim.w[other].snacks_win = { id = 2 }
+        reload_snacks()
+
+        assert.are.equal(other, adopted_window())
+      end)
+
+      -- Claude is hidden in the first tab, and the diff tab shows a copy. A reload there must not make the open jump.
+      it("ignores a copy that only another tab shows, so that an open shows Claude in the current tab", function()
+        snacks_provider.simple_toggle("claude", {}, config) -- hides the window of Snacks
+        state.current_tab = 2
+        local copy = new_window(claude.buf)
+        state.current_tab = 1
+        state.current_win = 1
+        reload_snacks()
+
+        assert.is_nil(adopted_window())
+
+        snacks_provider.open("claude", {}, config, true)
+
+        assert.are_not.equal(copy, state.current_win)
+        assert.are.equal(1, state.windows[state.current_win].tab)
+        assert.are.equal(claude.buf, state.windows[state.current_win].buf)
+      end)
+
+      -- A split that an older version re-created has no marker.
+      it("takes a window of the current tab that Snacks did not mark", function()
+        state.windows[real] = nil
+        local unmarked = new_window(claude.buf)
+        reload_snacks()
+
+        assert.are.equal(unmarked, adopted_window())
+      end)
     end)
 
-    -- A window of another tab is not where this entry shows Claude: the open shows it in the current tab.
-    it("tracks no window when only another tab shows the terminal", function()
-      snacks_provider.open("claude", {}, config, true)
+    -- A map without the config would turn on a key that the user turned off, and Snacks never removes a map. So an
+    -- entry without a config (get_active_bufnr, which selection tracking calls on a cursor move) maps nothing.
+    it("maps no key when the entry has no config", function()
+      local configured = vim.tbl_deep_extend("force", config, { snacks_win_opts = { keys = { term_normal = false } } })
+      snacks_provider.open("claude", {}, configured, true)
       local claude = started[1]
-      state.current_tab = 2
       reload_snacks()
 
       assert.are.equal(claude.buf, snacks_provider.get_active_bufnr())
-      assert.is_nil(snacks_provider._get_terminal_for_test().win)
 
-      snacks_provider.open("claude", {}, config, true)
-
-      assert.are.equal(2, state.windows[snacks_provider._get_terminal_for_test().win].tab)
-      assert.are.equal(1, #started)
+      assert.are.equal(claude, state.buffers[claude.buf].mapped_by)
+      assert.is_false(state.buffers[claude.buf].mapped_keys.term_normal)
     end)
   end)
 

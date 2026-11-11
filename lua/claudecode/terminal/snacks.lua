@@ -509,20 +509,26 @@ local function find_backdrop(win, buf)
   }
 end
 
----The window of the current tab that shows the buffer, for the first look of an adoption. A diff tab can show a copy of
----the terminal, and a window of another tab is not where this entry shows Claude. Later entries keep the window that the
----instance tracks, as an instance that `snacks` started does, so a hide and a show never mistake a copy for the
----terminal's window.
+---The window that an adoption takes for the terminal's: a window that shows the buffer and that Snacks made for it (it
+---carries the `snacks_win` marker, which a window shown by `nvim_win_set_buf` does not, such as the copy that a diff tab
+---shows). A marked window of the current tab comes first, then a marked one of another tab (as an instance that
+---`snacks` started tracks the window that it showed, in whichever tab), then an unmarked one of the current tab (a split
+---that an older version re-created). An unmarked window of another tab is a copy and counts for nothing. Later entries
+---keep the window that the instance tracks, so a hide and a show never mistake a copy for the terminal's window.
 ---@param buf number
 ---@return number|nil win
 local function find_window(buf)
   local tab = vim.api.nvim_get_current_tabpage()
+  local best, best_rank
   for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-    if vim.api.nvim_win_get_tabpage(win) == tab then
-      return win
+    local here = vim.api.nvim_win_get_tabpage(win) == tab
+    local marked = vim.w[win].snacks_win ~= nil
+    local rank = (marked and here and 1) or (marked and 2) or (here and 3) or nil
+    if rank and (not best_rank or rank < best_rank) then
+      best, best_rank = win, rank
     end
   end
-  return nil
+  return best
 end
 
 ---The options of the Snacks window that wraps an adopted terminal. The window options are what the terminal started
@@ -557,7 +563,7 @@ end
 ---So this wraps the buffer in a new Snacks window with the window options that the terminal started with, and shows no
 ---window of its own. A split or a float then comes back the way it started. The keys of the buffer close over the
 ---instance that started the Claude, and a hide or a show on the wrapper would leave that one with a stale window, so
----the wrapper maps its own keys over them.
+---the wrapper maps its own keys over them, once an entry brings the config that has the user's keys.
 ---@param buf number
 ---@param config table|nil
 ---@return table instance
@@ -570,16 +576,20 @@ local function wrap_terminal(buf, config)
   instance.buf, instance.scratch_buf = buf, buf
   patch_instance(instance, adopted_config(buf, config))
   instance.adopted = true
-  -- Without a config the keys are the style's alone, and the entry that brings a config adds the user's.
   instance._cc.configless = config == nil
   instance.win = find_window(buf)
   instance.backdrop = find_backdrop(instance.win, buf)
-  instance:map()
+  -- Only an entry with a config knows the user's keys, and only a hide or a show needs the maps of the wrapper. A map
+  -- without the config would turn on a key that the user turned off (Snacks never removes a map), so the entry that
+  -- brings a config maps them (upgrade_wrapper).
+  if config then
+    instance:map()
+  end
   return instance
 end
 
----Gives an adopted instance that an entry without a config wrapped the options that a config brings: the user's keys,
----and the window options of a terminal that an older version started.
+---Gives an adopted instance that an entry without a config wrapped the options that a config brings: the keys (the
+---style's and the user's, mapped now), and the window options of a terminal that an older version started.
 ---@param instance table
 ---@param config table
 local function upgrade_wrapper(instance, config)
