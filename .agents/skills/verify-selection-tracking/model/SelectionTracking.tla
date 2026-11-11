@@ -573,10 +573,15 @@ NoPhantomSelection == ~phantom
 (* Claude never gets a selection in the Claude terminal buffer. *)
 NoTerminalSelection == latest = None \/ latest.buf # Term
 
-(* Once events settle, a selection you released stays with Claude while the cursor *)
-(* has not moved and its text is unchanged.                                        *)
+(* Once events settle in a file, a selection you released stays with Claude while the *)
+(* cursor has not moved and its text is unchanged.                                    *)
 HeldUntilMoved ==
   (Settled /\ InFile /\ mode = "n" /\ hold # None /\ ~holdLoose /\ hold.ver = ver[hold.buf]) => latest = hold
+
+(* Once events settle in the Claude terminal, Claude still holds the selection you released *)
+(* while its text is unchanged: going there to type the question must not lose it (#246).   *)
+HeldInTerminal ==
+  (Settled /\ buf = Term /\ hold # None /\ ~holdLoose /\ hold.ver = ver[hold.buf]) => latest = hold
 
 (* Once events settle in a file, Claude holds a released selection only while the cursor *)
 (* has not moved since you released it.                                                 *)
