@@ -2763,8 +2763,9 @@ describe("Range Selection Tests", function()
           assert.are.equal(0, #_G.vim._buf_listeners[1])
         end)
 
-        -- The debounce armed the demotion, and the buffer became the terminal before it fired. handle_selection_demotion
-        -- only knows the terminal that the provider registered, so it would take this buffer for an ordinary one.
+        -- The debounce armed the demotion, and the buffer became the terminal before it fired.
+        -- handle_selection_demotion only knows the terminal that the provider registered, so it would take this buffer
+        -- for an ordinary one.
         it("cancels a pending demotion when the buffer of the held selection became the Claude terminal", function()
           ticks = { [1] = 5, [2] = 5 }
           _G.vim.api.nvim_buf_get_changedtick = function(bufnr)
