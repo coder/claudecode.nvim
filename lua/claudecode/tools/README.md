@@ -50,7 +50,7 @@ Sources: [tools/init.lua:M.register_all], [tools/close_tab.lua:schema], [tools/o
 - `getDiagnostics` raises `-32000` when `vim.lsp`, `vim.diagnostic`, or `vim.diagnostic.get` is missing. It raises `-32001` "File not open" when no buffer exists for `uri` (`vim.fn.bufnr(path) == -1`). An unloaded buffer does not raise [tools/get_diagnostics.lua:handler]
 - `getLatestSelection` returns a `success=false` JSON result when no selection exists [tools/get_latest_selection.lua:handler]
 - With no selection, `getCurrentSelection` returns `success=false` only when the active buffer has no name. When the Claude terminal is current, it answers from the window the user came from (`winnr('#')`), or `success=false` when there is none. When nothing is tracked (`track_selection = false`), it reads the editor at call time: the Visual or Select selection, or the cursor position [tools/get_current_selection.lua:handler]
-- `close_tab` returns its error tables as values, not raised errors. `handle_invoke` therefore wraps them in `result`. It answers `TAB_CLOSED` when it closes the diff, when it keeps a diff the user accepted for another client, and when no diff has that name [tools/close_tab.lua:handler]
+- `close_tab` raises `-32602` when `tab_name` is missing, like the other tools. It answers `TAB_CLOSED` when it closes the diff, when it keeps a diff the user accepted for another client, and when no diff has that name [tools/close_tab.lua:handler]
 
 ## Side Effects
 
