@@ -1376,15 +1376,33 @@ local function end_diff_mode_if_alone(win)
   end)
 end
 
----The files that a window left in a diff and has not shown again, in a window variable so that it goes with the window
-local FILES_LEFT = "claudecode_files_left"
+---What a window variable records, per file buffer, so that it goes with the window: "left" when the window left the file
+---in a diff and waits for it, "shown" once the cleanup or the autocmd below has seen the window show the file
+local FILE_WINDOWS = "claudecode_file_windows"
+
+---@param win number
+---@param key string A buffer number
+---@param state string
+local function set_file_state(win, key, state)
+  local states = vim.w[win][FILE_WINDOWS] or {}
+  states[key] = state
+  vim.w[win][FILE_WINDOWS] = states
+end
+
+---@param win number
+---@param key string A buffer number
+---@return boolean seen True when the window showed the file at the last look
+local function file_seen_in_window(win, key)
+  local states = vim.w[win][FILE_WINDOWS]
+  return states ~= nil and states[key] == "shown"
+end
 
 ---@param key string A buffer number
 ---@return boolean waiting True when a window waits for the file
 local function window_waits_for_file(key)
   for _, win in ipairs(vim.api.nvim_list_wins()) do
-    local files = vim.w[win][FILES_LEFT]
-    if files and files[key] then
+    local states = vim.w[win][FILE_WINDOWS]
+    if states and states[key] == "left" then
       return true
     end
   end
@@ -1393,8 +1411,10 @@ end
 
 ---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and sets them again when the
 ---buffer enters it, so diff mode comes back after the diff has ended, in a window that left the file and in a new window
----for it. When the file enters a window while a window that left it waits, the window leaves diff mode if it is alone in
----it. One BufWinEnter autocmd per file serves all such windows and goes when none waits.
+---for it. The windows that show the file when the cleanup looks are marked "shown". When the file enters a window, that
+---window is one that shows the file and is not marked, wherever an earlier BufWinEnter handler left the focus, and it
+---leaves diff mode if it is alone in it. One BufWinEnter autocmd per file serves all such windows and goes when none
+---waits.
 ---@param diff_data table
 local function end_diff_mode_when_file_returns(diff_data)
   local buffer = diff_data.original_buffer
@@ -1402,11 +1422,12 @@ local function end_diff_mode_when_file_returns(diff_data)
     return
   end
   local key = tostring(buffer)
+  for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
+    set_file_state(win, key, "shown")
+  end
   for _, win in pairs({ proposal = diff_data.new_window, original = diff_data.target_window }) do
     if vim.api.nvim_win_is_valid(win) and not window_shows(win, buffer) then
-      local files = vim.w[win][FILES_LEFT] or {}
-      files[key] = true
-      vim.w[win][FILES_LEFT] = files
+      set_file_state(win, key, "left")
     end
   end
   local target = diff_data.target_window
@@ -1426,12 +1447,11 @@ local function end_diff_mode_when_file_returns(diff_data)
     group = group,
     buffer = buffer,
     callback = function()
-      local win = vim.api.nvim_get_current_win()
-      end_diff_mode_if_alone(win)
-      local files = vim.w[win][FILES_LEFT]
-      if files then
-        files[key] = nil
-        vim.w[win][FILES_LEFT] = next(files) ~= nil and files or nil
+      for _, win in ipairs(vim.fn.win_findbuf(buffer)) do
+        if not file_seen_in_window(win, key) then
+          end_diff_mode_if_alone(win)
+          set_file_state(win, key, "shown")
+        end
       end
       return not window_waits_for_file(key)
     end,
