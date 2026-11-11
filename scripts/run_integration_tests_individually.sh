@@ -41,27 +41,19 @@ run_test_file() {
   # Parse results from output
   local clean_output
   clean_output=$(sed 's/\x1b\[[0-9;]*m//g' "$temp_output")
-  local success_count
-  success_count=$(echo "$clean_output" | grep -c "^Success[[:space:]]*||" || true)
-  local failing_rows
-  failing_rows=$(echo "$clean_output" | grep -c -E "^(Fail|Error)[[:space:]]*\|\|" || true)
-  local failed_count
+  local success_count failed_count error_count
+  success_count=$(echo "$clean_output" | grep "^Success:" | tail -1 | awk '{print $2}' || true)
   failed_count=$(echo "$clean_output" | grep "^Failed :" | tail -1 | awk '{print $3}' || true)
-  local error_count
   error_count=$(echo "$clean_output" | grep "^Errors :" | tail -1 | awk '{print $3}' || true)
 
-  # Plenary prints its summary only after it has run the whole file. Without the counts, nvim stopped early,
-  # whatever its exit code says.
-  if [[ ! $failed_count =~ ^[0-9]+$ ]] || [[ ! $error_count =~ ^[0-9]+$ ]]; then
+  # Plenary prints its summary only after it has run the whole file. Without all three counts, nvim stopped early,
+  # whatever its exit code says. A count with a leading zero or text would stop bash in the arithmetic below.
+  local plain_count='^(0|[1-9][0-9]*)$'
+  if [[ ! $success_count =~ $plain_count ]] || [[ ! $failed_count =~ $plain_count ]] || [[ ! $error_count =~ $plain_count ]]; then
     echo "FAILED: $basename: no plenary summary (nvim exit $EXIT_CODE)"
+    success_count=0
     failed_count=0
     error_count=1
-  fi
-  if [[ $failing_rows -gt 0 ]]; then
-    echo "FAILED: $basename: $failing_rows failing test row(s)"
-    if [[ $failing_rows -gt $failed_count ]]; then
-      failed_count=$failing_rows
-    fi
   fi
 
   # Update totals
