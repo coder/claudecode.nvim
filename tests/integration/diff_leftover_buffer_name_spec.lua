@@ -934,88 +934,167 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
-  -- The rename is not a nesting point: a handler that runs a second openDiff from a BufFilePre or BufFilePost event
-  -- leaves the same outcome with a leftover buffer as without one.
-  local function run_in_event_order(event, layout, new_file, with_leftover)
-    local other = dir .. "/B.txt"
-    vim.fn.writefile({ "beta" }, other)
-    path = new_file and (dir .. "/missing.txt") or (dir .. "/reload.txt")
-    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/B.txt"))
-    local _, tools = load_plugin(layout)
-    if with_leftover then
-      assert.is_true(open_diff(tools, "alpha zero\n")._deferred)
-      close_old_diff_windows()
-      _, tools = load_plugin(layout)
+  local function open_recording(tools, key, file, contents, answers)
+    local call = tools.handle_invoke({ id = "reload_proposal_name" }, {
+      name = "openDiff",
+      arguments = { old_file_path = file, new_file_path = file, new_file_contents = contents, tab_name = tab_name },
+    })
+    answers[key] = answers[key] or {}
+    if call._deferred then
+      _G.claude_deferred_responses[tostring(call.coroutine)] = function(result)
+        table.insert(answers[key], result)
+      end
+    else
+      table.insert(answers[key], call.result or call.error)
     end
-    local diff = require("claudecode.diff")
+    return call
+  end
+
+  local function leftover_of_a_reloaded_diff(layout, file)
+    local _, tools = load_plugin(layout)
+    assert.is_true(open_diff(tools, "alpha zero\n", nil, file)._deferred)
+    local diff
+    diff, tools = load_plugin(layout)
+    return diff, tools
+  end
+
+  -- Accept the diff whose proposal shows `text`, if one is shown, then close what is still pending. Every call has an
+  -- answer then, and the answer of a call holds that call's own text.
+  local function settle(diff, text)
+    local shown
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      local lines = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+      if #vim.fn.win_findbuf(buf) > 0 and lines:find(text, 1, true) then
+        shown = buf
+      end
+    end
+    silence_notify(function()
+      if shown then
+        vim.api.nvim_set_current_win(vim.fn.win_findbuf(shown)[1])
+        diff.accept_current_diff()
+      end
+      diff.close_pending_diffs("spec")
+      diff.close_saved_diffs("spec")
+    end)
+  end
+
+  local function assert_answered_once_with_own_text(answers, texts)
+    for key, own in pairs(texts) do
+      assert.equal(1, #answers[key], "the call " .. key .. " is answered once")
+      local content = answers[key][1].content
+      if content and content[1] and content[1].text == "FILE_SAVED" then
+        assert.equal(own, content[2].text, "the call " .. key .. " gets its own text")
+      end
+    end
+  end
+
+  -- With a leftover buffer the first setup frees the name when its naming fails, and names the buffer again without
+  -- events. So no handler of BufFilePre, BufFilePost or BufWipeout can start a second openDiff between the two steps.
+  -- A second openDiff that starts later, inside the first setup, leaves the first one failing with E95, as it did
+  -- before leftover buffers were freed.
+  local function run_second_call(event, layout, first_file, second_file, filter, queue_in_handler)
+    local diff, tools = leftover_of_a_reloaded_diff(layout, first_file)
+    local answers = {}
     local nested
     local fired = false
-    local group = vim.api.nvim_create_augroup("LeftoverEventOrder", { clear = true })
+    local function open_second()
+      nested = open_recording(tools, "B", second_file, "B PROPOSAL\n", answers)
+    end
+    local group = vim.api.nvim_create_augroup("LeftoverSecondCall", { clear = true })
     vim.api.nvim_create_autocmd(event, {
       group = group,
-      callback = function()
-        if fired then
+      callback = function(args)
+        if fired or (filter and not filter(vim.api.nvim_buf_get_name(args.buf))) then
           return
         end
         fired = true
-        vim.schedule(function()
-          nested = open_diff(tools, "beta two\n", nil, other)
-        end)
-        vim.wait(300, function()
+        if queue_in_handler then
+          vim.schedule(open_second)
+        end
+        vim.wait(200, function()
           return nested ~= nil
         end, 10)
       end,
     })
     local first
     silence_notify(function()
-      first = open_diff(tools, "alpha one\n")
+      if not queue_in_handler then
+        vim.schedule(open_second)
+      end
+      first = open_recording(tools, "A", first_file, "A PROPOSAL\n", answers)
+      vim.wait(800, function()
+        return nested ~= nil or queue_in_handler
+      end, 10)
+      if nested == nil then
+        open_second()
+      end
     end)
     vim.api.nvim_del_augroup_by_id(group)
-    local function kind(call)
-      if call == nil then
-        return "not run"
+    return diff, answers, first, nested
+  end
+
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it(
+      "answers both calls, each with its own text, when a BufFilePost handler runs a second openDiff: " .. layout,
+      function()
+        local diff, answers = run_second_call("BufFilePost", layout, path, dir .. "/brand-new.txt")
+        settle(diff, "B PROPOSAL")
+        assert_answered_once_with_own_text(answers, { A = "A PROPOSAL\n", B = "B PROPOSAL\n" })
       end
-      return call._deferred and "deferred" or (vim.inspect(call.error):match("E%d+") or "error")
-    end
-    local active = diff._get_active_diffs()[tab_name]
-    local summary = table.concat({
-      "first " .. kind(first),
-      "second " .. kind(nested),
-      "tabs " .. #vim.api.nvim_list_tabpages(),
-      "active " .. (active and active.new_file_contents or "none"),
-    }, ", ")
-    return summary
-  end
+    )
 
-  local function reset_editor()
-    pcall(function()
-      require("claudecode.diff")._cleanup_all_active_diffs("test reset")
-    end)
-    vim.cmd("silent! tabonly!")
-    vim.cmd("silent! only!")
-    vim.cmd("silent! %bwipeout!")
-    _G.claude_deferred_responses = {}
-  end
-
-  for _, event in ipairs({ "BufFilePost", "BufFilePre" }) do
-    for _, layout in ipairs({ "vertical", "unified" }) do
-      for _, new_file in ipairs({ false, true }) do
-        it(
-          "makes the second openDiff of a "
-            .. event
-            .. " handler end as it does without a leftover buffer: "
-            .. layout
-            .. (new_file and ", new file" or ", existing file"),
-          function()
-            local control = run_in_event_order(event, layout, new_file, false)
-            reset_editor()
-            local leftover = run_in_event_order(event, layout, new_file, true)
-
-            assert.equal(control, leftover)
-          end
+    it(
+      "answers both calls, each with its own text, when a BufWipeout handler runs a second openDiff: " .. layout,
+      function()
+        vim.fn.mkdir(dir .. "/a", "p")
+        vim.fn.mkdir(dir .. "/b", "p")
+        vim.fn.writefile({ "return 'b'" }, dir .. "/b/util.lua")
+        local diff, answers = run_second_call(
+          "BufWipeout",
+          layout,
+          dir .. "/a/util.lua",
+          dir .. "/b/util.lua",
+          function(name)
+            return name:find(tab_name, 1, true) ~= nil
+          end,
+          true
         )
+        settle(diff, "B PROPOSAL")
+        assert_answered_once_with_own_text(answers, { A = "A PROPOSAL\n", B = "B PROPOSAL\n" })
       end
-    end
+    )
+
+    it(
+      "answers both calls, each with its own text, when a handler runs a second openDiff after the first named its buffer: "
+        .. layout,
+      function()
+        local diff, answers = run_second_call("BufEnter", layout, path, dir .. "/brand-new.txt", function(name)
+          return name:find("(proposed)", 1, true) ~= nil or name:find("(unified diff)", 1, true) ~= nil
+        end)
+        settle(diff, "B PROPOSAL")
+        assert_answered_once_with_own_text(answers, { A = "A PROPOSAL\n", B = "B PROPOSAL\n" })
+      end
+    )
+  end
+
+  for _, event in ipairs({ "BufNew", "BufFilePre" }) do
+    it(
+      "answers both calls with E95 when a "
+        .. event
+        .. " handler runs a second openDiff before the first names its buffer",
+      function()
+        local diff, answers, first, nested = run_second_call(event, "vertical", path, path)
+
+        assert.is_nil(first._deferred)
+        assert.is_truthy(vim.inspect(first.error):find("E95", 1, true), vim.inspect(first.error))
+        assert.is_nil(nested._deferred)
+        assert.is_truthy(vim.inspect(nested.error):find("E95", 1, true), vim.inspect(nested.error))
+        assert.equal(1, #answers.A)
+        assert.equal(1, #answers.B)
+        assert.same({}, vim.tbl_keys(diff._get_active_diffs()))
+        assert.equal(1, #vim.api.nvim_list_tabpages())
+      end
+    )
   end
 
   local foreign_buffers = {

@@ -190,7 +190,7 @@ end
 local function cleanup_unregistered_inline_setup(tab_name, partial)
   local diff = require("claudecode.diff")
 
-  if diff._get_active_diffs()[tab_name] then
+  if diff._get_active_diffs()[tab_name] and not diff._setup_abandoned() then
     diff._cleanup_diff_state(tab_name, "setup failed")
     return
   end
@@ -294,7 +294,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
     error({ code = -32000, message = "Buffer creation failed", data = "Could not create inline diff buffer" })
   end
 
-  pcall(vim.api.nvim_buf_set_name, buf, tab_name .. " (unified diff)")
+  pcall(diff._name_diff_buffer, buf, tab_name .. " (unified diff)", "acwrite")
   vim.api.nvim_buf_set_option(buf, "buftype", "acwrite")
   vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
 
@@ -483,6 +483,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
     end
 
     diff._register_reject_when_hidden(tab_name, buf, autocmd_ids)
+
+    diff._abandon_for_second_setup(tab_name)
 
     diff._register_diff_state(tab_name, {
       old_file_path = params.old_file_path,

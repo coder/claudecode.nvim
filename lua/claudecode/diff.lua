@@ -659,6 +659,10 @@ local function choose_original_window(target_win, old_file_path, is_new_file, te
   end
 end
 
+---Defined with `active_diffs`, below.
+---@type fun(buf: integer, name: string, buftype: string)
+local name_diff_buffer
+
 ---Ensure the original window displays the proper buffer for the diff
 ---@param original_win NvimWin
 ---@param old_file_path string
@@ -675,7 +679,7 @@ local function load_original_buffer(original_win, old_file_path, is_new_file, ex
     end
 
     local ok, err = pcall(function()
-      vim.api.nvim_buf_set_name(empty_buffer, old_file_path .. " (NEW FILE)")
+      name_diff_buffer(empty_buffer, old_file_path .. " (NEW FILE)", "nofile")
       vim.api.nvim_buf_set_lines(empty_buffer, 0, -1, false, {})
       vim.api.nvim_buf_set_option(empty_buffer, "buftype", "nofile")
       vim.api.nvim_buf_set_option(empty_buffer, "modifiable", false)
@@ -1015,61 +1019,88 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----Key in `_G` that is set while a setup runs. A user handler that runs the event loop (vim.wait) inside a setup can
----start a second openDiff before the first one registers its diff, and the first setup can have named buffers by then
----that no active diff owns. The second one skips the rename and runs as it did without it. It is a global and not a
----module local because a plugin reload inside the setup gives the new module no memory of the running one.
----The rename also waits for a moment when nothing is live: a setup that finds an active diff, in any layout, runs as it
----did without it.
+---Key in `_G` of the table that the outermost setup sets while it runs. A user handler that runs the event loop
+---(vim.wait) inside a setup can start a second openDiff before the first one registers its diff, and a plugin reload
+---inside the setup gives the new module no memory of the running one, so the table lives in `_G`. Its fields: `depth`
+---counts the setups that run (a second one inside the first makes 2), `nested` says that a second one has started,
+---`recovered` says that the first one freed a leftover name, and `abandoned` says that it gave up its registration.
+---Neither the second setup nor the first one that has seen a second one frees a name: they run as they did before
+---leftover buffers were freed.
 local SETUP_RUNNING = "claudecode_diff_setup_running"
 
----Rename a buffer without BufFilePre and BufFilePost. A handler that runs the event loop in either one can start a
----second openDiff in the middle of the setup that renames. `noautocmd` sets no option, so no OptionSet fires either.
+---Rename a buffer without events. A handler of BufFilePre or BufFilePost that runs the event loop can start a second
+---openDiff between the rename of a leftover and the new naming, and the second one would take the free name.
+---`:noautocmd` sets 'eventignore' to `all` for the command, directly, so no OptionSet fires.
 ---@param buf integer
 ---@param name string
----@return boolean ok
-local function rename_without_events(buf, name)
-  return (pcall(vim.cmd, "noautocmd call nvim_buf_set_name(" .. buf .. ", " .. vim.fn.string(name) .. ")"))
+local function set_name_without_events(buf, name)
+  vim.cmd("noautocmd call nvim_buf_set_name(" .. buf .. ", " .. vim.fn.string(name) .. ")")
 end
 
----Rename the leftover buffers that hold the names a diff of `tab_name` is about to take, and unbind `tab_name` from
----every buffer that no active diff owns. A reload drops `active_diffs`, and Neovim refuses to delete a buffer from the
----command-line window (E11), so diff buffers can outlive their diff.
----Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
+---Whether a setup may free a leftover diff buffer: it is the outermost setup, no second setup has started inside it,
+---and no diff is active.
+---@return boolean
+local function may_free_leftover()
+  local setup = _G[SETUP_RUNNING]
+  return setup ~= nil and not setup.nested and next(active_diffs) == nil
+end
+
+---Unbind `tab_name` from every buffer. A reload drops `active_diffs`, and Neovim refuses to delete a buffer from the
+---command-line window (E11), so a diff buffer can outlive its diff, and `:ClaudeCodeDiffAccept` in its window would
+---answer a new diff of the same tab name with its old text.
 ---@param tab_name string
----@param old_file_path string
-local function rename_orphaned_diff_buffers(tab_name, old_file_path)
-  local owned = {}
-  for _, diff_data in pairs(active_diffs) do
-    if diff_data.new_buffer then
-      owned[diff_data.new_buffer] = true
-    end
-    if diff_data.original_buffer then
-      owned[diff_data.original_buffer] = true
-    end
-  end
+local function unbind_leftover_buffers(tab_name)
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if not owned[buf] and vim.b[buf].claudecode_diff_tab_name == tab_name then
+    if vim.b[buf].claudecode_diff_tab_name == tab_name then
       vim.b[buf].claudecode_diff_tab_name = nil
     end
   end
-  local orphan_names = {
-    { name = tab_name .. " (proposed)", buftype = "acwrite" },
-    { name = tab_name .. " (NEW FILE - proposed)", buftype = "acwrite" },
-    { name = tab_name .. " (unified diff)", buftype = "acwrite" },
-    { name = old_file_path .. " (NEW FILE)", buftype = "nofile" },
-  }
-  for _, orphan in ipairs(orphan_names) do
-    local full = vim.fn.fnamemodify(orphan.name, ":p")
-    local folder = vim.fn.resolve(vim.fn.fnamemodify(full, ":h"))
-    local stored = { [full] = true, [folder .. "/" .. vim.fn.fnamemodify(full, ":t")] = true }
-    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-      local name = vim.api.nvim_buf_get_name(buf)
-      if not owned[buf] and stored[name] and vim.bo[buf].buftype == orphan.buftype and not vim.bo[buf].buflisted then
-        rename_without_events(buf, name .. " (orphaned " .. buf .. ")")
-      end
+end
+
+---Name a diff buffer. When a leftover diff buffer holds the name, Neovim raises E95. If `may_free_leftover`, rename the
+---leftover to `<name> (orphaned <bufnr>)`, which keeps its window and its text, and name again. Both steps run without
+---events, because the name is free in between. A setup that did not free the name raises the E95 error as before.
+---Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
+---@param buf integer
+---@param name string
+---@param buftype string The 'buftype' of the leftover buffer that holds the name
+name_diff_buffer = function(buf, name, buftype)
+  local ok, err = pcall(vim.api.nvim_buf_set_name, buf, name)
+  if ok then
+    return
+  end
+  if not tostring(err):find("E95", 1, true) or not may_free_leftover() then
+    error(err, 0)
+  end
+  local full = vim.fn.fnamemodify(name, ":p")
+  local folder = vim.fn.resolve(vim.fn.fnamemodify(full, ":h"))
+  local stored = { [full] = true, [folder .. "/" .. vim.fn.fnamemodify(full, ":t")] = true }
+  for _, other in ipairs(vim.api.nvim_list_bufs()) do
+    local other_name = vim.api.nvim_buf_get_name(other)
+    if other ~= buf and stored[other_name] and vim.bo[other].buftype == buftype and not vim.bo[other].buflisted then
+      pcall(set_name_without_events, other, other_name .. " (orphaned " .. other .. ")")
     end
   end
+  set_name_without_events(buf, name)
+  _G[SETUP_RUNNING].recovered = true
+end
+
+---A setup that freed a leftover name only got as far as its registration because of that. If a second setup has
+---registered a diff under the tab name since, main would have failed the first one with E95 before the second one ran.
+---Fail it the same way, and leave the second diff alone: it is the one that main answers.
+---@param tab_name string
+function M._abandon_for_second_setup(tab_name)
+  local setup = _G[SETUP_RUNNING]
+  if setup and setup.depth == 1 and setup.recovered and active_diffs[tab_name] then
+    setup.abandoned = true
+    error("Vim:E95: Buffer with this name already exists", 0)
+  end
+end
+
+---@return boolean
+function M._setup_abandoned()
+  local setup = _G[SETUP_RUNNING]
+  return setup ~= nil and setup.abandoned
 end
 
 local diffs_registered = 0
@@ -1632,8 +1663,15 @@ function M._setup_blocking_diff(params, resolution_callback)
   local new_tab_handle = nil
   local original_tab_handle = nil
 
-  local nested_setup = _G[SETUP_RUNNING] == true
-  _G[SETUP_RUNNING] = true
+  local setup = _G[SETUP_RUNNING]
+  local nested_setup = setup ~= nil
+  if nested_setup then
+    setup.nested = true
+  else
+    setup = { depth = 0, nested = false, recovered = false, abandoned = false }
+    _G[SETUP_RUNNING] = setup
+  end
+  setup.depth = setup.depth + 1
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
@@ -1651,8 +1689,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    if not nested_setup and next(active_diffs) == nil then
-      rename_orphaned_diff_buffers(tab_name, params.old_file_path)
+    if may_free_leftover() then
+      unbind_leftover_buffers(tab_name)
     end
 
     -- Dispatch to unified diff if configured
@@ -1801,7 +1839,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     end
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
-    vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
+    name_diff_buffer(new_buffer, new_unique_name, "acwrite")
     local lines = vim.split(params.new_file_contents, "\n")
     -- Remove trailing empty line if content ended with \n
     if #lines > 0 and lines[#lines] == "" then
@@ -1828,6 +1866,8 @@ function M._setup_blocking_diff(params, resolution_callback)
     if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
       original_cursor_pos = vim.api.nvim_win_get_cursor(diff_info.target_window)
     end
+
+    M._abandon_for_second_setup(tab_name)
 
     M._register_diff_state(tab_name, {
       old_file_path = params.old_file_path,
@@ -1873,6 +1913,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       tab_number = created_new_tab and new_tab_handle or nil,
     })
   end) -- End of pcall
+  setup.depth = setup.depth - 1
   if not nested_setup then
     _G[SETUP_RUNNING] = nil
   end
@@ -1892,7 +1933,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     end
 
     -- Clean up any partial state that might have been created
-    if active_diffs[tab_name] then
+    if active_diffs[tab_name] and not setup.abandoned then
       M._cleanup_diff_state(tab_name, "setup failed")
     else
       -- Errored before the diff state was registered, so the state-based cleanup can't run. Close
@@ -2475,6 +2516,7 @@ M._is_buffer_dirty = is_buffer_dirty
 M._detect_filetype = detect_filetype
 M._get_autocmd_group = get_autocmd_group
 M._display_terminal_in_new_tab = display_terminal_in_new_tab
+M._name_diff_buffer = name_diff_buffer
 
 return M
 ---@alias NvimWin integer
