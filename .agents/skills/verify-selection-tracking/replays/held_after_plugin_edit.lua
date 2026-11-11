@@ -1,6 +1,8 @@
 -- NoDeletedText: a plugin (or a reload, or a command) changes the held text away from the cursor. TextChanged fires,
--- CursorMoved does not, so only the TextChanged handler can end the hold. Claude must not keep text the buffer no
--- longer has. Default delays.
+-- CursorMoved does not. The TextChanged handler ends the hold, and so does the buffer listener (on_lines fires for an
+-- edit of the current buffer too), so this probe also passes with the TextChanged call removed: it does not prove
+-- that guard on its own (see SKILL.md, "Read the result"). Claude must not keep text the buffer no longer has.
+-- Default delays.
 local driver = require("driver")
 driver.run({
   prepare = function()
