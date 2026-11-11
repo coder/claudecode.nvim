@@ -304,6 +304,45 @@ function findLineOutsideFences(lines, start, predicate) {
   return -1;
 }
 
+/**
+ * Throws when a code fence that never closes hides a section. `updateContent` drops everything after the
+ * Unreleased heading when no next section stands outside a fence. A fence that runs to the end of the text (it has
+ * no closer, or its closer is shorter, uses the other marker, or has text after it) swallows every older release, and
+ * the new changelog would silently lose them. A line that starts with `# ` or `## `, the runner's own section
+ * boundary, inside such a fence is the sign of that loss. A fence that closes, or one that holds no such line, keeps
+ * the old behavior: the draft is dropped and nothing else is lost.
+ */
+function assertNoSectionInUnclosedFence(lines) {
+  assert.ok(Array.isArray(lines), "lines must be an array");
+
+  let openFence = null;
+  let openedAt = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    const wasOpen = openFence !== null;
+    openFence = nextOpenFence(openFence, lines[i] ?? "");
+    if (!wasOpen && openFence !== null) {
+      openedAt = i;
+    }
+  }
+  if (openFence === null) {
+    return;
+  }
+  assert.notEqual(openedAt, -1, "an open fence has an opener");
+
+  const hiddenAt = lines.findIndex(
+    (line, i) => i > openedAt && NEXT_SECTION_PATTERN.test(line),
+  );
+  if (hiddenAt === -1) {
+    return;
+  }
+  const show = (line) => JSON.stringify(line.slice(0, 80));
+  throw new Error(
+    `The Unreleased section has a code fence that never closes. Line ${openedAt + 1} opens it (${show(lines[openedAt])}), ` +
+      `and line ${hiddenAt + 1} (${show(lines[hiddenAt])}) would start the next section. It stands inside the fence, so the updater would drop it and everything after it. ` +
+      "Close the fence: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs.",
+  );
+}
+
 function resolvePrettierBin(env = process.env, fileExists = existsSync) {
   if (env.PRETTIER_BIN !== undefined && env.PRETTIER_BIN !== "") {
     return env.PRETTIER_BIN;
@@ -364,6 +403,11 @@ class UnreleasedAwareChangelog {
         unreleasedIndex + 1,
         (line) => NEXT_SECTION_PATTERN.test(line),
       );
+      if (nextIndex === -1) {
+        // The draft is the last thing in the text, so nothing below the new entry survives. Make sure that no
+        // fence that never closes hid an older release.
+        assertNoSectionInUnclosedFence(lines);
+      }
       const rest = nextIndex === -1 ? "" : lines.slice(nextIndex).join("\n");
       return formatChangelogMarkdown(joinSections(head, entry, rest));
     }

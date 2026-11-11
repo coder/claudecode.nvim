@@ -5,6 +5,7 @@ const assert = require("node:assert/strict");
 const { execFile, execFileSync } = require("node:child_process");
 const {
   copyFileSync,
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -637,16 +638,20 @@ async function testFenceTracking() {
 /**
  * Runs `fn` with a formatter that prints its input, so a test sees the text that `updateContent` builds. prettier
  * rewrites some generated documents (it dedents a line that CommonMark reads as a paragraph continuation, for
- * example), and each prettier run takes far longer than the script.
+ * example), and each prettier run takes far longer than the script. `fn` gets a function that says whether the
+ * formatter has run, which is the last step before `updateContent` returns text.
  */
 function withIdentityFormatter(fn) {
   const directory = mkdtempSync(join(tmpdir(), "identity-formatter-"));
   const formatter = join(directory, "format.sh");
-  writeFileSync(formatter, "#!/bin/sh\ncat\n", { mode: 0o755 });
+  const ranMarker = join(directory, "ran");
+  writeFileSync(formatter, `#!/bin/sh\n: > '${ranMarker}'\ncat\n`, {
+    mode: 0o755,
+  });
   const previousFormatter = process.env.PRETTIER_BIN;
   process.env.PRETTIER_BIN = formatter;
   try {
-    return fn();
+    return fn(() => existsSync(ranMarker));
   } finally {
     if (previousFormatter === undefined) {
       delete process.env.PRETTIER_BIN;
@@ -794,6 +799,99 @@ async function testUnreleasedUpdaterFences() {
       `${JSON.stringify(inside)} holds two line endings`,
     );
   }
+}
+
+/**
+ * The error of `updateContent` for a fence that never closes. Lines are numbered from 1, and a line shows its first
+ * 80 code units.
+ */
+function refusal(openedAt, opener, hiddenAt, hidden) {
+  const show = (line) => JSON.stringify(line.slice(0, 80));
+  return (
+    `The Unreleased section has a code fence that never closes. Line ${openedAt} opens it (${show(opener)}), ` +
+    `and line ${hiddenAt} (${show(hidden)}) would start the next section. It stands inside the fence, so the updater would drop it and everything after it. ` +
+    "Close the fence: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs."
+  );
+}
+
+async function testUnreleasedDraftFenceGuard() {
+  const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
+  const update = (content) =>
+    new runner.UnreleasedAwareChangelog({
+      changelogEntry: entry,
+    }).updateContent(content);
+  const head = "# Changelog\n\n## [Unreleased]\n\n";
+  const previous = "\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
+  const entryOnly =
+    "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n";
+
+  // A draft fence that CommonMark does not close runs to the end of the text, so it hides every older release below
+  // it. The updater refuses, in each way that a fence stays open, under every line ending.
+  const stayOpen = [
+    ["a fence with no closer", "```text\nDraft\n", "```text"],
+    [
+      "a closer that is shorter than the opener",
+      "````text\nDraft\n```\n",
+      "````text",
+    ],
+    ["a closer of the other marker", "```text\nDraft\n~~~\n", "```text"],
+    ["a closer with text after it", "```text\nDraft\n``` done\n", "```text"],
+  ];
+  withIdentityFormatter((formatterRan) => {
+    for (const [name, draft, opener] of stayOpen) {
+      // The opener is on line 5. The older release heading is the first line that starts with `## [0.3.0]`.
+      const hiddenAt =
+        `${head}${draft}${previous}`
+          .split("\n")
+          .findIndex((line) => line.startsWith("## [0.3.0]")) + 1;
+      for (const ending of ["\n", "\r\n", "\r"]) {
+        assert.throws(
+          () => update(`${head}${draft}${previous}`.replace(/\n/g, ending)),
+          {
+            message: refusal(5, opener, hiddenAt, "## [0.3.0] - 2025-09-15"),
+          },
+          `${name}, ${JSON.stringify(ending)} endings`,
+        );
+      }
+    }
+    // The formatter is the last step before `updateContent` returns text, so a refusal wrote nothing. A text
+    // that is fine does reach it.
+    assert.equal(
+      formatterRan(),
+      false,
+      "a refusal never reaches the formatter",
+    );
+    update(`${head}Draft${previous}`);
+    assert.equal(
+      formatterRan(),
+      true,
+      "a text that is fine reaches the formatter",
+    );
+
+    // A text with no Unreleased heading keeps everything below the title, so an open fence loses nothing.
+    assert.equal(
+      update("# Changelog\n\n```text\n## [0.3.0] - 2025-09-15\n"),
+      "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n* Added x\n\n```text\n## [0.3.0] - 2025-09-15\n",
+      "an open fence outside the Unreleased section is not refused",
+    );
+  });
+
+  // Nothing older than the draft exists in these texts, or no line of the fence could start a section, so the
+  // updater drops the draft as before and nothing is lost.
+  for (const [name, draft] of [
+    ["a fence with no closer and no heading line", "```text\nDraft\n"],
+    ["an open fence that holds only a ### heading", "```md\n### Added\n"],
+    ["a closed fence that holds a heading line", "```md\n## Example\n```\n"],
+  ]) {
+    assert.equal(update(`${head}${draft}`), entryOnly, name);
+  }
+  // A line that starts with `# ` or `## ` inside an open fence could be an older release, so the updater cannot tell
+  // it from a comment in a shell snippet and refuses, even when the text holds nothing older.
+  assert.throws(
+    () => update(`${head}\`\`\`bash\n# install\nnpm i\n`),
+    { message: refusal(5, "```bash", 6, "# install") },
+    "an open fence that holds a `# ` line",
+  );
 }
 
 // A differential test against commonmark.js. The assertions above hold single examples, but a rule can also go wrong
@@ -1017,7 +1115,10 @@ function joinWithEndings(random, lines) {
   return text;
 }
 
-/** What commonmark.js says about `text`: the lines it sees, the lines inside a fenced code block, and the headings. */
+/**
+ * What commonmark.js says about `text`: the lines it sees, the lines inside a fenced code block, the headings, and the
+ * fenced code block that never closes (lines from 1), if any.
+ */
 function readWithCommonmark(text) {
   const lines = text.split(/\r\n|\r|\n/);
   // A final line ending ends the last line. It does not start another, empty one.
@@ -1026,6 +1127,7 @@ function readWithCommonmark(text) {
   }
   const fenced = new Set();
   const headings = [];
+  let openFence = null;
   const walker = new commonmark.Parser().parse(text).walker();
   for (let event = walker.next(); event; event = walker.next()) {
     const { entering, node } = event;
@@ -1037,6 +1139,11 @@ function readWithCommonmark(text) {
       for (let line = firstLine; line <= lastLine; line += 1) {
         fenced.add(line - 1);
       }
+      // A closed fence has an opener, its content lines, and a closer. One without a closer runs to the end.
+      const contentLines = (node.literal.match(/\n/g) ?? []).length;
+      if (lastLine - firstLine !== contentLines + 1) {
+        openFence = { first: firstLine, last: lastLine };
+      }
     }
     if (node.type === "heading") {
       let literal = "";
@@ -1046,7 +1153,7 @@ function readWithCommonmark(text) {
       headings.push({ level: node.level, line: firstLine - 1, text: literal });
     }
   }
-  return { lines, fenced, headings };
+  return { lines, fenced, headings, openFence };
 }
 
 /** A document for an assertion message: the seed and the index repeat it, so a long one is cut short. */
@@ -1194,7 +1301,14 @@ async function testFenceDifferential() {
 
   // The existing sections of a changelog stay headings. The formatter prints its input (see `withIdentityFormatter`).
   // The real formatter runs in the updater tests above.
-  withIdentityFormatter(() => checkUpdaterDocuments(random, coverage));
+  const refused = withIdentityFormatter(() =>
+    checkUpdaterDocuments(random, coverage),
+  );
+  // Both outcomes must occur, or the check would stop testing one of them.
+  assert.ok(
+    refused > 0 && refused < DIFFERENTIAL_UPDATER_DOCUMENTS,
+    `updater documents that updateContent refused: ${refused} of ${DIFFERENTIAL_UPDATER_DOCUMENTS}`,
+  );
 }
 
 function checkUpdaterDocuments(random, coverage) {
@@ -1202,6 +1316,7 @@ function checkUpdaterDocuments(random, coverage) {
   const updater = new runner.UnreleasedAwareChangelog({
     changelogEntry: entry,
   });
+  let refused = 0;
   for (let index = 0; index < DIFFERENTIAL_UPDATER_DOCUMENTS; index += 1) {
     const middle = generateLines(random, coverage);
     const text = joinWithEndings(random, [
@@ -1217,7 +1332,7 @@ function checkUpdaterDocuments(random, coverage) {
       "",
     ]);
     const where = `updater document ${index} of seed ${DIFFERENTIAL_SEED}: ${describeDocument(text)}`;
-    const { headings, lines } = readWithCommonmark(text);
+    const { headings, lines, openFence } = readWithCommonmark(text);
     const unreleased = headings.findIndex(
       (heading) => heading.level === 2 && heading.text === "[Unreleased]",
     );
@@ -1234,6 +1349,32 @@ function checkUpdaterDocuments(random, coverage) {
         heading.level <= 2 &&
         /^##? /.test(lines[heading.line]),
     );
+    // A fence that never closes below the Unreleased heading hides every section after it. When it holds a line that
+    // starts with `# ` or `## ` and no section stands outside a fence, `updateContent` refuses.
+    const hiddenAt =
+      openFence === null ||
+      next !== -1 ||
+      openFence.first - 1 <= headings[unreleased].line
+        ? -1
+        : lines.findIndex(
+            (line, i) => i >= openFence.first && /^##? /.test(line),
+          );
+    if (hiddenAt !== -1) {
+      assert.throws(
+        () => updater.updateContent(text),
+        {
+          message: refusal(
+            openFence.first,
+            lines[openFence.first - 1],
+            hiddenAt + 1,
+            lines[hiddenAt],
+          ),
+        },
+        `refusal in ${where}`,
+      );
+      refused += 1;
+      continue;
+    }
     const expected = [
       ...headings.slice(0, unreleased + 1),
       { level: 2, text: "[0.4.0] - 2026-06-15" },
@@ -1248,6 +1389,7 @@ function checkUpdaterDocuments(random, coverage) {
       `headings after updateContent in ${where}`,
     );
   }
+  return refused;
 }
 
 function testPullRequestOutputs() {
@@ -1463,6 +1605,7 @@ async function main() {
   await testUnreleasedUpdater();
   await testFenceTracking();
   await testUnreleasedUpdaterFences();
+  await testUnreleasedDraftFenceGuard();
   await testFenceDifferential();
   testPullRequestOutputs();
   await testInternalCommitSkipsCommunique();
