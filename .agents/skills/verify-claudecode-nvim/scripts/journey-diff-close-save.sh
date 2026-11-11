@@ -9,7 +9,15 @@
 # `PASS` or `FAIL: <count> of <total> checks failed` last. Evidence lands in $OUT as diff-close-save-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-: "${VCN_STATE:?export VCN_STATE and OUT, the two values launch printed}" "${OUT:?export VCN_STATE and OUT, the two values launch printed}"
+# OUT and WORK come from the run itself, so the evidence of a journey cannot land in the dir of another run. doctor
+# prints them on its `paths:` line, and a doctor that fails still prints it.
+: "${VCN_STATE:?export VCN_STATE, the value launch printed}"
+run_paths=$({ "$V" doctor || true; } | sed -n 's/^paths: //p')
+OUT=$(sed -n 's/.* OUT=\(.*\) WORK=.*/\1/p' <<<"$run_paths")
+[[ -n $OUT ]] || {
+  echo "FAIL: $V doctor printed no paths line for VCN_STATE=$VCN_STATE" >&2
+  exit 1
+}
 WORK=$VCN_STATE/work
 target=${1:-existing}
 [[ $target == existing || $target == new ]] || {

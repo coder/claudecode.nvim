@@ -697,6 +697,7 @@ setsid_resolved_case() {
 # setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it.
 bare_tools_case() {
   local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])' form
+  local strip_re='(JQ_BIN|SETSID_BIN)=\$\(bin (jq|setsid)\)'
   local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
   while IFS= read -r site; do
     for form in "" /usr/bin/ ./; do
@@ -707,7 +708,8 @@ bare_tools_case() {
     sites=$((sites + 1))
   done < <(grep -E '"\$(JQ_BIN|SETSID_BIN)"' "$V" | grep -v 'env_line JQ_BIN')
   ((sites > 0)) || fail "$name" "vcn.sh has no call through \$JQ_BIN or \$SETSID_BIN to check the pattern against"
-  hits=$(grep -nE "$word_re" "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '=\$\(bin (jq|setsid)\)$' || true)
+  sed -E "s/$strip_re//" <<<'jq --version; JQ_BIN=$(bin jq)' | grep -qE "$word_re" || fail "$name" "a bare jq on a line that ends with the resolution would pass"
+  hits=$(grep -n '' "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | sed -E "s/$strip_re//" | grep -E "$word_re" || true)
   [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
   cases=$((cases + 1))
@@ -716,9 +718,9 @@ bare_tools_case() {
 # A caller that sources a run.env runs every line of it without the checks that load makes first. This proof holds the
 # sample strings, so it is the one other file left out.
 callers_case() {
-  local name=no-caller-source hits sample skill source_re='((^|[;&|(`[:space:]])source|(^|[;&|(])[[:space:]]*\.)[[:space:]]+[^#]*run\.env'
+  local name=no-caller-source hits sample skill source_re='(^|[;&|(`[:space:]])(source[[:space:]]+[^#]*|\.[[:space:]]+[^[:space:]]*)run\.env'
   skill=$(dirname "$V")/..
-  for sample in 'source "$VCN_STATE/run.env"' '. "$VCN_STATE/run.env"' 'export VCN_STATE=x; source "$VCN_STATE/run.env"; V=y' 'To watch, run `source "$VCN_STATE/run.env"; agent-tty` in a terminal.'; do
+  for sample in 'source "$VCN_STATE/run.env"' '. "$VCN_STATE/run.env"' 'export VCN_STATE=x; source "$VCN_STATE/run.env"; V=y' 'To watch, run `source "$VCN_STATE/run.env"; agent-tty` in a terminal.' 'if true; then . "$VCN_STATE/run.env"; fi' 'run `. "$VCN_STATE/run.env"` first'; do
     grep -qE "$source_re" <<<"$sample" || fail "$name" "the pattern misses a known source of run.env: $sample"
   done
   hits=$(grep -rnE "$source_re" "$skill" --include='*.sh' --include='*.md' --exclude=vcn.sh --exclude=proof-agent-tty-resolution.sh || true)
