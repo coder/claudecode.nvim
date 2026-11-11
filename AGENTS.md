@@ -30,6 +30,10 @@
 - `openFile` write protection: rely only on buffer state that Neovim exposes, and on `new_file_buffers` (`lua/claudecode/tools/open_file.lua`), the one Lua record that stands in for an internal flag (BF_NEW). Do not add Lua-side tracking for another internal buffer flag Neovim has no API for, such as BF_NOTEDITED or BF_READERR. State that gap in `lua/claudecode/tools/README.md` instead.
 - Claude terminal float and diffs: the plugin does not store who hid the float, and it does not show the float again after a diff (a diff in its own tab still calls `ensure_visible` in its original tab when it closes, as before). A diff hides the float only after a live check that a window of the terminal is a float in the diff's own tab (`hide_terminal_float_for_diff` in `lua/claudecode/diff.lua`). The user reopens it with `:ClaudeCode` or `:ClaudeCodeFocus`. Do not add a record of which diff hid the float or a step that restores it: such a record went stale when the user moved or closed the float.
 
+## Code Shape
+
+- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Close such a window without `force`, so that Neovim refuses when unsaved work would be lost. Issue #528 has the cases.
+
 ## Testing Guidelines
 
 - Frameworks: Busted + Luassert; Plenary used where Neovim APIs are needed.
