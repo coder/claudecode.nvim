@@ -42,6 +42,11 @@ describe("openDiff in a new tab: mode", function()
       vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), _G.terminal_buf)
       _G.job = vim.fn.termopen({ "sleep", "60" })
       vim.cmd("wincmd p")
+      if opts.hide_original_terminal then
+        for _, win in ipairs(vim.fn.win_findbuf(_G.terminal_buf)) do
+          vim.api.nvim_win_close(win, true)
+        end
+      end
       package.loaded["claudecode.terminal"] = {
         get_active_terminal_bufnr = function()
           return _G.terminal_buf
@@ -168,6 +173,33 @@ describe("openDiff in a new tab: mode", function()
     vim.wait(1000, function()
       return vim.rpcrequest(chan, "nvim_get_mode").mode == "t"
     end, 50)
+  end
+
+  local function terminal_window_count()
+    return call("return #vim.fn.win_findbuf(_G.terminal_buf)")
+  end
+
+  -- Opens the terminal buffer in a new split of the original tab. That entry fires the handler too.
+  local function split_terminal_in_original_tab()
+    call([[
+      vim.api.nvim_set_current_tabpage(vim.api.nvim_list_tabpages()[1])
+      vim.cmd("sbuffer " .. _G.terminal_buf)
+    ]])
+  end
+
+  -- Leaves terminal mode as a user would, then moves to the original tab's editor window.
+  local function leave_terminal_for_editor_window()
+    vim.rpcrequest(chan, "nvim_input", "<C-\\><C-n>")
+    vim.wait(150)
+    call([[
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[1])) do
+        if vim.api.nvim_win_get_buf(win) ~= _G.terminal_buf then
+          vim.api.nvim_set_current_win(win)
+          return
+        end
+      end
+      error("the original tab shows no editor window")
+    ]])
   end
 
   local function shows_proposal(state)
@@ -298,6 +330,43 @@ describe("openDiff in a new tab: mode", function()
         assert.equal(1, state.tab)
         assert.equal("terminal", state.buftype)
         assert.equal("nt", state.mode)
+      end)
+
+      it("enters terminal mode when the swapped window was the only one that showed the terminal", function()
+        start_child({ layout = layout, hide_original_terminal = true })
+        open_diff("a.txt", "diff")
+        assert.equal(1, terminal_window_count(), "only the diff tab's window shows the terminal")
+        change_diff_tab_terminal_window("swap")
+        assert.equal(0, terminal_window_count(), "no window shows the terminal")
+
+        split_terminal_in_original_tab()
+        wait_for_terminal_mode()
+        local state = child_state()
+
+        assert.equal(1, state.tab)
+        assert.equal("terminal", state.buftype)
+        assert.equal("t", state.mode)
+      end)
+
+      it("enters terminal mode on every entry from the original tab, not only the first", function()
+        start_child({ layout = layout })
+        open_diff("a.txt", "diff")
+
+        enter_terminal_from_original_tab()
+        wait_for_terminal_mode()
+        assert.equal("t", child_state().mode)
+        leave_terminal_for_editor_window()
+        local between = child_state()
+        assert.equal("", between.buftype)
+        assert.equal("n", between.mode)
+
+        enter_terminal_from_original_tab()
+        wait_for_terminal_mode()
+        local state = child_state()
+
+        assert.equal(1, state.tab)
+        assert.equal("terminal", state.buftype)
+        assert.equal("t", state.mode)
       end)
     end)
   end
