@@ -107,6 +107,9 @@ command -v jq >/dev/null 2>&1 || {
 exec 8>&2 || exec 8>/dev/null
 # State that the cleanup reads. A signal before the first assignment finds it empty.
 WORK=""
+WORK_MADE=0  # 1 once this run's `mkdir` made WORK: the cleanup removes only a directory that it made
+MAKING=0     # 1 while the `mkdir` runs
+MKDIR_PID="" # the `mkdir` that makes WORK
 AGENT_HOME=""
 ATTY=(agent-tty)
 SID=""
@@ -226,6 +229,16 @@ atty_cleanup() {
 cleanup() {
   trap '' INT TERM HUP # a second signal must not cut the cleanup short
   local pid sid sock socks dir end entry stopped='' forget_stopped='' q_home q_work q_socks
+  # `mkdir` runs in its own process group, so a signal to the group did not cut it. It takes
+  # milliseconds. Wait for it (5 s at most): its exit status says whether this run made WORK.
+  if [[ "$MAKING" -eq 1 ]]; then
+    end=$((SECONDS + 5))
+    for pid in ${MKDIR_PID:-$(jobs -p)}; do
+      while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.05; done
+      ! kill -0 "$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+      if wait "$pid" 2>/dev/null; then WORK_MADE=1; fi
+    done
+  fi
   # A create that is still running makes a session whose ID this script has not read yet.
   # Give it about 5 s to finish, then stop it.
   if [[ -n "$CREATE_PID" ]]; then
@@ -296,7 +309,7 @@ cleanup() {
     warn "         Remove a session:   agent-tty --home $q_home destroy <session-id>"
     [[ -z "$q_socks" ]] || warn "         Its socket directory stays:$q_socks"
     warn "         When no session is left: agent-tty home forget $q_home; rm -rf $q_work${q_socks:+; rmdir$q_socks}"
-  elif [[ -n "$WORK" ]]; then
+  elif [[ -n "$WORK" && "$WORK_MADE" -eq 1 ]]; then
     rm -rf "$WORK"
   fi
   if [[ -n "$forget_stopped" ]]; then
@@ -310,15 +323,27 @@ trap cleanup EXIT
 trap 'exit 143' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
-# The cleanup removes WORK by its name, so the name exists before the directory does. A signal
-# to the process group that kills `mkdir` after it made the directory still leaves a directory
-# that the cleanup can find. The name holds this script's PID and two random numbers, and the
-# cleanup removes that exact path, never a pattern.
+# The name of WORK exists before the directory does, and `mkdir` runs in a process group of its
+# own (bash job control), so a signal to this script's process group cannot kill it after it made
+# the directory and before it returned. The cleanup waits for it and removes WORK only when its
+# exit status says that this run made the directory. A directory of another run with the same
+# name makes `mkdir` fail, and the cleanup leaves it alone. The name holds this script's PID and
+# two random numbers, and a name that exists is never used.
 WORK_PARENT="${TMPDIR:-/tmp}"
 WORK_PARENT="${WORK_PARENT%/}"
 for ((attempt = 0; attempt < 20; attempt++)); do
-  WORK="$WORK_PARENT/repro218.$$.$RANDOM$RANDOM"
-  mkdir -m 700 -- "$WORK" 2>/dev/null && break
+  candidate="$WORK_PARENT/repro218.$$.$RANDOM$RANDOM"
+  if [[ -e "$candidate" || -L "$candidate" ]]; then continue; fi
+  WORK="$candidate"
+  MAKING=1
+  set -m
+  mkdir -m 700 -- "$WORK" 2>/dev/null </dev/null &
+  MKDIR_PID=$!
+  set +m
+  if wait "$MKDIR_PID"; then WORK_MADE=1; fi
+  MKDIR_PID=""
+  MAKING=0
+  [[ "$WORK_MADE" -eq 0 ]] || break
   WORK=""
 done
 if [[ -z "$WORK" ]]; then
