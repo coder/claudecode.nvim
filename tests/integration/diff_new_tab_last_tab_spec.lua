@@ -68,6 +68,32 @@ describe("a diff in a new tab that stays open when Claude closes it", function()
           assert.is_true(child.call([[return vim.api.nvim_get_current_win() == _G.user_win]]))
           assert.equal("n", state.mode)
         end)
+
+        it(
+          "drops the terminal's handler when the user closed every other window, so the terminal cannot close",
+          function()
+            child.start({ layout = layout, show_terminal_again = true })
+            child.open_diff("a.txt", "first diff")
+            child.focus_terminal_in_tab()
+            child.leave_terminal_mode()
+            child.close_first_tab()
+            child.call([[
+            for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+              if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) ~= _G.terminal_buf then
+                vim.api.nvim_win_close(win, true)
+              end
+            end
+          ]])
+            assert.equal(1, child.leftovers().windows)
+            assert.equal(1, child.leftovers().handlers)
+
+            child.close_diff("first diff")
+            child.state()
+
+            assert.equal(0, child.leftovers().handlers)
+            assert.is_true(child.leftovers().job_running)
+          end
+        )
       end
     )
   end
