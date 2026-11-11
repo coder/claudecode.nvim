@@ -1,0 +1,8 @@
+#!/bin/sh
+# Stub for the Claude CLI, first on PATH in every test. It idles like the CLI, for 30 seconds at most, so a job that
+# no test stops still ends.
+if [ "${1:-}" = "--version" ]; then
+  echo "claude-stub (claudecode.nvim tests)"
+  exit 0
+fi
+exec sleep 30

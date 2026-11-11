@@ -39,6 +39,7 @@ claudecode.nvim/
 │   ├── unit/                # Unit tests
 │   ├── component/           # Component tests
 │   ├── integration/         # Integration tests
+│   ├── bin/                 # Stub claude CLI, first on PATH in every test
 │   └── mocks/               # Test mocks
 ├── README.md                # User documentation
 ├── ARCHITECTURE.md          # Architecture documentation
@@ -105,7 +106,9 @@ mise run check
 mise run format
 ```
 
-Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua` reports each `pairs()` loop that registers a test, in a spec file or another file under `tests/`, in a coroutine that the loop resumes, or in a function that the loop calls. The first test that each loop registers runs and then fails with the report, and busted counts it as a failure. A test that also fails for its own reason keeps that failure, after the report. The rest of the spec still registers and runs. A `describe` or `pending` in such a loop fails the run through a separate error instead. `.busted` in the repository root loads the helper when busted starts there, as `mise run test` does. From another directory, pass `--helper=<repo>/tests/helpers/test_order.lua`.
+Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua` reports each `pairs()` loop that registers a test, in a spec file or another file under `tests/`, in a coroutine that the loop resumes, or in a function that the loop calls. The first test that each loop registers runs and then fails with the report, and busted counts it as a failure. A test that also fails for its own reason keeps that failure, after the report. The rest of the spec still registers and runs. A `describe` or `pending` in such a loop fails the run through a separate error instead. `.busted` in the repository root loads `tests/helpers/busted_helper.lua`, which loads that helper, when busted starts there, as `mise run test` does. From another directory, pass `--helper=<repo>/tests/helpers/busted_helper.lua`.
+
+A test never starts the Claude CLI that is installed on the host. `tests/bin/claude` is a stub that idles, and its directory is first on `PATH` in every Neovim that starts with `tests/minimal_init.lua` (the integration runner, `scripts/run_integration_tests_individually.sh`) and in busted (`tests/helpers/busted_helper.lua` sets it). A bare `claude` in a spec, or in the plugin code that a spec reaches, runs the stub. `tests/unit/claude_stub_spec.lua` and `tests/integration/claude_stub_spec.lua` fail when `claude` resolves to anything else. They do not cover a spec that sets a `terminal_cmd` with an absolute path to the real CLI, so use the bare name or a stub of your own. To check a change with `strace`, run the suite under `strace -f -e trace=execve` and look for an exec of a `claude` outside `tests/bin`.
 
 A unit test that writes files writes them in a folder from `tests/helpers/temp_dir.lua` (`temp_dir.new()` in `setup`, `temp_dir.remove(dir)` in `teardown`), not at a fixed path under `/tmp`. Every test run on a host shares `/tmp`, so two suites that run at once would overwrite and delete each other's files.
 
