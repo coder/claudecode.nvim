@@ -82,6 +82,7 @@ describe("the shape of a tools/call", function()
   for _, case in ipairs({
     { label = "a number as params", params = "5" },
     { label = "a boolean as params", params = "true" },
+    { label = "false as params", params = "false" },
     { label = "a string as params", params = '"x"' },
     { label = "a list as params", params = "[1]" },
     { label = "an empty list as params", params = "[]" },

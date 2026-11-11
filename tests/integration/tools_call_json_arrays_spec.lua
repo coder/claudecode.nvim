@@ -56,6 +56,7 @@ describe("a tools/call with a JSON array or object", function()
   for _, case in ipairs({
     { label = "[]", fragment = ',"params":[]' },
     { label = "[1]", fragment = ',"params":[1]' },
+    { label = "false", fragment = ',"params":false' },
     { label = "no params", fragment = "" },
   }) do
     it("answers -32602 naming params for " .. case.label, function()
