@@ -191,6 +191,14 @@ describe("claudecode.utils.win_set_buf_in_split", function()
         assert.equal(USER_BUF, shown[SPLIT_WIN])
       end)
 
+      it("repairs a buffer with 'bufhidden' set to hide, also while 'hidden' is not set", function()
+        hidden = false
+
+        utils.win_set_buf_in_split(SPLIT_WIN, TERM_BUF, swap_redirected_to_user_window)
+
+        assert.equal(TERM_BUF, shown[SPLIT_WIN])
+      end)
+
       it("repairs a buffer with an empty 'bufhidden' while 'hidden' is set", function()
         bufhidden = ""
 
