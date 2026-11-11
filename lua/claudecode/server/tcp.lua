@@ -508,8 +508,10 @@ end
 ---at the first read of its socket after a tick [judge_silence], if the loop ran that read within `interval * 1.5` of the
 ---tick. A block longer than that restarts the count (the next tick is a wake). Any bytes read from a client clear its
 ---stamp, so a Claude that sends anything, also a large message before its pong, is not dropped. A Claude that sends
----nothing is dropped after the third tick that follows its first unanswered ping: the half interval keeps timer jitter
----from moving the drop. A client that answered is also judged for a stall of its write queue [judge_stall].
+---nothing is dropped at the first read after its oldest ping is `interval * 2.5` old: 3 intervals after that ping when
+---the ticks come on time, and as early as 2.5 when a tick runs late by less than `interval * 1.5`. The half interval
+---keeps timer jitter from moving the drop. A client that answered is also judged for a stall of its write queue
+---[judge_stall].
 ---@param server TCPServer The server object
 ---@param interval number Ping interval in milliseconds (default: 30000)
 ---@return table? timer The timer handle, or nil if creation failed
