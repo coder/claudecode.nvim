@@ -806,80 +806,27 @@ local function buffer_named(name)
   end
 end
 
----Whether the buffer shows the file at `path`: true or false when the two files can be compared (same device and
----inode), nil when they cannot, for instance when `path` is gone. The name of the buffer can be spelled otherwise than
----`path`, so a name is not enough to say that a buffer is not the file.
----@param buf integer
----@param path string
----@return boolean?
-local function buffer_is_file(buf, path)
-  local ok, result = pcall(function()
-    local uv = vim.uv or vim.loop
-    local wanted = uv.fs_stat(path)
-    if not wanted then
-      return nil
-    end
-    local name = vim.api.nvim_buf_get_name(buf)
-    local actual = name ~= "" and uv.fs_stat(name) or nil
-    return actual ~= nil and actual.dev == wanted.dev and actual.ino == wanted.ino
-  end)
-  if ok then
-    return result
+---Remove what a legacy diff that failed halfway made of its own: the temp file, and the buffer that has the temp
+---file's name, unless the buffer has unsaved changes or a window shows it. This is all it does. It moves no focus,
+---turns no diff mode off and closes no window, so the windows that the diff had split stay, as they did before.
+---Neovim closes the windows that show a buffer when the buffer is wiped, so a buffer that a window shows stays, and a
+---window that an autocmd moved to the temp file stays with it.
+---Every step is protected, so an error in one cannot stop the next or replace the error that made the diff fail.
+---@param tmp_file string
+local function remove_failed_proposal(tmp_file)
+  local buf = buffer_named(tmp_file)
+  if buf and not vim.api.nvim_get_option_value("modified", { buf = buf }) and #vim.fn.win_findbuf(buf) == 0 then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
   end
+  pcall(cleanup_temp_file, tmp_file)
 end
 
----What a native diff changed, so a failure in a later step can undo it.
----@class NativeDiffProgress
----@field win_before integer the window that was current before the diff
----@field created_wins integer[] the windows that the diff split off, in the tab where it opens
----@field diffed_win integer? the window where this diff turned diff mode on, which is not one that already had it
----@field proposed_buf integer? the buffer of the proposal's temp file
-
----Open the original and the proposal side by side, in diff mode. Raises when a step fails: a swap file for the original
----(E325), a buffer that already has the proposal's name (E95), an autocmd that errors.
+---Open the original and the proposal side by side, in diff mode. Raises when a step fails: a swap file for the
+---original (E325), a buffer that already has the proposal's name (E95), an autocmd that errors.
 ---@param old_file_path string
 ---@param new_file_path string
 ---@param tmp_file string
----@param progress NativeDiffProgress
-local function show_native_diff(old_file_path, new_file_path, tmp_file, progress)
-  progress.win_before = vim.api.nvim_get_current_win()
-  progress.created_wins = {}
-
-  -- Split off a window, and remember it: a rollback closes these windows and no other.
-  local function split()
-    -- create_split() leaves the preview window first, and a WinEnter handler can open a window while it does. That
-    -- window is made before the split, so the focus moves first and the windows are listed after. Neovim 0.8 raises
-    -- when a handler moved the focus during the switch, and the diff goes on from the window that is current then.
-    pcall(leave_preview_window)
-    -- A handler can switch to another tab, so the windows of the tab that was current are listed by its handle.
-    local tab = vim.api.nvim_get_current_tabpage()
-    local before = {}
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      before[win] = true
-    end
-    -- A WinNew or WinEnter handler that raises does so after the window exists, so the window is recorded first.
-    local split_ok, split_failure = pcall(create_split)
-    -- A handler can also open or enter a window of its own, so the split is not always the current window. Window ids
-    -- rise in the order that windows are created, so the lowest new one is the split.
-    local created
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      if not before[win] and (not created or win < created) then
-        created = win
-      end
-    end
-    if created then
-      table.insert(progress.created_wins, created)
-    end
-    if not split_ok then
-      error(split_failure, 0)
-    end
-    -- The steps that follow work in the current window, so a handler that moved the cursor must not make them load
-    -- the original and the proposal into a window that is not the split.
-    if created and vim.api.nvim_get_current_win() ~= created then
-      vim.api.nvim_set_current_win(created)
-    end
-  end
-
+local function show_native_diff(old_file_path, new_file_path, tmp_file)
   local target_win = find_main_editor_window()
 
   if target_win then
@@ -891,39 +838,19 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
     local buftype = vim.api.nvim_buf_get_option(vim.api.nvim_win_get_buf(win), "buftype")
 
     if buftype == "terminal" or buftype == "nofile" or vim.api.nvim_win_get_option(win, "previewwindow") then
-      split()
+      create_split()
     end
   end
 
-  -- A window of the user's own diff can be reused, and a rollback must not end that diff. The question comes before
-  -- the edit: it copies the window options of another window that shows the file, diff mode among them.
-  local was_diff = vim.api.nvim_win_get_option(vim.api.nvim_get_current_win(), "diff")
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  local old_win = vim.api.nvim_get_current_win()
   vim.cmd("diffthis")
-  if not was_diff then
-    progress.diffed_win = old_win
-  end
-  split()
+  create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
-  -- The steps below work on the current buffer. A BufEnter or FileType handler can leave another one current without
-  -- raising, or wipe the proposal and leave a buffer of the user's. So the proposal is found by its name. When no
-  -- buffer has that name, the current buffer is the proposal only if it shows the temp file, or if Neovim cannot compare
-  -- the two files. The diff stops when the proposal is not current: the rename and the options must not reach a buffer
-  -- of the user's, and the rollback must wipe the proposal and nothing else.
-  local current_buf = vim.api.nvim_get_current_buf()
-  local proposed_buf = buffer_named(tmp_file)
-  if not proposed_buf and buffer_is_file(current_buf, tmp_file) ~= false then
-    proposed_buf = current_buf
-  end
-  progress.proposed_buf = proposed_buf
-  if proposed_buf ~= current_buf then
-    error("ClaudeCode: an autocmd left another buffer current while the proposal was opened", 0)
-  end
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
+  local proposed_buf = vim.api.nvim_get_current_buf()
   local old_filetype = detect_filetype(old_file_path)
   if old_filetype and old_filetype ~= "" then
     vim.api.nvim_set_option_value("filetype", old_filetype, { buf = proposed_buf })
@@ -954,41 +881,6 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file, progress
   })
 end
 
----Undo a native diff that failed halfway: the diff mode of the original, the buffer of the proposal, the windows that
----the diff split off, and the temp file. The cleanup autocmd of a finished diff is registered last, so nothing else
----would remove them. Every step is protected, so an autocmd that errors in one (an OptionSet handler, for instance)
----cannot stop the next one or replace the error that made the diff fail.
----@param tmp_file string
----@param progress NativeDiffProgress
-local function undo_native_diff(tmp_file, progress)
-  if progress.diffed_win and vim.api.nvim_win_is_valid(progress.diffed_win) then
-    pcall(vim.api.nvim_win_call, progress.diffed_win, function()
-      vim.cmd("diffoff")
-    end)
-  end
-  local function wipe(buf)
-    if buf and vim.api.nvim_buf_is_valid(buf) then
-      pcall(vim.api.nvim_buf_delete, buf, { force = true })
-    end
-  end
-  wipe(progress.proposed_buf)
-  -- The temp file's name can still belong to a buffer: the proposal, when an autocmd raised while `edit` loaded it and
-  -- the buffer was never recorded, or the unlisted buffer that Neovim keeps for the old name after the rename.
-  wipe(buffer_named(tmp_file))
-  -- Wiping the buffer keeps the window that is current, and a split that edit never filled is still there too. The
-  -- close is not forced: an autocmd can have put a buffer of the user's own in the split, and a forced close wipes
-  -- unsaved text when that buffer has 'bufhidden' set to wipe. Such a window stays.
-  for _, win in ipairs(progress.created_wins) do
-    if vim.api.nvim_win_is_valid(win) then
-      pcall(vim.api.nvim_win_close, win, false)
-    end
-  end
-  if progress.win_before and vim.api.nvim_win_is_valid(progress.win_before) then
-    pcall(vim.api.nvim_set_current_win, progress.win_before)
-  end
-  pcall(cleanup_temp_file, tmp_file)
-end
-
 ---Open diff using native Neovim functionality
 ---@param old_file_path string Path to the original file
 ---@param new_file_path string Path to the new file (used for naming)
@@ -1002,11 +894,10 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
   end
 
-  local progress = {}
-  local ok, failure = pcall(show_native_diff, old_file_path, new_file_path, tmp_file, progress)
+  local ok, failure = pcall(show_native_diff, old_file_path, new_file_path, tmp_file)
   if not ok then
-    -- Raise as before, after the diff has put back what it changed.
-    undo_native_diff(tmp_file, progress)
+    -- The cleanup autocmd of a finished diff is registered last, so nothing else would remove the temp file.
+    remove_failed_proposal(tmp_file)
     error(failure, 0)
   end
 
