@@ -34,7 +34,7 @@ local function handler(params, client)
 
   log.debug("close_tab", "close_tab handler called")
 
-  if not params.tab_name then
+  if type(params.tab_name) ~= "string" then
     log.error("close_tab", "Missing required parameter: tab_name")
     error({
       code = -32602, -- Invalid params

@@ -166,6 +166,14 @@ describe("Tool: get_diagnostics", function()
     assert_contains(err.data, "Diagnostics not available in this editor version/configuration.")
   end)
 
+  it("should check uri before it checks that diagnostics are available", function()
+    _G.vim.diagnostic.get = nil
+    local success, err = pcall(get_diagnostics_handler, { uri = true })
+    expect(success).to_be_false()
+    expect(err.code).to_be(-32602)
+    expect(err.data).to_be("Invalid parameter: uri (a string is required)")
+  end)
+
   it("should error if vim.diagnostic is not available", function()
     local old_diagnostic = _G.vim.diagnostic
     _G.vim.diagnostic = nil
@@ -235,4 +243,20 @@ describe("Tool: get_diagnostics", function()
     assert.spy(_G.vim.fn.bufnr).was_called_with("/unknown/file.lua")
     assert.spy(_G.vim.diagnostic.get).was_not_called()
   end)
+
+  for _, case in ipairs({
+    { label = "false", value = false },
+    { label = "true", value = true },
+    { label = "a number", value = 5 },
+    { label = "a table", value = { "file:///test/file.lua" } },
+  }) do
+    it("should error if uri is " .. case.label .. " and not a string", function()
+      local success, err = pcall(get_diagnostics_handler, { uri = case.value })
+      expect(success).to_be_false()
+      expect(err).to_be_table()
+      expect(err.code).to_be(-32602)
+      expect(err.data).to_be("Invalid parameter: uri (a string is required)")
+      assert.spy(_G.vim.diagnostic.get).was_not_called()
+    end)
+  end
 end)
