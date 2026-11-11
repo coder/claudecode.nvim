@@ -11,7 +11,7 @@
 #                     forget`, all through the setsid that mise names
 #   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
 #                     reaches every call site, which the two cases above do not)
-#   no-caller-source  no doc or script of the skill except vcn.sh and the proof scripts tells a caller to source a
+#   no-caller-source  no doc or script of the skill except vcn.sh (and this proof) tells a caller to source a
 #                     run.env
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
 #   load-symlink      a run.env that is a symlink (to a file this user owns) is refused, not sourced
@@ -711,14 +711,15 @@ bare_tools_case() {
   cases=$((cases + 1))
 }
 
-# A caller that sources a run.env runs every line of it without the symlink and owner checks that load makes first.
+# A caller that sources a run.env runs every line of it without the checks that load makes first. This proof holds the
+# sample strings, so it is the one other file left out.
 callers_case() {
   local name=no-caller-source hits sample skill source_re='((^|[;&|(`[:space:]])source|(^|[;&|(])[[:space:]]*\.)[[:space:]]+[^#]*run\.env'
   skill=$(dirname "$V")/..
   for sample in 'source "$VCN_STATE/run.env"' '. "$VCN_STATE/run.env"' 'export VCN_STATE=x; source "$VCN_STATE/run.env"; V=y' 'To watch, run `source "$VCN_STATE/run.env"; agent-tty` in a terminal.'; do
     grep -qE "$source_re" <<<"$sample" || fail "$name" "the pattern misses a known source of run.env: $sample"
   done
-  hits=$(grep -rnE "$source_re" "$skill" --include='*.sh' --include='*.md' --exclude=vcn.sh --exclude='proof-*.sh' || true)
+  hits=$(grep -rnE "$source_re" "$skill" --include='*.sh' --include='*.md' --exclude=vcn.sh --exclude=proof-agent-tty-resolution.sh || true)
   [[ -z $hits ]] || fail "$name" "a doc or script sources a run.env: $(tr '\n' ' ' <<<"$hits" | cut -c1-400)"
   echo "ok $name: only vcn.sh sources a run.env"
   cases=$((cases + 1))
