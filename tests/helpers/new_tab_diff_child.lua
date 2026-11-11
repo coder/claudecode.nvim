@@ -18,7 +18,8 @@ function M.new()
     return vim.rpcrequest(chan, "nvim_exec_lua", code, { ... })
   end
 
-  ---@param opts table layout, snacks_auto_insert, keep_terminal_focus, auto_insert, show_terminal_again
+  ---@param opts table layout, snacks_auto_insert, keep_terminal_focus, auto_insert, show_terminal_again,
+  ---hide_original_terminal
   function child.start(opts)
     chan = vim.fn.jobstart({
       vim.v.progpath,
@@ -47,6 +48,11 @@ function M.new()
       vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), _G.terminal_buf)
       _G.job = vim.fn.termopen({ "sleep", "60" })
       vim.cmd("wincmd p")
+      if opts.hide_original_terminal then
+        for _, win in ipairs(vim.fn.win_findbuf(_G.terminal_buf)) do
+          vim.api.nvim_win_close(win, true)
+        end
+      end
       package.loaded["claudecode.terminal"] = {
         get_active_terminal_bufnr = function()
           return _G.terminal_buf
@@ -92,6 +98,10 @@ function M.new()
     end
   end
 
+  function child.channel()
+    return chan
+  end
+
   function child.mode()
     return vim.rpcrequest(chan, "nvim_get_mode").mode
   end
@@ -105,6 +115,7 @@ function M.new()
         mode = vim.api.nvim_get_mode().mode,
         name = vim.api.nvim_buf_get_name(buf),
         buftype = vim.bo[buf].buftype,
+        tab = vim.fn.tabpagenr(),
         tabs = vim.fn.tabpagenr("$"),
       }
     ]])

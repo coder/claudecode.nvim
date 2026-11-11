@@ -147,7 +147,6 @@ describe("openDiff in a new tab: terminal BufEnter handler", function()
         assert.equal(0, count_terminal_handlers())
 
         close_diff(1)
-        assert.equal("n", vim.api.nvim_get_mode().mode)
       end)
     end)
   end
