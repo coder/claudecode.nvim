@@ -165,7 +165,7 @@ file lua/claudecode/server/tcp.lua 63cbb8922056279a
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
-file lua/claudecode/terminal.lua bf1805928c0380b2
+file lua/claudecode/terminal.lua 37d9b6e1f414123e
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
@@ -177,7 +177,7 @@ file lua/claudecode/terminal/owned.lua f64571d98221176c
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua b8d6527f74e61f61
+file lua/claudecode/terminal/snacks.lua 339e6215cb20f702
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua db1fc44f41159f9f
 == lua/claudecode/tools/close_all_diff_tabs.lua
