@@ -1,14 +1,14 @@
 if vim == nil or vim.fn.has("nvim") ~= 1 then
-  describe("openDiff after a plugin reload", function()
+  describe("openDiff with a leftover diff buffer under its name", function()
     pending("needs a real Neovim")
   end)
   return
 end
 
--- A reload (:Lazy reload) clears every claudecode module, so the new diff module has no active diff while the proposal
--- buffer of the old one is still loaded under its name. A split-layout openDiff for that tab name must open a diff, and
--- the old buffer keeps its windows and text under another name.
-describe("openDiff after a plugin reload", function()
+-- No active diff owns a proposal buffer that a reload (:Lazy reload) left loaded, or that a failed setup could not
+-- delete in the command-line window. A split-layout openDiff for that tab name must open a diff, and the leftover
+-- buffer keeps its windows and text under another name.
+describe("openDiff with a leftover diff buffer under its name", function()
   local dir
   local path
   local tab_name = "✻ [Claude Code] reload.txt ⧉"
@@ -85,6 +85,19 @@ describe("openDiff after a plugin reload", function()
     { name = "every claudecode module", reload = load_plugin },
   }
 
+  local function in_command_line_window(fn)
+    local failure
+    vim.api.nvim_create_autocmd("CmdwinEnter", {
+      once = true,
+      callback = function()
+        local ok, err = pcall(fn)
+        failure = not ok and err or nil
+      end,
+    })
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("q:", true, false, true), "x", false)
+    assert(not failure, failure)
+  end
+
   local function close_old_diff_windows()
     vim.cmd("diffoff!")
     vim.cmd("silent! only!")
@@ -147,6 +160,23 @@ describe("openDiff after a plugin reload", function()
       assert.is_not.equal(state.new_buffer, leftover[1])
     end)
   end
+
+  it("opens a diff for a tab name whose first setup failed in the command-line window", function()
+    local diff, tools = load_plugin()
+    local first
+    in_command_line_window(function()
+      first = open_diff(tools, "alpha one\n")
+    end)
+    assert.is_truthy(vim.inspect(first.error):find("E11", 1, true), vim.inspect(first))
+    assert.equal(0, vim.tbl_count(diff._get_active_diffs()))
+
+    local call = open_diff(tools, "alpha two\n")
+
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    local state = diff._get_active_diffs()[tab_name]
+    assert.same({ state.new_buffer }, buffers_named("(proposed)"))
+    assert.same({ "alpha two" }, vim.api.nvim_buf_get_lines(state.new_buffer, 0, -1, false))
+  end)
 
   it("does not let the old proposal window resolve the new diff", function()
     local _, tools = load_plugin()
