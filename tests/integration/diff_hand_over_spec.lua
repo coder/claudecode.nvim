@@ -271,7 +271,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
       vim.cmd("ClaudeCodeCloseAllDiffs")
 
       assert.equal("saved", diff._get_active_diffs()[tab].status)
-      local step = notes[#notes]:match("open it with :(%S+ %S+) %(answer the swap file prompt")
+      local step = notes[#notes]:match("open it with :(split .-) %(answer the swap file prompt")
       assert.is_not_nil(step, notes[#notes])
       assert.equal(diff_win, vim.api.nvim_get_current_win(), "the user is still in the diff window")
       swap_answered = true
