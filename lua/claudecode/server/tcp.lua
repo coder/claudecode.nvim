@@ -388,10 +388,15 @@ end
 ---and, with libuv 1.44 (bundled in Neovim 0.8), after a block in any callback. libuv 1.44 also runs the timers again at
 ---the end of a pass, so two ticks can run with no read between them. `vim.schedule` is no help either: Neovim runs its
 ---callbacks between two passes, so it can run one before the read.
+---The check judges only if its loop time is at most `gap` after the tick. After a longer block, a pong that Claude sent
+---can wait behind more unread data than the socket holds, and one poll does not reach it. The next tick finds the same
+---gap, takes it for a wake and starts over.
 ---@param server TCPServer The server object
 ---@param clients WebSocketClient[] The clients that the ping timer pinged in one tick
 ---@param limit number Age in milliseconds of the oldest unanswered ping at which a client is dropped
-local function drop_unanswered_after_read(server, clients, limit)
+---@param tick_time number Loop time in milliseconds at which the tick pinged them
+---@param gap number Time in milliseconds after the tick, above which the check judges nothing
+local function drop_unanswered_after_read(server, clients, limit, tick_time, gap)
   local check = vim.loop.new_check()
   if not check then
     server.on_error("Failed to create keepalive check")
@@ -402,6 +407,9 @@ local function drop_unanswered_after_read(server, clients, limit)
     check:stop()
     check:close()
     local now = vim.loop.now()
+    if now - tick_time > gap then
+      return
+    end
 
     for _, client in ipairs(clients) do
       local since = client.ping_unanswered_since
@@ -426,9 +434,10 @@ end
 
 ---Start a periodic ping task to keep connections alive.
 ---A tick pings every connected client and never drops one. A client whose oldest ping is `interval * 2.5` old is
----dropped at the first read of its socket after a tick [drop_unanswered_after_read]. A Claude that answers each ping
----within that time is never dropped, however the main loop blocks. A Claude that never answers is dropped after the
----third tick that follows its first unanswered ping: the half interval keeps timer jitter from moving the drop.
+---dropped at the first read of its socket after a tick [drop_unanswered_after_read], if the loop ran that read within
+---`interval * 1.5` of the tick. A block longer than that restarts the count (the next tick is a wake). A Claude that
+---never answers is dropped after the third tick that follows its first unanswered ping: the half interval keeps timer
+---jitter from moving the drop.
 ---@param server TCPServer The server object
 ---@param interval number Ping interval in milliseconds (default: 30000)
 ---@return table? timer The timer handle, or nil if creation failed
@@ -481,7 +490,7 @@ function M.start_ping_timer(server, interval)
     last_run = now
 
     if #pinged > 0 then
-      drop_unanswered_after_read(server, pinged, interval * 2.5)
+      drop_unanswered_after_read(server, pinged, interval * 2.5, vim.loop.now(), interval * 1.5)
     end
   end)
 
