@@ -18,7 +18,9 @@ M.defaults = {
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
   connection_wait_delay = 600, -- Milliseconds to wait after connection before sending queued @ mentions
-  connection_timeout = 10000, -- Maximum time queued @ mentions wait for Claude Code to connect (milliseconds)
+  -- Milliseconds Claude Code has to connect for queued @ mentions. Each one leaves with an error connection_timeout +
+  -- connection_wait_delay ms after its send, unless a ready Claude takes the queue first.
+  connection_timeout = 10000,
   queue_timeout = 5000, -- Unused, kept so that configs that set it stay valid (connection_timeout bounds the wait)
   diff_opts = {
     layout = "vertical",
