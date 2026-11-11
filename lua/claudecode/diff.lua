@@ -1015,9 +1015,10 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
----Tab names whose setup has started but has not registered its diff yet. A user handler that runs the event loop inside
----a setup lets a second openDiff for the same tab name start before that.
-local setups_in_flight = {}
+---True while a setup runs. A user handler that runs the event loop inside a setup lets a second openDiff start before
+---the first one has registered its diff. The first setup has named buffers by then that no active diff owns, so the
+---second one must not rename any buffer. It runs as a setup did before the rename existed.
+local setup_running = false
 
 ---Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take, and unbind `tab_name` from every
 ---buffer that no active diff owns. Such buffers are left by a reload, which drops `active_diffs`, or by a setup that
@@ -1066,7 +1067,6 @@ local diffs_registered = 0
 ---@param tab_name string Unique identifier for the diff
 ---@param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
-  setups_in_flight[tab_name] = nil
   diffs_registered = diffs_registered + 1
   diff_data.open_order = diffs_registered
   active_diffs[tab_name] = diff_data
@@ -1403,25 +1403,11 @@ function M._create_diff_view_from_window(
   local choice = choose_original_window(target_window, old_file_path, is_new_file, terminal_win_in_new_tab)
 
   local original_window
-  local split_window
   if choice.decision == "split" then
     vim.api.nvim_set_current_win(target_window)
-    local tab = vim.api.nvim_win_get_tabpage(target_window)
-    local cloned = vim.api.nvim_win_get_buf(target_window)
-    local before = {}
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      before[win] = true
-    end
     create_split()
     original_window = vim.api.nvim_get_current_win()
     target_window_created_by_plugin = true
-    -- The split's own window is the first new one that shows the clone. A user's WinNew handler can close it, or open
-    -- and enter more windows.
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
-      if not before[win] and vim.api.nvim_win_get_buf(win) == cloned and (not split_window or win < split_window) then
-        split_window = win
-      end
-    end
   else
     original_window = choice.original_win
   end
@@ -1436,15 +1422,7 @@ function M._create_diff_view_from_window(
       original_buffer_created_by_plugin = true
     end
     -- Load the original-side buffer into the chosen window
-    local loaded, loaded_or_error =
-      pcall(load_original_buffer, original_window, old_file_path, is_new_file, existing_buffer)
-    if not loaded then
-      if split_window and vim.api.nvim_win_is_valid(split_window) then
-        pcall(vim.api.nvim_win_close, split_window, true)
-      end
-      error(loaded_or_error, 0)
-    end
-    original_buffer = loaded_or_error
+    original_buffer = load_original_buffer(original_window, old_file_path, is_new_file, existing_buffer)
   end
 
   -- Set up the proposed buffer and finalize the diff layout
@@ -1630,14 +1608,6 @@ function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
   logger.debug("diff", "Setting up diff for:", params.old_file_path)
 
-  if setups_in_flight[tab_name] then
-    error({
-      code = -32000,
-      message = "Diff tab in use",
-      data = "tab_name " .. tab_name .. " is being set up by another openDiff",
-    })
-  end
-
   -- Hoisted so the error handler can clean them up if setup fails before the diff state is
   -- registered: otherwise the terminal-only fallback split and the proposed buffer are stranded
   -- (the state-based cleanup is gated on a registered diff). Issue #231.
@@ -1651,7 +1621,8 @@ function M._setup_blocking_diff(params, resolution_callback)
   local new_tab_handle = nil
   local original_tab_handle = nil
 
-  setups_in_flight[tab_name] = true
+  local nested_setup = setup_running
+  setup_running = true
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
@@ -1669,7 +1640,9 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    rename_orphaned_diff_buffers(tab_name, params.old_file_path)
+    if not nested_setup then
+      rename_orphaned_diff_buffers(tab_name, params.old_file_path)
+    end
 
     -- Dispatch to unified diff if configured
     if config and config.diff_opts and config.diff_opts.layout == "unified" then
@@ -1889,7 +1862,9 @@ function M._setup_blocking_diff(params, resolution_callback)
       tab_number = created_new_tab and new_tab_handle or nil,
     })
   end) -- End of pcall
-  setups_in_flight[tab_name] = nil
+  if not nested_setup then
+    setup_running = false
+  end
 
   -- Handle setup errors
   if not setup_success then

@@ -31,12 +31,12 @@ describe("openDiff with a leftover diff buffer under its name", function()
     return require("claudecode.diff"), tools
   end
 
-  local function open_diff(tools, file_contents, name)
+  local function open_diff(tools, file_contents, name, file)
     local call = tools.handle_invoke({ id = "reload_proposal_name" }, {
       name = "openDiff",
       arguments = {
-        old_file_path = path,
-        new_file_path = path,
+        old_file_path = file or path,
+        new_file_path = file or path,
         new_file_contents = file_contents,
         tab_name = name or tab_name,
       },
@@ -272,20 +272,24 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
-  it("leaves no extra window when the original buffer of a new file cannot take its name", function()
-    path = dir .. "/missing.txt"
-    local _, tools = load_plugin()
-    local foreign = vim.api.nvim_create_buf(true, false)
-    vim.api.nvim_buf_set_name(foreign, path .. " (NEW FILE)")
-    local windows = #vim.api.nvim_tabpage_list_wins(0)
-    local tabs = #vim.api.nvim_list_tabpages()
+  it(
+    "answers E95 and keeps a user's listed buffer when the original buffer of a new file cannot take its name",
+    function()
+      path = dir .. "/missing.txt"
+      local _, tools = load_plugin()
+      local foreign = vim.api.nvim_create_buf(true, false)
+      vim.api.nvim_buf_set_name(foreign, path .. " (NEW FILE)")
+      vim.api.nvim_buf_set_lines(foreign, 0, -1, false, { "the user's notes" })
+      local tabs = #vim.api.nvim_list_tabpages()
 
-    local call = open_diff(tools, "alpha\n")
+      local call = open_diff(tools, "alpha\n")
 
-    assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
-    assert.equal(tabs, #vim.api.nvim_list_tabpages())
-    assert.equal(windows, #vim.api.nvim_tabpage_list_wins(0), "the failed setup closes the windows it made")
-  end)
+      assert.is_nil(call._deferred)
+      assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+      assert.equal(tabs, #vim.api.nvim_list_tabpages())
+      assert.same({ "the user's notes" }, vim.api.nvim_buf_get_lines(foreign, 0, -1, false))
+    end
+  )
 
   it("keeps the name and the tab name of the proposal buffer of an active diff", function()
     local diff, tools = load_plugin()
@@ -319,7 +323,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert(ok, err)
   end
 
-  local function reject_nested_open(trigger, layout)
+  local function open_nested(trigger, layout, loud)
     local _, tools = load_plugin(layout)
     local suffix = layout == "unified" and "(unified diff)" or "(proposed)"
     local nested
@@ -343,9 +347,14 @@ describe("openDiff with a leftover diff buffer under its name", function()
       end,
     })
     local first
-    silence_notify(function()
+    local run = function()
       first = open_diff(tools, "alpha one\n")
-    end)
+    end
+    if loud then
+      run()
+    else
+      silence_notify(run)
+    end
     vim.api.nvim_del_augroup_by_id(group)
     return first, nested, suffix
   end
@@ -367,19 +376,18 @@ describe("openDiff with a leftover diff buffer under its name", function()
   for _, order in ipairs(nested_orders) do
     it_when(
       order.trigger ~= "FileType" or vim.fn.has("nvim-0.9") == 1,
-      "answers an openDiff for the same tab name that runs inside a setup and keeps that diff intact: "
+      "keeps the name and the tab name of a diff when a second openDiff for its tab name runs inside its setup: "
         .. order.trigger
         .. ", "
         .. order.layout,
       function()
-        local first, nested, suffix = reject_nested_open(order.trigger, order.layout)
+        local first, nested, suffix = open_nested(order.trigger, order.layout)
 
         assert.is_not_nil(nested, "the second openDiff ran inside the first setup")
-        assert.is_nil(nested._deferred)
-        assert.is_truthy(vim.inspect(nested.error):find("Diff tab in use", 1, true), vim.inspect(nested.error))
         assert.is_true(first._deferred, vim.inspect(first.error))
         local diff = require("claudecode.diff")
         local state = diff._get_active_diffs()[tab_name]
+        assert.equal("alpha one\n", state.new_file_contents, "the first diff is the registered one")
         assert.same({ state.new_buffer }, buffers_named(suffix), "the first diff keeps the name of its buffer")
         assert.equal(tab_name, vim.b[state.new_buffer].claudecode_diff_tab_name)
 
@@ -388,6 +396,67 @@ describe("openDiff with a leftover diff buffer under its name", function()
         assert.equal("saved", state.status, "the user's accept in the first diff's window resolves it")
       end
     )
+  end
+
+  it("opens the first diff when the default notification runs inside its setup, in the unified layout", function()
+    local first, nested = open_nested("BufEnter", "unified", true)
+
+    assert.is_not_nil(nested, "the second openDiff ran inside the first setup")
+    assert.is_true(first._deferred, vim.inspect(first.error))
+    assert.equal("alpha one\n", require("claudecode.diff")._get_active_diffs()[tab_name].new_file_contents)
+  end)
+
+  for _, trigger in ipairs({ "BufNew", "BufFilePre" }) do
+    for _, layout in ipairs({ "vertical", "unified" }) do
+      it(
+        "serves an openDiff that runs inside a setup before it names a buffer: " .. trigger .. ", " .. layout,
+        function()
+          local path_a = dir .. "/A.txt"
+          local path_b = dir .. "/B.txt"
+          vim.fn.writefile({ "alpha" }, path_a)
+          vim.fn.writefile({ "beta" }, path_b)
+          vim.fn.writefile({ "other" }, dir .. "/other.txt")
+          vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+          local diff, tools = load_plugin(layout)
+          local nested
+          local group = vim.api.nvim_create_augroup("LeftoverEarlyNestedOpen", { clear = true })
+          vim.api.nvim_create_autocmd("User", {
+            group = group,
+            pattern = "ClaudeCodeDiffOpened",
+            callback = function()
+              local state = diff._get_active_diffs()[tab_name]
+              if state and state.old_file_path == path_b then
+                diff.accept_current_diff()
+              end
+            end,
+          })
+          vim.api.nvim_create_autocmd(trigger, {
+            group = group,
+            once = true,
+            callback = function()
+              vim.schedule(function()
+                nested = open_diff(tools, "beta two\n", nil, path_b)
+              end)
+              vim.wait(500, function()
+                return nested ~= nil
+              end, 10)
+            end,
+          })
+
+          local first
+          silence_notify(function()
+            first = open_diff(tools, "alpha one\n", nil, path_a)
+          end)
+          vim.api.nvim_del_augroup_by_id(group)
+
+          assert.is_not_nil(nested, "the second openDiff ran inside the first setup")
+          assert.is_nil(nested.error, vim.inspect(nested.error))
+          assert.equal("FILE_SAVED", nested.result.content[1].text, "the second openDiff is served")
+          assert.equal("beta two\n", nested.result.content[2].text)
+          assert.is_true(first._deferred or first.error ~= nil or first.result ~= nil, "the first openDiff is answered")
+        end
+      )
+    end
   end
 
   it_when(
@@ -425,12 +494,33 @@ describe("openDiff with a leftover diff buffer under its name", function()
     end
   )
 
+  -- The diff of `path` splits the current window when that window shows another file.
+  local function show_another_file()
+    vim.fn.writefile({ "x" }, dir .. "/other.txt")
+    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+  end
+
+  local function unsaved_user_work(win)
+    local buf = vim.api.nvim_create_buf(true, false)
+    vim.api.nvim_win_set_buf(win, buf)
+    vim.bo[buf].bufhidden = "wipe"
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "UNSAVED USER WORK" })
+    return buf
+  end
+
+  local function assert_user_work_kept(buf)
+    assert.is_true(vim.api.nvim_buf_is_valid(buf), "the user's buffer stays")
+    assert.same({ "UNSAVED USER WORK" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+  end
+
+  -- A failed setup closes no window and wipes no buffer: a user's handler can own any window it finds, and the
+  -- buffer in it.
   for _, trigger in ipairs({ "edit_e37", "newfile_e95" }) do
     it(
-      "keeps a window that a user handler opened during the split when the original buffer fails: " .. trigger,
+      "closes no window when the original buffer fails while a user handler opened a window during the split: "
+        .. trigger,
       function()
-        vim.fn.writefile({ "x" }, dir .. "/other.txt")
-        vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+        show_another_file()
         local _, tools = load_plugin()
         if trigger == "newfile_e95" then
           path = dir .. "/missing.txt"
@@ -444,11 +534,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
             plugin_win = vim.api.nvim_get_current_win()
             vim.cmd("noautocmd belowright split")
             user_win = vim.api.nvim_get_current_win()
-            user_buf = vim.api.nvim_create_buf(true, false)
-            vim.api.nvim_buf_set_name(user_buf, dir .. "/user-work.txt")
-            vim.api.nvim_win_set_buf(user_win, user_buf)
-            vim.bo[user_buf].bufhidden = "wipe"
-            vim.api.nvim_buf_set_lines(user_buf, 0, -1, false, { "UNSAVED USER WORK" })
+            user_buf = unsaved_user_work(user_win)
           end,
         })
 
@@ -464,17 +550,15 @@ describe("openDiff with a leftover diff buffer under its name", function()
         )
         assert.is_true(vim.api.nvim_win_is_valid(start_win), "the window that the diff started from stays")
         assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
-        assert.is_true(vim.api.nvim_buf_is_valid(user_buf), "the user's buffer stays")
-        assert.same({ "UNSAVED USER WORK" }, vim.api.nvim_buf_get_lines(user_buf, 0, -1, false))
-        assert.is_false(vim.api.nvim_win_is_valid(plugin_win), "the window that the plugin split off closes")
+        assert.is_true(vim.api.nvim_win_is_valid(plugin_win), "the window that the split created stays")
+        assert_user_work_kept(user_buf)
       end
     )
   end
 
   it("keeps a user's window when its handler closed the window that the split created", function()
-    vim.fn.writefile({ "x" }, dir .. "/other.txt")
+    show_another_file()
     vim.fn.writefile({ "original" }, dir .. "/reload.txt")
-    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
     local _, tools = load_plugin()
     local user_win, user_buf
     vim.api.nvim_create_autocmd("WinNew", {
@@ -483,11 +567,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
         local plugin_win = vim.api.nvim_get_current_win()
         vim.cmd("noautocmd belowright split")
         user_win = vim.api.nvim_get_current_win()
-        user_buf = vim.api.nvim_create_buf(true, false)
-        vim.api.nvim_buf_set_name(user_buf, dir .. "/user-work.txt")
-        vim.api.nvim_win_set_buf(user_win, user_buf)
-        vim.bo[user_buf].bufhidden = "wipe"
-        vim.api.nvim_buf_set_lines(user_buf, 0, -1, false, { "UNSAVED USER WORK" })
+        user_buf = unsaved_user_work(user_win)
         vim.api.nvim_win_close(plugin_win, true)
       end,
     })
@@ -500,21 +580,58 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_nil(call._deferred)
     assert.is_truthy(vim.inspect(call.error):find("E37", 1, true), vim.inspect(call.error))
     assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
-    assert.same({ "UNSAVED USER WORK" }, vim.api.nvim_buf_get_lines(user_buf, 0, -1, false))
+    assert_user_work_kept(user_buf)
   end)
 
-  it("closes the split window when a handler raises after the original buffer loaded into it", function()
-    vim.fn.writefile({ "x" }, dir .. "/other.txt")
-    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+  it(
+    "keeps a user's window and its unsaved text when a handler closed the split's window and a later one raises",
+    function()
+      show_another_file()
+      local _, tools = load_plugin()
+      local plugin_win, user_win, user_buf
+      vim.api.nvim_create_autocmd("WinNew", {
+        once = true,
+        callback = function()
+          plugin_win = vim.api.nvim_get_current_win()
+          vim.cmd("noautocmd belowright split")
+          user_win = vim.api.nvim_get_current_win()
+          vim.api.nvim_win_close(plugin_win, true)
+        end,
+      })
+      vim.api.nvim_create_autocmd("BufEnter", {
+        pattern = path,
+        once = true,
+        callback = function()
+          user_buf = unsaved_user_work(user_win)
+          error("the user's handler refuses the file")
+        end,
+      })
+
+      local call
+      silence_notify(function()
+        call = open_diff(tools, "alpha\n")
+      end)
+
+      assert.is_nil(call._deferred)
+      assert.is_truthy(vim.inspect(call.error):find("refuses the file", 1, true), vim.inspect(call.error))
+      assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
+      assert_user_work_kept(user_buf)
+    end
+  )
+
+  it("keeps the unsaved text that a handler put into the split's window before it raised", function()
+    show_another_file()
     local _, tools = load_plugin()
+    local split_win, user_buf
     vim.api.nvim_create_autocmd("BufEnter", {
       pattern = path,
       once = true,
       callback = function()
+        split_win = vim.api.nvim_get_current_win()
+        user_buf = unsaved_user_work(split_win)
         error("the user's handler refuses the file")
       end,
     })
-    local windows = #vim.api.nvim_tabpage_list_wins(0)
 
     local call
     silence_notify(function()
@@ -523,12 +640,62 @@ describe("openDiff with a leftover diff buffer under its name", function()
 
     assert.is_nil(call._deferred)
     assert.is_truthy(vim.inspect(call.error):find("refuses the file", 1, true), vim.inspect(call.error))
-    assert.equal(windows, #vim.api.nvim_tabpage_list_wins(0), "the window that the split created closes")
+    assert.is_true(vim.api.nvim_win_is_valid(split_win), "the window that holds the user's text stays")
+    assert_user_work_kept(user_buf)
+  end)
+
+  it("closes no window when a handler raises after the original buffer loaded into the split", function()
+    show_another_file()
+    local _, tools = load_plugin()
+    local split_win
+    vim.api.nvim_create_autocmd("BufEnter", {
+      pattern = path,
+      once = true,
+      callback = function()
+        split_win = vim.api.nvim_get_current_win()
+        error("the user's handler refuses the file")
+      end,
+    })
+
+    local call
+    silence_notify(function()
+      call = open_diff(tools, "alpha\n")
+    end)
+
+    assert.is_nil(call._deferred)
+    assert.is_truthy(vim.inspect(call.error):find("refuses the file", 1, true), vim.inspect(call.error))
+    assert.is_true(vim.api.nvim_win_is_valid(split_win), "the window that the split created stays")
+  end)
+
+  it("keeps a window that shows the cloned buffer after a handler closed the split's window and split again", function()
+    show_another_file()
+    local _, tools = load_plugin()
+    path = dir .. "/missing.txt"
+    vim.api.nvim_buf_set_name(vim.api.nvim_create_buf(true, false), path .. " (NEW FILE)")
+    local cloned = vim.api.nvim_get_current_buf()
+    local user_win
+    vim.api.nvim_create_autocmd("WinNew", {
+      once = true,
+      callback = function()
+        vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+        vim.cmd("noautocmd belowright split")
+        user_win = vim.api.nvim_get_current_win()
+      end,
+    })
+
+    local call
+    silence_notify(function()
+      call = open_diff(tools, "proposed\n")
+    end)
+
+    assert.is_nil(call._deferred)
+    assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
+    assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
+    assert.equal(cloned, vim.api.nvim_win_get_buf(user_win))
   end)
 
   it("keeps a window that a user handler opened on the cloned buffer during the split", function()
-    vim.fn.writefile({ "x" }, dir .. "/other.txt")
-    vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+    show_another_file()
     local _, tools = load_plugin()
     path = dir .. "/missing.txt"
     vim.api.nvim_buf_set_name(vim.api.nvim_create_buf(true, false), path .. " (NEW FILE)")
@@ -549,7 +716,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
 
     assert.is_truthy(vim.inspect(call.error):find("E95", 1, true), vim.inspect(call.error))
     assert.is_true(vim.api.nvim_win_is_valid(user_win), "the user's window stays")
-    assert.is_false(vim.api.nvim_win_is_valid(plugin_win), "the window that the split created closes")
+    assert.is_true(vim.api.nvim_win_is_valid(plugin_win), "the window that the split created stays")
   end)
 
   it("closes no window when the original buffer fails to load in a reused window", function()
