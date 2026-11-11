@@ -4,6 +4,11 @@
 #   mise-broken       mise's agent-tty is the broken one: launch runs the PATH one that passes
 #   mise-only         the only good agent-tty is the one `mise which` names: launch runs it
 #   path-over-mise    a different good agent-tty on PATH and in mise: the PATH one wins
+#   jq-resolved       a failing jq on PATH and a working one that only `mise which jq` names: launch and its cleanup
+#                     run the jq that mise names
+#   setsid-resolved   a failing setsid on PATH and a working one that only `mise which setsid` names: a launch that
+#                     fails by itself still saves its failure screen and the final evidence, and runs `agent-tty home
+#                     forget`, all through the setsid that mise names
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
@@ -120,16 +125,36 @@ mise ERROR Version: 2026.10.25 linux-x64 (2026-10-31)
 ERRORS
 exit 1
 SHIM
-# The stand-in answers `mise which agent-tty` with $FAKE_MISE_ATT, and runs every other command from the directory the
-# proof started in, so a case can launch from another directory and still resolve nvim and node.
+# The stand-in answers `mise which agent-tty` with $FAKE_MISE_ATT, `mise which setsid` with $FAKE_MISE_SETSID and `mise
+# which jq` with $FAKE_MISE_JQ when those are set, and runs every other command from the directory the proof started in,
+# so a case can launch from another directory and still resolve nvim and node.
 cat >"$TMP/mise/mise" <<MISE
 #!/bin/sh
 if [ "\$1" = which ] && [ "\$2" = agent-tty ]; then
   [ -n "\${FAKE_MISE_ATT-}" ] && echo "\$FAKE_MISE_ATT" && exit 0
   exit 1
 fi
+if [ "\$1" = which ] && [ "\$2" = setsid ] && [ -n "\${FAKE_MISE_SETSID-}" ]; then
+  echo "\$FAKE_MISE_SETSID" && exit 0
+fi
+if [ "\$1" = which ] && [ "\$2" = jq ] && [ -n "\${FAKE_MISE_JQ-}" ]; then
+  echo "\$FAKE_MISE_JQ" && exit 0
+fi
 cd "$root" && exec "$real_mise" "\$@"
 MISE
+# A setsid and a jq that fail, to put first on PATH where only mise names a working one. logged/agent-tty records each
+# call's subcommand in $GATE/calls and runs the good agent-tty.
+mkdir "$TMP/bad-setsid" "$TMP/bad-jq" "$TMP/logged"
+for tool in setsid jq; do
+  printf '#!/bin/sh\necho "this %s must not run" >&2\nexit 1\n' "$tool" >"$TMP/bad-$tool/$tool"
+  chmod +x "$TMP/bad-$tool/$tool"
+done
+cat >"$TMP/logged/agent-tty" <<LOGGED
+#!/bin/sh
+printf '%s %s\\n' "\$3" "\$4" >>"\$GATE/calls"
+exec "$TMP/good/agent-tty" "\$@"
+LOGGED
+chmod +x "$TMP/logged/agent-tty"
 # The signal cases hold launch at a known point: in the `mktemp` that makes the state dir, in the `mkdir` that makes
 # the run's dirs, which runs before run.env exists, in the `rm` of the early teardown (while $GATE/hold-rm exists), or
 # in `agent-tty doctor` (the stand-in logs every call to $GATE/calls and answers all but doctor at once, and holds
@@ -292,6 +317,7 @@ launched_with skip-broken "$TMP/mise:$TMP/broken:$TMP/good:$base" "$TMP/good/age
 launched_with mise-broken "$TMP/mise:$TMP/good:$base" "$TMP/good/agent-tty" FAKE_MISE_ATT="$TMP/broken/agent-tty"
 launched_with mise-only "$TMP/mise:$base" "$TMP/good/agent-tty" FAKE_MISE_ATT="$TMP/good/agent-tty"
 launched_with path-over-mise "$good_path" "$TMP/good/agent-tty" FAKE_MISE_ATT="$TMP/good2/agent-tty"
+launched_with jq-resolved "$TMP/mise:$TMP/bad-jq:$TMP/good:$base" "$TMP/good/agent-tty" FAKE_MISE_JQ="$TMP/tools/jq"
 launched_with explicit "$TMP/mise:$TMP/broken:$base" "$good" VCN_AGENT_TTY="$good" FAKE_MISE_ATT="$TMP/broken/agent-tty"
 refused explicit-broken "$TMP/mise:$TMP/good:$base" "$TMP/broken/agent-tty: Error: Failed to load native module: pty.node" \
   VCN_AGENT_TTY="$TMP/broken/agent-tty"
@@ -641,6 +667,25 @@ decoy_case() {
   cases=$((cases + 1))
 }
 
+# The failing setsid comes first on PATH and only mise names a working one. A launch that fails by itself (initialize
+# answers an error) saves its failure screen, the final evidence and runs `home forget` through agent-tty in a session of
+# its own, which needs the setsid that launch resolved: the bare name would run the failing one.
+setsid_resolved_case() {
+  local name=setsid-resolved gate=$TMP/gate-setsid-resolved why=""
+  mkdir "$gate"
+  launch "$name" "$TMP/mise:$TMP/bad-setsid:$TMP/logged:$base" GATE="$gate" FAKE_MISE_SETSID="$TMP/tools/setsid" VCN_INIT_JSONRPC=1.0
+  ((rc == 1)) || why="launch exited $rc, wanted 1"
+  [[ $out == *"vcn: initialize failed: "* ]] || why="${why:+$why, }launch failed at another step: the client did not start through that setsid"
+  [[ -s $TMP/out-$name/launch-failure.screen.txt ]] || why="${why:+$why, }the failure screen was not saved"
+  [[ -s $TMP/out-$name/final.screen.txt ]] || why="${why:+$why, }the cleanup saved no final screen"
+  grep -qx 'home forget' "$gate/calls" 2>/dev/null || why="${why:+$why, }launch did not run agent-tty home forget"
+  [[ -z $state || ! -e $state ]] || why="${why:+$why, }state dir $state is still there"
+  stop_run "$state"
+  [[ -z $why ]] || fail "$name" "$why: $out"
+  echo "ok $name: a launch that failed by itself saved its screens and forgot its home through the setsid that mise names"
+  cases=$((cases + 1))
+}
+
 # vcn.sh cleanup on the run.env of a launch that stopped before an agent-tty passed doctor: it has no ATT_BIN.
 cleanup_no_agent_tty_case() {
   local name=cleanup-no-agent-tty dir
@@ -666,5 +711,6 @@ signal_outside_case
 signal_failed_case
 signal_gap_case
 cleanup_no_agent_tty_case
+setsid_resolved_case
 sigterm_case
 echo "CASES $cases"
