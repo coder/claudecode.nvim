@@ -43,6 +43,16 @@ describe("a held selection with the real plugin", function()
     end
   end
 
+  -- Replaces server.broadcast with a recorder. Returns the list of what was sent after the call.
+  local function record_broadcasts()
+    local sent = {}
+    server.broadcast = function(method, params)
+      table.insert(sent, { method = method, params = params })
+      return true
+    end
+    return sent
+  end
+
   local function open_file(line)
     local path = vim.fn.tempname() .. ".txt"
     vim.fn.writefile({ line }, path)
@@ -245,6 +255,7 @@ describe("a held selection with the real plugin", function()
       open_file("alpha beta gamma")
       local file_buf = vim.api.nvim_get_current_buf()
       select_and_release()
+      local sent = record_broadcasts()
       vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
 
       vim.v.errmsg = ""
@@ -252,6 +263,10 @@ describe("a held selection with the real plugin", function()
       wait(300)
 
       assert.are.equal("", vim.v.errmsg)
+      assert.are.same({}, sent) -- no selection and no cursor of the terminal reached Claude
+      assert.are.equal("alpha", selection.get_latest_selection().text) -- Claude keeps the selection it has
+      assert.is_nil(selection.state.selection_tick) -- nothing checks the read again
+      assert.is_nil(selection.state.cursor_at_flush)
     end)
 
     -- The demotion timer is pending when the buffer becomes the terminal. When it fires it only knows the terminal
@@ -261,17 +276,41 @@ describe("a held selection with the real plugin", function()
       open_file("alpha beta gamma")
       local file_buf = vim.api.nvim_get_current_buf()
       select_and_release()
-      local sent = {}
-      server.broadcast = function(method, params)
-        table.insert(sent, { method = method, params = params })
-        return true
-      end
+      local sent = record_broadcasts()
       vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
 
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
       wait(1300) -- the demotion delay passes
 
       assert.are.same({}, sent)
+      assert.are.equal("alpha", selection.get_latest_selection().text)
+    end)
+
+    -- You are in a Claude terminal, and the buffer of the held selection becomes a Claude terminal too. Its text changes.
+    -- The check sent the cursor of that buffer, with its term:// path.
+    it("sends nothing when the buffer of the held selection became a Claude terminal and you are in another", function()
+      start({ provider = "none" }, 50)
+      open_file("alpha beta gamma")
+      local file_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("terminal sh -c 'sleep 60' claude")
+      local term_buf = vim.api.nvim_get_current_buf()
+      vim.cmd("stopinsert")
+      vim.cmd("buffer " .. file_buf)
+      wait(200)
+      select_and_release()
+      vim.cmd("buffer " .. term_buf)
+      vim.cmd("stopinsert")
+      wait(300)
+      local sent = record_broadcasts()
+
+      vim.api.nvim_buf_set_name(file_buf, "term://x//1:claude")
+      vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
+      wait(300)
+
+      assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
+      assert.are.same({}, sent)
+      assert.are.equal("alpha", selection.get_latest_selection().text)
+      assert.is_nil(selection.state.selection_tick)
     end)
 
     -- Neovim ignores what on_reload returns and keeps the listener. A listener that forgot its buffer there would let

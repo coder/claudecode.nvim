@@ -2754,6 +2754,7 @@ describe("Range Selection Tests", function()
             selection.update_selection()
           end)
           assert.is_nil(mock_server.last_broadcast) -- nothing in the Claude terminal reaches Claude
+          assert.are.equal("alpha", selection.get_latest_selection().text) -- Claude keeps the selection it has
           assert.is_nil(selection.state.cursor_at_flush)
           assert.is_nil(selection.state.last_active_visual_selection)
 
@@ -2784,7 +2785,28 @@ describe("Range Selection Tests", function()
 
           assert.is_nil(selection.state.demotion_timer)
           assert.is_nil(mock_server.last_broadcast)
+          assert.are.equal("alpha", selection.get_latest_selection().text)
         end)
+
+        -- The same with you in another Claude terminal: the check sent the cursor of the buffer that became a terminal,
+        -- with its term:// path.
+        it(
+          "sends nothing when the buffer of the held selection became a Claude terminal and you are in another",
+          function()
+            hold_alpha_and_enter_the_terminal()
+
+            _G.vim.test.add_buffer(1, "term://x//1:claude", { "beta gamma" })
+            ticks[1] = 6
+            fire_buffer_listeners(1, "on_lines")
+
+            assert.is_nil(mock_server.last_broadcast)
+            assert.are.equal("alpha", selection.get_latest_selection().text)
+            assert.is_nil(selection.state.cursor_at_flush)
+            assert.is_nil(selection.state.selection_tick) -- nothing checks it again
+            fire_buffer_listeners(1, "on_lines")
+            assert.are.equal(0, #_G.vim._buf_listeners[1])
+          end
+        )
 
         it("checks once after a burst of changes, such as a :%s", function()
           hold_alpha_and_enter_the_terminal()
