@@ -42,7 +42,7 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
 })
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
-  'folders=missing',
+  "folders=missing",
   'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
   'printf "%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
   '  "${XDG_STATE_HOME-unset}" "${XDG_CONFIG_HOME-unset}" "$folders" >> "$STUB_DIR/env_seen"',
