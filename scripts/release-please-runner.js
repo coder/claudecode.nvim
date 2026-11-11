@@ -49,14 +49,6 @@ const UNRELEASED_HEADING_PATTERN = /^#{2,3} \[?Unreleased\]?[ \t]*$/;
 // An H1 or H2 heading ends the Unreleased section; H3 stays inside it because
 // hand-staged drafts use Keep-a-Changelog `### Added`-style subsections.
 const NEXT_SECTION_PATTERN = /^##? /;
-// A line that might be a release heading, read loosely so that a heading is missed only when nobody would write it.
-// An ATX heading of any level (`#` to `######`, any spaces or tabs before the hashes, and one or more spaces or tabs
-// after them) whose text starts with an optional `[`, an optional `v` or `V`, and a dotted version: `## [0.3.0] - date`,
-// `##  0.3.0`, `###\tv0.3.0`, `  # V1.0`, `## [0.5.0-rc.1]`. What follows the version does not matter.
-const RELEASE_LIKE_ATX_PATTERN = /^[ \t]*#{1,6}[ \t]+\[?[vV]?\d+(?:\.\d+)+/;
-// The text line of a setext heading (`0.3.0` over `-----`): the same words without the hashes.
-const RELEASE_LIKE_TEXT_PATTERN = /^[ \t]*\[?[vV]?\d+(?:\.\d+)+/;
-const SETEXT_UNDERLINE_PATTERN = /^[ \t]*(?:=+|-+)[ \t]*$/;
 const TITLE_PATTERN = /^# .+$/;
 // CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
 // one rule (see `splitLines`), so a fence pattern never sees a bare CR inside a
@@ -313,18 +305,16 @@ function findLineOutsideFences(lines, start, predicate) {
 }
 
 /**
- * Throws when a line that `updateContent` drops looks like a release heading. `updateContent` keeps the lines up to
- * the Unreleased heading and the lines from the next section on. The lines in between are the draft, and they are the
- * only lines of the text that it drops. A code fence in the draft that does not close where the maintainer meant (it
- * has no closer, or a closer that CommonMark rejects, or Prettier closed it at the end of the file) puts the older
- * releases inside the draft, so they go too. A changelog that loses an older release must not be written.
- * The draft is scanned line by line with fences ignored, and a line counts when it looks like a release heading under
- * a loose reading (see `RELEASE_LIKE_ATX_PATTERN`): that is the loss itself, whatever its spelling and whatever the
- * new entry says. `start` is the first dropped line and `end` is the line after the last one (both 0-based).
- * The cost: a line in a draft code example that looks like a release heading, such as `## [1.0.0]` or a comment like
- * `# 0.10 or newer`, is refused too, because the runner cannot tell it from a release.
+ * Throws when a code fence opens in the Unreleased draft. `updateContent` drops the draft: the lines after the
+ * Unreleased heading up to the next section outside a fence (or to the end of the text). The reader that finds that
+ * next section is `nextOpenFence`, and a fence that does not close where the maintainer meant (it has no closer, or a
+ * closer that CommonMark rejects, or Prettier closed it at the end of the file) hides every older release below it. So
+ * the draft is read with the same reader, and a fence in it is refused, whatever the fence holds and whether it
+ * closes. With no fence in the draft, the first `# ` or `## ` line after the Unreleased heading ends the draft, and
+ * nothing at or after that line is dropped. `start` is the first draft line and `end` is the line after the last one
+ * (both 0-based). The cost: a harmless code block in the draft is refused too.
  */
-function assertDropsNoReleaseHeading(lines, start, end) {
+function assertDraftHasNoFence(lines, start, end) {
   assert.ok(Array.isArray(lines), "lines must be an array");
   assert.ok(
     Number.isInteger(start) &&
@@ -335,18 +325,13 @@ function assertDropsNoReleaseHeading(lines, start, end) {
     "start and end must bound lines",
   );
 
+  // The first fence line of the draft is an opener, because no fence is open before it.
   for (let i = start; i < end; i += 1) {
-    const line = lines[i];
-    const setext =
-      i + 1 < end &&
-      RELEASE_LIKE_TEXT_PATTERN.test(line) &&
-      SETEXT_UNDERLINE_PATTERN.test(lines[i + 1]);
-    if (RELEASE_LIKE_ATX_PATTERN.test(line) || setext) {
+    if (nextOpenFence(null, lines[i]) !== null) {
       throw new Error(
-        `The Unreleased draft has a line that looks like a release heading, and the update would drop it with the draft. Line ${i + 1}: ${JSON.stringify(line.slice(0, 80))}. ` +
-          "A code fence in the draft that does not close where you meant is the usual cause, and Prettier closes a fence that is still open at the end of the file. " +
-          "Check the draft's code fences: a closing line uses the same character as the opener, at least as many of it, and has nothing after it but spaces or tabs. " +
-          "If the line is only an example or a code comment, change it so that it does not look like a release heading.",
+        `The Unreleased draft has a code fence. Line ${i + 1} opens it: ${JSON.stringify(lines[i].slice(0, 80))}. ` +
+          "The update drops the draft, and a fence that does not close where you meant would drop the older releases below it too. " +
+          "Move the code block out of the Unreleased draft.",
       );
     }
   }
@@ -413,8 +398,8 @@ class UnreleasedAwareChangelog {
         (line) => NEXT_SECTION_PATTERN.test(line),
       );
       // The draft is the lines between the heading and the next section, or to the end of the text. They go, so no
-      // older release may stand among them.
-      assertDropsNoReleaseHeading(
+      // fence may open among them.
+      assertDraftHasNoFence(
         lines,
         unreleasedIndex + 1,
         nextIndex === -1 ? lines.length : nextIndex,
