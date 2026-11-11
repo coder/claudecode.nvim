@@ -113,21 +113,14 @@ vim.keymap.set("n", "<leader>dq", exit_diff_mode)
 
 ### 5. Selection Tracking (`selection.lua`)
 
-Debounced selection monitoring:
+Pushes a `selection_changed` notification when the selection Claude should see differs from the last one sent. Most updates are debounced, and three events are not:
 
-```lua
--- Track selection changes with debouncing
-local timer = nil
-vim.api.nvim_create_autocmd("CursorMoved", {
-  callback = function()
-    if timer then timer:stop() end
-    timer = vim.defer_fn(send_selection_update, 50)
-  end
-})
+- **Debounced, 100 ms.** `CursorMoved`, `CursorMovedI`, `BufEnter`, `ModeChanged`, `TextChanged`, `TextChangedI` and `TextChangedP` each restart a one-shot timer. When it fires, `update_selection` reads the mode and sends the selection, or the cursor in normal mode.
+- **At once.** Leaving visual mode sends the selection from the `'<` and `'>` marks (the flush). Editing the held text, or consuming it with an operator, sends the cursor. Moving the cursor away from a held selection sends the cursor. When the held text changes while you are in the Claude terminal (Neovim reloads the file, or a plugin edits it), the cursor of its file goes out too: `TextChanged` fires only for the current buffer, so a listener from `nvim_buf_attach` on the file's buffer sees the change.
+- **Entering another file** waits for the debounce.
+- **Claude terminal buffers** are skipped.
 
--- Visual mode demotion delay
--- Preserves selection context when switching to terminal
-```
+A selection released with Esc stays with Claude (issue #246) until the cursor moves away, you start another selection, an operator consumes it, its text changes, or you go to another file. Going to the Claude terminal keeps it. When a released selection has been left but the plugin has not replaced it yet, a demotion timer of `visual_demotion_delay_ms` (default 50 ms) replaces it with the cursor. The timer does nothing in the Claude terminal, in visual mode, or while the cursor is still where you released the selection.
 
 ### 6. Terminal Integration (`terminal.lua`)
 
@@ -263,7 +256,7 @@ vv netrw      # Test with built-in netrw
 
 ## Performance & Security
 
-- **Debounced Updates**: 50ms delay on selection changes
+- **Debounced Updates**: 100 ms debounce on selection changes, except leaving visual mode, editing or consuming the held text, and moving the cursor away from a held selection, which report at once
 - **Localhost Only**: Server binds to 127.0.0.1
 - **Resource Cleanup**: Automatic on vim exit
 - **Memory Efficient**: Minimal footprint, no caching

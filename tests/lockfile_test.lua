@@ -28,7 +28,10 @@ if not _G.vim then
     fs = { remove = function() end }, ---@type vim_fs_module
     fn = { ---@type vim_fn_table
       expand = function(path)
-        return select(1, path:gsub("~", home))
+        local expanded = path:gsub("~", function()
+          return home
+        end)
+        return expanded
       end,
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
@@ -334,9 +337,23 @@ describe("Lockfile Module", function()
     home = temp_dir.new()
     os.execute("mkdir -p " .. temp_dir.quote(home .. "/.claude/ide"))
 
+    -- The module picks its lock folder from CLAUDE_CONFIG_DIR once, when it loads. Hide the caller's value for that
+    -- one load, so the tests use only the private home and never read or write the caller's config folder.
+    local real_getenv = os.getenv
+    os.getenv = function(name)
+      if name == "CLAUDE_CONFIG_DIR" then
+        return nil
+      end
+      return real_getenv(name)
+    end
+
     -- Load the lockfile module for all tests
     package.loaded["claudecode.lockfile"] = nil -- Clear any previous requires
-    lockfile = require("claudecode.lockfile")
+    local loaded, load_error = pcall(function()
+      lockfile = require("claudecode.lockfile")
+    end)
+    os.getenv = real_getenv
+    assert(loaded, load_error)
   end)
 
   teardown(function()
@@ -415,6 +432,90 @@ describe("Lockfile Module", function()
 
       -- Verify results
       assert(2 == #folders) -- cwd + 1 unique workspace folder
+    end)
+  end)
+
+  describe("lock directory", function()
+    it("should stay inside the private test home whatever CLAUDE_CONFIG_DIR is", function()
+      -- The suite creates, reads and removes lock files. A lock_dir outside `home` would make it write into the
+      -- caller's real config folder, or fail when that folder has no ide/ subfolder.
+      assert(home .. "/.claude/ide" == lockfile.lock_dir, "lock_dir is " .. tostring(lockfile.lock_dir))
+    end)
+  end)
+
+  describe("remove()", function()
+    local real_os_remove
+
+    before_each(function()
+      real_os_remove = os.remove
+    end)
+
+    after_each(function()
+      os.remove = real_os_remove
+    end)
+
+    it("should delete the lock file and report success", function()
+      local port = 12350
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+
+      local success, err = lockfile.remove(port)
+
+      assert(success == true)
+      assert(err == nil)
+      assert(vim.fn.filereadable(lock_path) == 0)
+    end)
+
+    it("should report a failure when os.remove returns nil and an error instead of raising", function()
+      local port = 12351
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+
+      -- os.remove reports a failure such as a read-only folder as (nil, message, errno), without raising.
+      os.remove = function(path)
+        assert(path == lock_path)
+        return nil, lock_path .. ": Permission denied", 13
+      end
+
+      local success, err = lockfile.remove(port)
+      os.remove = real_os_remove
+
+      -- The file is still there, so remove must not say that it worked.
+      local still_there = vim.fn.filereadable(lock_path) == 1
+      real_os_remove(lock_path)
+
+      assert(still_there)
+      assert(success == false, "remove returned " .. tostring(success) .. " while the lock file stays")
+      assert("string" == type(err))
+      assert(err:find("Failed to remove lock file", 1, true))
+      assert(err:find("Permission denied", 1, true))
+    end)
+
+    it("should report a failure when os.remove raises", function()
+      local port = 12352
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+
+      os.remove = function()
+        error("boom")
+      end
+
+      local success, err = lockfile.remove(port)
+      os.remove = real_os_remove
+      real_os_remove(lock_path)
+
+      assert(success == false)
+      assert(err:find("Failed to remove lock file", 1, true))
+      assert(err:find("boom", 1, true))
+    end)
+  end)
+
+  describe("update()", function()
+    it("should not exist, because a rewritten lock file holds a token that the running server does not know", function()
+      -- update(port) removed the file and called create(port) without a token, so the new file got a fresh random
+      -- token while the server kept the old one. Nothing called it. A caller that needs a new file calls create
+      -- with the server's token.
+      assert(lockfile.update == nil)
     end)
   end)
 

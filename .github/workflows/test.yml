@@ -31,12 +31,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Build deps: PUC Lua builds from source, and the test rocks compile C modules.
-      - name: Install build dependencies
-        run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y build-essential libreadline-dev unzip
-
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         with:
@@ -81,56 +75,11 @@ jobs:
           if [ -f "luacov.stats.out" ]; then
             ./.luarocks/bin/luacov
 
-            echo "Creating lcov.info from luacov.report.out"
-            {
-              echo "TN:"
-              grep -E "^Summary$" -A1000 luacov.report.out | grep -E "^[^ ].*:" | while read -r line; do
-                file=$(echo "$line" | cut -d':' -f1)
-                echo "SF:$file"
-                percent=$(echo "$line" | grep -oE "[0-9\.]+%" | tr -d '%')
-                if [ -n "$percent" ]; then
-                  echo "DA:1,1"
-                  echo "LF:1"
-                  echo "LH:$percent"
-                fi
-                echo "end_of_record"
-              done
-            } > lcov.info
-
-            {
-              echo "## 📊 Test Coverage Report"
-              echo ""
-
-              if [ -f "luacov.report.out" ]; then
-                overall_coverage=$(grep -E "Total.*%" luacov.report.out | grep -oE "[0-9]+\.[0-9]+%" | head -1)
-                if [ -n "$overall_coverage" ]; then
-                  echo "**Overall Coverage: $overall_coverage**"
-                  echo ""
-                fi
-
-                echo "| File | Coverage |"
-                echo "|------|----------|"
-
-                grep -E "^[^ ].*:" luacov.report.out | while read -r line; do
-                  file=$(echo "$line" | cut -d':' -f1)
-                  percent=$(echo "$line" | grep -oE "[0-9]+\.[0-9]+%" | head -1)
-                  if [ -n "$percent" ]; then
-                    # Add emoji based on coverage level
-                    percent_num="${percent%.*}"
-                    if [ "$percent_num" -ge 90 ]; then
-                      emoji="🟢"
-                    elif [ "$percent_num" -ge 70 ]; then
-                      emoji="🟡"
-                    else
-                      emoji="🔴"
-                    fi
-                    echo "| \`$file\` | $emoji $percent |"
-                  fi
-                done
-              else
-                echo "❌ No coverage report generated"
-              fi
-            } >> "$GITHUB_STEP_SUMMARY"
+            summary=$(mktemp)
+            status=0
+            scripts/coverage-summary.sh luacov.report.out "$PWD" > "$summary" || status=$?
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
           else
             {
               echo "## 📊 Test Coverage Report"
@@ -179,6 +128,25 @@ jobs:
       - name: Run integration tests
         run: ./scripts/run_integration_tests_individually.sh
 
+      # A test that hands a temp path to an Ex command without fnameescape fails on a `%` or a space in TMPDIR (E499,
+      # a split path), and no other step has such a TMPDIR.
+      - name: Run integration tests under a TMPDIR with a space and a %
+        run: |
+          odd_tmp="$RUNNER_TEMP/odd tmp 50%"
+          mkdir -p "$odd_tmp"
+          TMPDIR="$odd_tmp" ./scripts/run_integration_tests_individually.sh
+
+      # The runner's Neovims open real diffs, whose temp files go under stdpath("cache"). A spec that uses the real
+      # cache folder instead of a temp one shows here.
+      - name: Check the integration tests left the real cache folder alone
+        run: |
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvim"
+          if [ -e "$cache" ]; then
+            echo "::error::A test wrote under $cache"
+            find "$cache" | head -20
+            exit 1
+          fi
+
       # Real-Neovim regression gate for issue #238 (reject-with-:q). The unit spec
       # only exercises the WinClosed handler logic against a mock; this drives a
       # genuine `:q` and self-reports via cquit (exit 0 = fixed, 1 = regressed).
@@ -187,10 +155,25 @@ jobs:
       - name: Reject-on-quit regression gate (#238)
         run: nvim --headless -u NONE -c "luafile scripts/repro_issue_238.lua" -c "cquit 2"
 
-  # covered.lock records the lua/ and plugin/ code that the openDiff lifecycle model was last
-  # confirmed against. check.sh model-checks that lifecycle with TLC on the runner's Java, then
-  # compares the lock. Advisory: Required does not need this job, so a broken rule or a stale
-  # lock shows red without blocking a merge.
+      # Regression gate for scripts/manual_test_helper.lua. It once hardcoded one developer's
+      # checkout path, so it printed "README.md not found" in every other checkout. Run it by
+      # absolute path from a directory outside the repo. It must open this checkout's README.md,
+      # and the openDiff handler's coroutine must suspend.
+      - name: Manual openDiff helper works outside the repo
+        env:
+          REPO: ${{ github.workspace }}
+        run: |
+          cd "$(mktemp -d)"
+          output="$(timeout 60 nvim --headless -u NONE --cmd "set rtp+=$REPO" -c "luafile $REPO/scripts/manual_test_helper.lua" -c "sleep 300m" -c "qa!" 2>&1)"
+          printf '%s\n' "$output"
+          grep -qF "Old file: $REPO/README.md" <<<"$output" || { echo "FAIL: the helper did not open $REPO/README.md"; exit 1; }
+          grep -qF "openDiff is properly blocking!" <<<"$output" || { echo "FAIL: the openDiff coroutine did not suspend"; exit 1; }
+
+  # Each .agents/skills/verify-*/check.sh model-checks one subsystem with TLC on the runner's Java,
+  # then compares its covered.lock, which records the code that model was last confirmed against.
+  # scripts/tla/test-check-lib.sh tests the harness that all of them share.
+  # Advisory: Required does not need this job, so a broken rule or a stale lock shows red without
+  # blocking a merge.
   covered-lock:
     runs-on: ubuntu-latest
 
@@ -200,16 +183,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # The cache key comes from the version and sha256 that check.sh pins, so a new pin gets a new
-      # entry. check.sh checks that sha256 on every run, a restored jar included.
-      - name: Read the TLC jar that check.sh pins
+      # The cache key comes from the version and sha256 that the shared harness pins, so a new pin
+      # gets a new entry. Every check.sh checks that sha256 on every run, a restored jar included.
+      - name: Read the TLC jar that the shared harness pins
         id: tlc
         run: |
-          check=.agents/skills/verify-diff-lifecycle/check.sh
-          version=$(sed -n 's/^TLC_VERSION=//p' "$check")
-          sha256=$(sed -n 's/^TLC_SHA256=//p' "$check")
+          lib=scripts/tla/check-lib.sh
+          version=$(sed -n 's/^TLC_VERSION=//p' "$lib")
+          sha256=$(sed -n 's/^TLC_SHA256=//p' "$lib")
           if [[ ! $version =~ ^[0-9.]+$ || ! $sha256 =~ ^[0-9a-f]{64}$ ]]; then
-            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $check"
+            echo "::error::cannot read TLC_VERSION and TLC_SHA256 from $lib"
             exit 1
           fi
           {
@@ -223,10 +206,25 @@ jobs:
           path: ${{ steps.tlc.outputs.jar }}
           key: ${{ steps.tlc.outputs.key }}
 
-      - name: Model-check the openDiff lifecycle and compare covered.lock
+      # Every check runs, so one red model does not hide another.
+      - name: Model-check each subsystem and compare its covered.lock
         env:
           TLC_JAR: ${{ steps.tlc.outputs.jar }}
-        run: .agents/skills/verify-diff-lifecycle/check.sh
+        run: |
+          status=0
+          for check in .agents/skills/verify-*/check.sh; do
+            echo "::group::$check"
+            "$check" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      # A toy skill on scripts/tla/check-lib.sh with a one-variable model. It runs even when a model above is red.
+      - name: Test the TLC harness
+        if: ${{ !cancelled() }}
+        env:
+          TLC_JAR: ${{ steps.tlc.outputs.jar }}
+        run: scripts/tla/test-check-lib.sh
 
   required:
     name: Required

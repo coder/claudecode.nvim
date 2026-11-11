@@ -5,7 +5,7 @@ This directory is the maintained source for verifying the user-facing behavior o
 ## Baseline preconditions
 
 - Launch a fresh run with `.agents/skills/verify-claudecode-nvim/scripts/vcn.sh launch`. It opens `hello.txt` with the default config plus `terminal.provider = "none"`.
-- Start every bash call with `export VCN_STATE=<value launch printed>; source "$VCN_STATE/run.env"; V=.agents/skills/verify-claudecode-nvim/scripts/vcn.sh`.
+- Start every bash call with `export VCN_STATE='<VCN_STATE value launch printed>' OUT='<OUT value launch printed>'` (quoted as SKILL.md says); `WORK=$VCN_STATE/work; V=.agents/skills/verify-claudecode-nvim/scripts/vcn.sh`. Do not `source` a `run.env` in these calls (see SKILL.md).
 - `$WORK/hello.txt` is `alpha`, `beta`, `gamma` and `$WORK/other.txt` is `one`, `two`, `three`, `four`.
 - `$V doctor` reports nine `ok` lines, including `a client finished the WebSocket handshake`.
 - Never drive an nvim, agent-tty session, or lock file that this run did not start.
@@ -44,10 +44,12 @@ Keep implementation details out of the map. Name only user paths, stable handles
 ## Features
 
 - [Review a proposed diff](./open-diff.md) covers openDiff blocking, accept through `:w` and `:ClaudeCodeDiffAccept`, reject through `:q` and `:ClaudeCodeDiffDeny`, `close_tab` finalization, new-file proposals, the unsaved-buffer refusal, and the `unified` layout.
+- [Review a diff with a floating Claude terminal](./terminal-float-diff.md) covers the Snacks float that hides when a diff opens and stays hidden after `close_tab`, for the split and unified layouts and `keep_terminal_focus = true`.
 - [Close diffs in bulk](./close-diffs.md) covers the `closeAllDiffTabs` tool and the `:ClaudeCodeCloseAllDiffs` command.
 - [Open a file for the user](./open-file.md) covers openFile with text and line selections, the background (`makeFrontmost: false`) form, the target window, the preview window, and reloads of files changed on disk.
 - [Share the selection](./selection.md) covers `selection_changed` notifications, `getCurrentSelection`, `getLatestSelection`, and `track_selection = false`.
 - [Send context with an at-mention](./send-at-mention.md) covers `:ClaudeCodeSend` from Visual and Select mode, `:ClaudeCodeAdd`, `:ClaudeCodeTreeAdd`, and mentions queued while Claude is disconnected.
-- [Run Claude in a terminal split](./terminal.md) covers `:ClaudeCode`, `:ClaudeCodeFocus`, `:ClaudeCodeOpen`, `:ClaudeCodeClose`, `:ClaudeCodeSendText`, `:ClaudeCodeSelectModel`, the `claudecode` filetype, and the `none` and `external` providers.
+- [Run Claude in a terminal split](./terminal.md) covers `:ClaudeCode`, `:ClaudeCodeFocus`, `:ClaudeCodeOpen`, `:ClaudeCodeClose`, `:ClaudeCodeSendText`, `:ClaudeCodeSelectModel`, the `claudecode` filetype, the README's terminal-mode key mappings, and the `none` and `external` providers.
 - [Report editor state](./editor-state.md) covers the `getWorkspaceFolders`, `getOpenEditors`, `getDiagnostics`, `checkDocumentDirty`, and `saveDocument` tools.
 - [Start and stop the Claude server](./server.md) covers `:ClaudeCodeStart`, `:ClaudeCodeStop`, `:ClaudeCodeStatus`, the lock file, token refusal, and diffs closed on disconnect.
+- [Suspend Neovim with Ctrl-Z in the Claude terminal](./terminal-ctrl-z.md) covers the terminal-mode `<C-z>` mapping of the `native` and `snacks` providers: Ctrl-Z runs `:suspend` and never reaches the Claude job.

@@ -355,9 +355,13 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       diff_split_width_percentage = nil, -- e.g. 0.20 to give diffs more room
       provider = "auto", -- "auto", "snacks", "native", "external", "none", or custom provider table
       auto_close = true,
-      -- Auto-enter insert/terminal mode whenever the Claude terminal window gains
-      -- focus. Set to false to stay in Normal mode and preserve your scroll position
-      -- when switching back to the terminal (e.g. via <C-w>l); press `i` to type.
+      -- Auto-enter terminal mode when the plugin opens or focuses the Claude terminal
+      -- (e.g. :ClaudeCodeFocus). With the snacks provider it also enters terminal mode
+      -- whenever the window gains focus, e.g. via <C-w>l. With native, <C-w>l back into
+      -- the terminal stays in Normal mode, except after a diff opened in a new tab
+      -- (diff_opts.open_in_new_tab) has put the terminal in its tab, until that terminal
+      -- window closes, even if it shows another buffer by then. Set to false to stay in
+      -- Normal mode with either provider and preserve your scroll position; press `i` to type.
       -- Note: false also opens the terminal in Normal mode (it gates start-insert too).
       auto_insert = true,
       snacks_win_opts = {}, -- Opts to pass to `Snacks.terminal.open()` - see Floating Window section below
@@ -385,7 +389,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
       --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
       --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
       open_in_new_tab = false,
-      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens
+      keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (a floating terminal then stays on screen)
       hide_terminal_in_new_tab = false,
       auto_resize_terminal = true, -- Let the plugin manage the terminal width across the diff lifecycle; set false to own it via the User autocmds below
       -- on_new_file_reject = "keep_empty", -- "keep_empty" or "close_window"
@@ -512,6 +516,107 @@ vim.api.nvim_create_autocmd("FileType", {
   closed, so `FileType` can fire twice for one buffer. Keep the handler idempotent.
 
 - `external` and `none` create no Neovim buffer, so they set no filetype.
+
+### Suspending Neovim with Ctrl-Z
+
+A Neovim terminal passes Ctrl-Z to its job, and Claude Code then suspends itself. Nothing in the terminal can resume
+it (#194). So the `native` and `snacks` providers map `<C-z>` in terminal mode on the Claude terminal buffer to
+`:suspend`. Ctrl-Z there suspends Neovim, as it does in any other window. The mapping is buffer-local, so other
+terminals keep their own Ctrl-Z behavior. `external` and `none` create no Neovim buffer, so they map nothing.
+
+The buffer-local mapping shadows a global terminal-mode `<C-z>` mapping of yours in the Claude buffer. To keep your
+own mapping there, set it buffer-local for the Claude buffer. The plugin keeps a buffer-local `<C-z>` terminal mapping
+that already exists. For example, to send Ctrl-Z to Claude Code again:
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode", -- the filetype of the Claude buffer (see Terminal Buffer Filetype above)
+  callback = function(args)
+    vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = args.buf })
+  end,
+})
+```
+
+- Replace the mapping with `vim.keymap.set`, as the example does. Do not remove it with `vim.keymap.del` on `snacks`:
+  Snacks fires `FileType` before the plugin maps `<C-z>`, so the handler finds nothing to delete, and the plugin then
+  maps its default. On `native`, the plugin maps first, so `vim.keymap.del` works there.
+- The `pattern` must match the filetype of the Claude buffer. With `snacks`, if you changed it in
+  `snacks_win_opts.bo.filetype`, use that filetype. To avoid the filetype, set the mapping from `snacks_win_opts.on_buf`,
+  which the plugin calls before it maps `<C-z>`:
+
+  ```lua
+  terminal = {
+    snacks_win_opts = {
+      on_buf = function(win)
+        vim.keymap.set("t", "<C-z>", "<C-z>", { buffer = win.buf })
+      end,
+    },
+  }
+  ```
+
+### Leaving Terminal Mode in the Claude Terminal
+
+With the `native` and `snacks` providers (`external` and `none` create no Neovim buffer), the Claude terminal runs in
+terminal mode. There Neovim sends your keys to Claude Code, so `<C-w>h` and your Normal-mode window mappings do
+nothing. A single `<Esc>` does not leave terminal mode either: it goes to Claude Code, which acts on it itself (#53,
+#77). With the `snacks` provider, a double-tap of `<Esc>` (two presses within about 200 ms) does leave terminal mode,
+but the first press still reaches Claude Code.
+
+The plugin maps no key that leaves terminal mode or moves between windows, so you choose them:
+
+- `<C-\><C-n>` works with no setup. Neovim handles it, so Claude Code never sees it. You stay in the Claude window in
+  Normal mode, and `<C-w>h` and the other window commands work. To type to Claude Code again, press `i` in the Claude
+  window. When you come back to it from another window with the default `terminal.auto_insert = true`, `:ClaudeCodeFocus`
+  enters terminal mode with either provider. `<C-w>l` and the other window commands do so only with `snacks`, or with
+  `native` after a diff opened in a new tab (`diff_opts.open_in_new_tab`) has put the terminal in its tab, until that
+  terminal window closes, even if it shows another buffer by then. With `auto_insert = false`, none of them do.
+- A shorter key is a mapping in a `FileType` autocmd for `claudecode` (see Terminal Buffer Filetype above). It exists on
+  the Claude buffer only, so other terminals keep their keys, and a single `<Esc>` still goes to Claude Code.
+
+To switch windows with `<C-h>`, `<C-j>`, `<C-k>` and `<C-l>` (each key leaves terminal mode and moves to the window in
+that direction, or stays in the Claude window when there is none):
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode",
+  callback = function(args)
+    for _, key in ipairs({ "h", "j", "k", "l" }) do
+      vim.keymap.set("t", "<C-" .. key .. ">", "<C-\\><C-n><C-w>" .. key, {
+        buffer = args.buf,
+        desc = "Leave terminal mode and move to the window in direction " .. key,
+      })
+    end
+  end,
+})
+```
+
+To leave terminal mode and stay in the Claude window, here with `<C-q>`:
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "claudecode",
+  callback = function(args)
+    vim.keymap.set("t", "<C-q>", "<C-\\><C-n>", { buffer = args.buf, desc = "Leave terminal mode" })
+  end,
+})
+```
+
+A key you map no longer reaches Claude Code, so pick keys you do not need there. The first example takes `<C-j>` (new
+line), `<C-k>` (delete to the end of the line) and `<C-l>` (redraw the screen) away from the Claude Code prompt. Its
+[interactive mode reference](https://code.claude.com/docs/en/interactive-mode) lists them and lists no binding for
+`<C-h>` or `<C-q>`. Do not map `<Esc>`: the `snacks` provider sets its own `<Esc>` key on the Claude buffer, and it
+replaces a mapping from your autocmd.
+
+If `<C-h>` and the others clash with tmux or a navigation plugin, use `<A-h>` and the others instead (write `"<A-"`
+for `"<C-"` in the first block). On macOS, `<A-h>` fires only when your terminal sends Option as Meta, and many
+terminals need that turned on first (see Claude Code's
+[Option key setup](https://code.claude.com/docs/en/terminal-config#enable-option-key-shortcuts-on-macos)). These keys
+move between Neovim windows only. To move between tmux panes as well, use vim-tmux-navigator: map the key to
+`<C-\><C-n><Cmd>TmuxNavigateLeft<CR>` (and `TmuxNavigateDown`, `TmuxNavigateUp`, `TmuxNavigateRight`) in place of
+`<C-\><C-n><C-w>h`.
+
+In a floating Claude window (`snacks_win_opts.position = "float"`), the four keys all go back to the window you came
+from.
 
 ## Floating Window Configuration
 
@@ -671,6 +776,8 @@ snacks_win_opts = {
 ```
 
 </details>
+
+When a diff opens in the tab where a floating Claude terminal sits, the plugin hides the float so it does not cover the diff, and the diff window has focus. A float that the user shows while the diff is open stays visible until another diff opens in that tab. The float stays hidden when the diff closes, and `:ClaudeCodeFocus` brings it back. A diff in its own tab leaves a visible float in the original tab alone while it is open. A diff is in its own tab with `open_in_new_tab`, and a split diff also opens in a new tab on its own when its tab already shows a diff. When a diff in its own tab closes, the plugin shows the terminal again if a window of it was visible in any tab when the diff opened, and none is visible then. A terminal split that another diff's new tab shows counts. The close does not look at other open diffs, so it can show the float over a diff that is still open: diff A hides the float, diff B opens in a new tab, diff C opens in another new tab while B's tab shows the terminal, and the close of C after the close of B shows the float over A. With `diff_opts.keep_terminal_focus = true`, the float stays on screen and keeps focus, and it covers the diff.
 
 For complete configuration options, see:
 
@@ -856,6 +963,8 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float(tab)` hides the terminal when it is a visible floating window, and when `tab` is not nil only when that window is in `tab`. It returns `true` when it did. The plugin calls it with the diff's tab when a diff opens in the tab of a floating terminal, so the float does not cover the diff, unless `diff_opts.keep_terminal_focus` is set. A provider that ignores `tab` hides its float in any tab. A diff does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes (in the current tab when the original tab is gone), if a window of the terminal was visible in any tab when the diff opened. `:ClaudeCodeSend`, `:ClaudeCodeAdd` and `:ClaudeCodeTreeAdd` also call `ensure_visible()` after a send to a connected Claude (they call `open` instead with `focus_after_send`, or when Claude is not connected).
+
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 
 ## Community Extensions
@@ -1003,8 +1112,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   in `tools/list` plus the hidden `close_tab`. `openDiff` runs in a coroutine and defers its response.
 - plugin: [./plugin/README.md](./plugin/README.md) - Runtime loader: Neovim >= 0.8.0 check, `vim.g.loaded_claudecode`
   guard, and optional `vim.g.claudecode_auto_setup`.
-- scripts: [./scripts/README.md](./scripts/README.md) - Shell WebSocket/MCP clients, issue repro scripts, integration test
-  runner, and the release-please runner.
+- scripts: [./scripts/README.md](./scripts/README.md) - Issue repro scripts, the integration test runner, a manual
+  `openDiff` helper, and the release-please runner.
 
 `fixtures/` (Neovim configs for manual repros) holds repro notes (`README.md` in some folders) but no EGM contracts.
 `tests/` (Busted specs) holds no contracts.
@@ -1014,12 +1123,12 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 - The server listens only on `127.0.0.1` [lua/claudecode/server/tcp.lua:M.\_bind_and_listen].
 - A WebSocket upgrade must carry `x-claude-code-ide-authorization` that matches the lock-file token, compared in constant
   time [lua/claudecode/server/handshake.lua:M.validate_upgrade_request]. `start` returns `false` before it starts the server
-  if the token is shorter than 10 characters. It stops the server if the token does not match the token that
-  `lockfile.create` wrote, and it leaves that lock file on disk [lua/claudecode/init.lua:M.start].
+  if the token is shorter than 10 characters. It removes the lock file and stops the server if the token does not
+  match the token that `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
 - The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
-- Lock files live in `$CLAUDE_CONFIG_DIR/ide`, or in `~/.claude/ide` when that variable is unset or empty, named `<port>.lock`
-  [lua/claudecode/lockfile.lua:M.lock_dir]. The shell clients that use `find_claude_lockfile` read the port from that basename
-  [scripts/lib_claude.sh:find_claude_lockfile]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
+- Lock files live in `$CLAUDE_CONFIG_DIR/ide`, or in `~/.claude/ide` when that variable is unset or empty, named `<port>.lock` [lua/claudecode/lockfile.lua:M.lock_dir]. `repro_issue_238.sh`,
+  `repro_issue_248.sh`, and the verify skill's `ws-client.mjs` read the port from that basename [scripts/repro_issue_238.sh:PORT] [scripts/repro_issue_248.sh:PORT]
+  [.agents/skills/verify-claudecode-nvim/scripts/ws-client.mjs:port]. `repro_issue_70.sh` and `repro_issue_277.sh` get the port another way.
 - `:ClaudeCode*` commands exist only after `setup` runs [lua/claudecode/init.lua:M.\_create_commands]. The loader defines
   none [plugin/claudecode.lua].
 - `openDiff` must run in a non-main coroutine. Its response is deferred until the diff resolves
@@ -1047,7 +1156,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   files [lua/claudecode/diff.lua:M.open_diff_blocking]. The `saveDocument` tool writes an open buffer to its file
   [lua/claudecode/tools/save_document.lua:handler].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
-  `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`), `User` events
+  `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`), `nvim_buf_attach` change
+  listeners on the buffer of a held selection [lua/claudecode/selection.lua:watch_selection_buffer], `User` events
   (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`), the four global `ClaudeCodeInlineDiff*`
   highlight groups for the `"unified"` diff layout [lua/claudecode/diff_inline.lua:setup_highlights], and a wrapped
   global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2 or a 0.12.2
@@ -1064,10 +1174,6 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 
 - Run: `mise run all` (format, lint, test)
 - Run: `mise run test` (Busted suite with coverage, in a random order whose seed it prints; `BUSTED_SEED=<seed> mise run test` repeats that order, and a test registered inside a `pairs()` loop fails the run) or one file with `busted -v tests/unit/<name>_spec.lua`
-- `tests/lockfile_test.lua` writes lock files to the directory that `lockfile.lua` resolves, which is
-  `$CLAUDE_CONFIG_DIR/ide` when `CLAUDE_CONFIG_DIR` is set [lua/claudecode/lockfile.lua:get_lock_dir]. When that
-  directory does not exist, five of its tests fail. When it exists, the tests pass and leave five fake lock files
-  (`12345.lock` to `12349.lock`) in it. Unset `CLAUDE_CONFIG_DIR` before `mise run test`.
 - Run: `mise run check` (a Lua syntax check on `lua/`, then `luacheck` on `lua/` and `tests/`)
 - Run: `npm --prefix scripts run test:release-please-runner` (release runner and the `communique.toml` output budget,
   after `npm --prefix scripts ci`, with a real `communique` binary on `PATH`, for example under `mise exec --`, not a

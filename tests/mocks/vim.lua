@@ -59,6 +59,13 @@ if _G.spy == nil then
   }
 end
 
+---A function, or a value whose metatable has a `__call` function, as Neovim's vim.wait accepts. Neovim reads the real
+---metatable even when `__metatable` hides it, so this uses `debug.getmetatable`.
+local function is_callable(value)
+  local metatable = debug.getmetatable(value)
+  return type(value) == "function" or (type(metatable) == "table" and type(metatable.__call) == "function")
+end
+
 local vim = {
   _buffers = {},
   _windows = { [1000] = { buf = 1, width = 80 } }, -- winid -> { buf, width, cursor, config }
@@ -559,6 +566,10 @@ local vim = {
       return 12345
     end,
 
+    maparg = function()
+      return {}
+    end,
+
     -- The mock keeps no split tree, so a tab's tiled windows form one row.
     winlayout = function(tabnr)
       local leaves = {}
@@ -916,17 +927,19 @@ local vim = {
 
   -- Additional missing vim functions
   wait = function(timeout, condition, interval, fast_only)
-    -- Optimized mock implementation for faster test execution
-    local start_time = os.clock()
-    interval = interval or 10 -- Reduced from 200ms to 10ms for faster polling
-    timeout = timeout or 1000
+    assert(tonumber(timeout), "vim.wait: timeout must be a number")
+    assert(condition == nil or is_callable(condition), "vim.wait: condition must be callable")
+    assert(interval == nil or tonumber(interval), "vim.wait: interval must be a number")
+    timeout = tonumber(timeout)
+    interval = tonumber(interval) or 10
+    assert(timeout >= 0, "vim.wait: timeout must be >= 0")
+    assert(interval >= 0, "vim.wait: interval must be >= 0")
 
-    while (os.clock() - start_time) * 1000 < timeout do
+    local polls = math.floor(timeout / math.max(interval, 1)) + 1
+    for _ = 1, polls do
       if condition and condition() then
         return true
       end
-      -- Add a small sleep to prevent busy-waiting and reduce CPU usage
-      os.execute("sleep 0.001") -- 1ms sleep
     end
 
     return false
@@ -963,6 +976,19 @@ local vim = {
       end
     end
     return result
+  end,
+
+  -- A table with only number keys is a list. Like Neovim, an empty table is a list too.
+  tbl_islist = function(t)
+    if type(t) ~= "table" then
+      return false
+    end
+    for key in pairs(t) do
+      if type(key) ~= "number" then
+        return false
+      end
+    end
+    return true
   end,
 
   -- Add tbl_extend function for compatibility
@@ -1240,6 +1266,9 @@ local vim = {
           end
           return true
         end,
+        get_write_queue_size = function(self)
+          return 0
+        end,
         close = function(self)
           return true
         end,
@@ -1261,9 +1290,44 @@ local vim = {
         end,
       }
     end,
+    -- Check handles run a callback right after the poll phase of a loop iteration, and idle handles keep that poll from
+    -- waiting. The mock never runs them.
+    new_idle = function()
+      return {
+        start = function(self, callback)
+          return true
+        end,
+        stop = function(self)
+          return true
+        end,
+        close = function(self)
+          return true
+        end,
+        is_closing = function(self)
+          return false
+        end,
+      }
+    end,
+    new_check = function()
+      return {
+        start = function(self, callback)
+          return true
+        end,
+        stop = function(self)
+          return true
+        end,
+        close = function(self)
+          return true
+        end,
+        is_closing = function(self)
+          return false
+        end,
+      }
+    end,
     now = function()
       return os.time() * 1000
     end,
+    update_time = function() end,
     timer_stop = function(timer)
       return true
     end,
@@ -1371,7 +1435,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40 }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
   __index = function(_, k)
     return vim._options[k]
   end,

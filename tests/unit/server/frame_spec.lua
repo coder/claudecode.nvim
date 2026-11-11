@@ -189,6 +189,7 @@ describe("WebSocket client malformed frame handling", function()
       handshake_complete = true,
       last_ping = 0,
       last_pong = 0,
+      queued_bytes = 0,
     }
 
     return c, writes, handle

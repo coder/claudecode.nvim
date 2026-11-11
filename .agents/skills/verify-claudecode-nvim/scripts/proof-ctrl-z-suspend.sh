@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# Proves that Ctrl-Z in the Claude terminal suspends Neovim and never reaches the Claude job (#194). It launches its
+# own run with scripts/ctrl-z-probe-job.mjs as terminal_cmd, opens the terminal with :ClaudeCode and presses Ctrl-Z.
+# Usage: proof-ctrl-z-suspend.sh native|snacks
+#   snacks needs SNACKS_DIR=<a snacks.nvim checkout>. VERIFY_OUT=<new dir> picks the evidence dir.
+# Phase 1 uses vcn.sh. agent-tty sends no reply to the Primary Device Attributes query that Neovim's TUI waits for
+# before it sends itself SIGSTOP on `:suspend`, so nvim never stops there, and its screen stops updating after the
+# first `:suspend`. Phase 1 counts VimSuspend events and compares the terminal's Ctrl-Z with a normal window's.
+# Phase 2, proof-ctrl-z-stop.py, runs nvim as a foreground job of `bash -i` in a pty that answers the query, and
+# checks that Ctrl-Z stops nvim, that `fg` resumes it, and that the job never reads 0x1a. It needs python3.
+# Prints `ok <check>` or `FAIL <check>` per check and ends with `CHECKS <n> FAILED <k>`. Exits 1 when any check
+# fails.
+# Evidence lands in the run's $OUT as ctrl-z-<provider>-*.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+V="$here/vcn.sh"
+provider=${1-}
+[[ $provider == native || $provider == snacks ]] || {
+  echo "usage: proof-ctrl-z-suspend.sh native|snacks" >&2
+  exit 2
+}
+launch_args=(hello.txt)
+if [[ $provider == snacks ]]; then
+  [[ -f ${SNACKS_DIR-}/lua/snacks/init.lua ]] || {
+    echo "proof-ctrl-z-suspend: SNACKS_DIR must be a snacks.nvim checkout" >&2
+    exit 2
+  }
+  launch_args=(--cmd "set rtp+=$SNACKS_DIR" hello.txt)
+fi
+node_exe=$(mise which node 2>/dev/null || command -v node)
+out=${VERIFY_OUT:-${XUM_SCRATCH_DIR:-/tmp}/verify-claudecode-nvim/ctrl-z-$provider-$(date -u +%Y%m%dT%H%M%SZ)}
+log="$out/ctrl-z-$provider-job.log"
+export VERIFY_OUT=$out
+VCN_SETUP=$(jq -nc --arg p "$provider" --arg cmd "$node_exe $here/ctrl-z-probe-job.mjs $log" \
+  '{terminal: {provider: $p}, terminal_cmd: $cmd}')
+export VCN_SETUP
+
+started=$("$V" launch "${launch_args[@]}")
+VCN_STATE=$(sed -n 's/^VCN_STATE=//p' <<<"$started")
+export VCN_STATE
+trap '"$V" cleanup >/dev/null' EXIT
+
+total=0
+failed=0
+check() {
+  local label=$1
+  shift
+  total=$((total + 1))
+  if "$@"; then
+    echo "ok   $label"
+  else
+    failed=$((failed + 1))
+    echo "FAIL $label"
+  fi
+}
+state() { ps -o stat= -p "$1" 2>/dev/null | cut -c1 | grep . || echo -; }
+job_log_lacks() { ! grep -qE "^bytes( [0-9a-f]{2})* $1( |$)" "$log"; }
+job_log_gets() {
+  local i
+  for ((i = 0; i < 50; i++)); do
+    job_log_lacks "$1" || return 0
+    sleep 0.1
+  done
+  return 1
+}
+lua() {
+  [[ $1 != *"'"* ]] || {
+    echo "proof-ctrl-z-suspend: lua code must not contain a single quote" >&2
+    return 2
+  }
+  "$V" expr "luaeval('$1')"
+}
+map_in() {
+  lua "vim.api.nvim_buf_call(vim.fn.bufnr(\"$1\"), function() return vim.fn.maparg(\"<C-z>\", \"t\") end)"
+}
+
+"$V" keys ':let g:suspends = 0 | autocmd VimSuspend * let g:suspends += 1' Enter
+"$V" keys ':ClaudeCode' Enter
+"$V" until 'mode()' t
+"$V" until "&filetype" claudecode
+for _ in $(seq 100); do
+  if grep -q '^ready ' "$log" 2>/dev/null; then break; fi
+  sleep 0.1
+done
+job_pid=$(sed -n 's/^ready pid=//p' "$log" | tail -n 1)
+terminal_buf=$(lua 'vim.api.nvim_get_current_buf()')
+"$V" capture "ctrl-z-$provider-1-open" >/dev/null
+"$V" screenshot "ctrl-z-$provider-1-open" >/dev/null
+
+check "the Claude terminal buffer has a terminal-mode <C-z> mapping" \
+  test -n "$(lua "vim.fn.maparg(\"<C-z>\", \"t\")")"
+check "the other buffer (hello.txt) has none" test -z "$(map_in hello.txt)"
+check "the Claude terminal buffer's mapping is buffer-local" \
+  test "$(lua "vim.fn.maparg(\"<C-z>\", \"t\", false, true).buffer")" = 1
+
+"$V" keys Ctrl+Z
+"$V" until 'g:suspends' 1 5 || true
+sleep 1
+{
+  echo "after Ctrl-Z in the terminal: VimSuspend fired $("$V" expr 'g:suspends') time(s), job pid $job_pid state $(state "$job_pid")"
+  ps -o pid,pgid,stat,args -p "$job_pid" | cut -c1-120
+} >"$out/ctrl-z-$provider-states.txt"
+
+check "Ctrl-Z in the Claude terminal ran :suspend once (VimSuspend 0 -> 1)" test "$("$V" expr 'g:suspends')" = 1
+check "the job never read the Ctrl-Z byte (0x1a)" job_log_lacks '1a'
+check "the job is not stopped" test "$(state "$job_pid")" != T
+
+"$V" until 'mode()' t 5 || true
+"$V" keys x
+check "after Ctrl-Z, a typed key (0x78) still reaches the job" job_log_gets '78'
+
+# Control: Ctrl-Z in the normal window of hello.txt runs :suspend too.
+"$V" keys "Ctrl+\\" Ctrl+N
+"$V" until 'mode()' n 5
+"$V" keys Ctrl+W h
+"$V" until 'bufname()' hello.txt 5
+"$V" until 'mode()' n 5
+"$V" keys Ctrl+Z
+"$V" until 'g:suspends' 2 5 || true
+check "Ctrl-Z in a normal window ran :suspend too (VimSuspend 1 -> 2)" test "$("$V" expr 'g:suspends')" = 2
+
+# Phase 2: the real stop, in a pty that answers the terminal queries.
+nvim_exe=$(mise which nvim 2>/dev/null || command -v nvim)
+pty_args=(--provider "$provider" --repo "$(cd "$here/../../../.." && pwd)" --nvim "$nvim_exe" --node "$node_exe" --out "$out/pty")
+[[ $provider == snacks ]] && pty_args+=(--snacks "$SNACKS_DIR")
+pty_report=$(python3 "$here/proof-ctrl-z-stop.py" "${pty_args[@]}" 2>"$out/ctrl-z-$provider-pty-stderr.txt") || true
+grep -E '^(ok|FAIL) ' <<<"$pty_report" | sed -E 's/^(ok   |FAIL )/\1[bash -i pty] /' || true
+if pty_counts=$(grep -E '^CHECKS [0-9]+ FAILED [0-9]+$' <<<"$pty_report"); then
+  read -r _ pty_total _ pty_failed <<<"$pty_counts"
+  total=$((total + pty_total))
+  failed=$((failed + pty_failed))
+else
+  check "proof-ctrl-z-stop.py printed its result (see $out/ctrl-z-$provider-pty-stderr.txt)" false
+fi
+
+echo "terminal buffer: $terminal_buf; job log: $log"
+echo "CHECKS $total FAILED $failed"
+((failed == 0))

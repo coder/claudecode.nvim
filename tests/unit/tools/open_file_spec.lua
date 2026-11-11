@@ -240,6 +240,20 @@ describe("Tool: open_file", function()
     assert_contains(err.data, "Missing filePath parameter")
   end)
 
+  for _, case in ipairs({
+    { label = "a boolean", value = true },
+    { label = "a number", value = 5 },
+    { label = "a table", value = { "a.txt" } },
+  }) do
+    it("should error if filePath is " .. case.label .. " and not a string", function()
+      local success, err = pcall(open_file_handler, { filePath = case.value })
+      expect(success).to_be_false()
+      expect(err).to_be_table()
+      expect(err.code).to_be(-32602)
+      assert_contains(err.data, "Missing filePath parameter")
+    end)
+  end
+
   it("should error if file is not readable", function()
     local params = { filePath = "non_readable_file.txt" }
     local success, err = pcall(open_file_handler, params)
@@ -703,7 +717,15 @@ describe("Tool: open_file", function()
         local old = buffers[buf].lines
         local new = buffers[buf].disk or buffers[buf].on_disk or old
         buffers[buf].disk, buffers[buf].new_file, buffers[buf].on_disk = nil, nil, new
-        fire("BufReadPre", buf)
+        -- An error in a BufReadPre autocommand stops the autocommands after it. Under a command from Lua it also stops
+        -- the read before it starts, and the buffer keeps its old text with empty lines added. :silent! lets it go on.
+        local fired, pre_error = pcall(fire, "BufReadPre", buf)
+        if not fired and not silenced then
+          buffers[buf].lines = { unpack(old) }
+          table.insert(buffers[buf].lines, "")
+          table.insert(buffers[buf].lines, "")
+          error(pre_error, 0)
+        end
         if buffers[buf].read_error and not silenced then
           buffers[buf].lines = { unpack(old) }
           table.insert(buffers[buf].lines, "")
@@ -1317,6 +1339,67 @@ describe("Tool: open_file", function()
           expect(win_buf[case.preview and 3000 or 1000]).to_be(30)
         end)
       end
+    end)
+
+    describe("when a user's BufReadPre autocommand fails while the file is loaded again", function()
+      before_each(function()
+        buffers[30].loaded = true
+        buffers[30].disk = { "alpha", "beta", "gamma", "delta", "epsilon", "zeta" }
+        -- It exists before openFile adds an autocommand of its own, and the error stops the autocommands after it.
+        _G.vim.api.nvim_create_autocmd("BufReadPre", {
+          buffer = 30,
+          callback = function()
+            if not silenced then
+              error('BufReadPre Autocommands for "*": user boom')
+            end
+          end,
+        })
+      end)
+
+      for _, case in ipairs({
+        { name = "the window shows it", shown = 1000 },
+        { name = "it is hidden" },
+        { name = "it is hidden, with preview = true", preview = true },
+      }) do
+        it("ends the reload and then fails with the error when " .. case.name, function()
+          if case.shown then
+            win_buf[case.shown] = 30
+          end
+          local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = case.preview })
+          expect(success).to_be_false()
+          assert_contains(tostring(err), "user boom")
+          assert.are.same({ "alpha", "beta", "gamma", "delta", "epsilon", "zeta" }, buffers[30].lines)
+          expect(win_buf[case.preview and 3000 or 1000]).to_be(30)
+        end)
+      end
+    end)
+
+    describe("when a user's FileChangedShell autocommand fails while the file changed", function()
+      before_each(function()
+        _G.vim.o.autoread, buffers[30].loaded = false, true
+        buffers[30].disk = { "alpha", "beta", "gamma", "delta", "epsilon", "zeta" }
+        _G.vim.api.nvim_create_autocmd("FileChangedShell", {
+          buffer = 30,
+          callback = function()
+            error('FileChangedShell Autocommands for "*": user boom')
+          end,
+        })
+      end)
+
+      it("loads the file again and then fails with the error when the buffer has no unsaved changes", function()
+        local success, err = pcall(open_file_handler, { filePath = "test.txt" })
+        expect(success).to_be_false()
+        assert_contains(tostring(err), "user boom")
+        assert.are.same({ "alpha", "beta", "gamma", "delta", "epsilon", "zeta" }, buffers[30].lines)
+      end)
+
+      it("keeps the unsaved text and then fails with the error when the buffer has unsaved changes", function()
+        buffers[30].modified = true
+        local success, err = pcall(open_file_handler, { filePath = "test.txt" })
+        expect(success).to_be_false()
+        assert_contains(tostring(err), "user boom")
+        assert.are.same({ "alpha", "beta", "gamma", "delta", "epsilon" }, buffers[30].lines)
+      end)
     end)
 
     for _, case in ipairs({ { name = "the window shows it", shown = 1000 }, { name = "it is hidden" } }) do

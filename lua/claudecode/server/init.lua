@@ -3,8 +3,12 @@ local claudecode_main = require("claudecode") -- Added for version access
 local logger = require("claudecode.logger")
 local tcp_server = require("claudecode.server.tcp")
 local tools = require("claudecode.tools.init") -- Added: Require the tools module
+local utils = require("claudecode.utils")
 
 local MCP_PROTOCOL_VERSION = "2024-11-05"
+
+-- Neovim 0.10 renamed vim.tbl_islist to vim.islist.
+local islist = vim.islist or vim.tbl_islist
 
 local M = {}
 
@@ -57,8 +61,9 @@ function M.start(config, auth_token)
       else
         logger.debug("server", "WebSocket client connected (no auth):", client.id)
       end
-
-      -- Notify main module about new connection for queue processing
+    end,
+    on_open = function(client)
+      -- The client completed its WebSocket handshake, so it can take the queued @ mentions now.
       local main_module = require("claudecode")
       if main_module.process_mention_queue then
         vim.schedule(function()
@@ -78,12 +83,15 @@ function M.start(config, auth_token)
       )
 
       -- Close diffs this client opened but never resolved (issue #248) -- only if
-      -- the diff module is in use. Scheduled: diff cleanup touches window APIs.
+      -- the diff module is in use. Scheduled, because this runs in a libuv callback. A client without a completed
+      -- handshake ran no tool, so it owns no diff.
       local diff = package.loaded["claudecode.diff"]
-      if diff then
+      if diff and client.handshake_complete then
         local client_id = client.id
         vim.schedule(function()
-          diff.close_diffs_for_client(client_id, "client disconnected")
+          utils.when_windows_allowed(function()
+            diff.close_diffs_for_client(client_id, "client disconnected")
+          end)
         end)
       end
     end,
@@ -339,13 +347,27 @@ function M.register_handlers()
     end,
 
     ["tools/call"] = function(client, params)
-      logger.debug(
-        "server",
-        "Received tools/call:",
-        params and params.name,
-        "arguments:",
-        describe_fields(params and params.arguments)
-      )
+      local invalid
+      -- A request without params arrives as a plain {}, which islist counts as a list, like []. A JSON {} carries the
+      -- empty-dict mark and passes.
+      if type(params) ~= "table" or islist(params) then
+        invalid = "params (an object is required)"
+      elseif type(params.name) ~= "string" then
+        invalid = "name (a string is required)"
+      elseif params.arguments ~= nil and (type(params.arguments) ~= "table" or islist(params.arguments)) then
+        invalid = "arguments (an object is required)"
+      end
+      if invalid then
+        logger.debug("server", "Rejected tools/call:", invalid)
+        return nil,
+          {
+            code = tools.ERROR_CODES.INVALID_PARAMS,
+            message = "Invalid params",
+            data = "Missing or invalid parameter: " .. invalid,
+          }
+      end
+
+      logger.debug("server", "Received tools/call:", params.name, "arguments:", describe_fields(params.arguments))
       local result_or_error_table = tools.handle_invoke(client, params)
 
       -- Check if this is a deferred response (blocking tool)
@@ -358,7 +380,7 @@ function M.register_handlers()
       local err = result_or_error_table.error
       local outcome = err and ("error " .. tostring(err.code) .. " " .. tostring(err.message))
         or ("result " .. describe_fields(result_or_error_table.result))
-      logger.debug("server", "Response - tools/call", params and params.name .. ":", outcome)
+      logger.debug("server", "Response - tools/call", params.name .. ":", outcome)
 
       if result_or_error_table.error then
         return nil, result_or_error_table.error
@@ -429,8 +451,10 @@ end
 ---Broadcast a message to all connected clients
 ---@param method string The method name
 ---@param params table|nil The parameters to send
----@return boolean success Whether broadcast was successful
-function M.broadcast(method, params)
+---@param on_written fun(written: integer)|nil When a connected client took the message: called once after the writes
+---  finished, with how many succeeded (see tcp.lua broadcast)
+---@return boolean success Whether a connected client took the message
+function M.broadcast(method, params, on_written)
   if not M.state.server then
     return false
   end
@@ -442,8 +466,7 @@ function M.broadcast(method, params)
   }
 
   local json_message = vim.json.encode(message)
-  tcp_server.broadcast(M.state.server, json_message)
-  return true
+  return tcp_server.broadcast(M.state.server, json_message, on_written) > 0
 end
 
 ---Get server status information

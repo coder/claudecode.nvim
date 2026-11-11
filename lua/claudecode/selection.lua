@@ -21,11 +21,247 @@ end
 ---@return boolean
 local function cursor_unmoved_since_flush(bufnr)
   local caf = M.state.cursor_at_flush
-  if not caf or caf.bufnr ~= bufnr then
+  if not caf or caf.bufnr ~= bufnr or caf.left then
     return false
   end
   local pos = vim.api.nvim_win_get_cursor(0)
   return pos[1] == caf.pos[1] and pos[2] == caf.pos[2]
+end
+
+---The selection that says "the cursor is here", for a position in a buffer.
+---@param bufnr integer
+---@param row integer 1-based line
+---@param col integer 0-based byte column
+---@return table
+local function cursor_selection(bufnr, row, col)
+  local file_path = vim.api.nvim_buf_get_name(bufnr)
+  return {
+    text = "",
+    filePath = file_path,
+    fileUrl = "file://" .. file_path,
+    selection = {
+      start = { line = row - 1, character = col },
+      ["end"] = { line = row - 1, character = col },
+      isEmpty = true,
+    },
+  }
+end
+
+---Forgets the held visual selection. Call it where `latest_selection` is replaced.
+local function clear_held_state()
+  M.state.last_active_visual_selection = nil
+  M.state.cursor_at_flush = nil
+end
+
+---Returns true if the buffer still has the text of a selection at the selection's range. The range is in bytes, as
+---the selection was read. A change elsewhere in the buffer leaves it as it was, unless it shifts the range.
+---@param held table A selection that is not empty.
+---@param bufnr number
+---@return boolean
+local function selection_text_is_there(held, bufnr)
+  local start_pos, end_pos = held.selection.start, held.selection["end"]
+  local ok, lines =
+    pcall(vim.api.nvim_buf_get_text, bufnr, start_pos.line, start_pos.character, end_pos.line, end_pos.character, {})
+  return ok and utils.valid_utf8(table.concat(lines, "\n")) == held.text
+end
+
+---Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
+---byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
+---A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
+---@param line string
+---@param col integer
+---@return integer
+local function code_point_start(line, col)
+  local byte = line:byte(col)
+  if not byte or byte < 0x80 or byte > 0xBF then
+    return col
+  end
+  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
+  for lead = col - 1, math.max(col - 3, 1), -1 do
+    byte = line:byte(lead)
+    if byte < 0x80 or byte > 0xBF then
+      local length = utils.utf8_sequence_length(line, lead)
+      return (length and lead + length > col) and lead or col
+    end
+  end
+  return col
+end
+
+---The cursor of a buffer that is not the current one: where a window shows it, else where the selection was
+---released, kept inside the text that is there now.
+---@param bufnr integer
+---@return table
+local function cursor_in_other_buffer(bufnr)
+  local winid = vim.fn.win_findbuf(bufnr)[1]
+  if winid then
+    local pos = vim.api.nvim_win_get_cursor(winid)
+    return cursor_selection(bufnr, pos[1], pos[2])
+  end
+  local caf = M.state.cursor_at_flush
+  local pos = caf and caf.bufnr == bufnr and caf.pos or { 1, 0 }
+  local row = math.max(1, math.min(pos[1], vim.api.nvim_buf_line_count(bufnr)))
+  local line = vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1] or ""
+  -- The text changed, so the byte column can fall inside a multibyte character: a cursor is on its first byte.
+  local col = code_point_start(line, math.min(pos[2], #line) + 1) - 1
+  return cursor_selection(bufnr, row, col)
+end
+
+---Reports the cursor at once if the buffer's text changed since the visual selection in `latest_selection` was read,
+---and the selection's text is no longer at its range. Claude must not keep text that is gone, not even until the
+---debounce fires: the debounce does nothing in the Claude terminal. The changedtick says that the buffer changed,
+---not where, so the range is read again.
+---The selection's buffer is not the current one when you are in the Claude terminal, which keeps a held selection
+---(issue #246). A reload (`:checktime`, autoread) or a plugin's edit changes that buffer then, and neither fires
+---TextChanged. The terminal does not update the selection, so the cursor of the selection's buffer is sent here,
+---unless that buffer is a Claude terminal too: nothing in a terminal reaches Claude.
+---@return boolean demoted
+local function demote_if_selection_text_changed()
+  local read = M.state.selection_tick
+  local held = M.state.latest_selection
+  if not (read and held) or held.selection.isEmpty then
+    return false
+  end
+  local current_buf = vim.api.nvim_get_current_buf()
+  local in_terminal = M.is_claude_terminal_buffer(current_buf)
+  if read.bufnr ~= current_buf and not in_terminal then
+    return false
+  end
+  -- The selection's buffer can be a Claude terminal itself: it became one after the selection was read.
+  local from_terminal = read.bufnr ~= current_buf and not M.is_claude_terminal_buffer(read.bufnr)
+  if read.bufnr ~= current_buf and not vim.api.nvim_buf_is_loaded(read.bufnr) then
+    return false
+  end
+  if vim.api.nvim_buf_get_changedtick(read.bufnr) == read.tick or selection_text_is_there(held, read.bufnr) then
+    return false
+  end
+  -- Where the selection was released is in the state that clear_held_state forgets.
+  local cursor = from_terminal and cursor_in_other_buffer(read.bufnr)
+  clear_held_state()
+  if cursor then
+    if M.has_selection_changed(cursor) then
+      M.state.latest_selection = cursor
+      if M.server then
+        M.send_selection_update(cursor)
+      end
+    end
+  elseif in_terminal then
+    -- The selection's buffer is a Claude terminal: it became one after the selection was read (termopen() in it, or a
+    -- rename to a term://...claude name), and you are in it or in another one. update_selection does nothing in the
+    -- terminal except cancel the demotion and call this function, so it must not come back here from it. Nothing in
+    -- a terminal reaches Claude, so no cursor of it is sent. Forget the read: nothing checks it again. A pending
+    -- demotion must not fire here either: it would take this buffer for an ordinary one and send its cursor.
+    M._cancel_demotion_timer()
+    M.state.selection_tick = nil
+  else
+    M.update_selection()
+  end
+  return true
+end
+
+---Whether a visual selection that was read in the buffer is what Claude holds. Disabling tracking forgets both.
+---@param bufnr integer
+---@return boolean
+local function holds_selection_of(bufnr)
+  local read = M.state.selection_tick
+  local held = M.state.latest_selection
+  return read ~= nil and read.bufnr == bufnr and held ~= nil and not held.selection.isEmpty
+end
+
+---Listens for changes to the buffer of the selection that Claude holds, for as long as it holds one. Neovim fires
+---TextChanged only for the current buffer, so this is the only way to see a reload or a plugin's edit of a buffer
+---while you are in the Claude terminal. `:checktime` and autoread reload a buffer and keep the listener (on_reload).
+---`:edit` and `:edit!` detach it (on_detach), so it is attached again when the buffer still holds the selection.
+---@param bufnr integer
+local function watch_selection_buffer(bufnr)
+  if M.state.watched_buffers[bufnr] then
+    return
+  end
+  M.state.watched_buffers[bufnr] = true
+  local check_scheduled = false
+  -- Do not touch the buffer in a callback: it is being changed. One check after a burst of changes (a :%s) is enough.
+  local function check_soon()
+    if not check_scheduled then
+      check_scheduled = true
+      vim.schedule(function()
+        check_scheduled = false
+        demote_if_selection_text_changed()
+      end)
+    end
+  end
+  vim.api.nvim_buf_attach(bufnr, false, {
+    on_lines = function(_, buf)
+      if not holds_selection_of(buf) then
+        M.state.watched_buffers[buf] = nil
+        return true -- detach
+      end
+      check_soon()
+    end,
+    -- Neovim ignores what on_reload returns and keeps the listener, so only on_lines can detach it.
+    on_reload = function(_, buf)
+      if holds_selection_of(buf) then
+        check_soon()
+      end
+    end,
+    on_detach = function(_, buf)
+      M.state.watched_buffers[buf] = nil
+      vim.schedule(function()
+        if holds_selection_of(buf) and vim.api.nvim_buf_is_loaded(buf) then
+          watch_selection_buffer(buf)
+          demote_if_selection_text_changed()
+        end
+      end)
+    end,
+  })
+end
+
+---Records the buffer and changedtick of the visual selection that was just read, and listens for changes to it.
+---@param bufnr integer
+local function record_selection_read(bufnr)
+  M.state.selection_tick = { bufnr = bufnr, tick = vim.api.nvim_buf_get_changedtick(bufnr) }
+  watch_selection_buffer(bufnr)
+end
+
+---Reacts, at the moment it happens, to something that ends the hold on a visual selection. A timer that compares
+---the cursor when it fires does not see a move away and back inside one debounce, and does not see an edit that
+---leaves the cursor where it was.
+---1. The text of the selection changed: report the cursor now.
+---2. The cursor left the flushed position: report the cursor now. It is final at CursorMoved. The Claude terminal
+---   does not update the selection, so a move that waited for the debounce would leave the old selection there.
+---3. Another buffer was entered: note it in `cursor_at_flush.away`, and decide at the next event whether it was
+---   the Claude terminal. A new Claude terminal has no name and is not registered yet when BufEnter fires, so
+---   the decision cannot be made then. The Claude terminal is not a place the selection left: going there keeps
+---   the held selection (issue #246). Any other buffer sets `cursor_at_flush.left`: the next update and the
+---   demotion then report the cursor, even if the cursor comes back. The cursor is not final at BufEnter.
+---@param compare_cursor boolean false at BufEnter: Neovim restores the window cursor after that event, so only the
+---buffer and the text say whether the selection is gone.
+local function reconcile_held_selection(compare_cursor)
+  if demote_if_selection_text_changed() then
+    return
+  end
+  local caf = M.state.cursor_at_flush
+  if not caf or caf.left then
+    return
+  end
+  local current_buf = vim.api.nvim_get_current_buf()
+  if caf.away and caf.away ~= current_buf then
+    if not M.is_claude_terminal_buffer(caf.away) then
+      caf.away = nil
+      caf.left = true
+      return
+    end
+    caf.away = nil
+  end
+  if M.is_claude_terminal_buffer(current_buf) then
+    -- Cancel the pending demotion now: if it fired first, its callback would resolve the held state in the
+    -- terminal, before the terminal's own debounced update cancels it.
+    caf.away = nil
+    M._cancel_demotion_timer()
+  elseif caf.bufnr ~= current_buf then
+    caf.away = current_buf
+  elseif compare_cursor and not cursor_unmoved_since_flush(current_buf) then
+    clear_held_state()
+    M.update_selection()
+  end
 end
 
 M.state = {
@@ -38,10 +274,20 @@ M.state = {
   demotion_timer = nil,
   visual_demotion_delay_ms = 50,
 
-  -- Cursor position captured when a visual selection is flushed on visual-mode exit.
-  -- Demotion only fires once the cursor actually moves away from this position, so a
-  -- held selection persists (see issue #246 and M.flush_visual_selection).
+  -- { bufnr, pos, left, away }: buffer and cursor position captured when a visual selection is
+  -- flushed on visual-mode exit. Demotion only fires once the cursor actually moves away from this
+  -- position, so a held selection persists (see issue #246 and M.flush_visual_selection).
+  -- `left` is set when another buffer was entered, so coming back does not undo it. `away` is the
+  -- buffer entered since, until the plugin knows whether it is the Claude terminal.
   cursor_at_flush = nil,
+
+  -- { bufnr, tick }: the buffer and its changedtick when the visual selection in latest_selection
+  -- was read. A later change of that buffer's text means Claude holds text the buffer may no
+  -- longer have (see M.on_text_changed).
+  selection_tick = nil,
+
+  -- Buffers with a change listener (see watch_selection_buffer): bufnr -> true.
+  watched_buffers = {},
 
   -- { bufnr, tick } captured when visual mode is entered. Used to detect that an operator
   -- consumed/mutated the selection (d/c/>/x...) so the flush does not broadcast stale,
@@ -79,6 +325,7 @@ function M.disable()
   M.state.latest_selection = nil
   M.state.last_active_visual_selection = nil
   M.state.cursor_at_flush = nil
+  M.state.selection_tick = nil
   M.state.visual_entry = nil
   M.server = nil
 
@@ -117,15 +364,16 @@ function M._cancel_demotion_timer()
 end
 
 ---Creates autocommands for tracking selections.
----Sets up listeners for CursorMoved, CursorMovedI, BufEnter, ModeChanged, and TextChanged events.
+---Sets up listeners for CursorMoved, CursorMovedI, BufEnter, ModeChanged, TextChanged, TextChangedI and
+---TextChangedP events.
 ---@local
 function M._create_autocommands()
   local group = vim.api.nvim_create_augroup("ClaudeCodeSelection", { clear = true })
 
   vim.api.nvim_create_autocmd({ "CursorMoved", "CursorMovedI", "BufEnter" }, {
     group = group,
-    callback = function()
-      M.on_cursor_moved()
+    callback = function(args)
+      M.on_cursor_moved(args.event == "BufEnter")
     end,
   })
 
@@ -136,7 +384,7 @@ function M._create_autocommands()
     end,
   })
 
-  vim.api.nvim_create_autocmd("TextChanged", {
+  vim.api.nvim_create_autocmd({ "TextChanged", "TextChangedI", "TextChangedP" }, {
     group = group,
     callback = function()
       M.on_text_changed()
@@ -151,8 +399,10 @@ function M._clear_autocommands()
 end
 
 ---Handles cursor movement events.
----Triggers a debounced update of the selection.
-function M.on_cursor_moved()
+---Notes that the cursor left a held visual selection, then triggers a debounced update of the selection.
+---@param entered_buffer boolean|nil true for BufEnter, when the window cursor is not restored yet.
+function M.on_cursor_moved(entered_buffer)
+  reconcile_held_selection(not entered_buffer)
   M.debounce_update()
 end
 
@@ -164,6 +414,8 @@ end
 ---released in under `debounce_ms` are not lost (issue #246).
 ---Entering visual mode records the buffer's changedtick so the flush can tell an
 ---abandoned selection apart from one consumed by a mutating operator (d/c/>/x...).
+---It also ends the hold on the previous selection: a new selection replaces it, unless it is in the Claude
+---terminal.
 function M.on_mode_changed()
   local event = vim.v.event
   if event then
@@ -172,6 +424,12 @@ function M.on_mode_changed()
     if entering_visual then
       local buf = vim.api.nvim_get_current_buf()
       M.state.visual_entry = { bufnr = buf, tick = vim.api.nvim_buf_get_changedtick(buf) }
+      -- A new selection replaces the held one. A selection in the Claude terminal never reaches Claude (the
+      -- flush and updates skip it), so it does not: you can copy text from the terminal and the selection you
+      -- held stays.
+      if not M.is_claude_terminal_buffer(buf) then
+        clear_held_state()
+      end
     elseif leaving_visual then
       M.flush_visual_selection()
     end
@@ -181,8 +439,9 @@ function M.on_mode_changed()
 end
 
 ---Handles text change events.
----Triggers a debounced update of the selection.
+---Ends the hold on a visual selection whose text changed, then triggers a debounced update of the selection.
 function M.on_text_changed()
+  reconcile_held_selection(true)
   M.debounce_update()
 end
 
@@ -231,23 +490,13 @@ function M.update_selection()
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  -- If the buffer name starts with "term://" and contains "claude", do not update selection
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
-    -- Optionally, cancel demotion timer like for the terminal
+  -- Do not update the selection in the Claude terminal; cancel any pending demotion. A new terminal is not registered
+  -- when BufEnter fires, so the held text of the file you came from is checked here too, once the debounce knows it.
+  if M.is_claude_terminal_buffer(current_buf) then
     M._cancel_demotion_timer()
+    demote_if_selection_text_changed()
     return
-  end
-
-  -- If the current buffer is the Claude terminal, do not update selection
-  if terminal then
-    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-    if claude_term_bufnr and current_buf == claude_term_bufnr then
-      -- Cancel any pending demotion if we switch to the Claude terminal
-      M._cancel_demotion_timer()
-      return
-    end
   end
 
   local current_mode_info = vim.api.nvim_get_mode()
@@ -266,6 +515,7 @@ function M.update_selection()
         selection_data = vim.deepcopy(current_selection), -- Store a copy
         timestamp = vim.loop.now(),
       }
+      record_selection_read(current_buf)
     else
       -- No valid visual selection (e.g., get_visual_selection returned nil)
       -- Clear last_active_visual if it was for this buffer
@@ -280,12 +530,14 @@ function M.update_selection()
       -- A demotion is already pending. While the cursor is still on the flushed position the
       -- held visual selection must be preserved (an idle re-entry here must not wipe it before
       -- the cursor actually moves -- matters when visual_demotion_delay_ms >= debounce_ms).
-      -- Once the cursor has moved, reflect the immediate cursor position; M.state.latest_selection
-      -- stays the visual one until the timer resolves.
+      -- Once the cursor has left (it moved, or this is another buffer), report the cursor and end the
+      -- hold: M.state.latest_selection is no longer the held selection, and a later return to the
+      -- flushed position must not read as "unmoved".
       if cursor_unmoved_since_flush(current_buf) then
         current_selection = M.state.latest_selection
       else
         current_selection = M.get_cursor_position()
+        clear_held_state()
       end
     elseif
       last_visual
@@ -481,28 +733,6 @@ local function get_selection_coordinates()
   else
     return p2, p1
   end
-end
-
----Returns the byte index of the first byte of the code point that contains byte col of line. A mark keeps its
----byte column when text before it on the line changes, so `gv` can put the anchor inside a multibyte character.
----A continuation byte outside a well-formed sequence is a character of its own in Neovim and keeps its column.
----@param line string
----@param col integer
----@return integer
-local function code_point_start(line, col)
-  local byte = line:byte(col)
-  if not byte or byte < 0x80 or byte > 0xBF then
-    return col
-  end
-  -- A code point has at most three continuation bytes (0x80-0xBF) after its first byte.
-  for lead = col - 1, math.max(col - 3, 1), -1 do
-    byte = line:byte(lead)
-    if byte < 0x80 or byte > 0xBF then
-      local length = utils.utf8_sequence_length(line, lead)
-      return (length and lead + length > col) and lead or col
-    end
-  end
-  return col
 end
 
 ---Returns the byte index of the last selected byte on the last line of a charwise or blockwise selection.
@@ -790,16 +1020,9 @@ function M.flush_visual_selection()
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local buf_name = vim.api.nvim_buf_get_name(current_buf)
 
-  if buf_name and buf_name:match("^term://") and buf_name:lower():find("claude", 1, true) then
+  if M.is_claude_terminal_buffer(current_buf) then
     return
-  end
-  if terminal then
-    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
-    if claude_term_bufnr and current_buf == claude_term_bufnr then
-      return
-    end
   end
 
   -- Skip when the buffer was edited while in visual mode: the changedtick advancing since
@@ -812,6 +1035,14 @@ function M.flush_visual_selection()
   -- residual non-broadcast, not a regression.
   local entry = M.state.visual_entry
   if entry and entry.bufnr == current_buf and vim.api.nvim_buf_get_changedtick(current_buf) ~= entry.tick then
+    -- The operator consumed the selection. Starting it already ended the hold on any selection from before,
+    -- whether or not that one's text is intact, and an in-visual update may have sent this one: report the
+    -- cursor now. The debounce does nothing in the Claude terminal, so waiting could leave a selection there.
+    clear_held_state()
+    local held = M.state.latest_selection
+    if held and not held.selection.isEmpty then
+      M.update_selection()
+    end
     return
   end
 
@@ -822,6 +1053,7 @@ function M.flush_visual_selection()
 
   -- Record the cursor position at flush time so demotion only fires after a real move.
   M.state.cursor_at_flush = { bufnr = current_buf, pos = vim.api.nvim_win_get_cursor(0) }
+  record_selection_read(current_buf)
   M.state.last_active_visual_selection = {
     bufnr = current_buf,
     selection_data = vim.deepcopy(selection),
@@ -838,24 +1070,14 @@ function M.flush_visual_selection()
   end
 end
 
----Gets the current cursor position when no visual selection is active.
+---Gets the cursor position when no visual selection is active.
+---@param winid integer|nil Window to read; nil reads the current window.
 ---@return table A table containing an empty text, file path, URL, and cursor
 ---position as start/end, with isEmpty set to true.
-function M.get_cursor_position()
-  local cursor_pos = vim.api.nvim_win_get_cursor(0)
-  local current_buf = vim.api.nvim_get_current_buf()
-  local file_path = vim.api.nvim_buf_get_name(current_buf)
-
-  return {
-    text = "",
-    filePath = file_path,
-    fileUrl = "file://" .. file_path,
-    selection = {
-      start = { line = cursor_pos[1] - 1, character = cursor_pos[2] },
-      ["end"] = { line = cursor_pos[1] - 1, character = cursor_pos[2] },
-      isEmpty = true,
-    },
-  }
+function M.get_cursor_position(winid)
+  local cursor_pos = vim.api.nvim_win_get_cursor(winid or 0)
+  local current_buf = winid and vim.api.nvim_win_get_buf(winid) or vim.api.nvim_get_current_buf()
+  return cursor_selection(current_buf, cursor_pos[1], cursor_pos[2])
 end
 
 ---Checks if the selection has changed compared to the latest stored selection.
@@ -896,6 +1118,30 @@ end
 ---@param selection table The selection object to send.
 function M.send_selection_update(selection)
   M.server.broadcast("selection_changed", selection)
+end
+
+---Whether a buffer is the Claude terminal, which selection tracking ignores.
+---A buffer that was wiped is not: a stored buffer number can name one (a popup that wipes itself when you leave
+---it), and nvim_buf_get_name() raises an error for it.
+---@param bufnr integer
+---@return boolean
+function M.is_claude_terminal_buffer(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) then
+    return false
+  end
+  -- A terminal buffer is named term://{cwd}//{pid}:{cmd}. Look for claude in the command
+  -- only, so a shell started in a directory such as claudecode.nvim does not count.
+  local term_cmd = vim.api.nvim_buf_get_name(bufnr):match("^term://.-//%d+:(.*)$")
+  if term_cmd and term_cmd:lower():find("claude", 1, true) then
+    return true
+  end
+  if terminal then
+    local claude_term_bufnr = terminal.get_active_terminal_bufnr()
+    if claude_term_bufnr and bufnr == claude_term_bufnr then
+      return true
+    end
+  end
+  return false
 end
 
 ---Gets the latest recorded selection.

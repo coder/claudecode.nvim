@@ -182,23 +182,17 @@ end
 
 ---Runs the Ex command `command`, which can load the file of `buf` again. Run from Lua, an error in a user's
 ---autocommand stops that reload halfway: the buffer keeps its old text with empty lines added, but takes the file as
----read, so a later `:w` writes that text over the file without a warning. When `command` fails after the reload began,
----the buffer reads its file again under `:silent!`, which lets the read end as for a command the user types, and then
----the error is raised. Only then, because `:silent!` also hides errors from autocommands that check for them.
+---read, so a later `:w` writes that text over the file without a warning. When `command` fails and the buffer has no
+---unsaved changes, the buffer reads its file again under `:silent!`, which lets the read end as for a command the user
+---types, and then the error is raised. The read does not wait for a sign that the reload began: an error in a user's
+---BufReadPre autocommand stops the rest of the BufReadPre autocommands, so no autocommand of ours can tell. Only then,
+---because `:silent!` also hides errors from autocommands that check for them.
 ---@param buf integer
 ---@param command string
 local function run_reload_command(buf, command)
-  local reading = false
-  local autocmd = vim.api.nvim_create_autocmd("BufReadPre", {
-    buffer = buf,
-    callback = function()
-      reading = true
-    end,
-  })
   local ok, err = pcall(vim.cmd, command)
-  pcall(vim.api.nvim_del_autocmd, autocmd)
   if not ok then
-    if reading and vim.api.nvim_buf_is_loaded(buf) and not vim.api.nvim_buf_get_option(buf, "modified") then
+    if vim.api.nvim_buf_is_loaded(buf) and not vim.api.nvim_buf_get_option(buf, "modified") then
       vim.api.nvim_buf_call(buf, function()
         vim.cmd("silent! edit")
       end)
@@ -293,19 +287,30 @@ end
 ---Runs `fn` while Neovim does not check the file of `buf`: it checks only a buffer whose 'buftype' is empty. The
 ---BufEnter and BufWinEnter autocommands that `fn` triggers see 'buftype' "acwrite". Not "nowrite": Neovim reads
 ---'modified' as off for a nowrite buffer, so an autocommand that loads an unmodified buffer again would drop unsaved
----changes.
+---changes. A write of an "acwrite" buffer skips the check that refuses `:w` of a buffer opened before its file
+---existed (E13), so such a buffer is also 'readonly' during `fn`. With default options, 'readonly' refuses a write
+---without `!`, or asks with 'confirm', as E13 does.
 ---@param buf integer
 ---@param fn fun()
 local function without_neovim_file_check(buf, fn)
-  local function set_buftype(value)
+  local function setlocal(option)
     vim.api.nvim_buf_call(buf, function()
-      vim.cmd("noautocmd setlocal buftype=" .. value)
+      vim.cmd("noautocmd setlocal " .. option)
     end)
   end
-  set_buftype("acwrite")
+  local set_readonly = new_file_buffers[buf] and not vim.api.nvim_buf_get_option(buf, "readonly")
+  if set_readonly then
+    setlocal("readonly")
+  end
+  setlocal("buftype=acwrite")
   local ok, err = pcall(fn)
-  if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_option(buf, "buftype") == "acwrite" then
-    set_buftype("")
+  if vim.api.nvim_buf_is_valid(buf) then
+    if vim.api.nvim_buf_get_option(buf, "buftype") == "acwrite" then
+      setlocal("buftype=")
+    end
+    if set_readonly and vim.api.nvim_buf_get_option(buf, "readonly") then
+      setlocal("noreadonly")
+    end
   end
   if not ok then
     error(err, 0)
@@ -498,7 +503,7 @@ end
 ---@param params table The input parameters for the tool
 ---@return table MCP-compliant response with content array
 local function handler(params)
-  if not params.filePath then
+  if type(params.filePath) ~= "string" then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
   end
 
