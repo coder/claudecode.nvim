@@ -674,6 +674,17 @@ function M.get_active_bufnr()
   return nil
 end
 
+---Hide the terminal when it is a visible float, so that it does not cover a diff. A split stays as it is: a
+---diff makes room for it. Nothing shows the float again but the user's own toggle.
+---@return boolean hidden Whether a float was hidden
+function M.hide_float()
+  if not (terminal and terminal:buf_valid() and cc_is_visible(terminal) and win_is_floating(terminal.win)) then
+    return false
+  end
+  cc_hide(terminal)
+  return true
+end
+
 ---Is the terminal provider available?
 ---@return boolean
 function M.is_available()
