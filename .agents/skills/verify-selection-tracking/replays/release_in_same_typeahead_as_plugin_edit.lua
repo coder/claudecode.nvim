@@ -2,9 +2,10 @@
 -- mode and presses Esc in the same typeahead (`<Cmd>lua ...<CR><Esc>`). The listener counts the edit and schedules the
 -- check that would show that visual mode is still on, but no main-loop turn runs between the edit and the Esc, so the
 -- flush on Esc finds an edit that nobody checked and takes it for an operator's. Claude gets the cursor, not the
--- selection, although its text is untouched. A plugin edit from a timer, a job or an autocmd is not like this: the
--- check runs before the next key (`release_after_plugin_edit_in_visual.lua`). BUG means the plugin still does that;
--- the probe prints OK once the fix lands. Default delays.
+-- selection, although its text is untouched. A plugin edit whose check runs before the next key is not like this
+-- (`release_after_plugin_edit_in_visual.lua`). Two other ways to reach the same flush are
+-- `release_with_key_during_plugin_callback.lua` and `release_after_autocmd_edit_in_visual.lua`. BUG means the plugin
+-- still does that; the probe prints OK once the fix lands. Default delays.
 local driver = require("driver")
 driver.run({
   prepare = function()

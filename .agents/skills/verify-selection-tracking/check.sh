@@ -206,12 +206,13 @@ read_records_tick() {
 fact[ReadRecordsTick]=$(as_bool read_records_tick)
 # record_selection_read listens to the buffer it records, and the listener schedules the check when the buffer changes
 # (a reload or a plugin's edit: TextChanged fires only for the current buffer).
+# on_lines and on_reload each call check_soon, at any indentation: the code before #524 called it straight from on_lines, and
+# since then both calls sit inside `if holds_selection_of(buf) then`.
 listens_to_selection_buffer() {
   in_order '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
     in_order '^  local function check_soon\(\)$' 'vim\.schedule\(function\(\)' '^        demote_if_selection_text_changed\(\)$' \
-      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' \
-      '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' \
-      '^    on_reload = function\(_, buf\)$' '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' <<<"$watch_buffer"
+      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' '^ *check_soon\(\)$' \
+      '^    on_reload = function\(_, buf\)$' '^ *check_soon\(\)$' <<<"$watch_buffer"
 }
 fact[ListensToSelectionBuffer]=$(as_bool listens_to_selection_buffer)
 # The check runs in the Claude terminal for a selection of another buffer that is not a Claude terminal, clears the held

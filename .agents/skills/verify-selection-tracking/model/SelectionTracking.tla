@@ -317,9 +317,11 @@ TickMoved(s, b) == IF s.entryBuf = b THEN [s EXCEPT !.entryMoved = TRUE] ELSE s
 \* An edit of buffer b reaches the listener (on_lines): note_visual_edit counts it on the visual_entry of b.
 EntryEdited(s, b) == IF s.entryBuf = b /\ ListenerNotesVisualEdit THEN [s EXCEPT !.entryDirty = TRUE] ELSE s
 
-\* A plugin's edit in visual mode: the listener counts it, and the check that it schedules runs before the next key (the edit
-\* comes from a callback of the main loop). The visual mode is still on then, so the entry is not consumed, unless the code
-\* takes every counted edit for an operator's.
+\* A plugin's edit in visual mode: the listener counts it, and the model runs the check that the code schedules in the same
+\* step, which is true when the check comes before the next key. Visual mode is still on then, so the entry is not consumed,
+\* unless the code takes every counted edit for an operator's. A key that comes first is not modeled (a known bug): a
+\* mapping that edits and presses Esc in one typeahead, a key that arrives during the plugin's callback, an autocmd edit at
+\* a mode change. See SKILL.md, "Scope and bounds".
 PluginEditedInVisual(s, b) ==
   TickMoved(IF VisualCheckSparesPluginEdit THEN s ELSE EntryEdited(s, b), b)
 
@@ -395,10 +397,10 @@ YouReleaseSelection ==
      ELSE NoSpecChange
 
 (* d, c, x, > or another operator on the selection: the text changes (the listener sees *)
-(* the edit, then visual mode ends) and the cursor lands on p. CursorMoved and          *)
-(* TextChanged fire when Neovim waits for the next key, so a mapping, a macro or         *)
-(* typeahead runs the next key first. The step leaves them out: it is the case in which  *)
-(* they have not fired yet.                                                              *)
+(* the edit with the mode already normal, then ModeChanged fires) and the cursor lands   *)
+(* on p. CursorMoved and TextChanged fire when Neovim waits for the next key, so a       *)
+(* mapping, a macro or typeahead runs the next key first. The step leaves them out: it   *)
+(* is the case in which they have not fired yet.                                         *)
 YouEditSelection(p) ==
   /\ buf \in Files /\ mode = "v" /\ ver[buf] < MaxEdits
   /\ LET vr == [ver EXCEPT ![buf] = @ + 1]
@@ -436,8 +438,8 @@ YouEditByPlugin ==
 
 (* A plugin edits another line while you select, and the selection stays on the screen with the *)
 (* text it had: the changedtick moves, and the listener counts the edit. No TextChanged and no   *)
-(* CursorMoved fire in visual mode. A key-driven edit followed by Esc in the same typeahead      *)
-(* would reach the flush before the check: not modeled.                                          *)
+(* CursorMoved fire in visual mode. An edit whose check has not run when the next key arrives   *)
+(* would reach the flush unchecked: not modeled (a known bug, see SKILL.md).                     *)
 YouEditByPluginInVisual ==
   /\ buf \in Files /\ mode = "v"
   /\ SetS(PluginEditedInVisual(S, buf))
