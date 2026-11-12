@@ -19,6 +19,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local shows
   local verbose
   local logged
+  local wiped_buffers
   local mock_snacks
 
   local function make_window(buf, relative)
@@ -67,6 +68,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     shows = {}
     verbose = false
     logged = {}
+    wiped_buffers = {}
     source_win = make_window(500, "")
     current_win = source_win
 
@@ -93,6 +95,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         end,
       }),
       keymap = { set = function() end },
+      v = { errmsg = "" },
       fn = {
         getcmdwintype = function()
           return ""
@@ -196,7 +199,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           return fn()
         end,
         nvim_buf_is_valid = function(b)
-          return b ~= nil and b >= 1
+          return b ~= nil and b >= 1 and not wiped_buffers[b]
         end,
         nvim_buf_get_option = function()
           return "terminal"
@@ -235,6 +238,10 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           return current_win
         end,
         nvim_set_current_win = function(w)
+          -- As Neovim does.
+          if w == nil or windows[w] == nil or not windows[w].valid then
+            error("Invalid window id: " .. tostring(w), 0)
+          end
           current_win = w
         end,
         nvim_win_call = function(_, fn)
@@ -460,6 +467,47 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       assert.is_nil(term.win)
       assert.are.equal(third_window, current_win)
       assert.are.equal(1, #logged)
+    end)
+
+    it("does not enter the caller's window, which the autocmd closed too, without focus", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      local third_window = make_window(600, "")
+      local split_window
+      local original_cmd = vim.cmd
+      vim.cmd = function(c)
+        original_cmd(c)
+        if c:find("split", 1, true) then
+          split_window = current_win
+        elseif c == "doautocmd <nomodeline> BufLeave" then
+          windows[source_win].valid = false
+          current_win = third_window
+          windows[split_window].valid = false
+        end
+      end
+
+      snacks_provider.open("claude", {}, cfg, false)
+
+      assert.is_nil(term.win)
+      assert.are.equal(third_window, current_win)
+      assert.are.equal(1, #logged)
+    end)
+
+    it("says nothing about a closed window when the autocmd wipes the terminal's buffer", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      local original_cmd = vim.cmd
+      vim.cmd = function(c)
+        original_cmd(c)
+        if c == "doautocmd <nomodeline> BufLeave" then
+          wiped_buffers[term.buf] = true
+        end
+      end
+
+      snacks_provider.open("claude", {}, cfg, false)
+
+      assert.is_nil(term.win)
+      assert.are.same({}, logged)
     end)
   end)
 

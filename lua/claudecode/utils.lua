@@ -61,11 +61,14 @@ local function buf_hides(buf)
   return bufhidden == "hide" or vim.o.hidden
 end
 
----Whether the code runs inside an autocmd. `expand("<abuf>")` gives the buffer number there and "" outside one, except
----that it raises E496 outside one when 'verbose' is above 0 (`:verbose`, `nvim -V1`). An error means outside.
+---Whether the code runs inside an autocmd. `expand("<abuf>")` gives the buffer number there and "" outside one. Outside
+---one with 'verbose' above 0 (`:verbose`, `nvim -V1`) it raises E496, and under `:silent!` it gives "" and sets
+---v:errmsg instead. An error means outside, and v:errmsg is as it was before the call.
 ---@return boolean
 local function inside_autocmd()
+  local errmsg = vim.v.errmsg
   local ok, abuf = pcall(vim.fn.expand, "<abuf>")
+  vim.v.errmsg = errmsg
   return ok and abuf ~= ""
 end
 

@@ -508,9 +508,12 @@ function show_hidden_terminal(effective_config, focus)
 
   -- Set the existing buffer in the new window
   if not utils.win_set_buf_in_split(new_winid, bufnr) then
-    -- A BufLeave autocmd of the user's closed the split, so the terminal shows nowhere and stays hidden. Without focus,
-    -- the cursor goes back to the window it was in, as after a show, unless that autocmd closed it.
-    logger.one_line("warn", "terminal", "A BufLeave autocmd closed the terminal's window.")
+    -- A BufLeave autocmd of the user's closed the split, so the terminal shows nowhere and stays hidden. Or it wiped the
+    -- terminal's buffer, which closes no window and says nothing, as on main. Without focus, the cursor goes back to
+    -- the window it was in, as after a show, unless that autocmd closed it.
+    if vim.api.nvim_buf_is_valid(bufnr) then
+      logger.one_line("warn", "terminal", "A BufLeave autocmd closed the terminal's window.")
+    end
     if not focus and vim.api.nvim_win_is_valid(original_win) then
       vim.api.nvim_set_current_win(original_win)
     end
@@ -606,10 +609,9 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
     -- Terminal is not visible
     if has_buffer then
       -- Terminal process exists but is hidden, show it
+      -- When it fails, it has said why.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
-      else
-        logger.error("terminal", "Failed to show hidden terminal")
       end
     else
       -- No terminal process exists, check if there's an existing one we lost track of
@@ -647,10 +649,9 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- Terminal process exists but is hidden, show it
+      -- When it fails, it has said why.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
-      else
-        logger.error("terminal", "Failed to show hidden terminal")
       end
     end
   else

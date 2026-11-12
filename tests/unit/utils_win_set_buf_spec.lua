@@ -74,11 +74,18 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     stub(vim.fn, "getcmdwintype", function()
       return state.cmdwin
     end)
+    stub(vim, "v", { errmsg = "earlier error" })
     stub(vim.fn, "expand", function(what)
       assert.equal("<abuf>", what)
       if state.verbose and state.abuf == "" then
         -- Neovim raises this outside an autocmd when 'verbose' is above 0, for any level, on every Neovim we run.
-        error('E496: No autocommand buffer number to substitute for "<abuf>"', 0)
+        -- Under `:silent!` it gives "" and sets v:errmsg instead.
+        local message = 'E496: No autocommand buffer number to substitute for "<abuf>"'
+        if state.silent then
+          vim.v.errmsg = message
+          return ""
+        end
+        error(message, 0)
       end
       return state.abuf
     end)
@@ -135,6 +142,19 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
     assert.is_true(placed)
+    assert.same({
+      "BufLeave",
+      "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet",
+    }, log)
+  end)
+
+  it("gives v:errmsg back as it was, also when expand of <abuf> failed under :silent!", function()
+    state.verbose = true
+    state.silent = true
+
+    utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+    assert.equal("earlier error", vim.v.errmsg)
     assert.same({
       "BufLeave",
       "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet",

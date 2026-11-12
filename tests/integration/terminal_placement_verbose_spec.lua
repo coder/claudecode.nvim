@@ -15,7 +15,8 @@ describe("the terminal's placement with 'verbose' above 0", function()
   local SCENARIO = [==[
 -- P.path "new": the first :ClaudeCodeOpen. "hidden": a terminal that was started and hidden, then :ClaudeCodeOpen.
 -- "diff": the terminal is shown, then openDiff in a new tab. P.verbose is the level to set, or 0 with P.modifier, which
--- runs the command as `:verbose ClaudeCodeOpen`.
+-- runs the command as `:verbose ClaudeCodeOpen`. P.silent runs it as `:silent! ClaudeCodeOpen`, where a failed `expand`
+-- sets v:errmsg and raises nothing.
 local terminal = setup_native()
 if P.path == "diff" then
   local config = vim.deepcopy(require("claudecode.config").defaults)
@@ -31,6 +32,7 @@ if P.path ~= "new" then
 end
 local verbose = P.verbose or 0
 vim.o.verbose = verbose
+vim.v.errmsg = ""
 local ok, err
 if P.path == "diff" then
   local tools = require("claudecode.tools.init")
@@ -49,9 +51,10 @@ if P.path == "diff" then
     assert(not call.error, vim.inspect(call.error))
   end)
 else
-  ok, err = pcall(vim.cmd, (P.modifier and "verbose " or "") .. "ClaudeCodeOpen")
+  ok, err = pcall(vim.cmd, (P.silent and "silent! " or "") .. (P.modifier and "verbose " or "") .. "ClaudeCodeOpen")
 end
 vim.o.verbose = 0
+result.errmsg = vim.v.errmsg
 local term = terminal.get_active_terminal_bufnr()
 local job = term and vim.b[term].terminal_job_id
 result.ok = ok
@@ -65,6 +68,7 @@ finish()
   local function expect_placed(result, expected_windows, expected_tabs)
     assert.is_true(result.ok, "the command must not fail: " .. vim.inspect(result))
     assert.equal("", result.err)
+    assert.equal("", result.errmsg, "the placement must not leave an error in v:errmsg")
     assert.equal(expected_windows, result.terminal_windows, vim.inspect(result))
     assert.equal(expected_tabs, result.tabs, vim.inspect(result))
     assert.is_true(result.job_running, vim.inspect(result))
@@ -86,6 +90,14 @@ finish()
 
   it("shows a hidden terminal when the command runs as :verbose ClaudeCodeOpen", function()
     expect_placed(child.run_to_end(SCENARIO, { path = "hidden", modifier = true }), 1, 1)
+  end)
+
+  it("starts the terminal under :silent! with 'verbose' at 1, and leaves v:errmsg empty", function()
+    expect_placed(child.run_to_end(SCENARIO, { path = "new", verbose = 1, silent = true }), 1, 1)
+  end)
+
+  it("shows a hidden terminal under :silent! with 'verbose' at 1, and leaves v:errmsg empty", function()
+    expect_placed(child.run_to_end(SCENARIO, { path = "hidden", verbose = 1, silent = true }), 1, 1)
   end)
 
   it("opens a diff in a new tab, with the terminal shown there, when 'verbose' is 1", function()
