@@ -6,13 +6,12 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
 end
 
 -- A BufLeave autocmd of the user's that enters another window during `nvim_win_set_buf` makes Neovim load the terminal
--- into that window. `utils.win_set_buf_in_split` swaps while the old buffer still shows in the window that the split was
--- made from, and then enters the split, so Neovim fires the BufLeave autocmds itself, in that window, and the terminal
--- lands in the split. In the shapes below the window that the autocmd enters, the options of the user's file and of the
--- terminal buffer decide whether a buffer is unloaded, hidden or refused with E37, so the helper must keep the outcome
--- of a plain swap: the command works, the user's file is loaded and still shows in its window, and the terminal runs
--- in one window. Each case runs in its own headless Neovim, so a crash or a hang fails one case, with its exit code,
--- and not the whole file.
+-- into that window. `utils.win_set_buf_in_split` fires `BufLeave` itself, in the split, and puts the cursor back in the
+-- split when an autocmd moved it, so the terminal lands in the split. In the shapes below the window that the autocmd
+-- enters, the options of the user's file and of the terminal buffer decide whether a buffer is unloaded, hidden or
+-- refused with E37, so the helper must keep the outcome of a plain swap: the command works, the user's file is loaded
+-- and still shows in its window, and the terminal runs in one window. Each case runs in its own headless Neovim, so a
+-- crash or a hang fails one case, with its exit code, and not the whole file.
 describe("the terminal swap when a BufLeave autocmd enters another window, in other shapes", function()
   local SCRIPT = [[
     local target, options = os.getenv("SWAP_TARGET"), os.getenv("SWAP_OPTIONS")
@@ -134,13 +133,19 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       end,
     })
 
-    -- A BufLeave autocmd of the user's that enters their window in the first tab, once the new tab has its two windows.
+    -- A BufLeave autocmd of the user's that enters their window in the first tab, or that closes the window it runs in,
+    -- once the new tab has its two windows.
     local armed = os.getenv("SWAP_ARMED") ~= "0"
+    local closes = os.getenv("SWAP_CLOSE") == "1"
     vim.api.nvim_create_autocmd("BufLeave", {
       callback = function()
         if armed and vim.fn.tabpagenr() == 2 and #vim.api.nvim_tabpage_list_wins(0) == 2 then
           armed = false
-          vim.api.nvim_set_current_win(start_win)
+          if closes then
+            vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+          else
+            vim.api.nvim_set_current_win(start_win)
+          end
         end
       end,
     })
@@ -272,6 +277,18 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
 
   -- Without the autocmd above, Neovim fires BufEnter for the terminal buffer when the cursor enters the split, and a
   -- handler of that buffer, as Snacks' auto_insert is, can queue an insert that starts in the window the cursor ends in.
+  it("opens a diff in a new tab with no terminal when a BufLeave autocmd closes the terminal's split", function()
+    local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_CLOSE = "1" })
+
+    assert.equal(0, exit_code, "Neovim must survive (nil is a hang): " .. vim.inspect(result))
+    assert.is_not_nil(result, "the case wrote no result")
+    assert.is_true(result.armed_used, "the autocmd must have run during the swap, or the test proves nothing")
+    assert.is_true(result.deferred, "openDiff must open: " .. result.err)
+    assert.equal(2, result.tabs)
+    assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
+    assert.is_false(result.terminal_in_new_tab, "the terminal's split is closed, so the new tab has no terminal window")
+  end)
+
   it("opens a diff in a new tab without running a BufEnter autocmd of the terminal buffer", function()
     local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_ARMED = "0" })
 

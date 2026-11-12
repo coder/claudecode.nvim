@@ -12,8 +12,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local next_buf_id
   local pending_insert
   local fail_swap
-  local exec_log
-  local enter_probes
+  local cmd_log
   local bufenter_handlers
   local bufenter_ignored_during_set_buf
   local eventignore_during_set_buf
@@ -59,8 +58,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     next_buf_id = 1
     pending_insert = false
     fail_swap = false
-    exec_log = {}
-    enter_probes = {}
+    cmd_log = {}
     bufenter_handlers = {}
     bufenter_ignored_during_set_buf = nil
     eventignore_during_set_buf = nil
@@ -77,7 +75,13 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       schedule = function(fn)
         fn()
       end,
-      o = { columns = 120, lines = 40, eventignore = "" },
+      o = { columns = 120, lines = 40, eventignore = "", hidden = true },
+      -- Every buffer is unchanged and hides, so the placement fires BufLeave itself and swaps with `buffer!`.
+      bo = setmetatable({}, {
+        __index = function()
+          return { modified = false, bufhidden = "" }
+        end,
+      }),
       w = setmetatable({}, {
         __index = function(t, win)
           rawset(t, win, rawget(t, win) or {})
@@ -86,6 +90,12 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       }),
       keymap = { set = function() end },
       fn = {
+        getcmdwintype = function()
+          return ""
+        end,
+        expand = function()
+          return ""
+        end,
         win_findbuf = function(buf)
           local wins = {}
           for w, win in pairs(windows) do
@@ -108,17 +118,32 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       },
       cmd = function(c)
         c = tostring(c)
-        local swap_win, swap_buf = c:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
+        local ignored, swap_buf = c:match('^noautocmd lua vim%.o%.eventignore = "(.-)"; vim%.cmd%("buffer! (%d+)"%)$')
         local enter_win = c:match("^noautocmd call nvim_set_current_win%((%d+)%)$")
         if c == "startinsert" then
           pending_insert = true
-        elseif swap_win then
-          if fail_swap then
-            error("E5555: boom")
+        elseif c == "doautocmd <nomodeline> BufLeave" then
+          table.insert(cmd_log, "BufLeave")
+        elseif ignored then
+          -- `:noautocmd` sets 'eventignore' again after the command, also when it fails.
+          local caller_value = vim.o.eventignore
+          vim.o.eventignore = ignored
+          table.insert(cmd_log, "swap")
+          local swapped, err = pcall(function()
+            if fail_swap then
+              error("E5555: boom")
+            end
+            windows[current_win].buf = tonumber(swap_buf)
+            bufenter_ignored_during_set_buf = ignores_bufenter()
+            eventignore_during_set_buf = vim.o.eventignore
+            if bufenter_handlers[tonumber(swap_buf)] and not ignores_bufenter() then
+              bufenter_handlers[tonumber(swap_buf)]()
+            end
+          end)
+          vim.o.eventignore = caller_value
+          if not swapped then
+            error(err, 0)
           end
-          windows[tonumber(swap_win)].buf = tonumber(swap_buf)
-          bufenter_ignored_during_set_buf = ignores_bufenter()
-          eventignore_during_set_buf = vim.o.eventignore
         elseif enter_win then
           current_win = tonumber(enter_win)
         elseif c:find("split") then
@@ -198,45 +223,18 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         nvim_get_current_buf = function()
           return windows[current_win].buf
         end,
-        -- BufWinEnter, which the placement fires itself.
-        nvim_exec_autocmds = function(event, opts)
-          table.insert(exec_log, { event = event, buffer = opts.buffer, win = current_win })
-        end,
         nvim_get_current_win = function()
           return current_win
         end,
-        -- Neovim's enter events: the placement's probe sees WinEnter, and a BufEnter handler of the buffer runs unless
-        -- 'eventignore' lists BufEnter.
         nvim_set_current_win = function(w)
           current_win = w
-          for _, probe in ipairs(enter_probes) do
-            probe()
-          end
-          local buf = windows[w] and windows[w].buf
-          if bufenter_handlers[buf] and not ignores_bufenter() then
-            bufenter_handlers[buf]()
-          end
         end,
-        nvim_create_augroup = function()
-          enter_probes = {}
-          return 1
-        end,
-        nvim_create_autocmd = function(_, opts)
-          if opts.group == 1 then
-            table.insert(enter_probes, opts.callback)
-          end
-        end,
-        nvim_del_augroup_by_id = function()
-          enter_probes = {}
-        end,
-        nvim_win_get_tabpage = function()
-          return 1
-        end,
-        nvim_win_call = function(w, fn)
-          local saved = current_win
-          current_win = w
+        nvim_win_call = function(_, fn)
           fn()
-          current_win = saved
+        end,
+        -- Neovim 0.8 has no 'winfixbuf', so the option read raises.
+        nvim_win_get_option = function()
+          error("Invalid option name: 'winfixbuf'")
         end,
       },
     }
@@ -356,27 +354,40 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
   for _, focus in ipairs({ true, false }) do
     it(
-      "re-showing a hidden split " .. (focus and "with" or "without") .. " focus fires BufWinEnter in the split",
+      "re-showing a hidden split " .. (focus and "with" or "without") .. " focus fires BufLeave, then swaps once",
       function()
-        -- Snacks closes the window of a terminal whose BufWinEnter fires in another window (its fixbuf autocmd).
         local cfg = config()
-        local term = open_then_hide(cfg)
-        exec_log = {}
+        open_then_hide(cfg)
+        cmd_log = {}
 
         snacks_provider.open("claude", {}, cfg, focus)
 
-        local entered = {}
-        for _, entry in ipairs(exec_log) do
-          if entry.event == "BufWinEnter" then
-            table.insert(entered, entry)
-          end
-        end
-        assert.are.equal(1, #entered)
-        assert.are.equal(term.buf, entered[1].buffer)
-        assert.are.equal(term.win, entered[1].win)
+        assert.are.same({ "BufLeave", "swap" }, cmd_log)
       end
     )
   end
+
+  it("shows nothing, and keeps the terminal hidden, when a BufLeave autocmd closes the new split", function()
+    local cfg = config()
+    local term = open_then_hide(cfg)
+    local split_window
+    local original_cmd = vim.cmd
+    vim.cmd = function(c)
+      original_cmd(c)
+      if c:find("split", 1, true) then
+        split_window = current_win
+      elseif c == "doautocmd <nomodeline> BufLeave" then
+        windows[split_window].valid = false
+        current_win = source_win
+      end
+    end
+
+    snacks_provider.open("claude", {}, cfg, true)
+
+    assert.is_nil(term.win)
+    assert.are.equal(source_win, current_win)
+    assert.is_false(windows[split_window].valid)
+  end)
 
   it("re-showing an externally closed float without focus keeps the caller's window and queues no insert", function()
     local cfg = config({ position = "float" })
@@ -535,9 +546,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     end)
 
     local cases = {
-      { value = "CursorHold", during = "CursorHold,BufEnter" },
-      { value = "all,-BufEnter", during = "all,BufEnter" },
-      { value = "-bufenter,CursorHold", during = "CursorHold,BufEnter" },
+      { value = "CursorHold", during = "CursorHold,BufLeave,OptionSet,BufEnter" },
+      { value = "all,-BufEnter", during = "all,BufLeave,OptionSet,BufEnter" },
+      { value = "-bufenter,CursorHold", during = "CursorHold,BufLeave,OptionSet,BufEnter" },
     }
     for _, case in ipairs(cases) do
       it("holds " .. case.during .. " during the call and comes back to " .. case.value, function()

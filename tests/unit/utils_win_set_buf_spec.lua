@@ -5,14 +5,14 @@ require("tests.busted_setup")
 describe("claudecode.utils.win_set_buf_in_split", function()
   local utils = require("claudecode.utils")
 
-  local SPLIT, OTHER, FAR, OLD, TERMINAL = 1001, 1002, 1003, 7, 8
+  local SPLIT, OTHER, OLD, TERMINAL = 1001, 1002, 7, 8
   local saved
   local state
   local log
 
-  local function stub(parent, name, fn)
+  local function stub(parent, name, value)
     saved[#saved + 1] = { parent = parent, name = name, value = parent[name] }
-    parent[name] = fn
+    parent[name] = value
   end
 
   before_each(function()
@@ -20,116 +20,100 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     log = {}
     state = {
       current = SPLIT,
-      previous = 0,
-      win_bufs = { [SPLIT] = OLD, [OTHER] = OLD, [FAR] = OLD },
-      tabs = { [SPLIT] = 1, [OTHER] = 1, [FAR] = 1 },
-      floats = {},
-      invalid = {},
-      enter_events = true,
-      probes = {},
-      eventignore_seen = {},
+      win_bufs = { [SPLIT] = OLD, [OTHER] = OLD },
+      bo = { [OLD] = { modified = false, bufhidden = "" } },
+      hidden = true,
+      abuf = "",
+      cmdwin = "",
+      winfixbuf = false,
+      winfixbuf_option = true,
+      invalid_wins = {},
+      invalid_bufs = {},
     }
-    saved[#saved + 1] = { parent = vim.o, name = "eventignore", value = vim.o.eventignore }
-    vim.o.eventignore = ""
 
+    stub(vim.o, "eventignore", "")
+    stub(vim.o, "hidden", true)
     stub(vim.api, "nvim_get_current_win", function()
       return state.current
-    end)
-    stub(vim.api, "nvim_get_current_buf", function()
-      return state.win_bufs[state.current]
     end)
     stub(vim.api, "nvim_win_get_buf", function(win)
       return state.win_bufs[win]
     end)
     stub(vim.api, "nvim_win_is_valid", function(win)
-      return not state.invalid[win]
+      return not state.invalid_wins[win]
     end)
-    stub(vim.api, "nvim_win_get_tabpage", function(win)
-      return state.tabs[win]
+    stub(vim.api, "nvim_buf_is_valid", function(buf)
+      return not state.invalid_bufs[buf]
     end)
-    stub(vim.api, "nvim_win_get_config", function(win)
-      return { relative = state.floats[win] and "editor" or "" }
+    stub(vim.api, "nvim_win_get_option", function(_, name)
+      assert.equal("winfixbuf", name)
+      if not state.winfixbuf_option then
+        error("Invalid option name: 'winfixbuf'", 0)
+      end
+      return state.winfixbuf
     end)
+    stub(
+      vim,
+      "wo",
+      setmetatable({}, {
+        __index = function()
+          return { winfixbuf = state.winfixbuf }
+        end,
+      })
+    )
+    stub(
+      vim,
+      "bo",
+      setmetatable({}, {
+        __index = function(_, buf)
+          return state.bo[buf] or { modified = false, bufhidden = "" }
+        end,
+      })
+    )
     stub(vim.fn, "win_findbuf", function(buf)
       local wins = {}
-      for _, win in ipairs({ SPLIT, OTHER, FAR }) do
-        if state.win_bufs[win] == buf and not state.invalid[win] then
+      for _, win in ipairs({ SPLIT, OTHER }) do
+        if state.win_bufs[win] == buf then
           table.insert(wins, win)
         end
       end
       return wins
     end)
-    stub(vim.fn, "winnr", function(arg)
-      assert.equal("#", arg)
-      return state.previous
+    stub(vim.fn, "getcmdwintype", function()
+      return state.cmdwin
     end)
-    stub(vim.fn, "win_getid", function(nr)
-      return nr
+    stub(vim.fn, "expand", function(what)
+      assert.equal("<abuf>", what)
+      if state.expand_raises then
+        error("E496", 0)
+      end
+      return state.abuf
     end)
     stub(vim.api, "nvim_win_set_buf", function(win, buf)
-      table.insert(log, string.format("plain set_buf %d %d", win, buf))
+      table.insert(log, string.format("plain set_buf %d %d eventignore=%s", win, buf, vim.o.eventignore))
+      if state.raise_on_swap then
+        error("E37: No write since last change", 0)
+      end
       state.win_bufs[win] = buf
     end)
-    stub(vim.api, "nvim_create_augroup", function(name)
-      assert.is_truthy(name:match("^claudecode_placement_probe_%d+$"), name)
-      table.insert(log, "create_group")
-      return 77
-    end)
-    stub(vim.api, "nvim_create_autocmd", function(events, opts)
-      assert.same({ "WinLeave", "BufLeave", "WinEnter", "BufEnter" }, events)
-      assert.equal(77, opts.group)
-      state.probes = { opts.callback }
-    end)
-    stub(vim.api, "nvim_del_augroup_by_id", function(id)
-      table.insert(log, "del_group " .. id)
-      state.probes = {}
-    end)
-    stub(vim.api, "nvim_set_current_win", function(win)
-      table.insert(log, string.format("enter %d eventignore=%s", win, vim.o.eventignore))
-      table.insert(state.eventignore_seen, vim.o.eventignore)
-      state.current = win
-      if state.raise_on_enter then
-        if state.on_enter then
-          state.on_enter()
-        end
-        error("Failed to switch to window " .. win, 0)
-      end
-      if state.enter_events then
-        for _, probe in ipairs(state.probes) do
-          probe()
-        end
-      end
-      if state.on_enter then
-        state.on_enter()
-      end
-    end)
-    stub(vim.api, "nvim_win_call", function(win, fn)
-      local before = state.current
-      state.current = win
-      fn()
-      state.current = before
-    end)
-    stub(vim.api, "nvim_exec_autocmds", function(event, opts)
-      table.insert(
-        log,
-        string.format("%s@%d in %d eventignore=%s", event, opts.buffer, state.current, vim.o.eventignore)
-      )
-      table.insert(state.eventignore_seen, vim.o.eventignore)
-    end)
     stub(vim, "cmd", function(command)
-      local set_win, set_buf = command:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
-      if set_win then
-        if state.raise_on_swap then
-          error("E5555: no", 0)
+      if command == "doautocmd <nomodeline> BufLeave" then
+        table.insert(log, "BufLeave")
+        if state.on_bufleave then
+          state.on_bufleave()
         end
-        table.insert(log, string.format("noautocmd set_buf %s %s", set_win, set_buf))
-        state.win_bufs[tonumber(set_win)] = tonumber(set_buf)
         return
       end
       local target = command:match("^noautocmd call nvim_set_current_win%((%d+)%)$")
-      assert.is_not_nil(target, "unexpected command: " .. command)
-      table.insert(log, "noautocmd enter " .. target)
-      state.current = tonumber(target)
+      if target then
+        table.insert(log, "noautocmd enter " .. target)
+        state.current = tonumber(target)
+        return
+      end
+      local ignore, buf = command:match('^noautocmd lua vim%.o%.eventignore = "(.-)"; vim%.cmd%("buffer! (%d+)"%)$')
+      assert.is_not_nil(ignore, "unexpected command: " .. command)
+      table.insert(log, string.format("noautocmd swap %d %s eventignore=%s", state.current, buf, ignore))
+      state.win_bufs[state.current] = tonumber(buf)
     end)
   end)
 
@@ -140,247 +124,258 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     end
   end)
 
-  it(
-    "swaps with no autocmd, goes back to the other window silently, enters the split, and fires BufWinEnter",
-    function()
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
+  it("fires BufLeave, then swaps under :noautocmd with BufLeave and OptionSet ignored", function()
+    local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
-      assert.same({
-        "noautocmd set_buf 1001 8",
-        "noautocmd enter 1002",
-        "create_group",
-        "enter 1001 eventignore=",
-        "del_group 77",
-        "BufWinEnter@8 in 1001 eventignore=",
-      }, log)
-      assert.equal(SPLIT, state.current)
-    end
-  )
+    assert.is_true(placed)
+    assert.same({
+      "BufLeave",
+      "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet",
+    }, log)
+    assert.equal(TERMINAL, state.win_bufs[SPLIT])
+    assert.equal("", vim.o.eventignore, "the caller's value is not written, :noautocmd sets it again itself")
+  end)
 
-  it("fires no BufLeave, BufWinLeave, BufHidden or BufUnload itself", function()
+  it("fires no other event itself", function()
     utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
     for _, line in ipairs(log) do
-      assert.is_nil(line:find("Leave", 1, true), line)
-      assert.is_nil(line:find("Hidden", 1, true), line)
-      assert.is_nil(line:find("Unload", 1, true), line)
-    end
-  end)
-
-  it(
-    "fires BufWinEnter for the buffer that is in the split after the enter, which an autocmd can have swapped in",
-    function()
-      state.on_enter = function()
-        state.win_bufs[SPLIT] = 99
+      for _, event in ipairs({ "BufWinLeave", "BufHidden", "BufUnload", "BufEnter", "BufWinEnter", "WinEnter" }) do
+        assert.is_nil(line:find(event, 1, true), line)
       end
-
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-      assert.equal("BufWinEnter@99 in 1001 eventignore=", log[#log])
     end
-  )
-
-  it("fires no BufWinEnter when Neovim ran no enter event, as inside a non-nested autocmd", function()
-    state.enter_events = false
-
-    utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-    assert.same({
-      "noautocmd set_buf 1001 8",
-      "noautocmd enter 1002",
-      "create_group",
-      "enter 1001 eventignore=",
-      "del_group 77",
-    }, log)
   end)
 
-  it("fires no BufWinEnter when an autocmd of the enter closed the split", function()
-    state.on_enter = function()
-      state.invalid[SPLIT] = true
-    end
-
-    utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-    assert.is_nil(log[#log]:find("BufWinEnter", 1, true))
-  end)
-
-  it("puts the cursor back in the split when an autocmd of the enter entered another window, silently", function()
-    state.on_enter = function()
-      state.current = FAR
+  it("puts the cursor back in the split, with no event, when an autocmd of BufLeave entered another window", function()
+    state.on_bufleave = function()
+      state.current = OTHER
     end
 
     utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
     assert.same({
-      "noautocmd set_buf 1001 8",
-      "noautocmd enter 1002",
-      "create_group",
-      "enter 1001 eventignore=",
-      "del_group 77",
+      "BufLeave",
       "noautocmd enter 1001",
-      "BufWinEnter@8 in 1001 eventignore=",
+      "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet",
     }, log)
     assert.equal(SPLIT, state.current)
   end)
 
-  it("passes on no error when an autocmd of the enter entered another window and Neovim refused the move", function()
-    state.raise_on_enter = true
-    state.on_enter = function()
-      state.current = FAR
+  it("shows nothing, and returns false, when an autocmd of BufLeave closed the split", function()
+    state.on_bufleave = function()
+      state.invalid_wins[SPLIT] = true
+      state.current = OTHER
     end
 
-    utils.win_set_buf_in_split(SPLIT, TERMINAL)
+    local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
-    assert.equal("noautocmd enter 1001", log[#log])
-    assert.equal(SPLIT, state.current)
+    assert.is_false(placed)
+    assert.same({ "BufLeave" }, log)
+    assert.equal(OTHER, state.current)
   end)
 
-  it(
-    "passes on no error and fires no BufWinEnter when an autocmd of the enter closed the split and Neovim refused",
-    function()
-      state.raise_on_enter = true
-      state.on_enter = function()
-        state.invalid[SPLIT] = true
-        state.current = FAR
-      end
-
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-      for _, line in ipairs(log) do
-        assert.is_nil(line:find("BufWinEnter", 1, true), line)
-      end
+  it("shows nothing, and returns false, when an autocmd of BufLeave wiped the buffer to show", function()
+    state.on_bufleave = function()
+      state.invalid_bufs[TERMINAL] = true
     end
-  )
 
-  describe("goes back to", function()
-    it("the previous window, which is the one the split was made from", function()
-      state.previous = FAR
+    local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+    assert.is_false(placed)
+    assert.same({ "BufLeave" }, log)
+  end)
+
+  it("raises the error of an autocmd of BufLeave and swaps nothing", function()
+    state.on_bufleave = function()
+      error("USER ERROR", 0)
+    end
+
+    assert.has_error(function()
+      utils.win_set_buf_in_split(SPLIT, TERMINAL)
+    end, "USER ERROR")
+    assert.same({ "BufLeave" }, log)
+  end)
+
+  describe("with 'eventignore'", function()
+    it("adds BufLeave and OptionSet to the caller's value, and keeps the caller's entries", function()
+      vim.o.eventignore = "CursorHold,FocusGained"
 
       utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
-      assert.equal("noautocmd enter 1003", log[2])
+      assert.same({
+        "BufLeave",
+        "noautocmd swap 1001 8 eventignore=CursorHold,FocusGained,BufLeave,OptionSet",
+      }, log)
     end)
 
-    it("the first other window of the tab that shows the buffer, without a previous window", function()
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-      assert.equal("noautocmd enter 1002", log[2])
-    end)
-
-    it("a window of the tab, not one that shows the buffer in another tab or in a float", function()
-      state.tabs[OTHER] = 2
-      state.floats[FAR] = true
-      state.win_bufs[FAR] = OLD
-      state.tabs[FAR] = 1
+    it("drops a -BufLeave and a -OptionSet entry, because they would beat the entries that it adds", function()
+      vim.o.eventignore = "-BufLeave,CursorHold,-OptionSet"
 
       utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
-      assert.same({ "plain set_buf 1001 8" }, log)
+      assert.same({
+        "BufLeave",
+        "noautocmd swap 1001 8 eventignore=CursorHold,BufLeave,OptionSet",
+      }, log)
     end)
   end)
 
-  describe("does what a plain swap does", function()
-    it("when no other window shows the buffer", function()
-      state.win_bufs[OTHER] = 99
-      state.win_bufs[FAR] = 99
+  describe("with ignore_bufenter", function()
+    it("adds BufEnter to the events of the swap, and drops a -BufEnter entry", function()
+      vim.o.eventignore = "-BufEnter,CursorHold"
 
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
+      utils.win_set_buf_in_split(SPLIT, TERMINAL, { ignore_bufenter = true })
 
-      assert.same({ "plain set_buf 1001 8" }, log)
+      assert.same({
+        "BufLeave",
+        "noautocmd swap 1001 8 eventignore=CursorHold,BufLeave,OptionSet,BufEnter",
+      }, log)
+    end)
+
+    it("ignores BufEnter in a plain swap too, and gives 'eventignore' back", function()
+      state.win_bufs[SPLIT] = TERMINAL
+      vim.o.eventignore = "-BufEnter,CursorHold"
+      stub(vim.api, "nvim_win_set_buf", function(win, buf)
+        table.insert(log, string.format("plain set_buf %d %d eventignore=%s", win, buf, vim.o.eventignore))
+      end)
+
+      utils.win_set_buf_in_split(SPLIT, TERMINAL, { ignore_bufenter = true })
+
+      assert.same({ "plain set_buf 1001 8 eventignore=CursorHold,BufEnter" }, log)
+      assert.equal("-BufEnter,CursorHold", vim.o.eventignore)
+    end)
+
+    it("gives 'eventignore' back and raises the same error when a plain swap fails", function()
+      state.cmdwin = ":"
+      state.raise_on_swap = true
+      vim.o.eventignore = "CursorHold"
+
+      assert.has_error(function()
+        utils.win_set_buf_in_split(SPLIT, TERMINAL, { ignore_bufenter = true })
+      end, "E37: No write since last change")
+      assert.equal("CursorHold", vim.o.eventignore)
+    end)
+  end)
+
+  describe("makes a plain swap, with no BufLeave of its own,", function()
+    local function expect_plain()
+      local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+      assert.is_true(placed)
+      assert.same({ "plain set_buf 1001 8 eventignore=" }, log)
+    end
+
+    it("when the split is not the current window", function()
+      state.current = OTHER
+
+      expect_plain()
     end)
 
     it("when the split already shows the buffer", function()
       state.win_bufs[SPLIT] = TERMINAL
 
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-      assert.same({ "plain set_buf 1001 8" }, log)
+      expect_plain()
     end)
 
-    it("when the split already shows the buffer, and another window shows it too", function()
-      state.win_bufs[SPLIT] = TERMINAL
-      state.win_bufs[OTHER] = TERMINAL
+    it("inside an autocmd, where Neovim fires no event of the swap and a fired BufLeave would run alone", function()
+      state.abuf = "7"
 
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-      assert.same({ "plain set_buf 1001 8" }, log)
+      expect_plain()
     end)
 
-    it("when the split is not the current window", function()
-      state.current = OTHER
+    it("in the command-line window", function()
+      state.cmdwin = ":"
 
-      utils.win_set_buf_in_split(SPLIT, TERMINAL)
+      expect_plain()
+    end)
 
-      assert.same({ "plain set_buf 1001 8" }, log)
+    it("when the split has 'winfixbuf', which a plain swap refuses and :buffer! would override", function()
+      state.winfixbuf = true
+
+      expect_plain()
+    end)
+
+    it(
+      "when a plain swap could refuse to leave the buffer: it is changed, not hidden, and shown in one window",
+      function()
+        state.bo[OLD] = { modified = true, bufhidden = "" }
+        state.win_bufs[OTHER] = nil
+        vim.o.hidden = false
+
+        expect_plain()
+      end
+    )
+
+    it("when its 'bufhidden' is wipe, because wipe is not hide", function()
+      state.bo[OLD] = { modified = true, bufhidden = "wipe" }
+      state.win_bufs[OTHER] = nil
+      vim.o.hidden = true
+
+      expect_plain()
     end)
   end)
 
-  describe("with ignore_bufenter", function()
-    it("keeps BufEnter in 'eventignore' for the whole call and gives it back", function()
-      vim.o.eventignore = "CursorHold"
+  describe("fires BufLeave first", function()
+    local function expect_leave_first()
+      utils.win_set_buf_in_split(SPLIT, TERMINAL)
 
-      utils.win_set_buf_in_split(SPLIT, TERMINAL, { ignore_bufenter = true })
-
-      assert.is_true(#state.eventignore_seen > 0)
-      for _, seen in ipairs(state.eventignore_seen) do
-        assert.equal("CursorHold,BufEnter", seen)
-      end
-      assert.equal("CursorHold", vim.o.eventignore)
-    end)
-
-    it("drops a -BufEnter entry for the call, because it would beat the later BufEnter", function()
-      vim.o.eventignore = "all,-bufenter,CursorHold"
-
-      utils.win_set_buf_in_split(SPLIT, TERMINAL, { ignore_bufenter = true })
-
-      assert.equal("all,CursorHold,BufEnter", state.eventignore_seen[1])
-      assert.equal("all,-bufenter,CursorHold", vim.o.eventignore)
-    end)
-
-    it("ignores BufEnter in a plain swap too", function()
-      state.current = OTHER
-      vim.api.nvim_win_set_buf = function(win, buf)
-        table.insert(log, string.format("plain set_buf %d %d eventignore=%s", win, buf, vim.o.eventignore))
-      end
-
-      utils.win_set_buf_in_split(SPLIT, TERMINAL, { ignore_bufenter = true })
-
-      assert.same({ "plain set_buf 1001 8 eventignore=BufEnter" }, log)
-      assert.equal("", vim.o.eventignore)
-    end)
-
-    it("gives 'eventignore' back and raises the same error when the swap fails", function()
-      vim.o.eventignore = "CursorHold"
-      state.raise_on_swap = true
-
-      local ok, err = pcall(utils.win_set_buf_in_split, SPLIT, TERMINAL, { ignore_bufenter = true })
-
-      assert.is_false(ok)
-      assert.equal("E5555: no", err)
-      assert.equal("CursorHold", vim.o.eventignore)
-    end)
-  end)
-
-  it("deletes its probe group and raises the same error when the enter fails with the cursor in the split", function()
-    state.raise_on_enter = true
-    state.on_enter = function()
-      state.current = SPLIT
+      assert.same({ "BufLeave", "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet" }, log)
     end
 
-    local ok, err = pcall(utils.win_set_buf_in_split, SPLIT, TERMINAL)
+    it("for a changed buffer when 'hidden' is on, which a plain swap hides", function()
+      state.bo[OLD] = { modified = true, bufhidden = "" }
+      state.win_bufs[OTHER] = nil
+      vim.o.hidden = true
 
-    assert.is_false(ok)
-    assert.equal("Failed to switch to window 1001", err)
-    assert.equal("del_group 77", log[#log])
+      expect_leave_first()
+    end)
+
+    it("for a changed buffer whose 'bufhidden' is hide", function()
+      state.bo[OLD] = { modified = true, bufhidden = "hide" }
+      state.win_bufs[OTHER] = nil
+      vim.o.hidden = false
+
+      expect_leave_first()
+    end)
+
+    it("for a changed buffer that another window shows", function()
+      state.bo[OLD] = { modified = true, bufhidden = "" }
+      vim.o.hidden = false
+
+      expect_leave_first()
+    end)
+
+    it("for a buffer with no change, shown in no other window", function()
+      state.win_bufs[OTHER] = nil
+      vim.o.hidden = false
+
+      expect_leave_first()
+    end)
+
+    it("when 'winfixbuf' is an unknown option, as in Neovim 0.8", function()
+      state.winfixbuf_option = false
+
+      expect_leave_first()
+    end)
+
+    it("when expanding <abuf> raises", function()
+      state.expand_raises = true
+
+      expect_leave_first()
+    end)
   end)
 
-  it("leaves 'eventignore' alone without ignore_bufenter", function()
-    vim.o.eventignore = "CursorHold"
+  it("raises the same error when the swap fails, after BufLeave", function()
+    stub(vim, "cmd", function(command)
+      table.insert(log, command)
+      if command:find("buffer!", 1, true) then
+        error("E86: Buffer 8 does not exist", 0)
+      end
+    end)
 
-    utils.win_set_buf_in_split(SPLIT, TERMINAL)
-
-    for _, seen in ipairs(state.eventignore_seen) do
-      assert.equal("CursorHold", seen)
-    end
+    assert.has_error(function()
+      utils.win_set_buf_in_split(SPLIT, TERMINAL)
+    end, "E86: Buffer 8 does not exist")
+    assert.equal("doautocmd <nomodeline> BufLeave", log[1])
   end)
 end)

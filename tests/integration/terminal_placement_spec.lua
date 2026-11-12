@@ -7,11 +7,13 @@ end
 
 -- `nvim_win_set_buf` runs the BufLeave autocmds of the buffer it replaces inside the call. When one of them enters
 -- another window, Neovim loads the new buffer into that window, even though the call names another one. The providers
--- put the terminal into the split they made with `utils.win_set_buf_in_split`. It swaps while the old buffer still shows
--- in the window that the split was made from, goes back to that window, and enters the split. Neovim fires the leave
--- and enter events of that move, and an autocmd that enters another window only moves the cursor. The helper fires no
--- leave event itself, so the events of a buffer that loses its last window come from Neovim, also when a BufLeave
--- autocmd closes the window.
+-- put the terminal into the split they made with `utils.win_set_buf_in_split`. It fires `BufLeave` for the old buffer
+-- itself, in the split, while the buffer still shows there. An autocmd that enters another window only moves the
+-- cursor, and the helper puts it back in the split. Then it makes the swap with `BufLeave` in 'eventignore', so Neovim
+-- fires the other events of the swap itself, after the `BufLeave` autocmds are done: `BufWinLeave`, `BufHidden` and
+-- `BufUnload` of a buffer that lost its last window, also when a `BufLeave` autocmd closed the other window of it.
+-- The events and their order are a plain swap's. What a plain swap does in shapes with no redirect is pinned by
+-- terminal_placement_contract_spec.lua, which passes on a tree with no helper.
 describe("the terminal's placement in its own split", function()
   local chan
 
@@ -270,21 +272,28 @@ describe("the terminal's placement in its own split", function()
               end,
             }
           )
+          local ok, err
           if use_helper then
-            utils.win_set_buf_in_split(split, terminal, { ignore_bufenter = opts.ignore_bufenter })
+            ok, err = pcall(utils.win_set_buf_in_split, split, terminal, { ignore_bufenter = opts.ignore_bufenter })
           else
             local saved = vim.o.eventignore
             if opts.ignore_bufenter then
               vim.o.eventignore = "BufEnter"
             end
-            vim.api.nvim_win_set_buf(split, terminal)
+            ok, err = pcall(vim.api.nvim_win_set_buf, split, terminal)
             vim.o.eventignore = saved
           end
           vim.api.nvim_clear_autocmds({ group = group })
           return {
+            ok = ok,
+            err = ok and "" or (tostring(err):match("E%d+") or (tostring(err):gsub("^.-:%d+: ", ""):gsub("%d+", "N"))),
+            eventignore = vim.o.eventignore,
             log = log,
-            tabstops = { file = vim.bo[file].tabstop, terminal = vim.bo[terminal].tabstop },
-            split_shows = role(vim.api.nvim_win_get_buf(split)),
+            tabstops = {
+              file = vim.api.nvim_buf_is_valid(file) and vim.bo[file].tabstop or -1,
+              terminal = vim.api.nvim_buf_is_valid(terminal) and vim.bo[terminal].tabstop or -1,
+            },
+            split_shows = vim.api.nvim_win_is_valid(split) and role(vim.api.nvim_win_get_buf(split)) or "closed",
             first_shows = vim.api.nvim_win_is_valid(first) and role(vim.api.nvim_win_get_buf(first)) or "closed",
             current = window_name(vim.api.nvim_get_current_win()),
           }
@@ -296,34 +305,23 @@ describe("the terminal's placement in its own split", function()
       )
     end
 
-    ---The plain swap's events with what the placement adds: the cursor leaves the other window for the split, so
-    ---`WinLeave` and `WinEnter` run after `BufLeave`, and `BufLeave` runs in the other window.
-    local function placement_events()
+    local function plain_events()
       return {
-        "BufLeave@file in first showing file",
-        "WinLeave@file in first showing file",
-        "WinEnter@terminal in split showing terminal",
+        "BufLeave@file in split showing file",
         "BufEnter@terminal in split showing terminal",
         "BufWinEnter@terminal in split showing terminal",
       }
     end
 
-    it(
-      "are the plain swap's, in the same order, with one more WinLeave and WinEnter, when the buffer also shows elsewhere",
-      function()
-        local result = logs("", {})
+    it("are the plain swap's, in the same order, when the buffer also shows elsewhere", function()
+      local result = logs("", {})
 
-        assert.same({
-          "BufLeave@file in split showing file",
-          "BufEnter@terminal in split showing terminal",
-          "BufWinEnter@terminal in split showing terminal",
-        }, result.plain.log)
-        assert.same(placement_events(), result.helper.log)
-        assert.equal("terminal", result.helper.split_shows)
-        assert.equal("file", result.helper.first_shows)
-        assert.equal("split", result.helper.current)
-      end
-    )
+      assert.same(plain_events(), result.plain.log)
+      assert.same(result.plain.log, result.helper.log)
+      assert.equal("terminal", result.helper.split_shows)
+      assert.equal("file", result.helper.first_shows)
+      assert.equal("split", result.helper.current)
+    end)
 
     it("leave BufEnter out when the call ignores it, as a swap that ignores it does", function()
       local result = logs("", { ignore_bufenter = true })
@@ -332,12 +330,7 @@ describe("the terminal's placement in its own split", function()
         "BufLeave@file in split showing file",
         "BufWinEnter@terminal in split showing terminal",
       }, result.plain.log)
-      assert.same({
-        "BufLeave@file in first showing file",
-        "WinLeave@file in first showing file",
-        "WinEnter@terminal in split showing terminal",
-        "BufWinEnter@terminal in split showing terminal",
-      }, result.helper.log)
+      assert.same(result.plain.log, result.helper.log)
     end)
 
     it("run the BufEnter autocmds of the user's for the terminal buffer once, in the split", function()
@@ -353,10 +346,10 @@ describe("the terminal's placement in its own split", function()
         {}
       )
 
-      assert.same(placement_events(), result.helper.log)
+      assert.same(plain_events(), result.helper.log)
     end)
 
-    it("run an autosave autocmd once, in the window that shows the file, before the file is left", function()
+    it("run an autosave autocmd once, in the split that shows the file, before the file is left", function()
       local result = logs(
         [[
         local file, _, _, _, group = ...
@@ -375,7 +368,7 @@ describe("the terminal's placement in its own split", function()
         {}
       )
 
-      assert.same(placement_events(), result.helper.log)
+      assert.same(plain_events(), result.helper.log)
       -- One run for the plain swap, one for the helper.
       assert.equal(2, call([[return _G.autosave_runs]]))
     end)
@@ -523,7 +516,161 @@ describe("the terminal's placement in its own split", function()
       assert.equal("terminal", result.plain.first_shows, "a plain swap is redirected, or the test proves nothing")
       assert.equal("file", result.helper.first_shows)
       assert.equal("terminal", result.helper.split_shows)
-      assert.same(placement_events(), result.helper.log)
+      -- The autocmd ran in the split and entered the other window. The helper put the cursor back with no event, so the
+      -- terminal's BufEnter and BufWinEnter run in the split.
+      assert.same({
+        "BufLeave@file in first showing file",
+        "BufEnter@terminal in split showing terminal",
+        "BufWinEnter@terminal in split showing terminal",
+      }, result.helper.log)
+    end)
+
+    -- A BufLeave autocmd that changes the windows or the buffers, and does not enter another window: a plain swap and
+    -- the helper must end the same, with the same events.
+    local quiet_shapes = {
+      { name = "closes the other window of the buffer", handler = "vim.api.nvim_win_close(first, false)" },
+      { name = "wipes the buffer that is to be shown", handler = 'vim.cmd("bwipeout! " .. terminal)' },
+    }
+    for _, shape in ipairs(quiet_shapes) do
+      for _, nested in ipairs({ false, true }) do
+        it(
+          "end as a plain swap does when a BufLeave autocmd " .. shape.name .. (nested and ", nested" or ", not nested"),
+          function()
+            local result = logs(
+              string.format(
+                [[
+              local file, terminal, split, first, group = ...
+              vim.api.nvim_create_autocmd("BufLeave", {
+                group = group,
+                buffer = file,
+                once = true,
+                nested = %s,
+                callback = function()
+                  %s
+                end,
+              })
+            ]],
+                tostring(nested),
+                shape.handler
+              ),
+              {}
+            )
+
+            assert.equal(result.plain.ok, result.helper.ok, result.plain.err .. " / " .. result.helper.err)
+            assert.equal(result.plain.err, result.helper.err)
+            assert.same(result.plain.log, result.helper.log)
+            assert.equal(result.plain.split_shows, result.helper.split_shows)
+            assert.equal(result.plain.first_shows, result.helper.first_shows)
+            assert.equal(result.plain.current, result.helper.current)
+          end
+        )
+      end
+    end
+
+    -- A plain swap fires BufWinLeave and BufHidden for the file here, which is still shown in the first window, and none
+    -- for the empty buffer that it replaces. Neovim fires them for a buffer that left its last window.
+    it("fires BufWinLeave and BufHidden for the buffer a BufLeave autocmd put into the split, and then left", function()
+      local result = logs(
+        [[
+        local file, _, _, _, group = ...
+        vim.api.nvim_create_autocmd("BufLeave", {
+          group = group,
+          buffer = file,
+          once = true,
+          callback = function()
+            vim.cmd("enew")
+          end,
+        })
+      ]],
+        {}
+      )
+
+      assert.is_true(result.helper.ok, result.helper.err)
+      assert.same({
+        "BufLeave@file in split showing other",
+        "BufWinLeave@other in split showing other",
+        "BufHidden@other in split showing other",
+        "BufEnter@terminal in split showing terminal",
+        "BufWinEnter@terminal in split showing terminal",
+      }, result.helper.log)
+      assert.equal("terminal", result.helper.split_shows)
+      assert.equal("file", result.helper.first_shows)
+    end)
+
+    it("runs the BufLeave autocmds of the user's with a plain swap's arguments, in the split", function()
+      local result = logs(
+        [[
+        local file, _, split, _, group = ...
+        _G.seen = _G.seen or {}
+        vim.api.nvim_create_autocmd("BufLeave", {
+          group = group,
+          buffer = file,
+          callback = function(event)
+            table.insert(_G.seen, {
+              buf_is_file = event.buf == file,
+              file_is_name = event.file == vim.api.nvim_buf_get_name(file),
+              match_is_name = event.match == vim.api.nvim_buf_get_name(file),
+              abuf_is_file = tonumber(vim.fn.expand("<abuf>")) == file,
+              in_split = vim.api.nvim_get_current_win() == split,
+              mode = vim.api.nvim_get_mode().mode,
+              eventignore = vim.o.eventignore,
+            })
+          end,
+        })
+      ]],
+        {}
+      )
+
+      local seen = call([[return _G.seen]])
+      assert.equal(2, #seen, "one run for the plain swap, one for the helper")
+      assert.same(seen[1], seen[2])
+      assert.is_true(seen[1].buf_is_file)
+      assert.is_true(seen[1].in_split)
+      assert.equal("", seen[1].eventignore)
+      assert.is_true(result.helper.ok)
+    end)
+
+    it("leaves 'eventignore' as the caller set it, entries that unignore an event included", function()
+      local result = logs(
+        [[
+        -- Neovim 0.8 takes no entry that unignores an event.
+        if not pcall(function()
+          vim.o.eventignore = "CursorHold,-BufLeave,-OptionSet"
+        end) then
+          vim.o.eventignore = "CursorHold"
+        end
+        _G.caller_eventignore = vim.o.eventignore
+      ]],
+        { ignore_bufenter = true }
+      )
+
+      assert.is_true(result.helper.ok, result.helper.err)
+      assert.equal(call([[return _G.caller_eventignore]]), result.helper.eventignore)
+      assert.same(result.plain.log, result.helper.log)
+    end)
+
+    it("makes a plain swap, and fails as it does, for an unsaved file that no other window shows", function()
+      local result = logs(
+        [[
+        local file, _, _, first = ...
+        vim.o.hidden = false
+        vim.api.nvim_buf_set_lines(file, 0, -1, false, { "unsaved" })
+        vim.api.nvim_win_close(first, true)
+        _G.leaves = 0
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = file,
+          callback = function()
+            _G.leaves = _G.leaves + 1
+          end,
+        })
+      ]],
+        { close_first = true }
+      )
+
+      assert.is_false(result.plain.ok)
+      assert.is_false(result.helper.ok)
+      assert.equal(result.plain.err, result.helper.err, "the error of the plain swap")
+      assert.equal(0, call([[return _G.leaves]]), "a swap that Neovim refuses fires no BufLeave")
     end)
   end)
 
@@ -668,6 +815,81 @@ describe("the terminal's placement in its own split", function()
     end)
   end)
 
+  describe("a BufLeave autocmd of the user's file that closes the split it runs in", function()
+    ---The autocmd runs in the split, which the provider just made, and closes it. A plain swap then loads the terminal
+    ---into the window that the cursor ends in, the user's. The helper shows nothing, and the terminal stays hidden.
+    local function arm_split_close()
+      call([[
+        _G.original = vim.api.nvim_get_current_win()
+        _G.file = vim.api.nvim_get_current_buf()
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = _G.file,
+          once = true,
+          callback = function()
+            vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+          end,
+        })
+      ]])
+    end
+
+    local function split_close_state()
+      return call([[
+        local terminal = require("claudecode.terminal")
+        local buf = terminal.get_active_terminal_bufnr()
+        return {
+          terminal_windows = buf and vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) or 0,
+          job_running = buf ~= nil and vim.fn.jobwait({ vim.b[buf].terminal_job_id }, 10)[1] == -1,
+          original_shows_file = vim.api.nvim_win_is_valid(_G.original)
+            and vim.api.nvim_win_get_buf(_G.original) == _G.file,
+          windows = #vim.api.nvim_tabpage_list_wins(0),
+        }
+      ]])
+    end
+
+    it("leaves a hidden terminal hidden, and the user's window alone, with no error", function()
+      start_child()
+      hide_terminal()
+      arm_split_close()
+
+      local ok = pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd("ClaudeCodeOpen")]], {})
+
+      local state = split_close_state()
+      assert.is_true(ok, "the command must not fail")
+      assert.equal(0, state.terminal_windows)
+      assert.is_true(state.job_running)
+      assert.is_true(state.original_shows_file, "the user's window must keep the file")
+      assert.equal(1, state.windows)
+    end)
+
+    it("starts a new terminal that stays hidden, and leaves the user's window alone, with no error", function()
+      start_child()
+      arm_split_close()
+
+      local ok = pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd("ClaudeCode")]], {})
+
+      local state = split_close_state()
+      assert.is_true(ok, "the command must not fail")
+      assert.equal(0, state.terminal_windows)
+      assert.is_true(state.job_running, "the terminal must still start")
+      assert.is_true(state.original_shows_file, "the user's window must keep the file")
+      assert.equal(1, state.windows)
+    end)
+
+    it("shows the terminal in a split on the next open", function()
+      start_child()
+      hide_terminal()
+      arm_split_close()
+      pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd("ClaudeCodeOpen")]], {})
+
+      call([[vim.cmd("ClaudeCodeOpen")]])
+
+      local state = split_close_state()
+      assert.equal(1, state.terminal_windows)
+      assert.is_true(state.original_shows_file)
+      assert.equal(2, state.windows)
+    end)
+  end)
+
   describe("a BufLeave autocmd of the user's file", function()
     ---A file of the user's with an edit, and an autosave autocmd that runs when the cursor leaves it.
     local function arm_autosave()
@@ -792,7 +1014,8 @@ describe("the terminal's placement in its own split", function()
 
   describe("a BufLeave autocmd that closes the other window of the file", function()
     ---A file of the user's with an edit, a hidden terminal, and a BufLeave autocmd of the user's file that closes the
-    ---window that the file shows in. The events of the file's last window then come from Neovim, not from the helper.
+    ---window that the file shows in. The autocmd runs in the split, which shows the file too, so the file loses its last
+    ---window in the swap, and Neovim fires the events of that, nested or not.
     local function arm_window_close(opts)
       call(
         [[
@@ -828,7 +1051,7 @@ describe("the terminal's placement in its own split", function()
         vim.api.nvim_create_autocmd("BufLeave", {
           buffer = file,
           once = true,
-          nested = true,
+          nested = opts.nested,
           callback = function()
             _G.closed, _G.close_error = pcall(vim.api.nvim_win_close, _G.original, false)
           end,
@@ -859,64 +1082,67 @@ describe("the terminal's placement in its own split", function()
       return state
     end
 
-    it("lets the autosave of a BufHidden autocmd run, once, when the file stays loaded", function()
-      start_child()
-      arm_window_close({ hidden = true, bufhidden = "", modified = true })
-
-      call([[require("claudecode.terminal").open()]])
-
-      local state = window_close_state()
-      assert.is_true(state.closed)
-      assert.same({ BufWinLeave = 1, BufHidden = 1 }, state.counts)
-      assert.same({ "unsaved user edit" }, state.disk, "the BufHidden autosave must write the edit")
-      assert.is_true(state.file_loaded)
-      assert.equal(1, state.terminal_windows)
-      assert.is_true(state.job_running)
-    end)
-
-    it("fires the events of an unloaded file once each, when 'hidden' is off", function()
-      start_child()
-      arm_window_close({ hidden = false, bufhidden = "", modified = false })
-
-      call([[require("claudecode.terminal").open()]])
-
-      local state = window_close_state()
-      assert.is_true(state.closed)
-      assert.same({ BufWinLeave = 1, BufUnload = 1 }, state.counts)
-      assert.is_false(state.file_loaded)
-      assert.equal(1, state.terminal_windows)
-      assert.is_true(state.job_running)
-    end)
-
-    it("fires the events of a wiped file once each, when its 'bufhidden' is wipe", function()
-      start_child()
-      arm_window_close({ hidden = true, bufhidden = "wipe", modified = false })
-
-      call([[require("claudecode.terminal").open()]])
-
-      local state = window_close_state()
-      assert.is_true(state.closed)
-      assert.same({ BufWinLeave = 1, BufUnload = 1, BufDelete = 1, BufWipeout = 1 }, state.counts)
-      assert.is_false(state.file_valid)
-      assert.equal(1, state.terminal_windows)
-      assert.is_true(state.job_running)
-    end)
-
-    it(
-      "lets Neovim refuse to close the window of an unsaved file when 'hidden' is off, and still shows the terminal",
-      function()
+    for _, nested in ipairs({ false, true }) do
+      local NESTED = nested
+      local label = nested and " (a nested autocmd)" or " (an autocmd that is not nested)"
+      it("lets the autosave of a BufHidden autocmd run, once, when the file stays loaded" .. label, function()
         start_child()
-        arm_window_close({ hidden = false, bufhidden = "", modified = true })
+        arm_window_close({ hidden = true, bufhidden = "", modified = true, nested = NESTED })
 
         call([[require("claudecode.terminal").open()]])
 
         local state = window_close_state()
-        assert.is_false(state.closed)
-        assert.same({}, state.counts)
+        assert.is_true(state.closed)
+        assert.same({ BufWinLeave = 1, BufHidden = 1 }, state.counts)
+        assert.same({ "unsaved user edit" }, state.disk, "the BufHidden autosave must write the edit")
         assert.is_true(state.file_loaded)
         assert.equal(1, state.terminal_windows)
-      end
-    )
+        assert.is_true(state.job_running)
+      end)
+
+      it("fires the events of an unloaded file once each, when 'hidden' is off" .. label, function()
+        start_child()
+        arm_window_close({ hidden = false, bufhidden = "", modified = false, nested = NESTED })
+
+        call([[require("claudecode.terminal").open()]])
+
+        local state = window_close_state()
+        assert.is_true(state.closed)
+        assert.same({ BufWinLeave = 1, BufUnload = 1 }, state.counts)
+        assert.is_false(state.file_loaded)
+        assert.equal(1, state.terminal_windows)
+        assert.is_true(state.job_running)
+      end)
+
+      it("fires the events of a wiped file once each, when its 'bufhidden' is wipe" .. label, function()
+        start_child()
+        arm_window_close({ hidden = true, bufhidden = "wipe", modified = false, nested = NESTED })
+
+        call([[require("claudecode.terminal").open()]])
+
+        local state = window_close_state()
+        assert.is_true(state.closed)
+        assert.same({ BufWinLeave = 1, BufUnload = 1, BufDelete = 1, BufWipeout = 1 }, state.counts)
+        assert.is_false(state.file_valid)
+        assert.equal(1, state.terminal_windows)
+        assert.is_true(state.job_running)
+      end)
+
+      it("hides the unsaved file, and runs the events of that once, when 'hidden' is off" .. label, function()
+        start_child()
+        arm_window_close({ hidden = false, bufhidden = "", modified = true, nested = NESTED })
+
+        call([[require("claudecode.terminal").open()]])
+
+        local state = window_close_state()
+        assert.is_true(state.closed, "the other window of the file is not its last, so Neovim closes it")
+        assert.same({ BufWinLeave = 1, BufHidden = 1 }, state.counts)
+        assert.same({ "unsaved user edit" }, state.disk, "the BufHidden autosave must write the edit")
+        assert.is_true(state.file_loaded)
+        assert.equal(1, state.terminal_windows)
+        assert.is_true(state.job_running)
+      end)
+    end
 
     it("resolves a pending diff whose proposal buffer loses its last window", function()
       -- The proposal buffer of an openDiff is the buffer in the window, and a diff stays pending until its proposal is
@@ -972,7 +1198,8 @@ describe("the terminal's placement in its own split", function()
 
       assert.is_true(state.ok, state.err)
       assert.is_true(state.resolved, "the diff must resolve, as it does when its proposal is hidden by a plain swap")
-      assert.equal(1, state.terminal_windows)
+      -- The autocmd closed the split too, so the terminal is shown nowhere. It runs on, as any hidden terminal does.
+      assert.equal(0, state.terminal_windows)
     end)
   end)
 

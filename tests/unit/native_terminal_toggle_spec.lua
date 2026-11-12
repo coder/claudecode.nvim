@@ -448,6 +448,7 @@ describe("claudecode.terminal.native toggle behavior", function()
 
     -- Load the native provider
     native_provider = require("claudecode.terminal.native")
+    require("tests.helpers.plain_placement").install()
     native_provider.setup({})
 
     -- Helper function to get mock state for verification
@@ -457,6 +458,7 @@ describe("claudecode.terminal.native toggle behavior", function()
   end)
 
   after_each(function()
+    require("tests.helpers.plain_placement").restore()
     _G.vim = nil
     package.loaded["claudecode.terminal.native"] = nil
     package.loaded["claudecode.logger"] = nil
@@ -1269,6 +1271,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       keep_only_window_of(terminal_bufnr)
       package.loaded["claudecode.terminal.native"] = nil
       native_provider = require("claudecode.terminal.native")
+      require("tests.helpers.plain_placement").install()
       native_provider.setup({})
 
       native_provider.open("claude", {}, auto_close)
@@ -1291,6 +1294,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       local terminal_bufnr = native_provider.get_active_bufnr()
       package.loaded["claudecode.terminal.native"] = nil
       native_provider = require("claudecode.terminal.native")
+      require("tests.helpers.plain_placement").install()
       native_provider.setup({ auto_close = term_config.auto_close })
       native_provider.open("claude", {}, term_config)
       assert.are.equal(terminal_bufnr, native_provider.get_active_bufnr())
@@ -1330,6 +1334,7 @@ describe("claudecode.terminal.native toggle behavior", function()
           local exited_bufnr = native_provider.get_active_bufnr()
           package.loaded["claudecode.terminal.native"] = nil
           native_provider = require("claudecode.terminal.native")
+          require("tests.helpers.plain_placement").install()
           native_provider.setup({ auto_close = auto_close })
           -- The reloaded module opens for the first time here, after the exit and before the old on_exit runs.
           mock_vim.api.nvim_create_autocmd("TermClose", {
@@ -1640,6 +1645,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       for _ = 1, 2 do
         package.loaded["claudecode.terminal.native"] = nil
         native_provider = require("claudecode.terminal.native")
+        require("tests.helpers.plain_placement").install()
         native_provider.setup({ auto_close = true })
         native_provider.open("claude", {}, term_config)
         assert.are.equal(terminal_bufnr, native_provider.get_active_bufnr())
@@ -1834,6 +1840,7 @@ describe("claudecode.terminal.native toggle behavior", function()
           local exited_bufnr = native_provider.get_active_bufnr()
           package.loaded["claudecode.terminal.native"] = nil
           native_provider = require("claudecode.terminal.native")
+          require("tests.helpers.plain_placement").install()
           native_provider.setup({ auto_close = auto_close })
           native_provider.open("claude", {}, term_config)
           assert.are.equal(exited_bufnr, native_provider.get_active_bufnr())
@@ -1943,6 +1950,7 @@ describe("claudecode.terminal.native toggle behavior", function()
     local function reload_native()
       package.loaded["claudecode.terminal.native"] = nil
       native_provider = require("claudecode.terminal.native")
+      require("tests.helpers.plain_placement").install()
       native_provider.setup({})
     end
 
