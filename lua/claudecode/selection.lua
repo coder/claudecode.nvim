@@ -176,7 +176,9 @@ local function visual_entry_of(bufnr)
 end
 
 ---The namespace of the key listener that note_visual_edit sets (see there), made when the first edit is noted. There
----is one listener: the one of the edit that was noted last replaces an earlier one, and a check clears it.
+---is one listener: the one of the edit that was noted last replaces an earlier one. The next key clears it, and so does
+---a check that runs before it for the selection that you are still making. After an operator the flush has removed the
+---entry, so the check that is scheduled does nothing, and the listener lives until the next key.
 local visual_edit_keys
 
 local function clear_visual_edit_keys()

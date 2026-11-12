@@ -1172,8 +1172,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   Snacks terminal whose split the plugin re-creates [lua/claudecode/terminal/snacks.lua:register_window_events]),
   `nvim_buf_attach` change listeners on the buffer of a held selection and on every buffer where a visual selection
   starts, until the first edit after the selection ends [lua/claudecode/selection.lua:watch_selection_buffer], a
-  `vim.on_key` listener (one namespace) that an edit of the buffer in which you select sets, until the next key or the
-  scheduled check [lua/claudecode/selection.lua:note_visual_edit], `User`
+  `vim.on_key` listener (one namespace) that an edit of the buffer in which you select sets, at the latest until the next
+  key [lua/claudecode/selection.lua:note_visual_edit], `User`
   events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`), the four global
   `ClaudeCodeInlineDiff*` highlight groups for the `"unified"` diff layout
   [lua/claudecode/diff_inline.lua:setup_highlights], and a wrapped global `vim.paste` when

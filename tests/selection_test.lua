@@ -63,11 +63,14 @@ if not _G.vim then
     schedule = function(fn)
       fn()
     end,
-    -- vim.on_key: ns -> the callback that Neovim calls for the next key, before it is processed.
+    -- vim.on_key: ns -> the callback that Neovim calls for the next key, before it is processed. A second callback for
+    -- the same namespace replaces the first, and nil removes it.
     _on_key = {},
     on_key = function(fn, ns)
       _G.vim._on_key[ns] = fn
     end,
+    _namespaces = {},
+    _next_namespace = 0,
     _buffers = {},
     _windows = {},
     _buf_listeners = {}, -- nvim_buf_attach: bufnr -> { callbacks }
@@ -134,8 +137,16 @@ if not _G.vim then
         return _G.vim._buffers[bufnr] ~= nil
       end,
 
-      nvim_create_namespace = function(_)
-        return 1
+      -- As in Neovim: one id for each name, and a new one for each call with the empty name.
+      nvim_create_namespace = function(name)
+        if name ~= "" and _G.vim._namespaces[name] then
+          return _G.vim._namespaces[name]
+        end
+        _G.vim._next_namespace = _G.vim._next_namespace + 1
+        if name ~= "" then
+          _G.vim._namespaces[name] = _G.vim._next_namespace
+        end
+        return _G.vim._next_namespace
       end,
 
       nvim_buf_attach = function(bufnr, _send_buffer, callbacks)
@@ -1099,6 +1110,7 @@ describe("Range Selection Tests", function()
       mock_server.last_broadcast = nil
       _G.vim.v.event = {}
       _G.vim._buf_listeners = {}
+      _G.vim._on_key = {}
     end)
 
     after_each(function()
@@ -1833,10 +1845,18 @@ describe("Range Selection Tests", function()
 
         -- What Neovim does with the next key of a mapping: vim.on_key calls the listener before the key is processed,
         -- with no main-loop turn between it and the edit, so vim.schedule has not run yet.
+        local function key_listeners()
+          local listeners = {}
+          for _, listener in pairs(_G.vim._on_key) do
+            table.insert(listeners, listener)
+          end
+          return listeners
+        end
+
         local function press_next_key()
-          local on_key = _G.vim._on_key[1]
-          assert(on_key, "the edit set a key listener")
-          on_key("\27")
+          local listeners = key_listeners()
+          assert.are.equal(1, #listeners, "the edit set one key listener")
+          listeners[1]("\27")
         end
 
         -- vim.schedule runs its callbacks later, after a mapping's keys: collect them.
@@ -1900,6 +1920,34 @@ describe("Range Selection Tests", function()
           end)
         end)
 
+        it("clears the key listener when the schedule runs before the next key", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            edit_text(1) -- a plugin's edit: the check is queued, the key listener is set
+            assert.are.equal(1, #key_listeners())
+
+            queued[1]() -- a main-loop turn came first
+
+            assert.are.equal(0, #key_listeners())
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+            assert.is_false(selection.state.visual_entry.consumed)
+          end)
+        end)
+
+        it("keeps one key listener for several edits and clears it at the next key", function()
+          with_queued_schedule(function()
+            enter_visual_mode()
+            edit_text(1)
+            edit_text(1)
+            edit_text(1)
+            assert.are.equal(1, #key_listeners()) -- each edit replaces the listener of the one before
+
+            press_next_key()
+
+            assert.are.equal(0, #key_listeners())
+          end)
+        end)
+
         it("keeps the operator's edit when the next key comes after the flush", function()
           with_queued_schedule(function()
             enter_visual_mode()
@@ -1912,7 +1960,7 @@ describe("Range Selection Tests", function()
             press_next_key() -- the stale listener finds another entry
             assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
             assert.is_false(selection.state.visual_entry.consumed)
-            assert.is_nil(_G.vim._on_key[1]) -- and clears itself
+            assert.are.equal(0, #key_listeners()) -- and clears itself
           end)
         end)
 
@@ -1925,9 +1973,9 @@ describe("Range Selection Tests", function()
             leave_visual_mode()
 
             assert.is_nil(mock_server.last_broadcast)
-            assert.is_not_nil(_G.vim._on_key[1]) -- waits for the next key
+            assert.are.equal(1, #key_listeners()) -- waits for the next key
             press_next_key()
-            assert.is_nil(_G.vim._on_key[1]) -- the entry is gone: it does nothing and clears itself
+            assert.are.equal(0, #key_listeners()) -- the entry is gone: it does nothing and clears itself
             assert.is_nil(selection.state.visual_entry)
           end)
         end)
