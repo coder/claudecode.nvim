@@ -9,23 +9,22 @@
 #                  does a comment
 #   no-source-run-env  no script of the skill, and no recipe in its docs, has a source of a run.env that the scanner sees, except
 #                  `load` in vcn.sh, which checks the state dir first (the callers read a value through `vcn.sh get`)
-#   doc-get-exact  no recipe has a `get [-z] <path name>` (OUT, WORK, ...) in a `$(...)` that is still open there (inner ones too),
-#                  because a substitution cuts a newline at the end of the value, and a `<(...)` with such a get is only
-#                  `IFS= read -r -d '' NAME < <(COMMAND get -z <path name>)`: one simple command before `get`, nothing after the
-#                  name, and the `read` right before the `<(`
+#   doc-get-exact  no code block or inline code of SKILL.md and features/*.md has a `get [-z] WORD` with a path word (OUT, WORK, ...)
+#                  except the one-line getz() recipe of features/README.md, which SKILL.md repeats byte for byte. The check reads text:
+#                  it joins a line that ends in a backslash to the next one, deletes every quote mark and backslash, and lets WORD be
+#                  PORT, SID, NVIM_PID, TUI_PID, NVIM_08, CLIENT_PID*, a lowercase word, or the placeholder NAME or <NAME>. Any other
+#                  WORD needs the whole line to equal the recipe, because a substitution cuts a newline at the end of a path
 #   doc-recipe     the recipe that features/README.md and SKILL.md give for reading OUT and WORK returns both whole, for a
 #                  VERIFY_OUT that ends in a newline and holds a backslash, and stops the call with status 1 and a message when `get`
 #                  refuses (the case runs the documented line on a hand-made run.env, with no V of its own)
 # What the checks do not see: an indented code block (four spaces) and <pre>, a command that a variable or an eval of a built
 # string holds, a source in a file that is not a shell script (.lua, .py, .mjs), a fence in a quote or a list that markdown would
-# not open, a `get` of a path that is in no `$(...)` and no `<(...)` (a pipe or a file that feeds `read`), a `get` whose name is a
-# variable (`get -z "$1"`, as the helper of the docs has), and six shapes that no code block and no code line of a script has: in
-# a code block, a command substitution or a `<(...)` whose `get` is on the next line, a backtick substitution of `get`, a source
-# or `.` whose run.env is on the next line after a backslash (in a code block or a script), a quoted command word (`"source"
-# run.env`), a run.env named through BASH_ENV, and a use of PORT, SID, NVIM_PID or NODE_DIR without a $ (`let`, `(( ))`,
-# `${#PORT}`). A source after `builtin`, `command` or `eval`, in backticks, or in a quoted string that starts with it, and an
-# inline span that a line break splits are seen. The docs must exist: a missing SKILL.md or features/*.md fails every case that
-# reads them.
+# not open, a `get` or a name that a shell expansion builds (brace expansion, $'..', parameter expansion, an alias, an eval), and
+# four shapes that no code block and no code line of a script has: a source or `.` whose run.env is on the next line after a
+# backslash (in a code block or a script), a quoted command word (`"source" run.env`), a run.env named through BASH_ENV, and a use
+# of PORT, SID, NVIM_PID or NODE_DIR without a $ (`let`, `(( ))`, `${#PORT}`). A source after `builtin`, `command` or `eval`, in
+# backticks, or in a quoted string that starts with it, and an inline span that a line break splits are seen. The docs must exist:
+# a missing SKILL.md or features/*.md fails every case that reads them.
 # Prints one `ok <case>` per case, or `FAIL <case>: <reason>` and exits 1, and ends with `CASES <n>`.
 set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
@@ -286,77 +285,72 @@ no_source_case() {
 }
 
 # `$(...)` cuts the newlines at the end of its output, and VERIFY_OUT can end in one. A recipe that has a `get` of a path of the run
-# in a `$(...)` writes its next file to the twin of the evidence dir, which is a different path in the same checked parent. A `read`
-# without `IFS=` trims a newline at the end of the value, and one without `-d ''` stops at the first newline, and a path can hold
-# one. The docs read a path with `IFS= read -r -d ''` on `get -z`. A value that is no path (PORT, SID) can use a substitution.
-# path_reads follows quotes and parentheses on one line at a time. It flags a `get [-z] <path name>` (the name can be in quotes) in a
-# `$(...)` that is still open there, also after an inner `$(...)` or a quoted `)`. A `get` in a `<(...)` passes only as
-# `IFS= read -r -d '' NAME < <(COMMAND get -z <path name>)`: one simple command (none of ; & | ( ) < >) before `get`, nothing after the
-# name, and the `read` right before the `<(`. Every other `<(...)` with such a get is flagged: another command or a group in it, a
-# `{ ...; }` or a `while` loop that it feeds, no `-z`, no `IFS=`, no `-r`, no `-d ''`. A get in no `$(...)` and no `<(...)` is not
-# checked (a pipe or a file that feeds `read`).
-path_names='OUT|WORK|VCN_STATE|ATT_HOME|NVIM_SOCK|NVIM_BIN|NODE_DIR|ATT_BIN|ATT_SOCK|JQ_BIN'
-path_reads_awk=$(
+# in a `$(...)`, or that reads it with a `read` that lacks `IFS=`, `-r` or `-d ''`, or with no `get -z`, writes its next file to the
+# twin of the evidence dir, which is a different path in the same checked parent. The one line that reads a path whole is the
+# getz() recipe of features/README.md, which doc-recipe runs. So no other code block or span of the docs has a `get` with a path name.
+# The check reads text and parses no shell, because a parser missed one more shape in each review round (a nested substitution, a
+# `<(` with two commands, a `read` in a group, a quoted word). It joins a line that ends in a backslash to the next line, deletes every
+# quote mark and backslash (the shell does the same to g"et", O'UT' and \get), and takes each word `get`, an optional `-z` and the word
+# after them. That word passes when it is PORT, SID, NVIM_PID, TUI_PID, NVIM_08 or CLIENT_PID* (they hold no path), a lowercase word
+# (`claude mcp get nvim`), or the placeholder NAME or <NAME>. For any other word, also one that starts with a $, the whole line must
+# equal the recipe, byte for byte, so the copy in SKILL.md must equal the one in features/README.md. A `get` or a name that a shell
+# expansion builds ({get,}, $'..', ${x}, an alias, an eval) is not seen.
+get_words_awk=$(
   cat <<'AWK'
-function bad(s,   n, i, c, two, sp, dq, j, rest, len) {
-  n = length(s); sp = 0; dq = 0
-  for (i = 1; i <= n; i++) {
-    c = substr(s, i, 1)
-    if (c == "\\") { i++; continue }
-    if (dq == 0 && c == sq) {
-      j = index(substr(s, i + 1), sq)
-      if (j == 0) return 0
-      i += j; continue
-    }
-    if (c == dqc) { dq = 1 - dq; continue }
-    two = substr(s, i, 2)
-    if (two == "$(") { sp++; T[sp] = "$("; D[sp] = dq; dq = 0; i++; continue }
-    if (dq == 0 && two == "<(") { sp++; T[sp] = "<("; D[sp] = dq; O[sp] = i; i++; continue }
-    if (dq == 0 && c == "(") { sp++; T[sp] = "("; D[sp] = dq; continue }
-    if (dq == 0 && c == ")") { if (sp > 0) { dq = D[sp]; sp-- } continue }
-    if (c == "g" && (i == 1 || substr(s, i - 1, 1) !~ /[A-Za-z0-9_.\/-]/)) {
-      rest = substr(s, i)
-      if (match(rest, getre) && substr(rest, RLENGTH + 1, 1) !~ /[A-Za-z0-9_]/) {
-        len = RLENGTH
-        if (flagged(s, i, len, rest, sp)) return 1
-        i += len - 1
-      }
-    }
+function misuse(text,   rest, word, name) {
+  rest = text
+  while (match(rest, /(^|[^A-Za-z0-9_])get[ \t]+/)) {
+    rest = substr(rest, RSTART + RLENGTH)
+    if (match(rest, /^-z([ \t]+|$)/)) rest = substr(rest, RLENGTH + 1)
+    word = rest
+    sub(/[ \t].*$/, "", word)
+    if (word == "") continue
+    match(word, /^<?[A-Za-z0-9_]*>?/)
+    name = substr(word, 1, RLENGTH)
+    if (name ~ /^(PORT|SID|NVIM_PID|TUI_PID|NVIM_08|NAME|<NAME>)$/ || name ~ /^CLIENT_PID[A-Za-z0-9_]*$/ || name ~ /^[a-z][a-z0-9_]*$/) continue
+    return 1
   }
   return 0
 }
-function flagged(s, i, len, rest, sp,   k, pre, before) {
-  for (k = 1; k <= sp; k++) if (T[k] == "$(") return 1
-  for (k = sp; k >= 1; k--) if (T[k] == "<(") break
-  if (k == 0) return 0
-  pre = substr(s, O[k] + 2, i - O[k] - 2)
-  if (pre !~ /^[ \t]*[^;&|()<>]*[ \t]$/) return 1
-  if (rest !~ /^get[ \t]+-z[ \t]/) return 1
-  if (substr(s, i + len) !~ /^[ \t]*\)/) return 1
-  before = substr(s, 1, O[k] - 1)
-  if (before !~ readre) return 1
-  return 0
+function check(line,   text) {
+  text = line
+  gsub(sq, "", text)
+  gsub(dqc, "", text)
+  gsub(/\\/, "", text)
+  if (misuse(text)) print line
 }
-BEGIN {
-  sq = "\047"; dqc = "\042"
-  getre = "^get[ \t]+(-z[ \t]+)?[" dqc sq "]?(" names ")[" dqc sq "]?"
-  readre = "(^|[ \t;&|{(])IFS=[ \t]+read[ \t]+-r[ \t]+-d[ \t]*(" sq sq "|" dqc dqc ")[ \t]+[^ \t;&|<>(){}]+[ \t]*<[ \t]*$"
+BEGIN { sq = "\047"; dqc = "\042" }
+$0 == "%%unit%%" { if (joined != "") check(joined); joined = ""; next }
+{
+  line = joined $0
+  joined = ""
+  if (substr(line, length(line)) == "\\") { joined = substr(line, 1, length(line) - 1); next }
+  check(line)
 }
-{ if (bad($0)) print NR ":" $0 }
+END { if (joined != "") check(joined) }
 AWK
 )
 
-# path_reads: the numbered lines on stdin that read a path of the run so that the end of it is lost.
-path_reads() { awk -v names="$path_names" "$path_reads_awk"; }
+# get_misuse <recipe>: the lines on stdin (code_units output) that have a get of a path word and are not the recipe, joined where
+# a backslash ends a line.
+get_misuse() {
+  local recipe=$1 line
+  awk "$get_words_awk" | while IFS= read -r line; do
+    [[ $line == "$recipe" ]] || printf '%s\n' "$line"
+  done
+}
 
-# doc_get_exact_case: the first list holds a line for each shape that the scanner must flag, the second the lines that it must pass
-# (the last of them are real forms of this skill's own scripts). A line that starts with ## names a shape and is skipped.
+# doc_get_exact_case: the first list holds a line for each shape that the check must flag, the second the lines that it must pass,
+# and the recipe of features/README.md and some changes of it are tried too. A line that starts with ## names a shape and is skipped.
 doc_get_exact_case() {
-  local name=doc-get-exact file hits line
+  local name=doc-get-exact file recipe hits line sample dflag=" -d ''" ifs="IFS= "
+  local -a joined=() changed=()
   need_docs "$name"
+  recipe=$(code_units "$skill/features/README.md" | grep -F 'getz()' || true)
+  [[ -n $recipe && $(grep -c '' <<<"$recipe") == 1 ]] || fail "$name" "features/README.md must hold one inline recipe with getz(), found: ${recipe:-none}"
   while IFS= read -r line; do
     [[ -z $line || $line == '##'* ]] && continue
-    [[ -n $(path_reads <<<"$line") ]] || fail "$name" "the scanner misses: $line"
+    [[ -n $(get_misuse "$recipe" <<<"$line") ]] || fail "$name" "the check misses: $line"
   done <<'SAMPLES'
 ## a get of a path in a command substitution, with or without -z, with the name in quotes
 OUT=$($V get OUT)
@@ -398,38 +392,87 @@ IFS= read -r -d x OUT < <($V get -z OUT)
 IFS= read -rd '' OUT < <($V get -z OUT)
 ## a <( without -z (get ends the value with a newline)
 IFS= read -r -d '' X < <($V get OUT)
+## quote marks around the word get or -z, and a plain quoted get before a later one
+OUT=$("$V" 'get' OUT)
+OUT=$("$V" "get" OUT)
+OUT=$("$V" get '-z' OUT)
+OUT=$("$V" 'get' "-z" 'OUT')
+OUT=$(cd "$d"; "$V" "get" -z OUT)
+IFS= read -r -d '' OUT < <("$V" 'get' -z OUT)
+IFS= read -r -d '' OUT < <("$V" "get" -z OUT)
+IFS= read -r -d '' OUT < <("$V" get '-z' OUT)
+"$V" "get" OUT; IFS= read -r OUT < <("$V" get -z OUT)
+## a quote mark, a backslash, a $'..' word or a case pattern that the shell takes out or ends: bash runs each of these as get OUT
+\get OUT
+g"et" OUT
+get O'UT'
+get -z O"UT"
+get \OUT
+get ""OUT
+get -\z OUT
+get $'OUT'
+$(case a in a) "$V" get OUT;; esac)
+$(echo ${x%)}; "$V" get OUT)
+ge\t OUT
+g'e't OUT
+x;get OUT
 SAMPLES
+  joined=(
+    $'OUT=$("$V" get \\\n  -z OUT)'
+    $'OUT=$("$V" get -z \\\n  OUT)'
+    $'OUT=$("$V" g\\\net OUT)'
+    $'OUT=$("$V" get \\\n\\\n  OUT)'
+    $'x=$(\n  "$V" get -z OUT\n)'
+    $'x get\tOUT'
+    $'x get \t -z \t OUT'
+    $'x=$("$V" get OUT) \\'
+    $'x=$("$V" get OUT) \\\n%%unit%%'
+  )
+  for sample in "${joined[@]}"; do
+    [[ -n $(get_misuse "$recipe" <<<"$sample") ]] || fail "$name" "the check misses: ${sample//$'\n'/<newline>}"
+  done
+  changed=(
+    "$recipe # note"
+    "# $recipe"
+    "$recipe; OUT=\$(\"\$V\" get OUT)"
+    "${recipe/"$dflag"/}"
+    "${recipe/"$ifs"/}"
+    "${recipe/get -z/get}"
+  )
+  for sample in "${changed[@]}"; do
+    [[ $sample != "$recipe" ]] || fail "$name" "a changed recipe equals the recipe: $sample"
+    [[ -n $(get_misuse "$recipe" <<<"$sample") ]] || fail "$name" "the check passes a changed recipe: $sample"
+  done
+  [[ -z $(get_misuse "$recipe" <<<"$recipe") ]] || fail "$name" "the check flags the recipe of features/README.md"
   while IFS= read -r line; do
     [[ -z $line || $line == '##'* ]] && continue
-    [[ -z $(path_reads <<<"$line") ]] || fail "$name" "the scanner flags a line that loses no newline: $line"
+    [[ -z $(get_misuse "$recipe" <<<"$line") ]] || fail "$name" "the check flags a line that reads no path: $line"
   done <<'SAMPLES'
-## the allowed form, with the name in quotes or not, and the helper of the docs (its name is "$1")
-IFS= read -r -d "" OUT < <($V get -z OUT)
-IFS= read -r -d '' OUT < <("$V" get -z OUT)
-IFS= read -r -d "" OUT < <($V get -z "OUT")
-IFS= read -r -d "" "$1" < <("$V" get -z "$1")
-getz() { IFS= read -r -d '' "$1" < <("$V" get -z "$1") || { echo "vcn.sh get $1 failed" >&2; return 1; }; }; getz OUT && getz WORK || exit 1
-## an earlier substitution or read that is closed before the get must not hide the allowed form
-PORT=$("$V" get PORT); IFS= read -r -d '' OUT < <("$V" get -z OUT)
-echo "$(date)"; IFS= read -r -d '' OUT < <("$V" get -z OUT)
-x=$(date) y=$(date); IFS= read -r -d '' OUT < <("$V" get -z OUT)
-read -r scratch <<< x; IFS= read -r -d "" OUT < <($V get -z OUT)
-## a get of a name that is no path, a longer name, a word that ends in get, a quoted )
-PORT=$($V get PORT)
-SID=$($V get SID)
-x=$($V get OUTPUT)
-read -r PORT < <($V get PORT)
-x=$(echo ")"; "$V" get PORT)
+## a name that holds no path, with and without quotes, and CLIENT_PID with a client name
+$($V get PORT)
+x=$("$V" get SID)
+x=$("$V" get NVIM_PID)
+x=$("$V" get TUI_PID)
+x=$("$V" get NVIM_08)
+x=$("$V" get CLIENT_PID)
+x=$("$V" get -z CLIENT_PID_a)
+x=$("$V" get "PORT")
+read -r PORT < <("$V" get -z 'PORT')
+## a lowercase word, the placeholders, a get with no name, a get that is part of another word, a helper that is no get
+claude mcp get nvim
+How to get to it (user POV)
+vcn.sh get <NAME> failed
+IFS= read -r -d '' NAME < <(COMMAND get -z NAME)
+get -z
+get
 x=$(forget OUT)
-## forms of this skill's own scripts: one simple command, such as env with variables, before the get
-IFS= read -r -d "" got < <(env PATH="$good_path" VCN_STATE="$dir" "$V" get -z OUT) || fail "$name" "x"
-IFS= read -r -d '' OUT < <(env -i "$V" get -z "OUT")
+getz OUT && getz WORK || exit 1
 SAMPLES
   for file in "$skill"/SKILL.md "$skill"/features/*.md; do
-    hits=$(code_units "$file" | path_reads)
-    [[ -z $hits ]] || fail "$name" "${file#"$skill"/} reads a path in a way that loses the end of it: $(tr '\n' ' ' <<<"$hits")"
+    hits=$(code_units "$file" | get_misuse "$recipe")
+    [[ -z $hits ]] || fail "$name" "${file#"$skill"/} has a get of a path word in a line that is not the recipe of features/README.md: $(tr '\n' ' ' <<<"$hits")"
   done
-  echo "ok $name: no recipe has a get of OUT, WORK or another path in a \$(...), and a <(...) with one is only IFS= read -r -d '' NAME < <(COMMAND get -z NAME)"
+  echo "ok $name: no code block or span of SKILL.md and features/*.md has a get of OUT, WORK or another path word outside the one recipe line of features/README.md, which SKILL.md repeats byte for byte"
   cases=$((cases + 1))
 }
 
