@@ -1142,10 +1142,9 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   pending diff [lua/claudecode/diff.lua:M.close_diff_by_tab_name]. A diff that resolves before `openDiff` yields, for example from a
   `ClaudeCodeDiffOpened` handler, is answered at once [lua/claudecode/diff.lua:M.open_diff_blocking].
 - Exit answers. This bullet is the one place that states what Claude gets when Neovim exits. The other docs describe
-  how the code runs the exit and link here. A call is waiting when its `openDiff` setup has finished and nobody has
-  answered its diff. Each fact below was probed with a real WebSocket client on Neovim 0.8.0 and 0.12.3. The facts
-  about `:qa!`, SIGTERM and a quit from a non-nested autocmd also hold on 0.9.5, 0.10.4 and 0.11.5. SIGKILL stands in
-  for a crash, which was not probed:
+  how the code runs the exit and point here. A call is waiting when its `openDiff` setup has finished and nobody has
+  answered its diff. Each fact below was probed with a real WebSocket client on Neovim 0.8.0, 0.9.5, 0.10.4, 0.11.5
+  and 0.12.3. SIGKILL stands in for a crash, which was not probed:
   - An exit that runs `VimLeavePre` (`:qa!`, SIGTERM or SIGHUP) gives each waiting call one `DIFF_REJECTED`
     [lua/claudecode/diff.lua:reject_pending_diffs]. A call that already has its answer, such as a `FILE_SAVED`,
     gets no second one.
@@ -1161,10 +1160,10 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   - In an exit that runs `VimLeavePre`, the autocmd of `ClaudeCodeMCPDiff` rejects every diff with the status
     `pending` first and removes every diff after that [lua/claudecode/diff.lua:cleanup_at_exit]. A reject can remove
     its own diff at once. With the default `on_new_file_reject = "keep_empty"`, a new-file diff in the `vertical`
-    layout that is not in its own tab is removed when it is rejected, so its `ClaudeCodeDiffClosed` handler runs while
-    a later diff is still `pending` [lua/claudecode/diff.lua:M.\_resolve_diff_as_rejected]. With `"close_window"`,
-    both diffs have their answers before the first `ClaudeCodeDiffClosed` fires (probed with one new-file and one
-    existing-file diff, for `:qa!` and SIGTERM).
+    or `horizontal` layout that is not in its own tab is removed when it is rejected, so its `ClaudeCodeDiffClosed`
+    handler runs while a later diff is still `pending` [lua/claudecode/diff.lua:M.\_resolve_diff_as_rejected]. With
+    `"close_window"`, both diffs have their answers before the first `ClaudeCodeDiffClosed` fires (probed in both
+    layouts with one new-file and one existing-file diff, for `:qa!` and SIGTERM).
   - How the code runs the exit: [lua/claudecode/README.md](./lua/claudecode/README.md) and the Resource Cleanup
     section of [ARCHITECTURE.md](./ARCHITECTURE.md).
 
