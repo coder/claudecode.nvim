@@ -1,11 +1,11 @@
--- Real-Neovim guards for the JIT while a tool's coroutine runs. A LuaJIT older than September 2023 (bundled by Neovim
--- 0.8 and 0.9) has a bug (LuaJIT issue #1066): when a Neovim API call raises inside a coroutine because a handler it
--- ran raised, LuaJIT keeps pointing at the main Lua thread, and the next exit from a compiled trace corrupts the stack
--- of that thread. Neovim then aborts or crashes. The first case reads the state of the JIT, so its result does not
--- depend on a failure rate. The second case keeps a JIT that the user turned off off. The third case raises in
--- handlers under an eager JIT, as diff_failed_setup_guards_spec.lua does, for setups that succeed. Under busted's mock
--- vim this is pending; scripts/run_integration_tests_individually.sh runs it in Neovim, including CI's oldest supported
--- version.
+-- Real-Neovim guards for the JIT around the coroutine of a tool. A LuaJIT older than 2023-09-21 (the release builds of
+-- Neovim 0.8 and 0.9) has a bug (LuaJIT issue #1066): after a C function runs Lua on another thread and then raises
+-- into a pcall, the next exit from a compiled trace crashes. A Neovim API call that raises inside a coroutine because a
+-- handler it ran raised is that case, and Neovim aborts or crashes. The first case reads the state of the JIT, so its
+-- result does not depend on a failure rate. The second case keeps a JIT that the user turned off off. The third case
+-- raises in handlers under an eager JIT, as diff_failed_setup_guards_spec.lua does, for setups that succeed. Under
+-- busted's mock vim this is pending. scripts/run_integration_tests_individually.sh runs it in Neovim, including CI's
+-- oldest supported version.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("openDiff and the JIT of a LuaJIT with issue 1066", function()
     pending("needs a real Neovim")
@@ -18,8 +18,8 @@ describe("openDiff and the JIT of a LuaJIT with issue 1066", function()
   local tools = require("claudecode.tools.init")
   local tab_name = "✻ [Claude Code] proposal ⧉"
   local group = "diff_tool_coroutine_jit_spec"
-  -- Rolling releases of LuaJIT 2.1 are numbered with the unix time of their commit. 1695261248 is the commit that fixed
-  -- the bug. The plugin makes the same decision, and this spec does not read it from the plugin.
+  -- Rolling releases of LuaJIT 2.1 are numbered with the unix time of their commit. 1695261248 is the time of commit
+  -- e86990f7f, the fix for the bug. The plugin makes the same decision, and this spec does not read it from the plugin.
   local affected = jit ~= nil and (tonumber(jit.version:match("^LuaJIT 2%.1%.(%d+)$")) or 0) < 1695261248
   local jit_was_on, real_resume
   local dir, path
@@ -166,7 +166,7 @@ describe("openDiff and the JIT of a LuaJIT with issue 1066", function()
 
   -- A second openDiff of the same tab first closes the windows of the first diff, in its own coroutine. A handler that
   -- raises then is caught by a pcall of the plugin, and both calls open a diff. Without the guard this case does not
-  -- abort Neovim (the cases of diff_failed_setup_guards_spec.lua do), so it shows no bug. It shows that the guard
+  -- abort Neovim (the eager case of diff_failed_setup_guards_spec.lua does), so it shows no bug. It shows that the guard
   -- leaves the answers of openDiff as they are.
   it("keeps Neovim running when handlers raise on repeated setups that succeed under an eager JIT", function()
     jit.opt.start("hotloop=1", "hotexit=1", "tryside=1")
