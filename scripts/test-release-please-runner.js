@@ -698,11 +698,6 @@ async function testUnreleasedUpdaterFences() {
     "Existing text\n\nMore text\n",
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\nExisting text\n\nMore text\n",
   ]);
-  // An Unreleased heading inside a fence is not the anchor.
-  cases.push([
-    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n- Draft\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
-    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
-  ]);
 
   // A line ends with LF, CR, or CRLF. A bare CR ends a fence line like the others, and the
   // updated changelog has LF endings only.
@@ -721,6 +716,25 @@ async function testUnreleasedUpdaterFences() {
         `${JSON.stringify(existing)} with ${JSON.stringify(ending)} line endings`,
       );
     }
+  }
+
+  // An Unreleased heading inside a fence is not the anchor of the update. Communique reads it as one, because it does
+  // not parse Markdown, and it refuses a file with two anchors. So the update refuses the text as well, and it does not
+  // keep a second Unreleased heading. With bare CR line breaks Communique reads no heading at all.
+  const fencedAnchor =
+    "# Changelog\n\n````text\n```\n## [Unreleased]\n````\n\n## [Unreleased]\n\n- Draft\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n";
+  for (const ending of ["\n", "\r\n", "\r"]) {
+    assert.throws(
+      () =>
+        withMissingFormatter(() => update(fencedAnchor.replace(/\n/g, ending))),
+      {
+        message: anchorMismatchRefusal(
+          { number: 8, line: "## [Unreleased]" },
+          ending === "\r" ? null : { number: 5, line: "## [Unreleased]" },
+        ),
+      },
+      `an Unreleased heading in a fence, with ${JSON.stringify(ending)} line endings`,
+    );
   }
 
   // One bare CR in an LF file: right after a closing fence, and inside an opener line. Each one ends a line, so the
@@ -1138,14 +1152,22 @@ async function testUnreleasedDraftFenceGuard() {
       released,
     ],
     ["an empty draft", `${head}${previous.trimStart()}`, released],
-    [
-      "a draft with no fence and a section that is not a release",
-      `${head}Draft\n\n## Upgrade notes\n\n- Read this\n${previous}`,
-      `# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## Upgrade notes\n\n- Read this\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n`,
-    ],
   ]) {
     assert.equal(updateWith(newEntry, text), expected, name);
   }
+  // A section that is not a release ends the draft of the update, and Communique reads past it, so it would show
+  // twice (see `testUnreleasedDraftEnd`).
+  const notesText = `${head}Draft\n\n## Upgrade notes\n\n- Read this\n${previous}`;
+  assert.throws(
+    () => withMissingFormatter(() => update(notesText)),
+    {
+      message: endMismatchRefusal(
+        placeIn(notesText, "## Upgrade notes"),
+        placeIn(notesText, release),
+      ),
+    },
+    "a draft with no fence and a section that is not a release",
+  );
   // A code line that is indented by four spaces is not a fence. It is an indented code block, and the update refuses
   // it as one (see `testUnreleasedDraftStructure`).
   assert.throws(
@@ -1243,21 +1265,58 @@ function uncoveredRefusal(lineNumber, line) {
   );
 }
 
-/** The error of `updateContent` for a draft line that Communique reads as a section heading. */
-function communiqueLineRefusal(lineNumber, line) {
+/**
+ * A place in a text for the two refusals below: `{ number, line }`, with the line numbered from 1, or `null` for the
+ * end of the text (or no line).
+ */
+function placeIn(text, line) {
+  const number = lineNumberOf(text, line);
+  assert.ok(number > 0, `the text holds ${JSON.stringify(line)}`);
+  return { number, line };
+}
+
+/**
+ * The error of `updateContent` when the update and Communique end the Unreleased draft at different lines. `update` is
+ * the place where the update ends the draft and `communique` the place where Communique ends it (see `placeIn`), or
+ * null for the end of the text. Communique ends it later than the update when its line is below the update's line, and
+ * `communiqueIsLater` says so when the two have the same number (a bare CR line break makes that happen).
+ */
+function endMismatchRefusal(
+  update,
+  communique,
+  communiqueIsLater = communique === null ||
+    (update !== null && communique.number > update.number),
+) {
+  const describe = (place) =>
+    place === null
+      ? "the end of the text"
+      : `line ${place.number}: ${JSON.stringify(place.line.slice(0, 80))}`;
   return (
-    `The Unreleased draft has a line that Communique reads as a section heading. Line ${lineNumber}: ${JSON.stringify(line.slice(0, 80))}. ` +
-    "Communique ends its draft there, so it never reads the lines below it, and the update would drop them. " +
-    "Move it out of the Unreleased draft, or write it as a paragraph."
+    "The update and Communique end the Unreleased draft in different places. " +
+    `The update ends it at ${describe(update)}. Communique ends it at ${describe(communique)}. ` +
+    (communiqueIsLater
+      ? "Communique reads the lines in between as draft too and folds them into the new entry, and the update keeps them, so they would show twice. "
+      : "Communique never reads the lines in between, and the update would drop them. ") +
+    "Communique ends a draft only at a `## ` heading with a version, such as `## [0.4.1]`. " +
+    "Write the heading that ends the draft that way, or move the lines in between out of the Unreleased draft."
   );
 }
 
-/** The error of `updateContent` for a heading that ends the draft and is empty or a setext heading. */
-function endRefusal(lineNumber, line) {
+/**
+ * The error of `updateContent` when the update and Communique find the Unreleased heading at different lines. Each
+ * place is `{ number, line }` or null for no line (see `placeIn`).
+ */
+function anchorMismatchRefusal(update, communique) {
+  const describe = (place) =>
+    place === null
+      ? "no line"
+      : `line ${place.number}: ${JSON.stringify(place.line.slice(0, 80))}`;
   return (
-    `The Unreleased draft ends at a heading that is empty or a setext heading. Line ${lineNumber} starts it: ${JSON.stringify(line.slice(0, 80))}. ` +
-    "Communique reads the text below it as draft too and folds it into the new entry, so the update would write that text twice. " +
-    "Write the heading on one line with `## ` and its text, or move the text out of the Unreleased draft."
+    "The update and Communique find the Unreleased heading in different places. " +
+    `The update finds it at ${describe(update)}. Communique finds it at ${describe(communique)}. ` +
+    "The update would drop a draft that Communique never read, keep one that Communique folds into the new entry, or add a second Unreleased heading. " +
+    "Communique reads `## [Unreleased]` and `## Unreleased` after it trims the line, and it reads `## [Unreleased](...)`. " +
+    "Write the heading as `## [Unreleased]` at the start of a line, once."
   );
 }
 
@@ -1587,10 +1646,6 @@ async function testUnreleasedDraftStructure() {
       "- Draft\n\n ## [0.3.0] - 2025-09-15",
     ],
     [
-      "an H2 heading with a tab after the marks",
-      "Draft text.\n\n##\t[0.3.0] - 2025-09-15",
-    ],
-    [
       "an H2 heading with two spaces after the marks",
       "Draft text.\n\n##  [0.3.0] - 2025-09-15",
     ],
@@ -1612,10 +1667,11 @@ async function testUnreleasedDraftStructure() {
     assert.equal(update(testCase.raw), released, "raw");
     assert.equal(update(formatted), released, "after prettier");
   });
-  // 2b. The heading that ends the draft is a one-line heading with text. Communique reads the text below an empty or a
-  // setext heading as draft too and folds it into the new entry, so the update refuses them. Each case is { name,
-  // draft, line, formattedLine }: `formattedLine` is the heading line after prettier, or null when prettier turns the
-  // heading into a one-line heading with text (a setext heading becomes an ATX heading), which the update reads.
+  // 2b. Communique ends its draft only at a `## <version>` line, so it reads the text below an empty or a setext
+  // heading as draft too and folds it into the new entry. The update ends its draft at that heading and keeps the text,
+  // so it would show twice, and the update refuses them. Each case is { name, draft, line, formattedLine }:
+  // `formattedLine` is the heading line after prettier. Prettier turns a setext heading into an ATX heading, which is
+  // not a version heading either (see `testUnreleasedDraftEnd` for the ones that are).
   const endCases = [
     ["an empty H1", "Draft text.\n\n#\n\n- Rest of the draft", "#", "#"],
     ["an empty H2", "Draft text.\n\n##\n\n- Rest of the draft", "##", "##"],
@@ -1647,13 +1703,13 @@ async function testUnreleasedDraftStructure() {
       "a setext H1",
       "Draft text.\n\nTitle\n=====\n\n- Rest of the draft",
       "Title",
-      null,
+      "# Title",
     ],
     [
       "a setext H2",
       "Draft text.\n\nTitle\n-----\n\n- Rest of the draft",
       "Title",
-      null,
+      "## Title",
     ],
     [
       "a setext H2 of two lines",
@@ -1671,43 +1727,35 @@ async function testUnreleasedDraftStructure() {
     formattedError,
   }));
   const endFormatted = formatDocuments(endCases.map(({ text }) => text));
+  // The update ends the draft at `line` and Communique at the older release.
+  const endRefused = (text, line) =>
+    endMismatchRefusal(placeIn(text, line), placeIn(text, release));
   checkCases(endCases, (testCase) => {
-    const number = lineNumberOf(testCase.text, testCase.line);
-    assert.ok(number > 0, "the text holds the heading");
     assert.throws(
       () => withMissingFormatter(() => update(testCase.text)),
-      { message: endRefusal(number, testCase.line) },
+      { message: endRefused(testCase.text, testCase.line) },
       "raw",
     );
     const formatted = endFormatted[endCases.indexOf(testCase)];
-    if (testCase.formattedLine === null) {
-      // The ATX heading that prettier writes ends the draft, as it does for the line reader, and the text below it stays.
-      assert.equal(
-        withIdentityFormatter(() => update(formatted)),
-        mainText(formatted),
-        "after prettier",
-      );
-    } else {
-      const formattedNumber = lineNumberOf(formatted, testCase.formattedLine);
-      assert.ok(formattedNumber > 0, "the formatted text holds the heading");
-      assert.throws(
-        () => withMissingFormatter(() => update(formatted)),
-        {
-          message: (testCase.formattedError ?? endRefusal)(
-            formattedNumber,
-            testCase.formattedLine,
-          ),
-        },
-        "after prettier",
-      );
-    }
+    const formattedNumber = lineNumberOf(formatted, testCase.formattedLine);
+    assert.ok(formattedNumber > 0, "the formatted text holds the heading");
+    assert.throws(
+      () => withMissingFormatter(() => update(formatted)),
+      {
+        message:
+          testCase.formattedError?.(formattedNumber, testCase.formattedLine) ??
+          endRefused(formatted, testCase.formattedLine),
+      },
+      "after prettier",
+    );
   });
 
   // 2c. Communique trims a line with Rust's `trim` and ends its draft at a trimmed `## <version>` line. CommonMark keeps
-  // most of those blanks as text, so a draft line that starts with one of them, then `## `, is a paragraph to the update,
-  // and Communique never reads the lines below it. The update refuses such a line. The blanks are the ones that Rust
-  // trims, except the space and the tab, which CommonMark reads as indent: VT, FF, NEL, no-break space, U+1680, U+2000
-  // to U+200A, the line and paragraph separators, U+202F, U+205F and U+3000.
+  // most of those blanks as text, so a draft line that starts with one of them, then `## ` and a version, is a paragraph
+  // to the update, and Communique never reads the lines below it. The update ends its draft at the next heading, so it
+  // refuses such a line. The blanks are the ones that Rust trims, except the space and the tab, which CommonMark reads
+  // as indent: VT, FF, NEL, no-break space, U+1680, U+2000 to U+200A, the line and paragraph separators, U+202F, U+205F
+  // and U+3000.
   const communiqueBlanks = [
     "\u000b",
     "\u000c",
@@ -1729,11 +1777,6 @@ async function testUnreleasedDraftStructure() {
       // Prettier removes a form feed, so only the raw text holds it.
       rawOnly: blank === "\u000c",
     })),
-    {
-      name: "a no-break space before an H2 with no version",
-      line: "\u00a0## Notes",
-      draft: "- MK1\n\n\u00a0## Notes\n\n- MK3",
-    },
     {
       name: "a no-break space before an H2 right after the anchor",
       line: "\u00a0## [0.2.0] - 2026-02-02 MK2",
@@ -1772,35 +1815,49 @@ async function testUnreleasedDraftStructure() {
     for (const [label, text] of variants) {
       const number = lineNumberOf(text, testCase.line);
       assert.ok(number > 0, `${label}: the text holds the line`);
+      // Communique ends its draft at the line, and the update ends it at the older release.
       assert.throws(
         () => withMissingFormatter(() => update(text)),
-        { message: communiqueLineRefusal(number, testCase.line) },
+        {
+          message: endMismatchRefusal(placeIn(text, release), {
+            number,
+            line: testCase.line,
+          }),
+        },
         label,
       );
     }
   });
   // The first and the last line of the draft are read as well.
   const nbspHeading = "\u00a0## [0.2.0] - 2026-02-02 MK2";
-  for (const [name, text, number] of [
+  for (const [name, text, number, older] of [
     [
       "the first line of the draft",
       `# Changelog\n\n## [Unreleased]\n${nbspHeading}\n\n- MK3${previous}`,
       4,
+      release,
     ],
     [
       "the last line of the draft",
       `${head}- MK1\n${nbspHeading}\n## [0.1.0] - 2026-01-01\n\n- MK9\n`,
       6,
+      "## [0.1.0] - 2026-01-01",
     ],
   ]) {
     assert.throws(
       () => withMissingFormatter(() => update(text)),
-      { message: communiqueLineRefusal(number, nbspHeading) },
+      {
+        message: endMismatchRefusal(placeIn(text, older), {
+          number,
+          line: nbspHeading,
+        }),
+      },
       name,
     );
   }
-  // These lines are not `## ` for Communique, so they are read as text, and the text of main is the text that the
-  // update writes: a character that Rust does not trim, a blank inside the line, a deeper heading, no space after the marks.
+  // These lines do not end the draft of Communique, so it reads them as text, and the text of main is the text that the
+  // update writes: a character that Rust does not trim, a blank inside the line, a deeper heading, no space after the
+  // marks, and an H2 with no version.
   const readLines = [
     [
       "a zero width space before the marks",
@@ -1816,6 +1873,7 @@ async function testUnreleasedDraftStructure() {
       "\u00a0##\u00a0[0.2.0] - 2026-02-02 MK2",
     ],
     ["a no-break space before an H3", "\u00a0### Added"],
+    ["a no-break space before an H2 with no version", "\u00a0## Notes"],
     ["no space after the marks", "\u00a0##[0.2.0] - 2026-02-02 MK2"],
     ["a tab after the marks", "\u00a0##\t[0.2.0] - 2026-02-02 MK2"],
   ].map(([name, line]) => ({ name, line }));
@@ -1832,7 +1890,8 @@ async function testUnreleasedDraftStructure() {
   const setext = "- Draft\n\n0.3.0\n-----\n\n- Previous\n";
   assert.throws(
     () => withMissingFormatter(() => update(`${head}${setext}`)),
-    { message: endRefusal(7, "0.3.0") },
+    // Communique reads the draft to the end of the text.
+    { message: endMismatchRefusal({ number: 7, line: "0.3.0" }, null) },
     "a raw setext heading that ends the draft",
   );
   // A raw setext older release further down is kept text. Prettier moves it into the list item above it, so the
@@ -1853,19 +1912,35 @@ async function testUnreleasedDraftStructure() {
     { message: nodeRefusal(9, "---", "thematic_break") },
     "the formatted text holds a thematic break and no release heading",
   );
-  for (const underline of ["=====", "-----"]) {
-    // Not after a list item: prettier writes an ATX heading, and the text is kept as written by prettier.
+  for (const [underline, atx] of [
+    ["=====", "# 0.3.0"],
+    ["-----", "## 0.3.0"],
+  ]) {
+    // Not after a list item: prettier writes an ATX heading.
     const text = `${head}Draft text.\n\n0.3.0\n${underline}\n\n- Previous\n`;
     const formatted = runner.formatChangelogMarkdown(text);
-    assert.ok(formatted.includes("0.3.0\n\n- Previous"), "prettier writes ATX");
-    assert.equal(
-      update(formatted),
-      `${entryOnly}\n${formatted.slice(formatted.indexOf("#", head.length))}`.replace(
-        "\n\n\n",
-        "\n\n",
-      ),
-      `the setext ${underline} release after prettier`,
+    assert.ok(
+      formatted.includes(`${atx}\n\n- Previous`),
+      "prettier writes ATX",
     );
+    if (atx.startsWith("## ")) {
+      // An H2 with a version ends the draft of Communique too, and the text is kept as written by prettier.
+      assert.equal(
+        update(formatted),
+        `${entryOnly}\n${formatted.slice(formatted.indexOf("#", head.length))}`.replace(
+          "\n\n\n",
+          "\n\n",
+        ),
+        `the setext ${underline} release after prettier`,
+      );
+    } else {
+      // An H1 does not end the draft of Communique, which reads the text below it as draft.
+      assert.throws(
+        () => withMissingFormatter(() => update(formatted)),
+        { message: endMismatchRefusal(placeIn(formatted, atx), null) },
+        `the setext ${underline} release after prettier`,
+      );
+    }
   }
 
   // 4. The contract: an H3 heading directly under `## [Unreleased]` is a subsection of the draft, whatever it says,
@@ -1999,11 +2074,30 @@ async function testUnreleasedDraftStructure() {
         ["after prettier", ordinaryFormatted[index]],
       ]) {
         assert.equal(update(text), mainText(text), label);
-        for (const ending of ["\r\n", "\r"]) {
+        assert.equal(
+          update(text.replace(/\n/g, "\r\n")),
+          mainText(text),
+          `${label}, "\\r\\n" endings`,
+        );
+        // Communique ends a line at LF only, so it reads no draft in a text with bare CR line breaks. The update would
+        // drop a draft that Communique never read, and refuses it. There is nothing to drop in an empty draft.
+        const bareCr = text.replace(/\n/g, "\r");
+        if (testCase.draft === "") {
           assert.equal(
-            update(text.replace(/\n/g, ending)),
+            update(bareCr),
             mainText(text),
-            `${label}, ${JSON.stringify(ending)} endings`,
+            `${label}, "\\r" endings`,
+          );
+        } else {
+          assert.throws(
+            () => withMissingFormatter(() => update(bareCr)),
+            {
+              message: anchorMismatchRefusal(
+                { number: 3, line: "## [Unreleased]" },
+                null,
+              ),
+            },
+            `${label}, "\\r" endings`,
           );
         }
       }
@@ -2264,7 +2358,9 @@ async function testUnreleasedAnchor() {
 
   // The lines that do not anchor, with a draft below each. The entry goes under the title, below a new anchor, and
   // every line of the text stays. Main did not anchor on any of them but the last two, which Communique does not read,
-  // so main dropped the draft below those two.
+  // so main dropped the draft below those two. Communique does not read a draft under any of them either. The lines
+  // that Communique reads a draft under and the update does not anchor on (a link, an indent) are refused instead (see
+  // `testUnreleasedDraftEnd`).
   const notAnchors = [
     ["bold", "## **Unreleased**"],
     ["emphasis with underscores", "## _Unreleased_"],
@@ -2276,10 +2372,8 @@ async function testUnreleasedAnchor() {
       "## [Unreleased][]",
       "\n[Unreleased]: https://example.com/compare/v0.3.0...HEAD\n",
     ],
-    ["a link", "## [Unreleased](https://example.com/compare/v0.3.0...HEAD)"],
     ["two spaces after the marks", "##  [Unreleased]"],
     ["a tab after the marks", "##\t[Unreleased]"],
-    ["an indent", " ## [Unreleased]"],
     ["a closing sequence", "## [Unreleased] ##"],
     ["a setext heading", "Unreleased\n----------"],
     ["a bracketed setext heading", "[Unreleased]\n============"],
@@ -2304,16 +2398,21 @@ async function testUnreleasedAnchor() {
     );
   });
 
-  // The first heading that anchors counts. A second Unreleased heading ends the draft and stays. A spelling that does
-  // not anchor, above an anchor, stays with its draft.
-  withIdentityFormatter(() => {
-    assert.equal(
-      update(
-        `${title}\n\n## [Unreleased]\n\n- First\n\n## Unreleased\n\n- Second\n\n${older}`,
+  // The first heading that anchors counts. A spelling that does not anchor, above an anchor, stays with its draft.
+  // Communique refuses a changelog with two Unreleased headings before this update runs, and a second heading ends the
+  // draft of the update at a heading that is no version (see `testUnreleasedDraftEnd`), so the update refuses it too.
+  const twoHeadings = `${title}\n\n## [Unreleased]\n\n- First\n\n## Unreleased\n\n- Second\n\n${older}`;
+  assert.throws(
+    () => withMissingFormatter(() => update(twoHeadings)),
+    {
+      message: endMismatchRefusal(
+        placeIn(twoHeadings, "## Unreleased"),
+        placeIn(twoHeadings, "## [0.3.0] - 2025-09-15"),
       ),
-      `${title}\n\n## [Unreleased]\n\n${entry}\n\n## Unreleased\n\n- Second\n\n${older}`,
-      "two Unreleased headings",
-    );
+    },
+    "two Unreleased headings",
+  );
+  withIdentityFormatter(() => {
     assert.equal(
       update(
         `${title}\n\n## **Unreleased**\n\n- A\n\n## [Unreleased]\n\n- B\n\n${older}`,
@@ -2387,6 +2486,554 @@ async function testUnreleasedAnchor() {
       `${anchor} at the end of the text`,
     );
   }
+}
+
+/** The markers (`MK1`, `MK2`, ...) of a text, in order. The tests put one marker in each line of text that must not be lost or written twice. */
+function markersIn(text) {
+  return text.match(/MK\d+/g) ?? [];
+}
+
+/**
+ * The markers that Communique 1.1.3 reads in the Unreleased draft of each text, with the real binary behind a fake
+ * Anthropic API: an array of markers in order, or null when Communique reads no draft. Communique sends the draft to the
+ * model, so the fake reads it in the request. A few workers run in parallel, each with its own repository and server.
+ */
+async function readDraftMarkersWithCommunique(texts) {
+  const results = new Array(texts.length);
+  let next = 0;
+  const gitEnv = {
+    PATH: process.env.PATH,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "test",
+    GIT_AUTHOR_EMAIL: "test@example.invalid",
+    GIT_COMMITTER_NAME: "test",
+    GIT_COMMITTER_EMAIL: "test@example.invalid",
+  };
+  const worker = async () => {
+    const root = mkdtempSync(join(tmpdir(), "communique-draft-"));
+    let lastRequest = null;
+    const server = http.createServer((req, res) => {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        lastRequest = JSON.stringify(request.messages);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "msg_test",
+            type: "message",
+            role: "assistant",
+            model: request.model,
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_test",
+                name: "submit_release_notes",
+                input: {
+                  changelog: "### Added\n\nGenerated.",
+                  release_title: "Title",
+                  release_body: "Body",
+                },
+              },
+            ],
+            stop_reason: "tool_use",
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+        );
+      });
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const git = (...args) =>
+        execFileSync("git", args, { cwd: root, env: gitEnv, stdio: "pipe" });
+      git("init", "-q");
+      git("commit", "-q", "--allow-empty", "-m", "chore: first");
+      git("tag", "v0.0.1");
+      git("commit", "-q", "--allow-empty", "-m", "fix: second (#1)");
+      copyFileSync(
+        join(__dirname, "..", "communique.toml"),
+        join(root, "communique.toml"),
+      );
+      while (next < texts.length) {
+        const index = next;
+        next += 1;
+        writeFileSync(join(root, "CHANGELOG.md"), texts[index]);
+        lastRequest = null;
+        await execFileAsync(
+          "communique",
+          [
+            "generate",
+            "HEAD",
+            "v0.0.1",
+            "--concise",
+            "--repo",
+            "coder/claudecode.nvim",
+            "--base-url",
+            `http://127.0.0.1:${server.address().port}`,
+            "--output",
+            join(root, "notes.md"),
+          ],
+          {
+            cwd: root,
+            env: {
+              ...gitEnv,
+              ANTHROPIC_API_KEY: "test-key-not-real",
+              HOME: root,
+            },
+            timeout: 60_000,
+          },
+        );
+        assert.notEqual(lastRequest, null, "communique must send a request");
+        results[index] = lastRequest.includes(
+          "Existing Unreleased CHANGELOG.md Draft",
+        )
+          ? markersIn(lastRequest)
+          : null;
+      }
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(6, texts.length) }, () => worker()),
+  );
+  return results;
+}
+
+/** The markers in the Unreleased draft that the runner's reader of Communique finds, or null for no draft. */
+function draftMarkersOfPort(text) {
+  const found = runner.findCommuniqueDraft(text);
+  if (found === null) {
+    return null;
+  }
+  return markersIn(
+    text.slice(
+      found.anchor.offset + found.anchor.line.length,
+      found.end === null ? text.length : found.end.offset,
+    ),
+  );
+}
+
+/** The first line of `text` that holds `marker`, as `{ number, line }`. */
+function placeOfMarker(text, marker) {
+  const line = text
+    .split(/\r\n|\r|\n/)
+    .find((candidate) => candidate.includes(marker));
+  assert.notEqual(line, undefined, `the text holds ${marker}`);
+  return placeIn(text, line);
+}
+
+/**
+ * Where the update and Communique end the Unreleased draft, and where they find its heading. The update ends the draft
+ * at the next heading of level 1 or 2 that a Markdown parser reads. Communique 1.1.3 reads the changelog line by line
+ * and ends its draft only at a line that, once trimmed, is `## ` and a version: a digit and a dot, or `v`, a digit and
+ * a dot, in brackets or not. It finds its draft under a trimmed line `## [Unreleased]`, `## Unreleased` or
+ * `## [Unreleased](...)`. If the two end the draft at different lines, the lines in between are written twice (the update
+ * keeps what Communique folds into the new entry) or lost (the update drops what Communique never read). So the update
+ * refuses unless both end the draft at the same line. Each case here is checked against the real Communique binary,
+ * and against the reader in the runner, before the update is.
+ */
+async function testUnreleasedDraftEnd() {
+  const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
+  const update = (content) =>
+    new runner.UnreleasedAwareChangelog({
+      changelogEntry: entry,
+    }).updateContent(content);
+  const title = "# Changelog";
+  const release = "## [0.3.0] - 2025-09-15";
+  const nbsp = "\u00a0";
+  // The text of a case: a draft of two paragraphs around `line`, and the older release. Communique reads MK1, and MK3
+  // too when it does not end its draft at `line`. `MK2` is on the heading line.
+  const endText = (line, before = "MK1.", join = "\n\n") =>
+    `${title}\n\n## [Unreleased]\n\n${before}${join}${line}\n\nMK3.\n\n${release}\n\n- MK9\n`;
+
+  // 1. The cases. { name, line, ends, accepted, before, join, formatted }: `ends` is true when Communique ends its draft at
+  // `line`, `accepted` when the update takes the text, `before` and `join` put the line after a paragraph that it
+  // continues, and `formatted` holds the same two flags for the text after prettier (when they differ).
+  const endCases = [
+    // Both end the draft at the version heading.
+    ...[
+      ["a version heading", "## [0.2.0] - 2026-02-02 MK2"],
+      ["a version with no brackets", "## 0.2.0 MK2"],
+      ["a version with a v", "## v0.2.0 MK2"],
+      ["a bracketed version with a v", "## [v0.2.0] MK2"],
+      ["a version of two parts", "## 1.2 MK2"],
+      ["a version with a prerelease", "## 0.2.0-rc.1 MK2"],
+      ["a heading that is a version to Communique", "## 1. Install MK2"],
+      ["a bracketed version that is a number and a dot", "## [1.] MK2"],
+      ["an indent of one space", " ## [0.2.0] MK2"],
+      ["an indent of three spaces", "   ## [0.2.0] MK2"],
+      ["two spaces after the marks", "##  [0.2.0] MK2"],
+      ["a closing sequence", "## [0.2.0] MK2 ##"],
+      ["blanks after the heading", "## [0.2.0] MK2   "],
+      // The version is the text up to the first blank, and it needs a dot and a first digit, nothing more.
+      ["a byte order mark inside the version", "## 1\ufeff.2 MK2"],
+      ["a version with a letter before the dot", "## 1x.y MK2"],
+    ].map(([name, line]) => ({ name, line, ends: true, accepted: true })),
+    // Neither ends the draft at the line, so both end it at the older release.
+    ...[
+      ["no space after the marks", "##[0.2.0] MK2"],
+      ["a no-break space after the marks", `##${nbsp}[0.2.0] MK2`],
+      ["a zero width space before the marks", "\u200b## [0.2.0] MK2"],
+      ["a byte order mark before the marks", "\ufeff## [0.2.0] MK2"],
+      ["an H3 version heading", "### [0.2.0] MK2"],
+    ].map(([name, line]) => ({ name, line, ends: false, accepted: true })),
+    // The update ends the draft at an H1 or an H2 that Communique reads past: its text below is written twice.
+    ...[
+      ["an H2 with no version", "## Upgrade notes MK2"],
+      ["an H2 with a name that is not a version", "## v1 MK2"],
+      ["an H2 with a date", "## 2026-02-02 MK2"],
+      ["an H2 with a space after the bracket", "## [ 0.2.0] MK2"],
+      ["an H2 with a bracket that never closes", "## [0.2.0 MK2"],
+      // A version ends at the first blank, or at the closing bracket.
+      ["an H2 with a space inside the version", "## 1 .2 MK2"],
+      ["an H2 with a tab inside the version", "## 1\t.2 MK2"],
+      ["an H2 with a no-break space inside the version", "## 1\u00a0.2 MK2"],
+      ["an H2 with a bracketed number and a dot after it", "## [1] 2.0 MK2"],
+      ["an H2 with a name that starts with a letter", "## x1.2 MK2"],
+      ["an H2 with a capital V", "## V1.2 MK2"],
+      // A digit is an ASCII digit, and a blank is a Unicode blank: NEL ends the version, a byte order mark does not.
+      ["an H2 with an Arabic-Indic digit", "## \u0661.2 MK2"],
+      ["an H2 with a NEL inside the version", "## 1\u0085.2 MK2"],
+      ["an H2 with a second closing bracket", "## [1] x.] MK2"],
+      ["an H1 with a version", "# [0.2.0] - 2026-02-02 MK2"],
+      ["an H1 with no version", "# Top MK2"],
+    ].map(([name, line]) => ({ name, line, ends: false, accepted: false })),
+    {
+      name: "a tab after the marks",
+      line: "##\t[0.2.0] - 2026-02-02 MK2",
+      ends: false,
+      accepted: false,
+      // Prettier writes one space.
+      formatted: { ends: true, accepted: true },
+    },
+    {
+      name: "a setext H1 with a version",
+      line: "0.2.0 MK2\n=====",
+      ends: false,
+      accepted: false,
+      formatted: { ends: false, accepted: false },
+    },
+    {
+      name: "a setext H2 with a version",
+      line: "0.2.0 MK2\n-----",
+      ends: false,
+      accepted: false,
+      // Prettier writes an ATX H2.
+      formatted: { ends: true, accepted: true },
+    },
+    // Communique ends the draft at a line that the update reads as text, so the update drops the lines below it.
+    ...[
+      ["a no-break space before a version heading", `${nbsp}## [0.2.0] MK2`],
+      ["an ideographic space before a version heading", "\u3000## [0.2.0] MK2"],
+    ].map(([name, line]) => ({ name, line, ends: true, accepted: false })),
+    {
+      name: "a line of the draft paragraph with four spaces of indent",
+      line: "    ## [0.2.0] MK2",
+      before: "MK1. Some text.",
+      join: "\n",
+      ends: true,
+      accepted: false,
+      // Prettier joins the line into the paragraph.
+      formatted: { ends: false, accepted: true },
+    },
+    {
+      name: "a line of the draft paragraph with a tab of indent",
+      line: "\t## [0.2.0] MK2",
+      before: "MK1. Some text.",
+      join: "\n",
+      ends: true,
+      accepted: false,
+      formatted: { ends: false, accepted: true },
+    },
+  ];
+  // Cases for the reader alone: the update refuses these for other reasons, or takes them for no reason in this test.
+  const readerOnlyCases = [
+    // These two lines hold no marker, so Communique reads the marker below them.
+    { name: "an empty H2", line: "##", ends: false, reads: ["MK1", "MK3"] },
+    { name: "an empty H1", line: "#", ends: false, reads: ["MK1", "MK3"] },
+    { name: "a version in a list item", line: "- ## [0.2.0] MK2", ends: false },
+    {
+      name: "a version in a block quote",
+      line: "> ## [0.2.0] MK2",
+      ends: false,
+    },
+    // CommonMark reads this as a setext H1, and Communique ends its draft at its first line, as the update does. Nobody
+    // writes this: prettier makes it an H1 that Communique does not end at, and the update refuses the text anyway,
+    // because it trims the no-break space off the older releases and the formatter check sees the heading change.
+    {
+      name: "a setext H1 that Communique trims to a version heading",
+      line: `${nbsp}## 0.2.0 MK2\n=====`,
+      ends: true,
+    },
+    {
+      name: "a version in a code fence",
+      line: "```\n## [0.2.0] MK2\n```",
+      ends: true,
+    },
+    {
+      name: "a version in a comment",
+      line: "<!--\n## [0.2.0] MK2\n-->",
+      ends: true,
+    },
+  ];
+  // The lines that anchor the draft of Communique, and the update does not anchor on: Communique reads a draft under
+  // each, and the update would add a second heading and keep the draft.
+  const communiqueAnchors = [
+    ["a link", "## [Unreleased](https://example.com/compare/v0.3.0...HEAD)"],
+    ["an indent of one space", " ## [Unreleased]"],
+    ["an indent of three spaces", "   ## [Unreleased]"],
+    ["an indent of four spaces", "    ## [Unreleased]"],
+    ["a no-break space before the marks", `${nbsp}## [Unreleased]`],
+    ["a code fence", "```\n## [Unreleased]\n```"],
+    ["a comment", "<!--\n## [Unreleased]\n-->"],
+  ].map(([name, anchor]) => ({ name, anchor, reads: ["MK1"] }));
+  // The lines that anchor neither reader.
+  const otherAnchors = [
+    ["two spaces after the marks", "##  [Unreleased]"],
+    ["a tab after the marks", "##\t[Unreleased]"],
+    ["a tab after the marks, no brackets", "##\tUnreleased"],
+    ["a closing sequence", "## [Unreleased] ##"],
+    ["bold", "## **Unreleased**"],
+    ["an H1", "# [Unreleased]"],
+    ["an H3", "### [Unreleased]"],
+    ["a list item", "- ## [Unreleased]"],
+  ].map(([name, anchor]) => ({ name, anchor, reads: null }));
+  const anchorText = (anchor) =>
+    `${title}\n\n${anchor}\n\nMK1.\n\n${release}\n\n- MK9\n`;
+  // A text with a line break that is a bare CR: Communique splits lines at LF only and finds no heading.
+  const bareCr = `${title}\r\r## [Unreleased]\r\rMK1.\r\r${release}\r\r- MK9\r`;
+
+  // 2. The reader of the runner reads what the real Communique reads.
+  const readerTexts = [
+    ...[...endCases, ...readerOnlyCases].map(
+      ({ line, before, join, ends, reads }) => ({
+        text: endText(line, before, join),
+        reads: reads ?? (ends ? ["MK1"] : ["MK1", "MK2", "MK3"]),
+      }),
+    ),
+    ...[...communiqueAnchors, ...otherAnchors].map(({ anchor, reads }) => ({
+      text: anchorText(anchor),
+      reads,
+    })),
+    { text: bareCr, reads: null },
+  ];
+  const readerNames = [
+    ...[...endCases, ...readerOnlyCases].map(({ name }) => name),
+    ...[...communiqueAnchors, ...otherAnchors].map(
+      ({ name }) => `anchor: ${name}`,
+    ),
+    "a bare CR as line break",
+  ];
+  const real = await readDraftMarkersWithCommunique(
+    readerTexts.map(({ text }) => text),
+  );
+  checkCases(
+    readerTexts.map(({ text, reads }, index) => ({
+      name: readerNames[index],
+      text,
+      reads,
+      real: real[index],
+    })),
+    ({ text, reads, real: realReads }) => {
+      assert.deepEqual(realReads, reads, "the real Communique");
+      assert.deepEqual(
+        draftMarkersOfPort(text),
+        reads,
+        "the reader of the runner",
+      );
+    },
+  );
+
+  // 3. The update takes a text only when both end the draft at one line, and then nothing is lost or written twice.
+  // The markers that Communique does not read are the markers that the update writes, and the text that main wrote
+  // is the text that the update writes when main lost and doubled nothing.
+  const nothingLostOrTwice = (text, written) => {
+    assert.deepEqual(
+      markersIn(written).sort(),
+      markersIn(text)
+        .filter((marker) => !(draftMarkersOfPort(text) ?? []).includes(marker))
+        .sort(),
+      "the update drops what Communique reads and keeps the rest",
+    );
+    assert.deepEqual(
+      draftMarkersOfPort(written),
+      [],
+      "Communique reads an empty draft in the text that the update writes",
+    );
+  };
+  const endTexts = endCases.map(({ line, before, join }) =>
+    endText(line, before, join),
+  );
+  const endFormatted = formatDocuments(endTexts);
+  let comparedWithMain = 0;
+  withIdentityFormatter(() => {
+    checkCases(endCases, (testCase) => {
+      const index = endCases.indexOf(testCase);
+      for (const [label, text, flags] of [
+        ["raw", endTexts[index], testCase],
+        ["after prettier", endFormatted[index], testCase.formatted ?? testCase],
+      ]) {
+        if (flags.accepted) {
+          const written = update(text);
+          nothingLostOrTwice(text, written);
+          const main = textThatMainWrites(text, entry).written;
+          const mainIsSound =
+            JSON.stringify(markersIn(main).sort()) ===
+            JSON.stringify(markersIn(written).sort());
+          if (mainIsSound) {
+            comparedWithMain += 1;
+            assert.equal(written, main, `${label}: the text of main`);
+          }
+          continue;
+        }
+        const row = placeOfMarker(text, "MK2");
+        const older = placeIn(text, release);
+        assert.throws(
+          () => update(text),
+          {
+            message: flags.ends
+              ? endMismatchRefusal(older, row)
+              : endMismatchRefusal(row, older),
+          },
+          label,
+        );
+      }
+    });
+  });
+  assert.ok(
+    comparedWithMain >= 20,
+    `${comparedWithMain} accepted texts were compared with main`,
+  );
+
+  // 4. The anchors. Communique reads a draft under each of these lines, and the update does not anchor on any of them,
+  // so it refuses the text: it would add a second Unreleased heading and keep the draft that Communique reads.
+  checkCases(communiqueAnchors, ({ anchor }) => {
+    const text = anchorText(anchor);
+    const communiqueLine = anchor
+      .split("\n")
+      .find((line) => /Unreleased/.test(line));
+    assert.throws(() => withMissingFormatter(() => update(text)), {
+      message: anchorMismatchRefusal(null, placeIn(text, communiqueLine)),
+    });
+  });
+  // Neither reads a draft under the lines of `otherAnchors`, so the text goes under the title as before.
+  withIdentityFormatter(() =>
+    checkCases(
+      otherAnchors.filter(({ anchor }) => !anchor.startsWith("###")),
+      ({ anchor }) => {
+        const text = anchorText(anchor);
+        assert.equal(
+          update(text),
+          `${title}\n\n## [Unreleased]\n\n${entry}\n\n${text.slice(title.length).trim()}\n`,
+        );
+      },
+    ),
+  );
+  // The update anchors on a heading that Communique does not read a draft under, and the draft is empty, so there is
+  // nothing to drop (an H3 anchor with a draft is refused for that).
+  withIdentityFormatter(() => {
+    assert.equal(
+      update(
+        `${title}\n\n### [Unreleased]\n\n## [0.3.0] - 2025-09-15\n\n- MK9\n`,
+      ),
+      `${title}\n\n### [Unreleased]\n\n${entry}\n\n## [0.3.0] - 2025-09-15\n\n- MK9\n`,
+      "an empty draft under an H3 anchor",
+    );
+  });
+  // A text with bare CR line breaks: the update reads three lines, and Communique one with no heading. The update
+  // refuses the draft, as it would drop text that Communique never read.
+  assert.throws(
+    () => withMissingFormatter(() => update(bareCr)),
+    {
+      message: anchorMismatchRefusal(
+        { number: 3, line: "## [Unreleased]" },
+        null,
+      ),
+    },
+    "a bare CR as line break",
+  );
+  // Two anchors for Communique (it refuses such a changelog before this update runs): the update compares with the first.
+  const twoAnchors = `${title}\n\n ## [Unreleased]\n\nMK1.\n\n## [Unreleased]\n\nMK2.\n\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(twoAnchors)),
+    {
+      message: anchorMismatchRefusal(
+        placeIn(twoAnchors, "## [Unreleased]"),
+        placeIn(twoAnchors, " ## [Unreleased]"),
+      ),
+    },
+    "two anchors",
+  );
+  // An H3 anchor with an empty draft is fine only when Communique reads no draft anywhere in the text.
+  const h3AndLink = `${title}\n\n### [Unreleased]\n\n## [Unreleased](https://e.x)\n\nMK1.\n\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(h3AndLink)),
+    {
+      message: anchorMismatchRefusal(
+        placeIn(h3AndLink, "### [Unreleased]"),
+        placeIn(h3AndLink, "## [Unreleased](https://e.x)"),
+      ),
+    },
+    "an H3 anchor and a link anchor",
+  );
+  // The update drops the draft to the end of the text when no heading ends it, and Communique ends it at a line that
+  // the parser reads as text.
+  const lazyToEnd = `${title}\n\n## [Unreleased]\n\nMK1.\n    ## [0.2.0] MK2\n\nMK3.\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(lazyToEnd)),
+    {
+      message: endMismatchRefusal(
+        null,
+        placeIn(lazyToEnd, "    ## [0.2.0] MK2"),
+      ),
+    },
+    "a draft that runs to the end of the text",
+  );
+  // A bare CR makes the lines of the update and the lines of Communique differ, so the same line number is not the same
+  // line. Here the update finds its anchor on line 2 after the CR and Communique on line 2 after the LF, and the update
+  // ends its draft at the H2 on line 4 and Communique at the release on line 4.
+  const crAnchor = `${title}\r## [Unreleased]\n ## [Unreleased]\n\nMK1.\n\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(crAnchor)),
+    {
+      message: anchorMismatchRefusal(
+        { number: 2, line: "## [Unreleased]" },
+        { number: 2, line: " ## [Unreleased]" },
+      ),
+    },
+    "the same line number for another anchor",
+  );
+  const crEnd = `${title}\n## [Unreleased]\nMK1.\r## Notes MK2\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(crEnd)),
+    {
+      message: endMismatchRefusal(
+        { number: 4, line: "## Notes MK2" },
+        { number: 4, line: release },
+        true,
+      ),
+    },
+    "the same line number for another end",
+  );
+  // Both ends are the same line of text, and a bare CR hides one of the two copies from Communique: the lines match by
+  // their text and differ by their place.
+  const crSameText = `${title}\n\n## [Unreleased]\n\n- MK1\r${release}\n- MK2\n\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(crSameText)),
+    {
+      message: endMismatchRefusal(
+        { number: 6, line: release },
+        { number: 8, line: release },
+        true,
+      ),
+    },
+    "the same line text for another end",
+  );
 }
 
 // A differential test against commonmark.js. The assertions above hold single examples, but a rule can also go wrong
@@ -2596,14 +3243,17 @@ function generateLines(random, coverage) {
   return lines;
 }
 
-/** Joins `lines` with a random line ending after each one: LF, CR LF, or CR. */
-function joinWithEndings(random, lines) {
+/**
+ * Joins `lines` with a random line ending after each one: LF, CR LF, or CR (a CR LF instead of it when `bareCr` is
+ * false).
+ */
+function joinWithEndings(random, lines, bareCr = true) {
   let text = "";
   lines.forEach((line, index) => {
     text += line;
     if (index < lines.length - 1) {
       const kind = random();
-      text += kind < 0.5 ? "\n" : kind < 0.8 ? "\r\n" : "\r";
+      text += kind < 0.5 ? "\n" : kind < 0.8 || !bareCr ? "\r\n" : "\r";
     }
   });
   return text;
@@ -2875,7 +3525,17 @@ function generateDraftFragment(random, fragments) {
     ],
     ["a setext H1", () => ["Title", "====="]],
     ["a setext H2", () => ["Title", "-----"]],
-    ["an indented H2", () => [" ## Notes", "", "- note"]],
+    // Communique ends its draft at an indented version heading, as the update does, and the runner before #531 did not see it.
+    ["an indented H2", () => [" ## [0.9.0] - 2025-12-01", "", "- Old nine"]],
+    [
+      "an H2 that is indented by three spaces",
+      () => ["   ## [0.9.0] - 2025-12-01", "", "- Old nine"],
+    ],
+    [
+      "an indented H2 after a list",
+      () => ["- note", "", " ## [0.9.0] - 2025-12-01", "", "- Old nine"],
+    ],
+    ["an indented H2 that is no version", () => [" ## Notes", "", "- note"]],
     ["an H2 with a tab", () => ["##\tNotes", "", "- note"]],
     ["an H2", () => ["## Upgrade notes", "", "- note"]],
     ["an empty H2", () => ["##", "", "- note"]],
@@ -2914,7 +3574,7 @@ function generateDraftFragment(random, fragments) {
   return [build(), kind === plain];
 }
 
-/** Makes one document: [text, plain]. The lines end with LF, CR LF or CR. */
+/** Makes one document: [text, plain]. The lines end with LF or CR LF. */
 function generateUpdaterDocument(random, fragments, lineCoverage) {
   const lines = [
     "# Changelog",
@@ -2934,7 +3594,9 @@ function generateUpdaterDocument(random, fragments, lineCoverage) {
     plain = false;
   }
   lines.push(...OLDER_RELEASES.split("\n"));
-  return [joinWithEndings(random, lines), plain];
+  // Communique ends a line at LF only, so a bare CR can hide a heading from it. Such a document mostly tests that
+  // refusal (see `testUnreleasedDraftEnd`).
+  return [joinWithEndings(random, lines, false), plain];
 }
 
 /**
@@ -2952,7 +3614,7 @@ function checkUpdaterDocument(text, plain, where, expectedFormat) {
   } catch (error) {
     assert.match(
       error.message,
-      /^(The Unreleased draft (has (a code fence|a node that the update does not read|a line that no paragraph|a line that Communique reads)|ends at a heading)|The update would change the older releases)/,
+      /^(The Unreleased draft has (a code fence|a node that the update does not read|a line that no paragraph)|The update and Communique (end the Unreleased draft|find the Unreleased heading) in different places|The update would change the older releases)/,
       `the refusal in ${where}`,
     );
     assert.ok(
@@ -3344,6 +4006,7 @@ async function main() {
   await testUnreleasedDraftFenceGuard();
   await testUnreleasedDraftStructure();
   await testUnreleasedAnchor();
+  await testUnreleasedDraftEnd();
   await testFenceDifferential();
   await testUnreleasedUpdaterProperty();
   await testRunnerNeedsCommonmark();
