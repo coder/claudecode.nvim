@@ -40,4 +40,4 @@ Steps:
 ## Gotchas
 
 - Key order in the JSON answers is not stable. Compare fields with jq, never the raw text.
-- After `:cd`, getWorkspaceFolders follows the new directory, but `workspaceFolders` in `$VCN_STATE/claude/ide/$PORT.lock` keeps the launch directory.
+- After `:cd`, getWorkspaceFolders follows the new directory, but `workspaceFolders` in `$VCN_STATE/claude/ide/<port>.lock` keeps the launch directory.
