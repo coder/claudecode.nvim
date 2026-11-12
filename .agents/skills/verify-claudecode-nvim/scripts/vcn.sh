@@ -59,11 +59,11 @@ bin() {
 # advice that ends the message, for a tool that does not come from PATH.
 runs_or_die() {
   local why first tool=${1##*/} fix
-  fix=${2-put a working $tool on PATH}
+  fix=${2-Put a working $tool earlier on PATH}
   why=$("$1" --version 2>&1 >/dev/null </dev/null) || {
     first=${why%%$'\n'*}
     die "$tool at $1 does not run: ${first:-it printed no error}
-If it is a mise shim, mise may not trust this checkout: export MISE_TRUSTED_CONFIG_PATHS=$REPO, or run \`mise trust\` in it. Otherwise $fix."
+If it is a mise shim, mise may not trust this checkout. $fix."
   }
 }
 
@@ -555,7 +555,7 @@ cmd_launch() {
   else
     nvim_exe=$(bin nvim)
   fi
-  runs_or_die "$nvim_exe" ${VCN_NVIM:+"set VCN_NVIM to a Neovim that runs"}
+  runs_or_die "$nvim_exe" ${VCN_NVIM:+"Set VCN_NVIM to a Neovim that runs"}
   [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
   att_cands=$(agent_tty_candidates)
   [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"

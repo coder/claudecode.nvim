@@ -340,9 +340,9 @@ for dead in nvim jq node setsid; do
   chmod +x "$TMP/dead-$dead/mise" "$TMP/dead-$dead/$dead"
 done
 refused tool-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" PATH="$TMP/dead-nvim:$PATH"
-[[ $err == *"Otherwise put a working nvim on PATH."* ]] || fail "tool-nvim: the advice does not say to put a working nvim on PATH: $err"
+[[ $err == *"Put a working nvim earlier on PATH."* ]] || fail "tool-nvim: the advice does not say to put a working nvim earlier on PATH: $err"
 refused tool-vcn-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" VCN_NVIM="$TMP/dead-nvim/nvim"
-[[ $err == *"Otherwise set VCN_NVIM to a Neovim that runs."* ]] || fail "tool-vcn-nvim: the advice does not name VCN_NVIM: $err"
+[[ $err == *"Set VCN_NVIM to a Neovim that runs."* ]] || fail "tool-vcn-nvim: the advice does not name VCN_NVIM: $err"
 refused tool-jq "jq at $TMP/dead-jq/jq does not run: mise ERROR stand-in jq cannot run" PATH="$TMP/dead-jq:$PATH" VCN_NVIM="$real_nvim"
 refused tool-node "node at $TMP/dead-node/node does not run: mise ERROR stand-in node cannot run" PATH="$TMP/dead-node:$PATH" VCN_NVIM="$real_nvim"
 refused tool-setsid "setsid at $TMP/dead-setsid/setsid does not run: mise ERROR stand-in setsid cannot run" \
