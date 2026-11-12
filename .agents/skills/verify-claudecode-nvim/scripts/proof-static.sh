@@ -16,8 +16,8 @@
 #                  refuses (the case runs the documented line on a hand-made run.env, with no V of its own)
 # What the checks do not see: an indented code block (four spaces) and <pre>, a command that a variable or an eval of a built
 # string holds, a source in a file that is not a shell script (.lua, .py, .mjs), a fence in a quote or a list that markdown
-# would not open, a `read` that takes `get` through a pipe or a file, and six shapes that no code block and no code line of a script has: a `read -d ''` with
-# no `IFS=` before it (it trims a newline at the end), a backtick substitution of `get`, a source or `.` whose run.env is on the next
+# would not open, a `read` that takes `get` through a pipe or a file, and seven shapes that no code block and no code line of a script has: in a code block, a
+# command substitution or a `read ... < <(...)` whose `get` is on the next line, a `read -d ''` with no `IFS=` before it (it trims a newline at the end), a backtick substitution of `get`, a source or `.` whose run.env is on the next
 # line after a backslash (in a code block or a script), a quoted command word (`"source" run.env`), a run.env named through BASH_ENV,
 # and a use of PORT, SID, NVIM_PID or NODE_DIR without a $ (`let`, `(( ))`, `${#PORT}`). A source after `builtin`, `command` or `eval`,
 # in backticks, or in a quoted string that starts with it (`bash -c "source run.env"`), and an inline span that a line break splits are seen. The docs must exist: a missing SKILL.md or features/*.md fails every case that reads them.
