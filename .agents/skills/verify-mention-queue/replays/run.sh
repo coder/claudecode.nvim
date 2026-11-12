@@ -23,12 +23,16 @@ kept=0
 for name in "${names[@]}"; do
   run="$OUT/$name.run"
   mkdir -p "$run/xdg-config" "$run/xdg-data" "$run/xdg-state" "$run/xdg-cache" "$run/claude" "$run/cwd"
-  # macOS has no `timeout`, so perl's alarm bounds the run. REPLAY_REPO reaches 'runtimepath' through Lua, so a
-  # checkout path with a space or another Ex-special character still loads the plugin.
+  # macOS has no `timeout`, so perl's alarm bounds the run. REPLAY_REPO and REPLAY_SCRIPT reach Neovim through the
+  # environment, so a checkout path with a space or another Ex-special character still works. `nvim -l` needs
+  # Neovim 0.9, so the replay runs through :luafile, as in .github/workflows/test.yml. A replay quits Neovim at its
+  # verdict. If it raises before that, the last -c exits 2.
   (cd "$run/cwd" && XDG_CONFIG_HOME="$run/xdg-config" XDG_DATA_HOME="$run/xdg-data" XDG_STATE_HOME="$run/xdg-state" \
-    XDG_CACHE_HOME="$run/xdg-cache" CLAUDE_CONFIG_DIR="$run/claude" REPLAY_REPO="$repo" \
+    XDG_CACHE_HOME="$run/xdg-cache" CLAUDE_CONFIG_DIR="$run/claude" \
+    REPLAY_REPO="$repo" REPLAY_SCRIPT="$here/$name.lua" \
     perl -e 'alarm 120; exec @ARGV' "$NVIM" --headless -u NONE -i NONE \
-    --cmd 'lua vim.opt.rtp:prepend(vim.env.REPLAY_REPO)' -l "$here/$name.lua") >"$OUT/$name.log" 2>&1
+    --cmd 'lua vim.opt.rtp:prepend(vim.env.REPLAY_REPO)' -c 'execute "luafile" fnameescape($REPLAY_SCRIPT)' \
+    -c 'cquit 2') >"$OUT/$name.log" 2>&1
   verdict=$(grep -E '^(KEPT|BROKEN) ' "$OUT/$name.log" | tail -1)
   [[ -n $verdict ]] || verdict="BROKEN $name: the replay printed no verdict (see $OUT/$name.log)"
   [[ $verdict == KEPT* ]] && kept=$((kept + 1))

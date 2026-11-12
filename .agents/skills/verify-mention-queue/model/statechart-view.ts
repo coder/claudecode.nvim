@@ -53,6 +53,9 @@ export const state = (v: any) => {
   if (v.early)
     regions["Sent early"] = "a mention went out before any client was ready";
   if (v.luaError) regions["Lua error"] = "Lua error";
+  if (v.leaked)
+    regions["Sent after a stop"] =
+      "a mention queued before :ClaudeCodeStop reached a Claude after the stop";
   return regions;
 };
 

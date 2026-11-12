@@ -154,6 +154,11 @@ Expire(k, ft) ==
 (* init.lua M.send_at_mention: no server, an error. Otherwise              *)
 (* queue_mention appends the mention with its deadline, starts            *)
 (* connection_timer for it when none runs, then schedule_mention_flush.   *)
+(* This is the default config only. With disable_broadcast_debouncing     *)
+(* set, _broadcast_at_mention broadcasts at once while the queue is empty *)
+(* and checks no readiness, so a Claude whose handshake just completed    *)
+(* gets the mention early. That path is not modeled, and a PASS of        *)
+(* SentWhenReady does not cover it (SKILL.md, "Scope and bounds").        *)
 YouSend ==
   \E m \in M :
     /\ ~sent[m]
