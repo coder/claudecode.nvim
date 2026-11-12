@@ -291,7 +291,7 @@ describe("Tool: get_diagnostics", function()
       return require("tests.busted_setup").json_decode(result.content[1].text)
     end
 
-    it("groups the diagnostics of one file into one entry, in order, and keeps the entries in order", function()
+    it("groups the diagnostics of one file into one entry, in order", function()
       local files = files_for({
         diagnostic({ bufnr = 1, lnum = 1, severity = 1, message = "one" }),
         diagnostic({ bufnr = 2, lnum = 2, severity = 2, message = "two" }),
@@ -304,6 +304,23 @@ describe("Tool: get_diagnostics", function()
       expect(files[1].diagnostics[2].message).to_be("three")
       expect(files[2].uri).to_be("file:///path/to/file_for_buf_2.lua")
       expect(#files[2].diagnostics).to_be(1)
+    end)
+
+    it("lists the files in the order of their first diagnostic", function()
+      -- Eight files, so that an order taken from pairs() differs from this one.
+      local order = { 3, 1, 8, 2, 7, 4, 6, 5 }
+      local diagnostics, expected = {}, {}
+      for _, bufnr in ipairs(order) do
+        table.insert(diagnostics, diagnostic({ bufnr = bufnr, message = "m" }))
+        table.insert(expected, "file:///path/to/file_for_buf_" .. bufnr .. ".lua")
+      end
+
+      local uris = {}
+      for _, file in ipairs(files_for(diagnostics)) do
+        table.insert(uris, file.uri)
+      end
+
+      assert.are.same(expected, uris)
     end)
 
     it("names severities 1 to 4 and calls any other number Info", function()
