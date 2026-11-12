@@ -22,11 +22,30 @@ describe("a held selection with the real plugin", function()
     vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(keys, true, false, true), "xt", false)
   end
 
-  -- Lets the real timers run: the debounce is 100 ms.
+  -- Lets the real timers run for at least ms. Use it only where the time is the point of the step.
   local function wait(ms)
     vim.wait(ms, function()
       return false
     end, 10)
+  end
+
+  -- Waits until the plugin has finished what it started: no debounce timer is pending, no demotion timer is pending
+  -- (unless keep_demotion), and every vim.schedule callback that was queued before the call has run (the check after
+  -- an edit is one). A fixed wait() cannot say that. When the main loop stalls for 300 ms under load, vim.wait returns
+  -- in the iteration that fires the timers, before their vim.schedule_wrap callbacks run. The step after the wait then
+  -- reads a plugin that is not done: the debounce has not read the cursor, or a demotion fires after the step has
+  -- renamed the buffer.
+  local function settle(keep_demotion)
+    local drained = false
+    vim.schedule(function()
+      drained = true
+    end)
+    local done = vim.wait(10000, function()
+      return drained
+        and selection.state.debounce_timer == nil
+        and (keep_demotion or selection.state.demotion_timer == nil)
+    end, 10)
+    assert.is_true(done, "the plugin still has a timer pending")
   end
 
   local function start(terminal_config, delay_ms)
@@ -67,12 +86,17 @@ describe("a held selection with the real plugin", function()
     vim.cmd("edit " .. vim.fn.fnameescape(path))
   end
 
-  -- Select alpha (the first word) and release it with Esc: Claude holds it.
-  local function select_and_release()
+  -- Select alpha (the first word) and release it with Esc: Claude holds it. The plugin reads the selection when the
+  -- debounce fires, and arms the demotion when it reads the release. keep_demotion leaves that demotion pending, for a
+  -- spec that needs it pending (a visual_demotion_delay_ms of 1000).
+  local function select_and_release(keep_demotion)
     press("ve")
-    wait(150)
+    settle(true)
     press("<Esc>")
-    wait(300)
+    settle(keep_demotion)
+    if keep_demotion then
+      assert.is_not_nil(selection.state.demotion_timer, "the demotion is not pending")
+    end
     assert.are.equal("alpha", selection.get_latest_selection().text)
   end
 
@@ -102,13 +126,13 @@ describe("a held selection with the real plugin", function()
     it("keeps the selection when the Claude terminal first opens (delay " .. delay_ms .. ")", function()
       start({ provider = "native", show_native_term_exit_tip = false }, delay_ms)
       open_file("alpha beta gamma")
-      select_and_release()
+      select_and_release(delay_ms > 500) -- a demotion that late is still pending when the terminal opens
 
       require("claudecode.terminal").open()
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
       vim.cmd("wincmd p")
-      wait(600 + delay_ms) -- the debounce, then the demotion
+      settle() -- the debounce, then the demotion
 
       assert.are.equal("alpha", selection.get_latest_selection().text)
     end)
@@ -122,14 +146,14 @@ describe("a held selection with the real plugin", function()
     local term_buf = vim.api.nvim_get_current_buf()
     vim.cmd("stopinsert")
     vim.cmd("buffer " .. file_buf)
-    wait(200)
+    settle()
     select_and_release()
 
     vim.cmd("buffer " .. term_buf)
     vim.cmd("stopinsert")
-    wait(300)
+    settle()
     vim.cmd("buffer #")
-    wait(600)
+    settle()
 
     assert.are.equal(file_buf, vim.api.nvim_get_current_buf())
     assert.are.equal("alpha", selection.get_latest_selection().text)
@@ -143,12 +167,12 @@ describe("a held selection with the real plugin", function()
     local term_buf = vim.api.nvim_get_current_buf()
     vim.cmd("stopinsert")
     vim.cmd("buffer " .. file_buf)
-    wait(200)
+    settle()
     select_and_release() -- Claude holds "alpha"
 
     press("$vd") -- a second selection, on the last character, consumed before the debounce
     vim.cmd("buffer " .. term_buf) -- and the Claude terminal, where the debounce does nothing
-    wait(300)
+    settle()
 
     local held = selection.get_latest_selection()
     assert.is_true(held.selection.isEmpty)
@@ -180,14 +204,14 @@ describe("a held selection with the real plugin", function()
       local term_buf = vim.api.nvim_get_current_buf()
       vim.cmd("stopinsert")
       vim.cmd("buffer " .. file_buf)
-      wait(200)
+      settle()
       select_and_release()
 
       vim.cmd("buffer " .. term_buf)
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
-      wait(300)
+      settle()
 
       assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
       local held = selection.get_latest_selection()
@@ -205,14 +229,14 @@ describe("a held selection with the real plugin", function()
       local term_win = vim.api.nvim_get_current_win()
       vim.cmd("stopinsert")
       vim.api.nvim_set_current_win(file_win)
-      wait(200)
+      settle()
       select_and_release()
 
       vim.api.nvim_set_current_win(term_win)
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
       rewrite_on_disk_and_reload(file_buf, "beta gamma")
-      wait(300)
+      settle()
 
       assert.are.same({ "beta gamma" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
       assert.are.equal(term_win, vim.api.nvim_get_current_win())
@@ -232,24 +256,24 @@ describe("a held selection with the real plugin", function()
       local term_buf = vim.api.nvim_get_current_buf()
       vim.cmd("stopinsert")
       vim.cmd("buffer " .. file_buf)
-      wait(200)
+      settle()
       select_and_release()
 
       vim.cmd("buffer " .. term_buf)
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
       vim.cmd("bunload! " .. file_buf)
-      wait(200)
+      settle()
       vim.cmd("buffer " .. file_buf)
       vim.api.nvim_win_set_cursor(0, { 1, 0 }) -- Neovim put the cursor back where it was
-      wait(200)
+      settle()
       select_and_release()
       vim.cmd("buffer " .. term_buf)
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
 
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
-      wait(300)
+      settle()
 
       assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
@@ -268,7 +292,7 @@ describe("a held selection with the real plugin", function()
 
       vim.v.errmsg = ""
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
-      wait(300)
+      settle()
 
       assert.are.equal("", vim.v.errmsg)
       assert.are.same({}, sent) -- no selection and no cursor of the terminal reached Claude
@@ -283,13 +307,13 @@ describe("a held selection with the real plugin", function()
       start({ provider = "none" }, 1000)
       open_file("alpha beta gamma")
       local file_buf = vim.api.nvim_get_current_buf()
-      select_and_release()
+      select_and_release(true)
       local sent = record_broadcasts()
       rename_to_claude_terminal(file_buf)
 
       vim.v.errmsg = ""
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
-      wait(1300) -- the demotion delay passes
+      settle() -- a demotion that the check did not cancel fires here
 
       assert.are.equal("", vim.v.errmsg)
       assert.are.same({}, sent)
@@ -306,16 +330,16 @@ describe("a held selection with the real plugin", function()
       local term_buf = vim.api.nvim_get_current_buf()
       vim.cmd("stopinsert")
       vim.cmd("buffer " .. file_buf)
-      wait(200)
+      settle()
       select_and_release()
       vim.cmd("buffer " .. term_buf)
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
       local sent = record_broadcasts()
 
       rename_to_claude_terminal(file_buf)
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
-      wait(300)
+      settle()
 
       assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
       assert.are.same({}, sent)
@@ -341,12 +365,12 @@ describe("a held selection with the real plugin", function()
           vim.api.nvim_win_set_cursor(0, { 1, 0 })
           select_and_release()
           vim.cmd("enew") -- another file: the debounce replaces the selection with that buffer's cursor
-          wait(300)
+          settle()
           assert.is_true(selection.get_latest_selection().selection.isEmpty)
           rewrite_on_disk_and_reload(file_buf, "alpha beta gamma, cycle " .. cycle) -- on_reload, nothing held
-          wait(200)
+          settle()
           vim.cmd("buffer " .. file_buf)
-          wait(200)
+          settle()
         end
       end)
       vim.api.nvim_buf_attach = real_attach
@@ -364,21 +388,21 @@ describe("a held selection with the real plugin", function()
       local term_win = vim.api.nvim_get_current_win()
       vim.cmd("stopinsert")
       vim.api.nvim_set_current_win(file_win)
-      wait(200)
+      settle()
       select_and_release()
 
       vim.api.nvim_set_current_win(term_win)
       vim.cmd("stopinsert")
-      wait(300)
+      settle()
       rewrite_on_disk_and_reload(file_buf, "alpha beta gamma, and more")
-      wait(300)
+      settle()
 
       assert.are.same({ "alpha beta gamma, and more" }, vim.api.nvim_buf_get_lines(file_buf, 0, -1, false))
       assert.are.equal("alpha", selection.get_latest_selection().text)
 
       -- The listener survives the reload: the next change is seen too.
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {})
-      wait(300)
+      settle()
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
     end)
   end)
@@ -407,7 +431,7 @@ describe("a held selection with the real plugin", function()
           vim.api.nvim_buf_delete(scratch, { force = true })
         end
       end)
-      wait(400)
+      settle()
 
       assert.is_false(vim.api.nvim_buf_is_valid(scratch))
       assert.are.equal(file_buf, vim.api.nvim_get_current_buf())
