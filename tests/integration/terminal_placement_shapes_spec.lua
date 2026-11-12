@@ -123,6 +123,16 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     require("claudecode.tools.init").register_all()
     _G.claude_deferred_responses = {}
 
+    -- A BufEnter autocmd for the terminal buffer, as Snacks' auto_insert is: it can queue an insert that starts in the
+    -- window the cursor ends in.
+    local terminal_bufenter_runs = 0
+    vim.api.nvim_create_autocmd("BufEnter", {
+      buffer = terminal_buf,
+      callback = function()
+        terminal_bufenter_runs = terminal_bufenter_runs + 1
+      end,
+    })
+
     -- A BufLeave autocmd of the user's that enters their window in the first tab, once the new tab has its two windows.
     local armed = true
     vim.api.nvim_create_autocmd("BufLeave", {
@@ -145,6 +155,7 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       armed_used = not armed,
       tabs = vim.fn.tabpagenr("$"),
       start_win_shows_file = vim.api.nvim_win_get_buf(start_win) == file_buf,
+      terminal_bufenter_runs = terminal_bufenter_runs,
       terminal_in_new_tab = vim.tbl_contains(
         vim.tbl_map(vim.api.nvim_win_get_buf, vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2])),
         terminal_buf
@@ -256,5 +267,6 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     assert.equal(2, result.tabs)
     assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
     assert.is_true(result.terminal_in_new_tab, "the terminal must be in a window of the new tab")
+    assert.equal(0, result.terminal_bufenter_runs, "no BufEnter autocmd of the terminal buffer may run for the swap")
   end)
 end)

@@ -256,7 +256,7 @@ describe("the terminal's placement in its own split", function()
             return -1
           end
           local group = vim.api.nvim_create_augroup("swap_events_" .. tostring(use_helper), { clear = true })
-          prepare(file, terminal, split, first, group)
+          prepare(file, terminal, split, first, group, opts.close_first)
           local log = {}
           vim.api.nvim_create_autocmd(
             { "BufLeave", "BufEnter", "BufWinEnter", "BufWinLeave", "BufHidden", "WinEnter", "WinLeave" },
@@ -285,7 +285,7 @@ describe("the terminal's placement in its own split", function()
           vim.api.nvim_clear_autocmds({ group = group })
           return {
             log = log,
-            tabstop = vim.bo[file].tabstop,
+            tabstops = { file = vim.bo[file].tabstop, terminal = vim.bo[terminal].tabstop },
             split_shows = role(vim.api.nvim_win_get_buf(split)),
             first_shows = vim.api.nvim_win_is_valid(first) and role(vim.api.nvim_win_get_buf(first)) or "closed",
             current = index(vim.api.nvim_get_current_win()),
@@ -375,20 +375,30 @@ describe("the terminal's placement in its own split", function()
       assert.same(result.plain.log, result.helper.log)
     end)
 
-    it("and reads no modeline of the buffer it replaces", function()
-      local result = logs(
-        [[
-        local file = ...
-        vim.o.modeline = true
-        -- Set after the buffer was loaded, so only a call that processes modelines reads it.
-        vim.api.nvim_buf_set_lines(file, 0, -1, false, { "vim: ts=5" })
-      ]],
-        {}
-      )
+    for _, case in ipairs({
+      { name = "shows in another window", close_first = false },
+      { name = "shows in no other window", close_first = true },
+    }) do
+      it("and reads no modeline of either buffer when the buffer it replaces " .. case.name, function()
+        local result = logs(
+          [[
+          local file, terminal, _, first, _, close_first = ...
+          vim.o.modeline = true
+          vim.bo[file].bufhidden = "hide"
+          -- Set after the buffers were loaded, so only a call that processes modelines reads them.
+          vim.api.nvim_buf_set_lines(file, 0, -1, false, { "vim: ts=5" })
+          vim.api.nvim_buf_set_lines(terminal, 0, -1, false, { "vim: ts=6" })
+          if close_first then
+            vim.api.nvim_win_close(first, true)
+          end
+        ]],
+          { close_first = case.close_first }
+        )
 
-      assert.equal(8, result.plain.tabstop)
-      assert.equal(result.plain.tabstop, result.helper.tabstop)
-    end)
+        assert.same({ file = 8, terminal = 8 }, result.plain.tabstops)
+        assert.same(result.plain.tabstops, result.helper.tabstops)
+      end)
+    end
 
     it("with the same events, in the same order, when a BufLeave autocmd enters another window", function()
       local result = logs(
