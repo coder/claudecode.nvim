@@ -1,4 +1,4 @@
--- A known bug that the model does not cover (a fix PR is open): a mapping edits another line while you are in visual
+-- A known bug that the model does not cover (fix PR #540): a mapping edits another line while you are in visual
 -- mode and presses Esc in the same typeahead (`<Cmd>lua ...<CR><Esc>`). The listener counts the edit and schedules the
 -- check that would show that visual mode is still on, but no main-loop turn runs between the edit and the Esc, so the
 -- flush on Esc finds an edit that nobody checked and takes it for an operator's. Claude gets the cursor, not the
