@@ -206,6 +206,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   local new_bufnr = vim.api.nvim_create_buf(true, false)
   -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
   vim.b[new_bufnr][OWNED_MARK] = true
+  -- Hidden when its window closes, as soon as it has one. An autocmd of the start can close the split, and with
+  -- 'nohidden' that would unload a buffer that is not bufhidden=hide. Before termopen, Neovim loads it again, and on
+  -- 0.8 its term:// reader starts a second terminal in it. In TermOpen, the unload ends Claude.
+  vim.bo[new_bufnr].bufhidden = "hide"
   vim.api.nvim_win_set_buf(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
@@ -260,18 +264,25 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   jobid = termopen_result
-  if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+  -- An autocmd of the start can close the split. A focus_toggle from a BufEnter or TermOpen autocmd adopts this
+  -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
+  -- terminal, and the next toggle shows it.
+  if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
   winid = new_winid
   bufnr = new_bufnr
+  -- A later autocmd of the start can show the terminal in another window. Look for the window that shows it now.
+  is_valid()
   job_auto_close = effective_config.auto_close
+  -- Again, after the autocmds of the start: one of them can have changed it (to wipe, for example), and a hide must keep
+  -- the job.
   vim.bo[bufnr].bufhidden = "hide"
   utils.map_terminal_suspend(bufnr)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen
 
-  if focus then
+  if focus and winid then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
     if effective_config.auto_insert ~= false then
