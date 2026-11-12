@@ -212,15 +212,19 @@ fact[ReadRecordsTick]=$(as_bool read_records_tick)
 # check nothing it holds), and before #524 it did it after the `if not holds_selection_of(buf) then ... return true end` that
 # detaches.
 listens_to_selection_buffer() {
+  # Each listener is read inside its own body (up to the next `    end,`), so a check_soon that moved into on_detach does
+  # not count for on_reload.
+  local on_lines on_reload
+  on_lines=$(sed -n '/^    on_lines = function(_, buf)$/,/^    end,$/p' <<<"$watch_buffer")
+  on_reload=$(sed -n '/^    on_reload = function(_, buf)$/,/^    end,$/p' <<<"$watch_buffer")
   in_order '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
     in_order '^  local function check_soon\(\)$' 'vim\.schedule\(function\(\)' '^        demote_if_selection_text_changed\(\)$' \
       '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' <<<"$watch_buffer" &&
     {
-      in_order '^    on_lines = function\(_, buf\)$' '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' \
-        '^      elseif not entry then$' '^    on_reload = function\(_, buf\)$' '^ *check_soon\(\)$' <<<"$watch_buffer" ||
-        in_order '^    on_lines = function\(_, buf\)$' '^      if not holds_selection_of\(buf\) then$' '^      check_soon\(\)$' \
-          '^    on_reload = function\(_, buf\)$' '^ *check_soon\(\)$' <<<"$watch_buffer"
-    }
+      in_order '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' '^      elseif not entry then$' <<<"$on_lines" ||
+        in_order '^      if not holds_selection_of\(buf\) then$' '^      check_soon\(\)$' <<<"$on_lines"
+    } &&
+    in_order '^ *check_soon\(\)$' <<<"$on_reload"
 }
 fact[ListensToSelectionBuffer]=$(as_bool listens_to_selection_buffer)
 # The check runs in the Claude terminal for a selection of another buffer that is not a Claude terminal, clears the held
