@@ -1162,7 +1162,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   - SIGKILL, a crash, `:noautocmd qa!`, a Lua `os.exit()` and a `:qa!` from inside an autocmd that is not `nested` run
     no `VimLeavePre`. A `:qa!`, SIGTERM or SIGHUP that Neovim handles while an autocmd that is not `nested` is still
     running can end Neovim without `VimLeavePre` too. A synchronous LSP format on save, which waits in `vim.wait`, is
-    the common example. Without `VimLeavePre`, Claude gets no answer, its socket closes with 1006, and the lock file
+    the common example. In these exits, Claude gets no answer, its socket closes with 1006, and the lock file
     stays.
   - In an exit that runs `VimLeavePre`, the autocmd of `ClaudeCodeMCPDiff` rejects every diff with the status
     `pending` first and removes every diff after that [lua/claudecode/diff.lua:cleanup_at_exit]. A reject can remove
