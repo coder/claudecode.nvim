@@ -73,6 +73,8 @@ const labels: Record<string, string> = {
   YouEditElsewhere: "you edit another line",
   YouEditByPlugin: "a plugin or a reload changes the text away from the cursor",
   YouEditOtherBuffer: "a plugin or a reload changes a file that you are not in",
+  YouEditByPluginInVisual: "a plugin edits another line while you select",
+  YouWriteInVisual: "you save the file while you select (:write)",
   ListenerCheckRuns: "the plugin's listener checks the held text",
   DebounceTimerFires: "100 ms pass",
   DebounceCallbackRuns: "the plugin updates Claude",
