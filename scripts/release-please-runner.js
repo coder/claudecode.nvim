@@ -600,13 +600,13 @@ function assertCommuniqueReadsTheSameDraft(content, lines, endings, draft) {
  * thematic break or a heading of another level is refused, and so is a line that no paragraph or heading holds (a link
  * reference definition leaves no node). An empty list item is a marker alone, and it is read. Each of the refused
  * shapes can end a section where a reader of lines sees none, hide the lines after it, or hold an older release. The
- * error names the line and the node type, and it comes before anything is formatted. A code fence keeps the error of
- * the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique reads a
- * draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An empty
- * draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it
- * read. Where the draft starts and ends is not checked here (see `assertCommuniqueReadsTheSameDraft`). The cost: a
- * draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a maintainer
- * edits it.
+ * error names the line and the node type, and it comes before the new changelog is formatted. A code fence keeps the
+ * error of the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique
+ * reads a draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An
+ * empty draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the
+ * text it read. Where the draft starts and ends is not checked here (see `assertCommuniqueReadsTheSameDraft`). The
+ * cost: a draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a
+ * maintainer edits it.
  */
 function assertDraftIsPlain(lines, draft) {
   assert.ok(Array.isArray(lines), "lines must be an array");
@@ -773,12 +773,13 @@ function formatKeepingHeadings(markdown, entry, kept) {
  * `assertChangelogIsFormatted`). The draft is read with commonmark.js. The anchor is a heading line that Communique
  * reads a draft under (see `UNRELEASED_LINE_PATTERN`). The draft is the blocks from the anchor to the next top-level
  * heading of the same level or a higher one, or to the end of the text. It can hold only paragraphs, lists and H3
- * headings (see `assertDraftIsPlain`), and the update refuses anything else before it formats. A draft under an H3
- * anchor is refused, because Communique reads none. An H3 heading directly under `## [Unreleased]` is a subsection of
- * the draft whatever it says, so `### [0.3.0]` there is dropped with the draft. The update and Communique must read the
- * draft between the same two lines, or the update refuses (see `assertCommuniqueReadsTheSameDraft`): the draft ends at
- * the heading `## <version>` where Communique ends it, or at the end of the text. After the formatter runs, the
- * headings of the new entry and the older releases must be unchanged (see `formatKeepingHeadings`).
+ * headings (see `assertDraftIsPlain`), and the update refuses anything else before it formats the new changelog. A
+ * draft under an H3 anchor is refused, because Communique reads none. An H3 heading directly under `## [Unreleased]` is
+ * a subsection of the draft whatever it says, so `### [0.3.0]` there is dropped with the draft. The update and
+ * Communique must read the draft between the same two lines, or the update refuses (see
+ * `assertCommuniqueReadsTheSameDraft`): the draft ends at the heading `## <version>` where Communique ends it, or at
+ * the end of the text. After the formatter runs, the headings of the new entry and the older releases must be unchanged
+ * (see `formatKeepingHeadings`).
  */
 class UnreleasedAwareChangelog {
   constructor(options) {
