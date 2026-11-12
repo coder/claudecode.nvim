@@ -3,11 +3,11 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua a1c57f34e79b17ce
+file lua/claudecode/diff.lua 67ef0ee90c49f456
 block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
-block setup_blocking         b96c84e0961817fc
+block setup_blocking         aca280f1f15cceac
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
@@ -23,8 +23,8 @@ block cleanup_all            43e7b595cf106229
 block exit_cleanup           8bc9fbded77d818f
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
-block register_state         8cf78b6711a9ecc6
-block cleanup_state          2ff77c6e3ecddf07
+block register_state         30f01a6a1889741d
+block cleanup_state          281e3d1e523409d7
 block diff_autocmds          01fff2946c5a2149
 block write_proposal         9baeff1cd3273193
 block reject_when_hidden     dd45932e5cd7090d
@@ -62,6 +62,7 @@ site lua/claudecode/diff.lua: diff_data.status = "saved" @ function M._resolve_d
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, other in pairs(active_diffs) do @ local function save_window_sizes(tab)
+site lua/claudecode/diff.lua: for other_name, other in pairs(active_diffs) do @ local function window_used_by_other_diff(win, tab_name)
 site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function cleanup_at_exit()
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function close_active_diffs(filter_fn, reason, client_id)
