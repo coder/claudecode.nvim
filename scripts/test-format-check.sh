@@ -3,7 +3,9 @@
 # probe files to the working tree (Markdown, Lua and shell, each unformatted) and removes them on exit. The check must
 # fail, name each probe, and leave each probe as it was (the old task, `treefmt --ci` with the write flags, rewrote
 # them). `mise run format` on the probes must write the formatted text. The check must pass on the formatted probes, and
-# it must fail on a shell probe that shfmt keeps and shellcheck rejects.
+# it must fail on a shell probe that shfmt keeps and shellcheck rejects. In a vendored copy of the repo (a folder with
+# no .git inside another git repository, made in a temporary folder) the check must pass on a formatted probe and fail
+# on an unformatted one, so treefmt must take the vendored folder as its tree root.
 # The check runs on the whole tree, so the test needs a formatted tree: its third run expects exit 0.
 # Usage: scripts/test-format-check.sh
 # Exit 0: the checks hold. Exit 1: one failed. Exit 2: a probe file is there already.
@@ -89,5 +91,30 @@ write_probes "$formatted_md" "$formatted_lua" '#!/bin/sh\necho $1\n'
 run_check
 [ "$status" -ne 0 ] || fail "format-check passed a file that shellcheck fails"
 grep -q "$sh" "$scratch/output" || fail "format-check does not name $sh for the shellcheck failure"
+
+# 5. A vendored copy: the folder has no .git, and a git repository holds it. treefmt.toml's tree-root-file makes the
+# folder the tree root, so treefmt finds the wrapper, and the excludes apply (the lock file below is unformatted on
+# purpose, and an exclude of treefmt.toml skips it). The folder is in a temporary folder, with mise's tools on PATH.
+tool_path=$(mise exec -- printenv PATH 2>/dev/null | tail -n 1)
+vendor=$scratch/outer/vendor/copy
+mkdir -p "$vendor/scripts" "$vendor/fixtures/probe"
+cp treefmt.toml "$vendor/treefmt.toml"
+cp scripts/treefmt-formatter.sh "$vendor/scripts/treefmt-formatter.sh"
+printf '{"a":1,   "b":2}\n' >"$vendor/fixtures/probe/lazy-lock.json"
+git init -q "$scratch/outer"
+
+# Runs the check in the vendored copy. Sets `status`, and leaves the output in "$scratch/output".
+run_vendored() {
+  status=0
+  (cd "$vendor" && FORMAT_CHECK=1 PATH="$tool_path" treefmt --ci) >"$scratch/output" 2>&1 || status=$?
+}
+
+printf '%b' "$formatted_md" >"$vendor/probe.md"
+run_vendored
+[ "$status" -eq 0 ] || fail "format-check failed in a vendored copy: $(tail -n 5 "$scratch/output")"
+printf '%b' "$unformatted_md" >"$vendor/probe.md"
+run_vendored
+[ "$status" -ne 0 ] || fail "format-check passed an unformatted probe in a vendored copy"
+grep -q "probe.md" "$scratch/output" || fail "format-check does not name probe.md in a vendored copy"
 
 echo "test-format-check: ok"

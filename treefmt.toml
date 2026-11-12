@@ -5,6 +5,10 @@
 # scripts/treefmt-formatter.sh, which holds their write flags and their check flags. Their includes and excludes stay
 # here, so both modes format the same files.
 # Every formatter/linter referenced here is provisioned by mise (see mise.toml).
+# The tree root is the folder of this file. By default it is the root of the git repository, so a checkout without its
+# own .git (a vendored copy inside another repository) would get the outer repository as its tree root. Then treefmt
+# would not find scripts/treefmt-formatter.sh, and the excludes below would anchor at the outer root.
+tree-root-file = "treefmt.toml"
 # treefmt's git walker already skips git-ignored paths; these also guard `--walk filesystem`.
 excludes = [
   ".luarocks/**",
