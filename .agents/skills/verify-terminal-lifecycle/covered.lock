@@ -37,7 +37,7 @@ site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks"
 site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks") @ local function get_provider()
 site lua/claudecode/terminal.lua: return get_provider().get_active_bufnr() @ function M.get_active_terminal_bufnr()
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 83aca54c4731e2d4
+file lua/claudecode/terminal/native.lua b4d8ae9200fa1223
 block is_last_window         ca717305ec122468
 block is_valid               d3f215f69bdc28bf
 block forget_exited          2ab5742b54f43e66
@@ -46,7 +46,7 @@ block adopt                  c89db8a9183c7aff
 block stop_snacks            3b6ad0bb3ca53456
 block start_terminal         221979b3d9bf65b8
 block open_terminal          588edf5c85e83068
-block close_terminal         7b5a8b177625da21
+block close_terminal         a343acb3e973f338
 block native_visible         4c17f637808c446a
 block hide_terminal          2e97ed454c3e46a0
 block show_hidden            875f91703794172d
@@ -114,6 +114,7 @@ site lua/claudecode/terminal/native.lua: vim.api.nvim_win_close(winid, false) @ 
 site lua/claudecode/terminal/native.lua: vim.b[closing_bufnr][OWNED_MARK] = nil @ function close_terminal()
 site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = nil @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = true @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ function close_terminal()
 site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ function close_terminal()
 == lua/claudecode/terminal/owned.lua
 file lua/claudecode/terminal/owned.lua f64571d98221176c
