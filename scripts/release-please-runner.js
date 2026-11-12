@@ -373,6 +373,27 @@ function headingText(heading) {
 }
 
 /**
+ * The link reference definitions of `text`, as `[LABEL]: <destination>` lines. A heading with a reference link or image
+ * (`### ![Chart][chart]`) is a link or an image only when a definition is in the same text, and the entry and the older
+ * releases are read apart. So each of them is read with the definitions of the whole text.
+ */
+function referenceDefinitions(text) {
+  const parser = new commonmark.Parser();
+  parser.parse(text);
+  assert.equal(
+    typeof parser.refmap,
+    "object",
+    "the parser must keep its definitions",
+  );
+  return Object.entries(parser.refmap)
+    .map(
+      ([label, { destination }]) =>
+        `[${label}]: <${destination.replace(/[<>\\\r\n]/g, "")}>`,
+    )
+    .join("\n");
+}
+
+/**
  * `"<level> <text>"` for each heading that is a direct child of the document. A heading inside a list item or a block
  * quote is not one: it is not a section of the changelog.
  */
@@ -564,13 +585,18 @@ function formatChangelogMarkdown(content) {
  * A formatter that moves a setext heading into a list item has the same result. A heading in the entry that repeats an
  * older release does not hide the loss, because the count and the order must match too. The check refuses these
  * before anything is written. A heading inside a list item or a block quote is not a section, so it does not count.
+ * The entry and the kept text are read with the link definitions of the whole text, so a reference link in a heading
+ * reads the same alone and in the formatted text.
  */
 function formatKeepingHeadings(markdown, entry, kept) {
   assert.equal(typeof markdown, "string", "markdown must be a string");
   assert.equal(typeof entry, "string", "entry must be a string");
   assert.equal(typeof kept, "string", "kept must be a string");
   const formatted = formatChangelogMarkdown(markdown);
-  const expected = [...topLevelHeadings(entry), ...topLevelHeadings(kept)];
+  const definitions = referenceDefinitions(markdown);
+  const expected = [entry, kept].flatMap((part) =>
+    topLevelHeadings(`${part}\n\n${definitions}\n`),
+  );
   const found = topLevelHeadings(formatted);
   const tail = found.slice(Math.max(0, found.length - expected.length));
   const changed = expected.findIndex((heading, i) => heading !== tail[i]);

@@ -2210,6 +2210,17 @@ async function testUnreleasedDraftStructure() {
     `${released}\n${footer}`,
     "link definitions below the older releases",
   );
+  // A reference link or image in a heading of the new entry is a link or an image only when a definition below the
+  // older releases defines it. The heading reads the same alone and in the formatted text.
+  const referenceEntry =
+    "## [0.4.0] - 2026-06-15\n\n### ![Architecture][diagram]\n\n### [Details][docs]\n\n- Added x";
+  const definitions =
+    "[diagram]: https://example.com/d.png\n[docs]: https://example.com/docs\n";
+  assert.equal(
+    update(`${head}- Draft${previous}\n${definitions}`, referenceEntry),
+    `# Changelog\n\n## [Unreleased]\n\n${referenceEntry}\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n\n${definitions}`,
+    "reference links and images in the headings of the new entry",
+  );
 }
 
 /**
