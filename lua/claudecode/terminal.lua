@@ -251,14 +251,26 @@ local function build_config(opts_override)
 
   local resolved_cwd = nil
   -- Prefer provider function, then static cwd, then git root via resolver
+  local requested_cwd = nil
   if effective_config.cwd_provider then
     local ok_p, res = pcall(effective_config.cwd_provider, cwd_ctx)
     if ok_p and type(res) == "string" and res ~= "" then
-      resolved_cwd = vim.fn.expand(res)
+      requested_cwd = res
     end
   end
-  if not resolved_cwd and type(effective_config.cwd) == "string" and effective_config.cwd ~= "" then
-    resolved_cwd = vim.fn.expand(effective_config.cwd)
+  if not requested_cwd and type(effective_config.cwd) == "string" and effective_config.cwd ~= "" then
+    requested_cwd = effective_config.cwd
+  end
+  if requested_cwd then
+    -- A folder that exists is taken as written. `vim.fn.expand` reads `[`, `{`, `*`, `?`, `$` and `\` in a name as
+    -- patterns or variables, so it changed the path of a folder that has them. Text that names no folder still goes
+    -- through `expand`, so `~` and `$VAR` work. A leading `~` or `$` always asks for `expand`, as in a shell and in
+    -- `:cd`, so a stray folder named `~` in Neovim's cwd does not take the place of the home folder.
+    if not requested_cwd:match("^[~$]") and vim.fn.isdirectory(requested_cwd) == 1 then
+      resolved_cwd = requested_cwd
+    else
+      resolved_cwd = vim.fn.expand(requested_cwd)
+    end
   end
   if not resolved_cwd and effective_config.git_repo_cwd then
     local ok_r, cwd_mod = pcall(require, "claudecode.cwd")
@@ -479,8 +491,11 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       if type(v) == "table" or v == "snacks" or v == "native" or v == "external" or v == "auto" or v == "none" then
         defaults.provider = v
       else
+        -- A rejected value leaves `defaults.provider` as it was: "auto" until a valid value is set. Say so.
+        local kept = type(defaults.provider) == "table" and "the custom provider table"
+          or ("'" .. tostring(defaults.provider) .. "'")
         vim.notify(
-          "claudecode.terminal.setup: Invalid value for provider: " .. tostring(v) .. ". Defaulting to 'native'.",
+          "claudecode.terminal.setup: Invalid value for provider: " .. tostring(v) .. ". Keeping " .. kept .. ".",
           vim.log.levels.WARN
         )
       end

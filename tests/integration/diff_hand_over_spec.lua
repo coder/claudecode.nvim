@@ -228,10 +228,8 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   local swap_layouts = {
     { "vertical", { layout = "vertical" } },
     { "vertical new-tab", { layout = "vertical", open_in_new_tab = true } },
+    { "unified", { layout = "unified" } },
   }
-  if vim.fn.has("nvim-0.9") == 1 then
-    swap_layouts[#swap_layouts + 1] = { "unified", { layout = "unified" } }
-  end
   for _, case in ipairs(swap_layouts) do
     local layout, diff_opts = case[1], case[2]
     it("names a swap file step that works from the " .. layout .. " diff window", function()
@@ -276,6 +274,7 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
       assert.equal(diff_win, vim.api.nvim_get_current_win(), "the user is still in the diff window")
       swap_answered = true
       vim.cmd(step)
+      assert.equal(vim.fn.resolve(path), vim.fn.resolve(vim.api.nvim_buf_get_name(0)), "the step opens the file")
       vim.cmd("ClaudeCodeCloseAllDiffs")
       assert.is_nil(diff._get_active_diffs()[tab], notes[#notes])
       assert.are.same({ "alpha accepted" }, vim.api.nvim_buf_get_lines(vim.fn.bufnr(path), 0, -1, false))

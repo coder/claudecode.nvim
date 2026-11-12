@@ -248,11 +248,11 @@ end
 function M.setup_inline_diff(params, resolution_callback, config)
   local diff = require("claudecode.diff")
 
-  -- Version check: the diff function (vim.text.diff / vim.diff) requires Neovim >= 0.9.0
+  -- Neovim 0.8.0 has vim.diff, so this fails only on a Neovim that has neither diff function.
   if not get_diff_fn() then
     error({
       code = -32000,
-      message = "Inline diff requires Neovim >= 0.9.0",
+      message = "The unified layout needs vim.text.diff or vim.diff, and this Neovim has neither",
       data = "vim.text.diff()/vim.diff() is not available. Please use layout = 'vertical' or 'horizontal', or upgrade Neovim.",
     })
   end
@@ -527,8 +527,9 @@ function M.resolve_inline_as_saved(tab_name, diff_data)
   logger.debug("diff", "Accepting inline diff for", tab_name)
 
   local content = M.extract_new_content(diff_data.lines, diff_data.line_types)
-  -- Preserve trailing newline when original new_file_contents had one
-  if diff_data.new_file_contents:sub(-1) == "\n" and content:sub(-1) ~= "\n" then
+  -- The lines carry no line break after the last one. A proposal that ends with a line break gets exactly one back,
+  -- even when its last line is blank: "a\n\n" is the lines "a" and "", which join to "a\n".
+  if diff_data.new_file_contents:sub(-1) == "\n" then
     content = content .. "\n"
   end
 

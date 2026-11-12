@@ -51,15 +51,15 @@ file lua/claudecode/server/handshake.lua 3eca35d572094a55
 block process_handshake      46341209ae5ab06a
 block extract_request        936e9a8b79d36106
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua a9c0d153b61e3078
-block server_start           69f261638f188c5f
-block server_stop            4dae0bf675cf2cc1
+file lua/claudecode/server/init.lua dbc9b57cf9a7142b
+block server_start           5eb961f0e8934ed0
+block server_stop            506e2e53358dc947
 site lua/claudecode/server/init.lua: M.state.ping_timer = tcp_server.start_ping_timer(server, 30000) -- Start ping timer to keep connections alive @ function M.start(config, auth_token)
 site lua/claudecode/server/init.lua: M.state.ping_timer:close() @ function M.stop()
 site lua/claudecode/server/init.lua: M.state.ping_timer:stop() @ function M.stop()
 site lua/claudecode/server/init.lua: tcp_server.stop_server(M.state.server) @ function M.stop()
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 5db5a02380274137
+file lua/claudecode/server/tcp.lua 610f324845bca7b5
 block new_connection         e1daff4237326df4
 block release_socket         de7e50701ce4c83d
 block disconnect             122662fc03352d6b
