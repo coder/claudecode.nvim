@@ -1,13 +1,13 @@
 == lua/claudecode/config.lua
 file lua/claudecode/config.lua 787fa0432d1d77d7
 == lua/claudecode/cwd.lua
-file lua/claudecode/cwd.lua 55d26ea362173afa
+file lua/claudecode/cwd.lua 35b7af3572d13018
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 8a209b2c063625a1
+file lua/claudecode/diff.lua 8585b5e799d506cc
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
-block setup_blocking         5873be8346fa1b52
+block setup_blocking         257189386f7b6147
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
@@ -150,7 +150,7 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua ac973c02b06e4d54
+file lua/claudecode/server/init.lua 7a2c6c65948073e5
 block server_stop            506e2e53358dc947
 block on_disconnect          a0ce86cede4af786
 block handle_request         dcc066af67f9f88e
@@ -165,7 +165,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 0cfb4b3ed4c138a1
+file lua/claudecode/server/tcp.lua 8be1dd96671223ea
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
@@ -173,7 +173,7 @@ file lua/claudecode/terminal.lua 4fed625dd5199b09
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 3c6a45dc04eb59ce
+file lua/claudecode/terminal/native.lua 0e9b890a642c84f7
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/owned.lua

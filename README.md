@@ -211,8 +211,8 @@ Configure the plugin with the detected path:
 
 1. **Launch Claude**: Run `:ClaudeCode` to open Claude in a split terminal
 2. **Send context**:
-   - Select text in visual mode and use `<leader>as` to send it to Claude
-   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, or a focused snacks picker list / the Snacks Explorer sidebar, press `<leader>as` on a file to add it to Claude's context
+   - Select text in visual mode and run `:ClaudeCodeSend` to send it to Claude (the `keys` in the Installation spec map `<leader>as` to it)
+   - In `nvim-tree`/`neo-tree`/`oil.nvim`/`mini.nvim`, or a focused snacks picker list / the Snacks Explorer sidebar, run `:ClaudeCodeTreeAdd` on a file to add it to Claude's context (the `keys` in the Installation spec map `<leader>as` to it in the file types that the spec lists)
    - For modal snacks pickers (`Snacks.picker.files()`/`grep()`), which keep focus in the input box, bind a picker action that calls `require("claudecode").send_at_mention(...)` for the selected item(s) — the [claude-fzf.nvim](#-claude-fzfnvim) community extension does the equivalent for `fzf-lua`
 3. **Let Claude work**: Claude can now:
    - See your current file and selections in real-time
@@ -248,8 +248,10 @@ This writes directly to the terminal's job channel, so it only works with the in
 
 When Claude proposes changes, the plugin opens a native Neovim diff view:
 
-- **Accept**: `:w` (save) or `<leader>aa`
-- **Reject**: `:q` or `<leader>ad`
+- **Accept**: `:w` (save) or `:ClaudeCodeDiffAccept`
+- **Reject**: `:q` or `:ClaudeCodeDiffDeny`
+
+Run these in the proposed buffer. The plugin sets no keymaps for the diff. The `keys` in the Installation spec map `<leader>aa` to `:ClaudeCodeDiffAccept` and `<leader>ad` to `:ClaudeCodeDiffDeny`.
 
 You can edit Claude's suggestions before accepting them.
 
