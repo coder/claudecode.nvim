@@ -8,7 +8,8 @@ end
 -- The accepted text goes back to Claude as the file's new contents, so it must match the proposal byte for byte. The
 -- vertical and horizontal layouts take that text from the proposal buffer. A new buffer has 'eol' on, so a proposal
 -- without a final line break was accepted with one: "a" came back as "a\n". The unified layout lost one line break of a
--- proposal that ends in blank lines: "a\n\n" came back as "a\n".
+-- proposal that ends in "\n\n": "a\n\n" came back as "a\n". A proposal that ends in a single "\n", such as "a\n" or
+-- "\n", kept it.
 describe("the text a proposed diff accepts, by how the proposal ends", function()
   local diff = require("claudecode.diff")
   local tools = require("claudecode.tools.init")
