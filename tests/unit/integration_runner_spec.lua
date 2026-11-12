@@ -42,6 +42,16 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
 })
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
+  'echo "$*" >> "$STUB_DIR/nvim_args"',
+  'if [ -f "$STUB_DIR/$name.sleep" ]; then',
+  '  : > "$STUB_DIR/$name.started"',
+  "  sleep 2",
+  '  mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada"',
+  "fi",
+  "folders=missing",
+  'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
+  'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
+  '  "${XDG_STATE_HOME-unset}" "${XDG_CONFIG_HOME-unset}" "$folders" "${XDG_DATA_HOME-unset}" >> "$STUB_DIR/env_seen"',
   'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
   "  trap '' TERM",
   '  : > "$STUB_DIR/$name.ready"',
@@ -286,6 +296,139 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     local _, limit = timeout_limits()
     assert.is_truthy(output:find("nvim did not exit within " .. limit .. "s", 1, true), output)
+  end)
+
+  ---@return table[] seen One entry for each file the stub nvim ran, with the strings viminit, minimal_init, state_home,
+  ---config_home, folders and data_home
+  local function env_seen()
+    local seen = {}
+    local log = assert(io.open(dir .. "/env_seen"))
+    for line in log:lines() do
+      local viminit, minimal_init, state_home, config_home, folders, data_home =
+        line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      assert(viminit, line)
+      table.insert(seen, {
+        viminit = viminit,
+        minimal_init = minimal_init,
+        state_home = state_home,
+        config_home = config_home,
+        folders = folders,
+        data_home = data_home,
+      })
+    end
+    log:close()
+    return seen
+  end
+
+  -- A Neovim without -u runs VIMINIT. This runs it with `vim.env` and `dofile` stood in for.
+  ---@param viminit string
+  ---@param variable string|nil The value of CLAUDECODE_MINIMAL_INIT
+  ---@return string[] loaded What the command passed to dofile
+  local function files_loaded_by(viminit, variable)
+    local command = assert(viminit:match("^lua (.+)$"), "VIMINIT is a lua command, not " .. viminit)
+    local loaded = {}
+    local chunk = assert(loadstring(command))
+    setfenv(chunk, {
+      vim = { env = { CLAUDECODE_MINIMAL_INIT = variable } },
+      dofile = function(path)
+        table.insert(loaded, tostring(path))
+      end,
+    })
+    chunk()
+    return loaded
+  end
+
+  it("makes the Neovim that plenary starts for a spec run tests/minimal_init.lua by its absolute path", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()[1]
+    assert.are.same({ dir .. "/tests/minimal_init.lua" }, files_loaded_by(seen.viminit, seen.minimal_init))
+  end)
+
+  it("loads no file when CLAUDECODE_MINIMAL_INIT is missing, as dofile(nil) would read standard input", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.are.same({}, files_loaded_by(env_seen()[1].viminit, nil))
+  end)
+
+  it("leaves XDG_DATA_HOME alone, because plenary lives there", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.are.equal(os.getenv("XDG_DATA_HOME") or "unset", env_seen()[1].data_home)
+  end)
+
+  it("gives the Neovim of each file its own state and config folders and removes them afterwards", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+      { name = "b_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()
+    assert.are.equal(2, #seen)
+    assert.are_not.equal(seen[1].state_home, seen[2].state_home)
+    assert.are_not.equal(seen[1].config_home, seen[2].config_home)
+    for _, entry in ipairs(seen) do
+      assert.are_not.equal("unset", entry.state_home)
+      assert.are_not.equal("unset", entry.config_home)
+      assert.are_not.equal(entry.state_home, entry.config_home)
+      assert.are.equal("present", entry.folders, "both folders exist while the Neovim runs")
+      shell("test ! -e " .. quote(entry.state_home) .. " && test ! -e " .. quote(entry.config_home))
+    end
+  end)
+
+  it("starts its own Neovim without a ShaDa file, because the Neovim of plenary shares its folders", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local log = assert(io.open(dir .. "/nvim_args"))
+    local args = log:read("*a")
+    log:close()
+    assert.is_truthy(args:find("--headless -i NONE -u tests/minimal_init.lua", 1, true), args)
+  end)
+
+  it("stops the running file and removes its temp files and folders when it gets SIGTERM, and exits 143", function()
+    write(dir .. "/tests/integration/slow_spec.lua", {})
+    write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
+    write(dir .. "/slow_spec.lua.exit", { "0" })
+    write(dir .. "/slow_spec.lua.sleep", {})
+    local temp = dir .. "/tmp"
+    shell("mkdir -p " .. quote(temp))
+    local command = "cd "
+      .. quote(dir)
+      .. " && TMPDIR="
+      .. quote(temp)
+      .. " PATH="
+      .. quote(dir .. "/bin")
+      .. ':"$PATH" STUB_DIR='
+      .. quote(dir)
+      .. " REAL_TIMEOUT="
+      .. quote(real_timeout)
+      .. " "
+      .. quote(script)
+      .. " > /dev/null 2>&1 & pid=$!; for _ in $(seq 100); do [ -e "
+      .. quote(dir .. "/slow_spec.lua.started")
+      .. " ] && break; sleep 0.1; done; kill -TERM $pid; wait $pid; echo status=$?; sleep 3"
+    local pipe = assert(io.popen(command))
+    local output = pipe:read("*a")
+    pipe:close()
+
+    assert.are.equal("143", output:match("status=(%d+)"), output)
+    local left = assert(io.popen("ls -A " .. quote(temp)))
+    local names = left:read("*a")
+    left:close()
+    assert.are.equal("", names, "the runner left temp files or folders behind")
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
