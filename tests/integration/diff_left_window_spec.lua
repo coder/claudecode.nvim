@@ -13,18 +13,19 @@ describe("diff mode in a window that left a split diff", function()
   local tab = "✻ [Claude Code] left_window.txt ⧉"
   local dir, file, answers
 
-  local function open_diff(path)
+  local function open_diff(path, name)
     path = path or file
+    name = name or tab
     diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
     local call = tools.handle_invoke({ id = "left_window_spec" }, {
       name = "openDiff",
-      arguments = { old_file_path = path, new_file_path = path, new_file_contents = "one\nTWO\n", tab_name = tab },
+      arguments = { old_file_path = path, new_file_path = path, new_file_contents = "one\nTWO\n", tab_name = name },
     })
     assert.is_true(call._deferred, "openDiff waits for the user")
     _G.claude_deferred_responses[tostring(call.coroutine)] = function(response)
       answers[#answers + 1] = response
     end
-    return diff._get_active_diffs()[tab]
+    return diff._get_active_diffs()[name]
   end
 
   local function run_in(win, command)
@@ -39,10 +40,10 @@ describe("diff mode in a window that left a split diff", function()
     end)
   end
 
-  local function close_tab()
+  local function close_tab(name)
     local response = tools.handle_invoke(
       { id = "left_window_spec" },
-      { name = "close_tab", arguments = { tab_name = tab } }
+      { name = "close_tab", arguments = { tab_name = name or tab } }
     )
     vim.wait(50)
     return response
@@ -75,7 +76,7 @@ describe("diff mode in a window that left a split diff", function()
     vim.fn.writefile({ "other" }, dir .. "/other.txt")
     vim.fn.writefile({ "third" }, dir .. "/third.txt")
     vim.fn.writefile({ "fourth" }, dir .. "/fourth.txt")
-    tools.register_all()
+    tools.setup()
     _G.claude_deferred_responses = {}
     answers = {}
     vim.cmd("edit " .. vim.fn.fnameescape(file))
@@ -90,22 +91,42 @@ describe("diff mode in a window that left a split diff", function()
     _G.claude_deferred_responses = nil
   end)
 
+  describe("the proposal window that :edit switched to another file", function()
+    -- The plugin splits the window before it runs `diffthis`, so the options that Neovim saves for the file when the
+    -- split shows the proposal have no diff mode.
+    it("stays out of diff mode when :edit brings the file back", function()
+      local state = open_diff()
+      run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      wait_for_answers(1)
+      assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
+      assert.is_false(option(state.new_window, "diff"), "the switch ended diff mode there")
+
+      run_in(state.new_window, "edit " .. vim.fn.fnameescape(file))
+
+      assert.is_false(option(state.new_window, "diff"), "Neovim saved no diff mode for the file in this window")
+      assert.equal(0, diff_windows())
+    end)
+
+    it("stays out of diff mode in the proposal window of the legacy diff when :edit brings the file back", function()
+      -- The legacy diff.open_diff writes its proposal under stdpath("cache"); keep that out of the real cache folder.
+      local saved_cache_home = vim.env.XDG_CACHE_HOME
+      vim.env.XDG_CACHE_HOME = dir .. "/cache"
+      diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
+      diff.open_diff(file, file, "one\nTWO\n", "legacy")
+      local proposal = vim.api.nvim_get_current_win()
+      assert.equal(2, diff_windows(), "the legacy diff compares two windows")
+
+      run_in(proposal, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      run_in(proposal, "edit " .. vim.fn.fnameescape(file))
+      vim.env.XDG_CACHE_HOME = saved_cache_home
+      local diff_mode = option(proposal, "diff")
+      vim.cmd("silent! diffoff!")
+
+      assert.is_false(diff_mode, "Neovim saved no diff mode for the file in this window")
+    end)
+  end)
+
   describe("a file that comes back after the cleanup, which the cleanup does not look at (as on main)", function()
-    it(
-      "turns diff mode on again in the proposal window that :edit switched, when :edit brings the file back",
-      function()
-        local state = open_diff()
-        run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
-        wait_for_answers(1)
-        assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
-        assert.is_false(option(state.new_window, "diff"), "the switch ended diff mode there")
-
-        run_in(state.new_window, "edit " .. vim.fn.fnameescape(file))
-
-        assert.is_true(option(state.new_window, "diff"), "Neovim sets the options that it saved for the file")
-      end
-    )
-
     it(
       "turns diff mode on again in the original window that :edit switched, when :edit # brings the file back",
       function()
@@ -421,18 +442,19 @@ describe("diff mode in a window that left a split diff", function()
       assert.is_true(option(new_window, "scrollbind"), "the user's 'scrollbind' goes to the new window")
     end)
 
-    it("leaves a lone diff window of another tab alone when close_tab runs", function()
+    -- OptionSet does not fire in this spec, which plenary starts with -c, so a window that gets diff mode by a
+    -- command looks like a copy here. diff_cleanup_events_spec.lua runs the cases with a command.
+    it("ends the diff mode of a lone window of another tab that copied it from the original window", function()
       local state = open_diff()
       local first_tab = vim.api.nvim_get_current_tabpage()
-      run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
-      vim.cmd("tabnew " .. vim.fn.fnameescape(file))
+      run_in(state.target_window, "tab split")
       local other_tab_window = vim.api.nvim_get_current_win()
-      vim.cmd("diffthis")
+      assert.is_true(option(other_tab_window, "diff"), "the new tab copied diff mode from the original window")
       vim.api.nvim_set_current_tabpage(first_tab)
 
       close_tab()
 
-      assert.is_true(option(other_tab_window, "diff"), "the window of the other tab is not touched")
+      assert.is_false(option(other_tab_window, "diff"), "the copy has no partner left")
     end)
 
     it("ends the diff mode of a window that already shows the file and has no partner after close_tab", function()
@@ -546,5 +568,54 @@ describe("diff mode in a window that left a split diff", function()
         assert.is_true(option(state.target_window, "diff"), "the window that it was split from keeps diff mode")
       end
     )
+  end)
+  describe("two diffs of the same file", function()
+    local second_tab = "✻ [Claude Code] left_window.txt (second) ⧉"
+
+    it("keeps the second diff's windows in diff mode when the first diff closes", function()
+      local first = open_diff()
+      run_in(first.new_window, "quit")
+      wait_for_answers(1)
+      local second = open_diff(file, second_tab)
+      assert.equal(first.target_window, second.target_window, "the second diff reuses the original-side window")
+      assert.is_true(option(second.target_window, "diff"))
+
+      assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
+
+      assert.is_true(vim.api.nvim_win_is_valid(second.target_window), "the window of the second diff stays")
+      assert.is_true(option(second.target_window, "diff"), "the first diff leaves the second diff's window alone")
+      assert.is_true(option(second.new_window, "diff"), "the second diff's proposal stays in diff mode")
+
+      assert.equal("TAB_CLOSED", close_tab(second_tab).result.content[1].text)
+      assert.equal(0, diff_windows(), "the second diff ends its own diff mode")
+    end)
+
+    it("keeps the second diff's original-side window open when the first diff opened that window", function()
+      vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      local first = open_diff()
+      assert.is_true(first.target_window_created_by_plugin, "the first diff opened its own window for the file")
+      run_in(first.new_window, "quit")
+      wait_for_answers(1)
+      local second = open_diff(file, second_tab)
+      assert.equal(first.target_window, second.target_window, "the second diff reuses that window")
+
+      close_tab()
+
+      assert.is_true(vim.api.nvim_win_is_valid(second.target_window), "the first diff does not close it")
+      assert.is_true(option(second.target_window, "diff"))
+      assert.is_true(option(second.new_window, "diff"))
+    end)
+
+    it("ends both diffs' diff mode when the second one closes first", function()
+      local first = open_diff()
+      run_in(first.new_window, "quit")
+      wait_for_answers(1)
+      open_diff(file, second_tab)
+
+      close_tab(second_tab)
+      close_tab()
+
+      assert.equal(0, diff_windows())
+    end)
   end)
 end)

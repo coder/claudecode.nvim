@@ -721,9 +721,9 @@ local function setup_new_buffer(
   terminal_win_in_new_tab,
   target_win_for_meta
 )
+  -- Split first: a split copies the window's options, and a copy made after `diffthis` would hand diff mode to the
+  -- proposal window for the original buffer, so that `:edit` of the file back there turns it on again after the diff.
   vim.api.nvim_set_current_win(original_win)
-  vim.cmd("diffthis")
-
   create_split()
   local new_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(new_win, new_buf)
@@ -732,6 +732,8 @@ local function setup_new_buffer(
   if original_ft and original_ft ~= "" then
     vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buf })
   end
+  vim.cmd("diffthis")
+  vim.api.nvim_set_current_win(original_win)
   vim.cmd("diffthis")
 
   vim.cmd("wincmd =")
@@ -811,7 +813,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  vim.cmd("diffthis")
+  local original_win = vim.api.nvim_get_current_win()
   create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
@@ -832,6 +834,9 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   vim.api.nvim_set_option_value("swapfile", false, { buf = new_buf })
 
   vim.cmd("diffthis")
+  vim.api.nvim_set_current_win(original_win)
+  vim.cmd("diffthis")
+  vim.cmd("wincmd p")
 
   local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
   local cleaned_up = false
@@ -1023,6 +1028,7 @@ local diffs_registered = 0
 function M._register_diff_state(tab_name, diff_data)
   diffs_registered = diffs_registered + 1
   diff_data.open_order = diffs_registered
+  diff_data.user_diff_windows = diff_data.user_diff_windows or {}
   active_diffs[tab_name] = diff_data
 end
 
@@ -1438,18 +1444,31 @@ local function end_diff_mode_if_alone(win)
   end)
 end
 
+---@param win number
+---@param tab_name string The diff that asks
+---@return boolean used True when another open diff uses `win` as its original-side or its proposal window
+local function window_used_by_other_diff(win, tab_name)
+  for other_name, other in pairs(active_diffs) do
+    if other_name ~= tab_name and (other.target_window == win or other.new_window == win) then
+      return true
+    end
+  end
+  return false
+end
+
 ---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and sets them again when the
----buffer enters it. When the cleanup has closed its windows and deleted its buffers, a window of the original side's tab
----page that shows the file, and is the only window of that tab page in diff mode, has the leftover of the ended diff.
+---buffer enters it, and a split copies the options of its source with no OptionSet event. So after the cleanup has closed
+---its windows and deleted its buffers, a window that shows the file, in any tab page, and is the only window of its tab
+---page in diff mode, has the leftover of the ended diff. Windows that were in diff mode before the diff opened or that
+---got diff mode from a command (OptionSet fired) are the user's, and so are the windows of another open diff.
 ---@param diff_data table
 local function end_diff_mode_in_windows_that_show_the_file(diff_data)
   local buffer = diff_data.original_buffer
-  local target = diff_data.target_window
-  if not (buffer and target and vim.api.nvim_buf_is_valid(buffer) and vim.api.nvim_win_is_valid(target)) then
+  if not (buffer and vim.api.nvim_buf_is_valid(buffer)) then
     return
   end
-  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(target))) do
-    if window_shows(win, buffer) then
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    if window_shows(win, buffer) and not diff_data.user_diff_windows[win] then
       end_diff_mode_if_alone(win)
     end
   end
@@ -1534,7 +1553,11 @@ function M._cleanup_diff_state(tab_name, reason)
     end
 
     -- If we created an extra window/split for the diff, close it. Otherwise just disable diff mode.
-    if diff_data.target_window and vim.api.nvim_win_is_valid(diff_data.target_window) then
+    if
+      diff_data.target_window
+      and vim.api.nvim_win_is_valid(diff_data.target_window)
+      and not window_used_by_other_diff(diff_data.target_window, tab_name)
+    then
       if
         diff_data.target_window_created_by_plugin and window_shows(diff_data.target_window, diff_data.original_buffer)
       then
@@ -1558,24 +1581,65 @@ function M._cleanup_diff_state(tab_name, reason)
     end
   end
 
-  -- ALWAYS clean up buffers regardless of tab mode (fixes buffer leak)
-  -- Clean up the new buffer (proposed changes)
+  -- ALWAYS clean up buffers regardless of tab mode (fixes buffer leak). The proposal buffer goes, and so does the
+  -- original buffer when the plugin created it for a new file.
+  local deleted = {}
   if diff_data.new_buffer and vim.api.nvim_buf_is_valid(diff_data.new_buffer) then
-    pcall(vim.api.nvim_buf_delete, diff_data.new_buffer, { force = true })
+    deleted[#deleted + 1] = diff_data.new_buffer
   end
-
-  -- Clean up the original buffer only if it was created by the plugin for a new file
   if
     diff_data.is_new_file
     and diff_data.original_buffer
     and vim.api.nvim_buf_is_valid(diff_data.original_buffer)
     and diff_data.original_buffer_created_by_plugin
   then
-    pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
+    deleted[#deleted + 1] = diff_data.original_buffer
   end
 
-  -- After the deletes, and before the event, so that nothing a handler of it starts is looked at.
-  end_diff_mode_in_windows_that_show_the_file(diff_data)
+  -- A window that shows a deleted buffer falls back to another one. Neovim sets the options it saved for that buffer in
+  -- the window, diff mode included, and then runs the user's BufEnter and BufWinEnter handlers. Those two events wait
+  -- until the leftover diff mode is ended, and run after it, so that a handler sets its options on a clean window.
+  local deleted_set = {}
+  for _, buffer in ipairs(deleted) do
+    deleted_set[buffer] = true
+  end
+  local falling_back = {}
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buffer = vim.api.nvim_win_get_buf(win)
+    if deleted_set[buffer] then
+      falling_back[win] = buffer
+    end
+  end
+  local current_before = vim.api.nvim_get_current_win()
+  local eventignore = vim.o.eventignore
+  if next(falling_back) then
+    vim.opt.eventignore:append({ "BufEnter", "BufWinEnter" })
+  end
+  local ok, err = pcall(function()
+    for _, buffer in ipairs(deleted) do
+      pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+    end
+    end_diff_mode_in_windows_that_show_the_file(diff_data)
+  end)
+  vim.o.eventignore = eventignore
+  if not ok then
+    error(err, 0)
+  end
+  local function enter(win, events)
+    vim.api.nvim_win_call(win, function()
+      vim.api.nvim_exec_autocmds(events, { buffer = vim.api.nvim_win_get_buf(win), modeline = false })
+    end)
+  end
+  for win, buffer in pairs(falling_back) do
+    if vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) ~= buffer then
+      enter(win, { "BufEnter", "BufWinEnter" })
+    end
+  end
+  -- A window that closed with its buffer hands the focus on, and the window that gets it enters its own buffer.
+  local current = vim.api.nvim_get_current_win()
+  if next(falling_back) and current ~= current_before and falling_back[current] == nil then
+    enter(current, { "BufEnter" })
+  end
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil
@@ -1807,6 +1871,27 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local autocmd_ids = register_diff_autocmds(tab_name, new_buffer)
 
+    -- Diff mode that the plugin did not start is the user's, and the cleanup leaves it alone: a window in diff mode
+    -- before this diff opened, and a window where a command turns 'diff' on while it is open (OptionSet fires there).
+    -- A window that copies diff mode from a window of this diff (`:split`, `:tab split`) fires no event.
+    local user_diff_windows = {}
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+      if
+        win ~= diff_info.target_window
+        and win ~= diff_info.new_window
+        and vim.api.nvim_get_option_value("diff", { win = win })
+      then
+        user_diff_windows[win] = true
+      end
+    end
+    autocmd_ids[#autocmd_ids + 1] = vim.api.nvim_create_autocmd("OptionSet", {
+      group = get_autocmd_group(),
+      pattern = "diff",
+      callback = function()
+        user_diff_windows[vim.api.nvim_get_current_win()] = true
+      end,
+    })
+
     local original_cursor_pos = nil
     if diff_info.target_window and vim.api.nvim_win_is_valid(diff_info.target_window) then
       original_cursor_pos = vim.api.nvim_win_get_cursor(diff_info.target_window)
@@ -1832,6 +1917,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       had_terminal_in_original = had_terminal_in_original,
       terminal_win_in_new_tab = terminal_win_in_new_tab,
       autocmd_ids = autocmd_ids,
+      user_diff_windows = user_diff_windows,
       created_at = vim.fn.localtime(),
       status = "pending",
       resolution_callback = resolution_callback,
