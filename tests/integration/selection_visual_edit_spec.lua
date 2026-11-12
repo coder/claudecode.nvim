@@ -147,15 +147,30 @@ describe("a visual selection released after the buffer changed, with the real pl
 
   -- What the guard exists for: an operator consumes the selection, and the marks point at text you never selected.
   describe("when an operator consumes the selection", function()
-    -- Nothing that Claude was sent may carry the text that the marks point at after the operator.
-    local function sent_no_selection()
-      for _, message in ipairs(sent) do
-        local params = message.params
+    -- Nothing that Claude was sent after the operator (the messages from number `from` + 1 on) may carry the text that
+    -- the marks point at after it. What was sent before is not the operator's doing: when something delays the keys
+    -- past the debounce (a slow :write, a busy host), the debounce sends the selection that you are still making, and
+    -- that is right. selection_texts checks that it is that selection and no other text.
+    local function sent_no_selection(from)
+      for index = (from or 0) + 1, #sent do
+        local params = sent[index].params
         if params and params.selection and not params.selection.isEmpty then
           return false, params.text
         end
       end
       return true
+    end
+
+    -- The texts of the selections (not the cursors) among the first `count` messages.
+    local function selection_texts(count)
+      local texts = {}
+      for index = 1, count do
+        local params = sent[index].params
+        if params and params.selection and not params.selection.isEmpty then
+          table.insert(texts, params.text)
+        end
+      end
+      return texts
     end
 
     it("sends no selection for d (ved)", function()
@@ -205,11 +220,15 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(20)
       plugin_edits_line_two()
       wait(20)
+      local before_operator = #sent
       press("d")
       wait(400)
 
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
-      assert.are.same({ true }, { sent_no_selection() })
+      assert.are.same({ true }, { sent_no_selection(before_operator) })
+      for _, text in ipairs(selection_texts(before_operator)) do
+        assert.are.equal("alpha", text)
+      end
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
     end)
 
@@ -223,11 +242,15 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(20)
       vim.cmd("silent write")
       wait(20)
+      local before_operator = #sent
       press("d")
       wait(400)
 
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
-      assert.are.same({ true }, { sent_no_selection() })
+      assert.are.same({ true }, { sent_no_selection(before_operator) })
+      for _, text in ipairs(selection_texts(before_operator)) do
+        assert.are.equal("alpha", text)
+      end
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
     end)
   end)
