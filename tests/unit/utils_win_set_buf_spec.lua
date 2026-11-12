@@ -63,13 +63,13 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       end
     end)
     stub(vim, "cmd", function(command)
-      local set_buf_win, set_buf_buf = command:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
-      if set_buf_win then
+      local set_buf_buf = command:match("^noautocmd buffer! (%d+)$")
+      if set_buf_buf then
         if state.raise then
           error("E5555: no", 0)
         end
-        table.insert(log, string.format("noautocmd set_buf %s %s", set_buf_win, set_buf_buf))
-        state.win_bufs[tonumber(set_buf_win)] = tonumber(set_buf_buf)
+        table.insert(log, string.format("noautocmd set_buf %d %s", state.current, set_buf_buf))
+        state.win_bufs[state.current] = tonumber(set_buf_buf)
         return
       end
       local target = command:match("^noautocmd call nvim_set_current_win%((%d+)%)$")

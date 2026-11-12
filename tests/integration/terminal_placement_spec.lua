@@ -739,45 +739,33 @@ describe("the terminal's placement in its own split", function()
           file_loaded = vim.api.nvim_buf_is_loaded(_G.file),
           file_lines = vim.api.nvim_buf_get_lines(_G.file, 0, -1, false),
           original_shows_other = vim.api.nvim_win_get_buf(_G.original) == _G.other,
+          file_in_a_window = #vim.fn.win_findbuf(_G.file) > 0,
         }
       ]])
     end
 
-    it("shows the hidden terminal in its split, and keeps the unsaved file loaded, when 'hidden' is on", function()
-      start_child()
-      arm_session_switch(true)
+    for _, case in ipairs({ { hidden = true, name = "on" }, { hidden = false, name = "off" } }) do
+      -- Neovim checks that the swap can leave a modified buffer before it runs BufLeave autocmds, and the autocmd here
+      -- takes away the other window that made it pass. A plain swap then loads the terminal into the original
+      -- window, which is the redirect. The placement makes the swap after the autocmds, so it skips that check and
+      -- shows the terminal in the split. The file stays loaded and hidden with its edits, as after a plain swap.
+      it(
+        "shows the hidden terminal in its split, and keeps the unsaved file loaded, when 'hidden' is " .. case.name,
+        function()
+          start_child()
+          arm_session_switch(case.hidden)
 
-      call([[require("claudecode.terminal").open()]])
+          call([[require("claudecode.terminal").open()]])
 
-      local result = state()
-      assert.equal(1, result.terminal_windows)
-      assert.is_true(result.job_running)
-      assert.is_true(result.file_loaded)
-      assert.same({ "unsaved user edit" }, result.file_lines)
-      assert.is_true(result.original_shows_other)
-    end)
-
-    -- Neovim checks that the swap can leave a modified buffer before it runs BufLeave autocmds, and the autocmd here
-    -- takes away the other window that made it pass. Showing the terminal in the split would hide the unsaved file
-    -- that 'nohidden' keeps from being hidden, so the open fails like any other swap of such a buffer does. A plain
-    -- swap showed the terminal in the original window instead, which is the redirect this placement prevents.
-    it("raises E37 for the hidden terminal, and loses nothing, when 'hidden' is off", function()
-      start_child()
-      arm_session_switch(false)
-
-      local ok, err = pcall(call, [[require("claudecode.terminal").open()]])
-
-      assert.is_false(ok)
-      assert.is_truthy(tostring(err):find("E37", 1, true))
-      local result = state()
-      assert.equal(0, result.terminal_windows)
-      assert.is_true(result.job_running)
-      assert.is_true(result.file_loaded)
-      assert.same({ "unsaved user edit" }, result.file_lines)
-
-      -- The autocmd ran once, so the next call shows the terminal beside the other windows.
-      call([[require("claudecode.terminal").open()]])
-      assert.equal(1, state().terminal_windows)
-    end)
+          local result = state()
+          assert.equal(1, result.terminal_windows)
+          assert.is_true(result.job_running)
+          assert.is_true(result.file_loaded)
+          assert.same({ "unsaved user edit" }, result.file_lines)
+          assert.is_true(result.original_shows_other)
+          assert.is_false(result.file_in_a_window)
+        end
+      )
+    end
   end)
 end)

@@ -49,12 +49,14 @@ local function ignoring_bufenter(fn)
   end
 end
 
----`nvim_win_set_buf` with no autocmd and no option write: `:noautocmd` sets 'eventignore' inside Neovim, and no
----`OptionSet` autocmd sees that.
----@param win number
+---Show `buf` in the current window with no autocmd and no option write: `:noautocmd` sets 'eventignore' inside Neovim,
+---and no `OptionSet` autocmd sees that. The `!` skips the check that the buffer that leaves can be abandoned. A plain
+---`nvim_win_set_buf` makes that check before it runs `BufLeave`, and the caller made it that way too: the buffer shows
+---in another window, or stays loaded when hidden. An autocmd that closed that other window must not turn it into E37
+---now. The buffer then stays loaded and hidden, as after a plain swap.
 ---@param buf number
-local function win_set_buf_without_autocmds(win, buf)
-  vim.cmd(string.format("noautocmd call nvim_win_set_buf(%d, %d)", win, buf))
+local function swap_current_window_to(buf)
+  vim.cmd(string.format("noautocmd buffer! %d", buf))
 end
 
 ---Whether `buf` stays loaded, with its job running, after it loses its last window.
@@ -72,12 +74,13 @@ end
 ---leaves run before the swap, so an autocmd that enters another window only moves the cursor, and the cursor goes back
 ---to `win`. The swap runs under `:noautocmd`, and `BufEnter` and `BufWinEnter` run after it, in `win`.
 ---The events of the leaving buffer are `BufLeave`, and when `win` was its last window, also `BufWinLeave` and `BufHidden`.
----That order is only the order of a buffer that stays loaded when it is hidden. For another buffer (the swap would
----unload it, or raise E37 for an unsaved one) the plain swap runs.
+---That order is only the order of a buffer that stays loaded when it is hidden, or that shows in another window. For
+---another buffer (the swap would unload it, or raise E37 for an unsaved one) the plain swap runs.
 ---@param win number
 ---@param buf number
----@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events, as
----`win_set_buf_without_bufenter` does.
+---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events. A handler of a terminal
+---buffer can queue an insert with `startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window
+---the cursor ends in, not in `win`. 'eventignore' is back to the caller's value afterwards, also when the call raises.
 function M.win_set_buf_in_split(win, buf, opts)
   local function place()
     local old = vim.api.nvim_win_get_buf(win)
@@ -106,7 +109,7 @@ function M.win_set_buf_in_split(win, buf, opts)
     if vim.api.nvim_get_current_win() ~= win then
       vim.cmd(string.format("noautocmd call nvim_set_current_win(%d)", win))
     end
-    win_set_buf_without_autocmds(win, buf)
+    swap_current_window_to(buf)
     vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf, modeline = false })
     -- A BufEnter autocmd can swap another buffer into the window, and then BufWinEnter is for that buffer.
     vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = vim.api.nvim_get_current_buf(), modeline = false })

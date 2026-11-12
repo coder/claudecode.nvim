@@ -103,15 +103,15 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       },
       cmd = function(c)
         c = tostring(c)
-        local swap_win, swap_buf = c:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
+        local swap_buf = c:match("^noautocmd buffer! (%d+)$")
         local enter_win = c:match("^noautocmd call nvim_set_current_win%((%d+)%)$")
         if c == "startinsert" then
           pending_insert = true
-        elseif swap_win then
+        elseif swap_buf then
           if fail_swap then
             error("E5555: boom")
           end
-          windows[tonumber(swap_win)].buf = tonumber(swap_buf)
+          windows[current_win].buf = tonumber(swap_buf)
           bufenter_ignored_during_set_buf = ignores_bufenter()
           eventignore_during_set_buf = vim.o.eventignore
         elseif enter_win then
