@@ -734,10 +734,19 @@ async function testUnreleasedUpdaterNeedsFormattedChangelog() {
     `${title}\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [Unreleased]\n\n${release}\n\n- MK9\n`,
     "the text that the update writes without the check",
   );
+  // The message of the error is in the failure, so that a Communique that cannot start (a mise shim, for example) shows
+  // its own error and not an opaque mismatch.
   await assert.rejects(
     readDraftMarkersWithCommunique([writtenAnchor]),
-    /multiple Unreleased sections/,
-    "Communique refuses the text that the update writes without the check",
+    (error) => {
+      const message = String(error?.message ?? error);
+      assert.match(
+        message,
+        /multiple Unreleased sections/,
+        `Communique refuses the text that the update writes without the check, but it failed with: ${message}`,
+      );
+      return true;
+    },
   );
 
   // 2. A bare CR hides a release heading from Communique. The update ends the draft at the heading, and Communique
@@ -784,6 +793,15 @@ async function testUnreleasedUpdaterNeedsFormattedChangelog() {
     ["CR LF line endings", formattedAnchor.replace(/\n/g, "\r\n")],
     ["CR line endings", formattedAnchor.replace(/\n/g, "\r")],
     ["no line ending at the end of the text", formattedAnchor.trimEnd()],
+    ["a text that is only a line ending", "\n"],
+    [
+      "spaces at the end of a list item line",
+      formattedAnchor.replace("- MK1", "- MK1  "),
+    ],
+    [
+      "a space at the end of a heading line",
+      formattedAnchor.replace("## [Unreleased]", "## [Unreleased] "),
+    ],
     [
       "a run of blank lines",
       formattedAnchor.replace("\n\n- MK1", "\n\n\n\n- MK1"),
@@ -1096,7 +1114,7 @@ async function testUnreleasedDraftFenceGuard() {
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n";
   // The line of a text, numbered from 1.
   const lineOf = (text, line) => text.split(/\r\n|\r|\n/).indexOf(line) + 1;
-  // `update` refuses before the formatter runs, and the error names the line that opens the fence.
+  // `update` refuses before the formatter formats the new text, and the error names the line that opens the fence.
   const refuses = (text, opener, name, run = update) => {
     assert.ok(lineOf(text, opener) > 0, `${name}: the text holds the opener`);
     assert.throws(
@@ -1677,9 +1695,10 @@ function readHistoricalChangelogs(releasedSections) {
 
 /**
  * The structure of the Unreleased draft. `updateContent` reads the changelog with commonmark.js. It drops a draft that
- * holds only paragraphs, lists and H3 headings, it refuses any other node before it formats, and it refuses a formatter
- * that changes the headings of the older releases. A release heading that a reader of lines misses (an H3 or deeper
- * heading is the exception) is a section heading to the parser. Each case that main loses is here, and it fails on main.
+ * holds only paragraphs, lists and H3 headings, it refuses any other node before it formats the new changelog, and it
+ * refuses a formatter that changes the headings of the older releases. A release heading that a reader of lines misses
+ * (an H3 or deeper heading is the exception) is a section heading to the parser. Each case that main loses is here, and
+ * it fails on main.
  */
 async function testUnreleasedDraftStructure() {
   const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
@@ -1703,9 +1722,9 @@ async function testUnreleasedDraftStructure() {
   const mainText = (text, newEntry = entry) =>
     textThatMainWrites(text, newEntry).written;
 
-  // 1. Refusals, before the formatter runs, raw and after the real prettier. The error names the line and the node.
-  // Each case is { name, draft, error, line, formattedLine }: `error` builds the error from the line number and the
-  // line that starts the node, and `formattedLine` is that line after prettier when prettier changes it.
+  // 1. Refusals, before the formatter formats the new text, raw and after the real prettier. The error names the line
+  // and the node. Each case is { name, draft, error, line, formattedLine }: `error` builds the error from the line
+  // number and the line that starts the node, and `formattedLine` is that line after prettier when prettier changes it.
   const node = (kind) => (number, line) => nodeRefusal(number, line, kind);
   const refusedCases = [
     ...["####", "#####", "######"].map((marks) => ({
@@ -2138,9 +2157,10 @@ async function testUnreleasedDraftStructure() {
     );
   });
 
-  // 3. A setext heading is a heading. After a list item, prettier moves it into the item and writes a thematic
-  // break, so the update refuses the text before the formatter (when it is already formatted) or after it (when it is
-  // raw). Nothing is written, and the older release is not lost.
+  // 3. A setext heading is a heading. After a list item, prettier moves it into the item and writes a thematic break,
+  // so the update refuses the text before it formats the new changelog (the setext heading ends the draft, or the
+  // formatted text has no release heading) or after it (a raw setext release further down). Nothing is written, and the
+  // older release is not lost.
   const setext = "- Draft\n\n0.3.0\n-----\n\n- Previous\n";
   assert.throws(
     () => withCheckOnlyFormatter(() => update(`${head}${setext}`)),
