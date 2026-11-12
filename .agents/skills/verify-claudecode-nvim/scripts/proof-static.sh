@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 # Static proofs of the verify-claudecode-nvim skill. They read the skill's own files and start no run, no agent-tty and no nvim,
-# so `mise run check` runs them in CI:
-#   no-bare-tools  vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN, not even as the default of a
-#                  parameter expansion (reads the source, so it reaches every call site, which a run of launch does not)
-#   doc-vars       a code block, or the inline code of a doc, that expands PORT, SID, NVIM_PID or NODE_DIR sets it with `VAR=$(` in
-#                  the same block (or the same doc, for inline code), because a fresh shell has none of them. Prose that names
-#                  an assignment sets nothing, and neither does a comment
-#   no-source-run-env  no script of the skill, and no recipe in its docs, sources a run.env, except `load` in vcn.sh, which checks the
-#                  state dir first (the callers read a value through `vcn.sh get`)
-#   doc-get-exact  no recipe reads a path of the run (OUT, WORK, ...) through `$(... get NAME)`, which cuts a newline at the end
+# so `mise run check` runs them in CI. Each `ok` line says only what the scanner sees:
+#   no-bare-tools  no code line of vcn.sh names jq or setsid as a bare call, except the two resolutions, and none as the default of
+#                  a parameter expansion (reads the source, so it reaches every call site, which a run of launch does not)
+#   doc-vars       a code block, or the inline code of a doc taken together, that expands PORT, SID, NVIM_PID or NODE_DIR with a $
+#                  (also in a $(( )) that holds no parenthesis before it) sets it with `VAR=$(` in the same block (or the same doc,
+#                  for inline code), because a fresh shell has none of them. Prose that names an assignment sets nothing, and neither
+#                  does a comment
+#   no-source-run-env  no script of the skill, and no recipe in its docs, has a source of a run.env that the scanner sees, except
+#                  `load` in vcn.sh, which checks the state dir first (the callers read a value through `vcn.sh get`)
+#   doc-get-exact  no recipe reads a path of the run (OUT, WORK, ...) through `$(... get [-z] NAME)`, or through a
+#                  `read ... < <(... get [-z] NAME)` that has no `-d ''` of its own, because each loses a newline at the end of the value
 #   doc-recipe     the recipe that features/README.md and SKILL.md give for reading OUT and WORK returns both whole, for a
-#                  VERIFY_OUT that ends in a newline (the case runs the documented line on a hand-made run.env)
+#                  VERIFY_OUT that ends in a newline and holds a backslash, and stops the call with status 1 and a message when `get`
+#                  refuses (the case runs the documented line on a hand-made run.env, with no V of its own)
 # What the checks do not see: an indented code block (four spaces) and <pre>, a command that a variable or an eval of a built
-# string holds, a source in a file that is not a shell script (.lua, .py, .mjs), and a fence in a quote or a list that markdown
-# would not open. A source after `builtin`, `command` or `eval`, in backticks or quotes, and an inline span that a line break
-# splits are seen. The docs must exist: a missing SKILL.md or features/*.md fails every case that reads them.
+# string holds, a source in a file that is not a shell script (.lua, .py, .mjs), a fence in a quote or a list that markdown
+# would not open, a `read` that takes `get` through a pipe or a file, and seven shapes that no code block and no code line of a script has: in a code block, a
+# command substitution or a `read ... < <(...)` whose `get` is on the next line, a `read -d ''` with no `IFS=` before it (it trims a newline at the end), a backtick substitution of `get`, a source or `.` whose run.env is on the next
+# line after a backslash (in a code block or a script), a quoted command word (`"source" run.env`), a run.env named through BASH_ENV,
+# and a use of PORT, SID, NVIM_PID or NODE_DIR without a $ (`let`, `(( ))`, `${#PORT}`). A source after `builtin`, `command` or `eval`,
+# in backticks, or in a quoted string that starts with it (`bash -c "source run.env"`), and an inline span that a line break splits are seen. The docs must exist: a missing SKILL.md or features/*.md fails every case that reads them.
 # Prints one `ok <case>` per case, or `FAIL <case>: <reason>` and exits 1, and ends with `CASES <n>`.
 set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
@@ -71,7 +77,7 @@ bare_tools_case() {
   [[ -z $(bare_hits "$TMP/bare-sample") ]] || fail "$name" "the scan of a file took a call through \$JQ_BIN or the resolution for a bare call"
   hits=$(bare_hits "$V")
   [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
-  echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
+  echo "ok $name: no code line of vcn.sh names jq or setsid as a bare call or a default, except the two resolutions"
   cases=$((cases + 1))
 }
 
@@ -220,7 +226,7 @@ doc_vars_case() {
   done
   rm -f -- "$sample"
   [[ -z $missing ]] || fail "$name" "a recipe expands a variable that it does not set:$missing"
-  echo "ok $name: every recipe that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
+  echo "ok $name: every code block, and the inline code of each doc taken together, that expands PORT, SID, NVIM_PID or NODE_DIR with a \$ sets it"
   cases=$((cases + 1))
 }
 
@@ -270,43 +276,78 @@ no_source_case() {
   done
   n=$(grep -E "$src_re" "$V" | grep -cvE '^[[:space:]]*#' || true)
   ((n == 1)) || fail "$name" "vcn.sh sources a run.env in $n places, wanted one (load)"
-  echo "ok $name: only load in vcn.sh sources a run.env; no script and no recipe does"
+  echo "ok $name: no source of a run.env that the scanner sees, except load in vcn.sh"
   cases=$((cases + 1))
 }
 
 # `$(...)` cuts the newlines at the end of its output, and VERIFY_OUT can end in one. A recipe that reads a path of the run through
-# `$($V get OUT)` writes its next file to the twin of the evidence dir, which is a different path in the same checked parent. The
-# docs read a path with `get -z`. A value that is no path (PORT, SID) can use a substitution.
+# `$($V get OUT)` or `$($V get -z OUT)` writes its next file to the twin of the evidence dir, which is a different path in the
+# same checked parent. A `read` without `-d ''` stops at the first newline of the value, and a path can hold one. The docs read a
+# path with `read -r -d ''` on `get -z`. A value that is no path (PORT, SID) can use a substitution.
+path_names='OUT|WORK|VCN_STATE|ATT_HOME|NVIM_SOCK|NVIM_BIN|NODE_DIR|ATT_BIN|ATT_SOCK|JQ_BIN'
+get_name_re='get[[:space:]]+(-z[[:space:]]+)?["'\'']?('"$path_names"')["'\'']?([^A-Za-z0-9_]|$)'
+sub_re='\$\([^)]*'"$get_name_re"
+read_re='(^|[^A-Za-z0-9_])read[[:space:]][^;&|<]*<[^;&|]*'"$get_name_re"
+read_d_re="[[:space:]]-[A-Za-z]*d[[:space:]]*(''|\"\")"
+
+# path_reads: the numbered lines on stdin that read a path of the run through a command substitution, or through a `read ... < <(... get
+# NAME)` that has no `-d ''` among its own words (the text before its first `<`: another `read` on the line does not count).
+path_reads() {
+  local text
+  text=$(cat)
+  grep -nE "$sub_re" <<<"$text" || true
+  grep -noE "$read_re" <<<"$text" | sed 's/<.*//' | grep -vE "$read_d_re" || true
+}
+
 doc_get_exact_case() {
   local name=doc-get-exact file hits line
-  local sub_re='\$\([^)]*get[[:space:]]+(OUT|WORK|VCN_STATE|ATT_HOME|NVIM_SOCK|NVIM_BIN|NODE_DIR|ATT_BIN|ATT_SOCK|JQ_BIN)([^A-Za-z0-9_]|$)'
   need_docs "$name"
-  for line in 'OUT=$($V get OUT)' 'x="$(vcn.sh get WORK)"' 'echo "$($V get VCN_STATE)"' 'WORK=$($V get WORK)'; do
-    grep -qE "$sub_re" <<<"$line" || fail "$name" "the pattern misses: $line"
+  for line in 'OUT=$($V get OUT)' 'x="$(vcn.sh get WORK)"' 'echo "$($V get VCN_STATE)"' 'WORK=$($V get WORK)' 'x=$($V get -z OUT)' \
+    'IFS= read -r OUT < <($V get -z OUT)' 'read OUT < <($V get -z OUT)' 'IFS= read -r -d x OUT < <($V get -z OUT)' 'OUT=$($V get -z "OUT")' "x=\$(\"\$V\" get 'WORK')" \
+    'IFS= read -r OUT < <($V get -z "OUT")' 'read -r -d "" scratch <<< x; IFS= read -r OUT < <($V get -z OUT)'; do
+    [[ -n $(path_reads <<<"$line") ]] || fail "$name" "the patterns miss: $line"
   done
-  for line in 'IFS= read -r -d "" OUT < <($V get -z OUT)' 'PORT=$($V get PORT)' 'SID=$($V get SID)' 'x=$($V get OUTPUT)'; do
-    ! grep -qE "$sub_re" <<<"$line" || fail "$name" "the pattern takes this line for a path read through a substitution: $line"
+  for line in 'IFS= read -r -d "" OUT < <($V get -z OUT)' "IFS= read -r -d '' OUT < <(\"\$V\" get -z OUT)" 'IFS= read -rd "" WORK < <($V get -z WORK)' \
+    'IFS= read -r -d "" "$1" < <("$V" get -z "$1")' 'PORT=$($V get PORT)' 'SID=$($V get SID)' 'x=$($V get OUTPUT)' 'read -r PORT < <($V get PORT)' \
+    'read -r scratch <<< x; IFS= read -r -d "" OUT < <($V get -z OUT)' 'IFS= read -r -d "" OUT < <($V get -z "OUT")'; do
+    [[ -z $(path_reads <<<"$line") ]] || fail "$name" "the patterns take this line for a path read that loses a newline: $line"
   done
   for file in "$skill"/SKILL.md "$skill"/features/*.md; do
-    hits=$(code_units "$file" | grep -nE "$sub_re" || true)
-    [[ -z $hits ]] || fail "$name" "${file#"$skill"/} reads a path through \$(... get ...), which cuts a newline at its end: $(tr '\n' ' ' <<<"$hits")"
+    hits=$(code_units "$file" | path_reads)
+    [[ -z $hits ]] || fail "$name" "${file#"$skill"/} reads a path through \$(... get ...) or a read without -d '', which loses a newline at its end: $(tr '\n' ' ' <<<"$hits")"
   done
-  echo "ok $name: no recipe reads OUT, WORK or another path of the run through a command substitution"
+  echo "ok $name: no recipe reads OUT, WORK or another path of the run through \$(... get NAME) or a read < <(... get NAME) without -d ''"
   cases=$((cases + 1))
 }
 
-# The recipe of the docs, run as it is written. VERIFY_OUT can end in a newline (and WORK follows it), a command substitution would
-# cut it, and the next file that a caller writes would go to another path. The state dir and the run.env are hand-made, in the
-# resolved path of this proof's temp dir. `get` starts no run.
+# The recipe of the docs, run as it is written, from the repo root, with no V in the environment (the line sets its own). VERIFY_OUT
+# can end in a newline (and WORK follows it) and can hold a backslash, a command substitution would cut the newline, a `read` without
+# -r would eat the backslash, and the next file that a caller writes would go to another path. A `get` that refuses must stop the
+# call with a message and the status 1, so that no later command runs: a state dir that load refuses, a run.env without OUT (the second getz must not hide it),
+# and one without WORK. The state dirs and the run.env files are hand-made, in a dir with a colon in its name (a path can hold one, and
+# a case that packs a dir and a name into one string splits it there), under the resolved path of this proof's temp dir. `get` starts no run.
 doc_recipe_case() {
-  local name=doc-recipe file recipe dir out_want work_want rtmp repo got
+  local name=doc-recipe file recipe dir no_out no_work loose out_want work_want rtmp repo got bad rc i bad_dirs bad_names
   need_docs "$name"
-  rtmp=$(realpath -- "$TMP")
+  rtmp=$(realpath -- "$TMP")/a:b
+  mkdir -m 700 -- "$rtmp"
   repo=$(realpath -- "$skill/../../..")
   dir=$(mktemp -d "$rtmp/vcn.XXXXXX")
-  out_want=$'/tmp/a b OUT=/x\t\'q"\nline2\n'
+  no_out=$(mktemp -d "$rtmp/vcn.XXXXXX")
+  no_work=$(mktemp -d "$rtmp/vcn.XXXXXX")
+  loose=$(mktemp -d "$rtmp/vcn.XXXXXX")
+  out_want=$'/tmp/a b OUT=/x\t\'q"\nback\\slash \\\\ end\\n\n'
   work_want=$dir/work$'\n'
-  printf 'VCN_STATE=%q\nOUT=%q\nWORK=%q\nNODE_DIR=/usr/bin\nJQ_BIN=/usr/bin/jq\n' "$dir" "$out_want" "$work_want" >"$dir/run.env"
+  for bad in "$dir" "$no_out" "$no_work" "$loose"; do
+    printf 'VCN_STATE=%q\nNODE_DIR=/usr/bin\nJQ_BIN=/usr/bin/jq\n' "$bad" >"$bad/run.env"
+  done
+  bad_dirs=("$loose" "$no_out" "$no_work")
+  bad_names=(OUT OUT WORK)
+  printf 'OUT=%q\nWORK=%q\n' "$out_want" "$work_want" >>"$dir/run.env"
+  printf 'WORK=%q\n' "$work_want" >>"$no_out/run.env"
+  printf 'OUT=%q\n' "$out_want" >>"$no_work/run.env"
+  printf 'OUT=%q\nWORK=%q\n' "$out_want" "$work_want" >>"$loose/run.env"
+  chmod 770 "$loose"
   printf '%s' "$out_want" >"$TMP/out.want"
   printf '%s' "$work_want" >"$TMP/work.want"
   got=$(cd "$repo" && env VCN_STATE="$dir" V="$V" bash -c 'OUT=$($V get OUT); printf %s "$OUT" >"$1"' _ "$TMP/out.got" 2>&1) ||
@@ -316,12 +357,19 @@ doc_recipe_case() {
     recipe=$(code_units "$file" | grep -F 'getz()' || true)
     [[ -n $recipe && $(grep -c '' <<<"$recipe") == 1 ]] || fail "$name" "${file#"$skill"/} must hold one inline recipe with getz(), found: ${recipe:-none}"
     rm -f "$TMP/out.got" "$TMP/work.got"
-    got=$(cd "$repo" && env VCN_STATE="$dir" V="$V" bash -c "$recipe"$'\n''printf %s "$OUT" >"$1"; printf %s "$WORK" >"$2"' _ "$TMP/out.got" "$TMP/work.got" 2>&1) ||
+    got=$(cd "$repo" && env -u V VCN_STATE="$dir" bash -c "$recipe"$'\n''printf %s "$OUT" >"$1"; printf %s "$WORK" >"$2"' _ "$TMP/out.got" "$TMP/work.got" 2>&1) ||
       fail "$name" "the recipe of ${file#"$skill"/} failed: $got"
     cmp -s "$TMP/out.got" "$TMP/out.want" || fail "$name" "the recipe of ${file#"$skill"/} read OUT as '$(cat "$TMP/out.got")', not the whole value"
     cmp -s "$TMP/work.got" "$TMP/work.want" || fail "$name" "the recipe of ${file#"$skill"/} read WORK as '$(cat "$TMP/work.got")', not the whole value"
+    for i in "${!bad_dirs[@]}"; do
+      rc=0
+      got=$(cd "$repo" && env -u V VCN_STATE="${bad_dirs[i]}" bash -c "$recipe"$'\n''echo after-recipe' 2>&1) || rc=$?
+      ((rc == 1)) || fail "$name" "the recipe of ${file#"$skill"/} exited $rc, wanted 1, after a refused get (${bad_names[i]} of ${bad_dirs[i]}): $got"
+      ! grep -qF after-recipe <<<"$got" || fail "$name" "a command after the recipe of ${file#"$skill"/} still ran after a refused get (${bad_names[i]} of ${bad_dirs[i]})"
+      grep -qF "vcn.sh get ${bad_names[i]} failed" <<<"$got" || fail "$name" "the recipe of ${file#"$skill"/} did not say 'vcn.sh get ${bad_names[i]} failed' after a refused get: $got"
+    done
   done
-  echo "ok $name: the recipe of SKILL.md and of features/README.md read OUT and WORK whole, with a newline at their end"
+  echo "ok $name: the recipe of SKILL.md and of features/README.md reads OUT and WORK whole (newline, backslash) and stops the call with status 1 when get refuses"
   cases=$((cases + 1))
 }
 
