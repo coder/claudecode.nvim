@@ -71,8 +71,6 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
     end)
   end
 
-  -- `blank_end` marks a proposal that ends in a blank line. On main the unified layout drops one of those (F11 fixes
-  -- that), so this file runs them in the split layouts only.
   local proposals = {
     { name = "a final line without a line break", text = "a" },
     { name = "two lines and no final line break", text = "a\nb" },
@@ -81,9 +79,9 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
     { name = "one final line break", text = "a\n" },
     { name = "two lines and a final line break", text = "a\nb\n" },
     { name = "a blank line only", text = "\n" },
-    { name = "one blank line after the last line", text = "a\n\n", blank_end = true },
-    { name = "two blank lines after the last line", text = "a\n\n\n", blank_end = true },
-    { name = "two blank lines only", text = "\n\n", blank_end = true },
+    { name = "one blank line after the last line", text = "a\n\n" },
+    { name = "two blank lines after the last line", text = "a\n\n\n" },
+    { name = "two blank lines only", text = "\n\n" },
   }
   local old_files = {
     { name = "a file with other text", text = "old\n" },
@@ -95,13 +93,11 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
     describe("in the " .. layout .. " layout", function()
       for _, old_file in ipairs(old_files) do
         for _, proposal in ipairs(proposals) do
-          if not (layout == "unified" and proposal.blank_end) then
-            it(("accepts %s as it is, against %s"):format(proposal.name, old_file.name), function()
-              local state = open_diff(layout, old_file.text, proposal.text)
+          it(("accepts %s as it is, against %s"):format(proposal.name, old_file.name), function()
+            local state = open_diff(layout, old_file.text, proposal.text)
 
-              assert.equal(vim.inspect(proposal.text), vim.inspect(accept(state)))
-            end)
-          end
+            assert.equal(vim.inspect(proposal.text), vim.inspect(accept(state)))
+          end)
         end
       end
     end)
