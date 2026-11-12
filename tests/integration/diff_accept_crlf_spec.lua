@@ -10,6 +10,8 @@ end
 -- `:w` then ends every line with CRLF, a line that the user typed too. The split layouts kept each CR inside its line
 -- and joined the lines with LF, so a line that the user typed, or the join of two lines, came back with an LF or with
 -- a stray CR in the middle of a line. The unified layout's buffer is read-only, so its answer is the proposal itself.
+-- The diff gives the buffer the 'fileformat' of the proposal, whatever the first entry of 'fileformats' is, and takes
+-- dos only when 'fileformats' includes it, as Neovim does when it reads a file.
 describe("the text a diff accepts when the proposal has CRLF line breaks", function()
   local diff = require("claudecode.diff")
   local tools = require("claudecode.tools.init")
@@ -68,6 +70,19 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
     return answers[1].content[2].text
   end
 
+  --- The lines of the proposal window that diff mode marks as changed.
+  local function changed_lines(state)
+    return vim.api.nvim_win_call(state.new_window, function()
+      local lines = {}
+      for line = 1, vim.api.nvim_buf_line_count(0) do
+        if vim.fn.diff_hlID(line, 1) ~= 0 then
+          lines[#lines + 1] = line
+        end
+      end
+      return lines
+    end)
+  end
+
   before_each(function()
     vim.o.columns, vim.o.lines = 160, 40
     dir = vim.fn.tempname()
@@ -87,14 +102,7 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
   end)
 
   local split_layouts = { "vertical", "horizontal" }
-  local all_layouts = { "vertical", "horizontal" }
-  if vim.fn.has("nvim-0.9") == 1 then
-    all_layouts[#all_layouts + 1] = "unified"
-  else
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
+  local all_layouts = { "vertical", "horizontal", "unified" }
 
   -- A proposal without a final line break stays without one (#542), where a default `:w` adds one. `nofixeol` makes
   -- Neovim's `:w` keep it too, so the rest of the bytes can be compared.
@@ -160,17 +168,7 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
       it("shows no difference between a CRLF proposal and the CRLF file that holds the same text", function()
         local state = open_diff(layout, "a\r\nb\r\nc\r\n", "a\r\nb\r\nc\r\n")
 
-        local changed_lines = vim.api.nvim_win_call(state.new_window, function()
-          local lines = {}
-          for line = 1, vim.api.nvim_buf_line_count(0) do
-            if vim.fn.diff_hlID(line, 1) ~= 0 then
-              lines[#lines + 1] = line
-            end
-          end
-          return lines
-        end)
-
-        assert.same({}, changed_lines)
+        assert.same({}, changed_lines(state))
       end)
 
       -- Controls: these gave the text that :w writes before the fix too. A proposal that is not all CRLF reads as
@@ -211,6 +209,64 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
 
           assert.equal(vim.inspect(expected), vim.inspect(edit_and_accept(state, commands)))
         end)
+      end
+    end)
+  end
+
+  -- 'fileformats' decides how Neovim reads a text, and its first entry is the 'fileformat' of a new buffer. So the diff
+  -- must not take the 'fileformat' of the proposal buffer from the option, and it takes dos only for a value that
+  -- includes dos. The oracle reads the text under the same value.
+  for _, fileformats in ipairs({ "unix,dos", "dos,unix", "unix" }) do
+    describe("with 'fileformats' set to " .. fileformats, function()
+      local saved_fileformats
+
+      before_each(function()
+        saved_fileformats = vim.o.fileformats
+        vim.o.fileformats = fileformats
+      end)
+
+      after_each(function()
+        vim.o.fileformats = saved_fileformats
+      end)
+
+      local texts = {
+        { name = "an LF proposal", text = "a\nb\n" },
+        { name = "a proposal with CRLF and LF line breaks", text = "a\r\nb\n" },
+        { name = "a CRLF proposal", text = "a\r\nb\r\n" },
+      }
+
+      for _, layout in ipairs(all_layouts) do
+        for _, proposal in ipairs(texts) do
+          it(("the %s layout accepts %s unedited"):format(layout, proposal.name), function()
+            local state = open_diff(layout, "old\n", proposal.text)
+
+            assert.equal(vim.inspect(proposal.text), vim.inspect(edit_and_accept(state, {})))
+          end)
+        end
+      end
+
+      for _, layout in ipairs(split_layouts) do
+        for _, proposal in ipairs(texts) do
+          it(
+            ("the %s layout accepts what :w writes after a typed line, from %s"):format(layout, proposal.name),
+            function()
+              local commands = { "normal! Gox" }
+              local expected = neovim_writes(proposal.text, commands)
+              local state = open_diff(layout, "old\n", proposal.text)
+
+              assert.equal(vim.inspect(expected), vim.inspect(edit_and_accept(state, commands)))
+            end
+          )
+        end
+
+        it(
+          "the " .. layout .. " layout shows no difference between a CRLF proposal and the CRLF file with its text",
+          function()
+            local state = open_diff(layout, "a\r\nb\r\nc\r\n", "a\r\nb\r\nc\r\n")
+
+            assert.same({}, changed_lines(state))
+          end
+        )
       end
     end)
   end
