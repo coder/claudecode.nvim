@@ -178,7 +178,7 @@ Automatic cleanup on shutdown:
 ```lua
 vim.api.nvim_create_autocmd("VimLeavePre", {
   callback = function()
-    M.stop()  -- Stop server, remove lock file
+    M.stop()  -- Stop server, try to remove lock file (only logs a warning when it cannot)
   end
 })
 ```
