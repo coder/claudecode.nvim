@@ -34,7 +34,7 @@
 
 - Interfaces: put a function on a module table `M` only when another module, the documented Lua API or Neovim calls it. Everything else is `local`. Tests drive behavior through that interface. Do not add `M._name` hooks for tests.
 - Modules: prefer few modules that each hide a lot. Merge a helper module into its only consumer. Do not add a module for one caller.
-- Validation: check data once, where it comes in: `setup(opts)` in `config.lua`, user command arguments, MCP messages at the socket and at the tool handler, files, user callbacks, other plugins, and Neovim state at the start of an async callback. Below that point, use the data without re-checking it.
+- Validation: check data once, where it comes in: the options of `setup(opts)` in `config.apply` (`config.lua`), user command arguments, MCP messages at the socket and at the tool handler, files, user callbacks, other plugins, and Neovim state at the start of an async callback. Below that point, use the data without re-checking it.
 - One-off logic: write logic that has one call site where it is used. Keep a single-use function only when it is recursive, when it is a named algorithm (SHA-1, base64), or when inlining it turns early returns into flags or adds two levels of nesting.
 - `pcall`: use it only where the callee can fail while the plugin's own code and state are correct: optional plugins, user callbacks, data from the socket or a file, file and process IO, and Neovim calls that can throw on valid input, above all in cleanup paths.
 - Fail-closed checks on the auth token path stay, even where today's code cannot reach them.
