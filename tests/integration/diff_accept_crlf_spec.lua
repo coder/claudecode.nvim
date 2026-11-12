@@ -157,6 +157,22 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
         assert.same({ "a", "b" }, vim.api.nvim_buf_get_lines(buffer, 0, -1, false))
       end)
 
+      it("shows no difference between a CRLF proposal and the CRLF file that holds the same text", function()
+        local state = open_diff(layout, "a\r\nb\r\nc\r\n", "a\r\nb\r\nc\r\n")
+
+        local changed_lines = vim.api.nvim_win_call(state.new_window, function()
+          local lines = {}
+          for line = 1, vim.api.nvim_buf_line_count(0) do
+            if vim.fn.diff_hlID(line, 1) ~= 0 then
+              lines[#lines + 1] = line
+            end
+          end
+          return lines
+        end)
+
+        assert.same({}, changed_lines)
+      end)
+
       -- Controls: these gave the text that :w writes before the fix too. A proposal that is not all CRLF reads as unix, so
       -- it keeps the text it has, CRs included.
       local controls = {
