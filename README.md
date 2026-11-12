@@ -251,7 +251,7 @@ When Claude proposes changes, the plugin opens a native Neovim diff view:
 - **Accept**: `:w` (save) or `:ClaudeCodeDiffAccept`
 - **Reject**: `:q` or `:ClaudeCodeDiffDeny`
 
-Run these in the proposed buffer. The plugin sets no keymaps for the diff. The `keys` in the Installation spec map `<leader>aa` to `:ClaudeCodeDiffAccept` and `<leader>ad` to `:ClaudeCodeDiffDeny`.
+Run these in the proposal buffer. The plugin sets no keymaps for the diff. The `keys` in the Installation spec map `<leader>aa` to `:ClaudeCodeDiffAccept` and `<leader>ad` to `:ClaudeCodeDiffDeny`.
 
 You can edit Claude's suggestions before accepting them.
 
