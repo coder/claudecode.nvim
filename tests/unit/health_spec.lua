@@ -10,6 +10,8 @@ describe("health", function()
   local server_status
   local executables
   local lock_readable
+  local lock_stat
+  local real_fs_stat
   local claude_connected
 
   local function record(level)
@@ -31,6 +33,7 @@ describe("health", function()
     reports = {}
     executables = { claude = true }
     lock_readable = true
+    lock_stat = nil
     claude_connected = true
     server_status = { running = true, port = 12345, client_count = 1 }
     fake_state = {
@@ -62,6 +65,12 @@ describe("health", function()
     vim.fn.filereadable = function(_)
       return lock_readable and 1 or 0
     end
+    -- What fs_stat finds at the lock path: nil for nothing, or a table with the type of the entry.
+    vim.loop = vim.loop or {}
+    real_fs_stat = vim.loop.fs_stat
+    vim.loop.fs_stat = function(_)
+      return lock_stat
+    end
 
     package.loaded["claudecode"] = {
       version = {
@@ -86,6 +95,7 @@ describe("health", function()
   end)
 
   after_each(function()
+    vim.loop.fs_stat = real_fs_stat
     package.loaded["claudecode"] = nil
     package.loaded["claudecode.server.init"] = nil
     package.loaded["claudecode.lockfile"] = nil
@@ -145,6 +155,28 @@ describe("health", function()
     health.check()
 
     expect(has_report("error", "Lock file missing")).to_be_true()
+    expect(has_report("error", "exists but cannot be read")).to_be_false()
+  end)
+
+  it("says that a lock file that exists but cannot be read cannot be read, not that it is missing", function()
+    lock_readable = false
+    lock_stat = { type = "file" }
+
+    health.check()
+
+    expect(has_report("error", "Lock file exists but cannot be read: /tmp/claude/ide/12345.lock")).to_be_true()
+    expect(has_report("error", "Lock file missing")).to_be_false()
+    expect(has_report("ok", "Lock file present")).to_be_false()
+  end)
+
+  it("reports a folder at the lock path as a missing lock file", function()
+    lock_readable = false
+    lock_stat = { type = "directory" }
+
+    health.check()
+
+    expect(has_report("error", "Lock file missing")).to_be_true()
+    expect(has_report("error", "exists but cannot be read")).to_be_false()
   end)
 
   it("reports info when no client is connected", function()
