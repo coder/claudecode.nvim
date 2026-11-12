@@ -235,7 +235,8 @@ function M.remove(port)
   return true
 end
 
----Read the authentication token from a lock file
+---Read the authentication token from a lock file. A lock file that exists but cannot be read is refused with an error
+---that says so, not with the error for a missing one.
 ---@param port number The port number of the WebSocket server
 ---@return boolean success Whether the operation was successful
 ---@return string? auth_token The authentication token if successful, or nil if failed
@@ -247,13 +248,17 @@ function M.get_auth_token(port)
 
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
-  if vim.fn.filereadable(lock_path) == 0 then
+  -- `filereadable` is 0 for a file that exists but cannot be read, and it would call that file missing. A folder with
+  -- this name is no lock file, as in `remove`.
+  local stat = vim.loop.fs_stat(lock_path)
+  if not stat or stat.type == "directory" then
     return false, nil, "Lock file does not exist: " .. lock_path
   end
 
-  local file = io.open(lock_path, "r")
+  -- The file exists, so a failure here is a refusal to read it. io.open's message names the path and the reason.
+  local file, open_error = io.open(lock_path, "r")
   if not file then
-    return false, nil, "Failed to open lock file: " .. lock_path
+    return false, nil, "Lock file exists but cannot be read: " .. (open_error or lock_path)
   end
 
   local content = file:read("*all")

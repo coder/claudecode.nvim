@@ -687,6 +687,57 @@ describe("Lockfile Module", function()
       assert(error:find("Lock file does not exist"))
     end)
 
+    it("should say that a lock file that is missing does not exist", function()
+      local port = 12360
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+
+      local success, token, err = lockfile.get_auth_token(port)
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
+    it("should refuse a lock file that exists but cannot be read, and say that it cannot be read", function()
+      local port = 12361
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+      os.execute("chmod 000 " .. temp_dir.quote(lock_path))
+
+      local probe = io.open(lock_path, "r")
+      if probe then
+        probe:close()
+        os.remove(lock_path)
+        return pending("this user can read a file with mode 000 (root)")
+      end
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.execute("chmod 600 " .. temp_dir.quote(lock_path))
+      os.remove(lock_path)
+
+      -- The messages are checked here, never the token or the file's content.
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert("string" == type(err))
+      assert(err:find("Lock file exists but cannot be read: ", 1, true) == 1, err)
+      assert(err:find(lock_path, 1, true), err)
+      assert(err:find("Permission denied", 1, true), err)
+      assert(not err:find("does not exist", 1, true), err)
+    end)
+
+    it("should say that a folder named like a lock file is not a lock file", function()
+      local port = 12362
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      assert(os.execute("mkdir " .. temp_dir.quote(lock_path)))
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.execute("rmdir " .. temp_dir.quote(lock_path))
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
     it("should write the lock file with 0600 permissions", function()
       _G._test_last_fs_open_mode = nil
       local port = 12347

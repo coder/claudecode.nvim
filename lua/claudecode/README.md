@@ -113,6 +113,7 @@ Module map (direct files):
 - The lock directory is `$CLAUDE_CONFIG_DIR/ide` when that variable is set and not empty, else `~/.claude/ide`. It is resolved once when the module loads [lockfile.lua:M.lock_dir]
 - `health.check` builds the lock-file path `lock_dir/<port>.lock` itself, so a change to the lock-file name must change `health.lua` too [health.lua:check_server]
 - `lockfile.create` requires a port in 1..65535 and a caller token of 10..500 characters. It writes JSON `{ pid, workspaceFolders, ideName = "Neovim", transport = "ws", authToken }` [lockfile.lua:M.create]
+- `lockfile.get_auth_token(port)` returns `false, nil, error` when it cannot give the token. The error is "Lock file does not exist" when nothing has that name or a folder has it, and "Lock file exists but cannot be read" with the system message when the file is there and `io.open` fails (mode 000, for example) [lockfile.lua:M.get_auth_token]
 
 ### Configuration and terminal
 
