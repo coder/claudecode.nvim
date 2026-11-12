@@ -782,19 +782,51 @@ local function setup_new_buffer(
   return new_win
 end
 
----Open diff using native Neovim functionality
----@param old_file_path string Path to the original file
----@param new_file_path string Path to the new file (used for naming)
----@param new_file_contents string Contents of the new file
----@param tab_name string Name for the diff tab/view
----@return table res Result with provider, tab_name, and success status
-function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
-  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
-  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
-  if not tmp_file then
-    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+---The buffer that has this name, if there is one. Neovim resolves symbolic links in the name of a buffer, so a path
+---through a linked folder (a cache folder that is a link) is found by its real path too. A path can also have other
+---separators than the one the plugin built (backslashes on Windows), and Windows ignores case.
+---@param name string
+---@return integer? buf
+local function buffer_named(name)
+  local function plain(path)
+    path = path:gsub("\\", "/")
+    return vim.fn.has("win32") == 1 and path:lower() or path
   end
+  local wanted = { [plain(name)] = true }
+  local ok, real = pcall(function()
+    return (vim.uv or vim.loop).fs_realpath(name)
+  end)
+  if ok and real then
+    wanted[plain(real)] = true
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if wanted[plain(vim.api.nvim_buf_get_name(buf))] then
+      return buf
+    end
+  end
+end
 
+---Remove what a legacy diff that failed halfway made of its own: the temp file, and the buffer that has the temp
+---file's name, unless the buffer has unsaved changes or a window shows it. This is all it does. It moves no focus,
+---turns no diff mode off and closes no window, so the windows that the diff had split stay, as they did before.
+---Neovim closes the windows that show a buffer when the buffer is wiped, so a buffer that a window shows stays, and a
+---window that an autocmd moved to the temp file stays with it.
+---Every step is protected, so an error in one cannot stop the next or replace the error that made the diff fail.
+---@param tmp_file string
+local function remove_failed_proposal(tmp_file)
+  local buf = buffer_named(tmp_file)
+  if buf and not vim.api.nvim_get_option_value("modified", { buf = buf }) and #vim.fn.win_findbuf(buf) == 0 then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+  pcall(cleanup_temp_file, tmp_file)
+end
+
+---Open the original and the proposal side by side, in diff mode. Raises when a step fails: a swap file for the
+---original (E325), a buffer that already has the proposal's name (E95), an autocmd that errors.
+---@param old_file_path string
+---@param new_file_path string
+---@param tmp_file string
+local function show_native_diff(old_file_path, new_file_path, tmp_file)
   local target_win = find_main_editor_window()
 
   if target_win then
@@ -847,6 +879,27 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     end,
     once = true,
   })
+end
+
+---Open diff using native Neovim functionality
+---@param old_file_path string Path to the original file
+---@param new_file_path string Path to the new file (used for naming)
+---@param new_file_contents string Contents of the new file
+---@param tab_name string Name for the diff tab/view
+---@return table res Result with provider, tab_name, and success status
+function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
+  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
+  if not tmp_file then
+    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+  end
+
+  local ok, failure = pcall(show_native_diff, old_file_path, new_file_path, tmp_file)
+  if not ok then
+    -- The cleanup autocmd of a finished diff is registered last, so nothing else would remove the temp file.
+    remove_failed_proposal(tmp_file)
+    error(failure, 0)
+  end
 
   return {
     provider = "native",
