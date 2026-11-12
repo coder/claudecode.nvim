@@ -1155,8 +1155,9 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
     [lua/claudecode/server/init.lua:M.\_handle_request].
   - The answers go out before the server closes each client with close code 1001. `stop` also tries to remove the lock
     file [lua/claudecode/init.lua:M.stop].
-  - SIGKILL, a crash, and `:qa!` from inside an autocmd that is not `nested` run no `VimLeavePre`. Claude gets no
-    answer, its socket closes with 1006, and the lock file stays.
+  - SIGKILL, a crash, and a `:qa!`, SIGTERM or SIGHUP that comes while an autocmd that is not `nested` runs (for
+    example one that waits in `vim.wait`) run no `VimLeavePre`. Claude gets no answer, its socket closes with 1006, and
+    the lock file stays. The signal case was probed on Neovim 0.8.0 and 0.12.3.
   - In an exit that runs `VimLeavePre`, the autocmd of `ClaudeCodeMCPDiff` rejects every diff with the status
     `pending` first and removes every diff after that [lua/claudecode/diff.lua:cleanup_at_exit]. A reject can remove
     its own diff at once. With the default `on_new_file_reject = "keep_empty"`, a new-file diff in the `vertical`
@@ -1166,7 +1167,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
     the `vertical`, `horizontal` and `unified` layouts with one new-file and one existing-file diff, for `:qa!` and
     SIGTERM). A call that the exit cuts off during its setup is not waiting: it gets its -32603 after the
     `ClaudeCodeDiffClosed` events, in every layout and with either `on_new_file_reject` (probed with a nested `:qa!`
-    in a `ClaudeCodeDiffOpened` handler, on Neovim 0.8.0 and 0.12.3). Every call still gets one answer before the
+    in a `ClaudeCodeDiffOpened` handler, on each Neovim version above). Every call still gets one answer before the
     server closes its client with 1001.
   - How the code runs the exit: [lua/claudecode/README.md](./lua/claudecode/README.md) and the Resource Cleanup
     section of [ARCHITECTURE.md](./ARCHITECTURE.md).
