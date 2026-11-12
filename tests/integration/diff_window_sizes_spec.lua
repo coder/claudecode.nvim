@@ -364,11 +364,6 @@ describe("openDiff window sizes", function()
     assert.equal(user_win, vim.api.nvim_get_current_win())
   end)
 
-  if vim.fn.has("nvim-0.9") ~= 1 then
-    pending("the unified layout needs Neovim 0.9")
-    return
-  end
-
   it("gives the windows of the user's own diff back their sizes after a unified diff", function()
     use_layout("unified")
     vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/b.txt"))
