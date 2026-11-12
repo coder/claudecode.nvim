@@ -3,8 +3,8 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 35b7af3572d13018
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua eea6b4bcdd655787
-block resolve_saved          46d5f3f732711fe1
+file lua/claudecode/diff.lua 0ec43e91b199531e
+block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
 block setup_blocking         b96c84e0961817fc
@@ -104,8 +104,8 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 6ebc375cd00f480f
-block inline_saved           53e3ff9a47388fc9
+file lua/claudecode/diff_inline.lua 38c961cbff293013
+block inline_saved           0516057dbab0688a
 block inline_rejected        3a098216eef4b774
 block setup_inline           6c384d6803b05800
 site lua/claudecode/diff_inline.lua: diff._cleanup_diff_state(tab_name, "setup failed") @ local function cleanup_unregistered_inline_setup(tab_name, partial)
