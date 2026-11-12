@@ -141,7 +141,7 @@ file lua/claudecode/lockfile.lua 2746b4c6e0b2b630
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua 4d6678af786fa69f
+file lua/claudecode/selection.lua 349b9bb73c6f64c5
 == lua/claudecode/server/client.lua
 file lua/claudecode/server/client.lua b8165df16f194471
 block create_client          24fa2a266b76e6ad
@@ -169,7 +169,7 @@ file lua/claudecode/server/tcp.lua 0cfb4b3ed4c138a1
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
-file lua/claudecode/terminal.lua 37d9b6e1f414123e
+file lua/claudecode/terminal.lua 4fed625dd5199b09
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua

@@ -22,10 +22,14 @@
 # VCN_NVIM=<path> makes launch run that nvim (default: the repo's mise nvim, then nvim on PATH).
 # VCN_RTP=<dir>[:<dir>...] adds plugin dirs to nvim's runtimepath, for example a snacks.nvim clone.
 # TMPDIR=<dir> makes launch put its state dir (vcn.XXXXXX) in <dir> instead of /tmp. <dir> must be an absolute path to an
-#              existing directory, and neither it nor a dir above it may be writable by others without the sticky bit.
+#              existing directory with no . or .. part, and neither it nor a dir above it may be writable by others without
+#              the sticky bit. Launch resolves <dir> once, so VCN_STATE has no symlink in it.
+#              No agent-tty call of this script reads it: att() runs every one with TMPDIR=$VCN_STATE/tmp.
 set -euo pipefail
 # Evidence holds buffer text and accepted diffs: keep every file this run writes private.
 umask 077
+# load records that the check of $VCN_STATE passed. A caller's environment must not be able to preset that.
+unset state_checked
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO="$(cd "$SKILL_DIR/../../.." && pwd)"
@@ -44,11 +48,42 @@ bin() {
 
 env_line() { printf '%s=%q\n' "$1" "$2"; }
 
+# load sources run.env, so $VCN_STATE must be a dir that only this user can write, in a place where no other user can swap
+# it. After that one check nothing in it can change under another user's hand. A stale VCN_STATE can name a dir or
+# symlink that another user made at a freed name.
+unsafe_state() {
+  local uid mode real
+  # A path with a symlink or a . or .. part could be pointed elsewhere by another user after the check, and source and rm -rf
+  # would follow it. realpath -z ends the path with a NUL, so read keeps a newline at its end, which a substitution would cut.
+  real=""
+  IFS= read -r -d "" real < <(realpath -ez -- "$1" 2>/dev/null) || true
+  if [[ $real != "$1" ]]; then
+    echo "it is not its own resolved path (${real:-it does not exist})"
+    return
+  fi
+  read -r uid mode < <(stat -c '%u %a' -- "$1" 2>/dev/null) || {
+    echo "it does not exist"
+    return
+  }
+  if ((uid != EUID)); then
+    echo "it is owned by another user"
+  elif (((8#$mode & 8#022) != 0)); then
+    echo "it is group- or world-writable"
+  else
+    unsafe_above "$1" "the state dir"
+  fi
+}
+
 load() {
+  local why
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
   [[ -f $VCN_STATE/run.env ]] || die "no run at $VCN_STATE (already cleaned up?)"
-  # run.env is sourced, so it must be a file this user made: a stale VCN_STATE can name a dir that another user made since.
-  [[ ! -L $VCN_STATE/run.env && -O $VCN_STATE/run.env ]] || die "refusing $VCN_STATE/run.env: it is a symlink or owned by another user"
+  # launch calls load many times, and a passed check stays true, so it runs once per VCN_STATE.
+  if [[ ${state_checked-} != "$VCN_STATE" ]]; then
+    why=$(unsafe_state "$VCN_STATE")
+    [[ -z $why ]] || die "refusing state dir $VCN_STATE: $why"
+    state_checked=$VCN_STATE
+  fi
   [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
@@ -60,10 +95,15 @@ load() {
 # its own: Node resets the signals that its parent ignores, so `trap ''` does not reach it, and a signal sent to launch's
 # process group would end the call. A process in another session never gets that signal. It runs the setsid that launch
 # resolved (SETSID_BIN): a bare setsid could be another one on PATH, or none.
+#
+# agent-tty makes its staging dirs (a WebM export, a screenshot, the browser profile) under TMPDIR and follows every symlink in
+# it each time. A caller's TMPDIR can hold a symlink that another user repoints after launch, and a command can run with
+# any TMPDIR, so agent-tty gets one of its own: $VCN_STATE/tmp, in the dir that load has checked.
 att() {
   local own=()
   [[ -z ${own_session-} ]] || own=("$SETSID_BIN" -w)
-  PATH="$NODE_DIR:$PATH" ${own[@]+"${own[@]}"} "$ATT_BIN" --home "$ATT_HOME" "$@"
+  [[ -d $VCN_STATE/tmp ]] || mkdir -m 700 -- "$VCN_STATE/tmp"
+  PATH="$NODE_DIR:$PATH" TMPDIR="$VCN_STATE/tmp" ${own[@]+"${own[@]}"} "$ATT_BIN" --home "$ATT_HOME" "$@"
 }
 
 # Callers pass --json. A failed command answers ok:false.
@@ -278,9 +318,9 @@ cmd_cleanup() {
   # destroy leaves this home in the per-user registry and its empty socket directory in /tmp/agent-tty.
   [[ -z ${ATT_BIN-} ]] || att home forget "$ATT_HOME" --json >/dev/null 2>&1 || true
   # agent-tty makes the socket directory (the first 8 hex digits of the sha256 of the real path of the home) at its first
-  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. A symlink in TMPDIR makes the
-  # real path differ from ATT_HOME.
-  rmdir "/tmp/agent-tty/$(printf %s "$(realpath -m -- "$ATT_HOME")" | sha256sum | cut -c1-8)" 2>/dev/null || true
+  # call, but ATT_SOCK names it only after `inspect`: a run stopped earlier has no ATT_SOCK. ATT_HOME is $VCN_STATE/att,
+  # and load refuses a VCN_STATE that is not its own real path, so the path needs no resolving here.
+  rmdir "/tmp/agent-tty/$(printf %s "$VCN_STATE/att" | sha256sum | cut -c1-8)" 2>/dev/null || true
   if [[ -n ${ATT_SOCK-} ]]; then rmdir "$(dirname "$ATT_SOCK")" 2>/dev/null || true; fi
   rm -rf "$VCN_STATE"
   echo "vcn: cleanup ok, no processes left; evidence kept in $OUT"
@@ -333,28 +373,48 @@ unsafe_dir() {
   fi
 }
 
-# Another user who can write a dir above <dir> can rename <dir> away after the checks. Walks the
-# dirs above it as given and as resolved. Prints the first one that is unsafe, or nothing. <what> names <dir> in the
-# message (default: the evidence dir).
+# Another user who can write a dir above <dir> can rename <dir> away after the checks.
 unsafe_above() {
-  local dir mode uid what=${2-the evidence dir}
-  for dir in "$(realpath -sm -- "$1/..")" "$(realpath -m -- "$1/..")"; do
-    while :; do
-      if [[ -e $dir || -L $dir ]]; then
-        read -r mode uid < <(stat -c '%a %u' -- "$dir")
-        if ((uid != 0 && uid != EUID)); then
-          echo "$dir, above $what, is owned by another user"
-          return
-        fi
-        if [[ ! -L $dir ]] && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
-          echo "$dir, above $what, is writable by others and not sticky"
-          return
-        fi
-      fi
-      [[ $dir != / ]] || break
-      dir=$(dirname -- "$dir")
-    done
+  local logical="" resolved="" why
+  IFS= read -r -d "" logical < <(realpath -smz -- "$1/..") || true
+  IFS= read -r -d "" resolved < <(realpath -mz -- "$1/..") || true
+  why=$(unsafe_walk "$logical" "${2-the evidence dir}")
+  if [[ -z $why && $resolved != "$logical" ]]; then
+    why=$(unsafe_walk "$resolved" "${2-the evidence dir}")
+  fi
+  [[ -z $why ]] || echo "$why"
+}
+
+# stat prints one record per dir, mode, owner and type and no name, so no path is ever read back from a line of text:
+# a name with a trailing space, a tab or a newline would be cut, and a twin symlink with the shorter name tested in its
+# place. The type is the raw mode in hex (%f): GNU stat translates the label that %F prints.
+unsafe_walk() {
+  local dir=$1 what=$2 mode uid raw rec i=0 dirs=() existing=()
+  while :; do
+    dirs+=("$dir")
+    [[ $dir != / ]] || break
+    dir=${dir%/*}
+    dir=${dir:-/}
   done
+  for dir in "${dirs[@]}"; do
+    if [[ -e $dir || -L $dir ]]; then existing+=("$dir"); fi
+  done
+  while IFS= read -r rec; do
+    read -r mode uid raw <<<"$rec"
+    dir=${existing[i]-}
+    i=$((i + 1))
+    if ((uid != 0 && uid != EUID)); then
+      echo "$dir, above $what, is owned by another user"
+      return
+    fi
+    if (((16#$raw & 16#f000) != 16#a000)) && (((8#$mode & 8#022) != 0 && (8#$mode & 8#1000) == 0)); then
+      echo "$dir, above $what, is writable by others and not sticky"
+      return
+    fi
+  done < <(stat -c '%a %u %f' -- "${existing[@]}" 2>/dev/null)
+  if ((i != ${#existing[@]})); then
+    echo "$1, above $what, could not be read in full"
+  fi
 }
 
 # The fast cleanup runs for $signaled, not for status 143: a child that someone else killed with SIGTERM also gives 143.
@@ -417,7 +477,7 @@ cmd_disconnect() {
 cmd_launch() {
   # The launch client is the unnamed one, whatever VCN_CLIENT the caller set.
   local VCN_CLIENT=""
-  local nvim_exe att_cands node_exe state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
+  local nvim_exe att_cands node_exe tmpdir given state out="" guard why sid tui sock lock="" f i dir missing made mode nvim_08=0
   if [[ -n ${VCN_NVIM-} ]]; then
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
@@ -450,12 +510,23 @@ cmd_launch() {
   if [[ -n $out && -e $out && ! -d $out ]]; then
     die "$out is not a directory; pick a fresh VERIFY_OUT"
   fi
-  [[ ${TMPDIR:-/tmp} == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
-  # A dir that is missing now could be made by another user after the check below and before mktemp.
-  [[ -d ${TMPDIR:-/tmp} ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
+  tmpdir=${TMPDIR:-/tmp}
+  [[ $tmpdir == /* ]] || die "TMPDIR=${TMPDIR-} is not an absolute path"
+  # As for VERIFY_OUT, a path that has a . or .. part is refused, not resolved: TMPDIR must already be the dir it names.
+  [[ /$tmpdir/ != */./* && /$tmpdir/ != */../* ]] || die "TMPDIR=$tmpdir has a . or .. part"
+  # mktemp gets the resolved path, so the check below and mktemp see the same path. A dir that is missing now could be made by
+  # another user after the check and before mktemp.
+  given=""
+  IFS= read -r -d "" given < <(realpath -smz -- "$tmpdir" 2>/dev/null) || given=""
+  IFS= read -r -d "" tmpdir < <(realpath -ez -- "$tmpdir" 2>/dev/null) || tmpdir=""
+  [[ -d $tmpdir ]] || die "TMPDIR=${TMPDIR:-/tmp} is not an existing directory"
   # Another user who can write TMPDIR or a dir above it could swap the state dir for one with a run.env of their own, which
-  # cleanup and every other command source. TMPDIR gets the same rule as the evidence dir.
-  why=$(unsafe_above "${TMPDIR:-/tmp}/vcn" "the state dir")
+  # cleanup and every other command source.
+  why=$(unsafe_walk "$tmpdir" "the state dir")
+  [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
+  # The walk of the path as given is the rule that main applied, so a TMPDIR that main refused stays refused. Nothing reads the
+  # symlinks of that path after launch has resolved them (agent-tty gets $VCN_STATE/tmp), so it no longer guards a later call.
+  why=$(unsafe_walk "$given" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
@@ -464,7 +535,7 @@ cmd_launch() {
   trap 'signaled=1' TERM INT HUP
   state=$(
     trap '' TERM INT HUP
-    exec mktemp -d "${TMPDIR:-/tmp}/vcn.XXXXXX"
+    exec mktemp -d "${tmpdir%/}/vcn.XXXXXX"
   )
   trap 'trap "" TERM INT HUP; rm -rf -- "$state"; exit 143' TERM INT HUP
   [[ -z $signaled ]] || {
@@ -523,7 +594,7 @@ cmd_launch() {
     ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
     die "a new file in $out gets mode $mode, not 600; remove its default ACL (setfacl -k) or set VERIFY_OUT to another dir"
   fi
-  mkdir -p "$state"/{home,claude,work}
+  mkdir -p "$state"/{home,claude,work,tmp}
   printf 'alpha\nbeta\ngamma\n' >"$state/work/hello.txt"
   printf 'one\ntwo\nthree\nfour\n' >"$state/work/other.txt"
   : >"$out/ws-out.jsonl"
@@ -539,6 +610,15 @@ cmd_launch() {
     env_line JQ_BIN "$JQ_BIN"
   } >"$state/run.env"
   export VCN_STATE=$state
+  # load refuses a state dir that is not its own resolved path or that others can reach, before launch has a teardown to run,
+  # and launch_failed would only call load again. A refusal here removes what this launch made.
+  why=$(unsafe_state "$state")
+  if [[ -n $why ]]; then
+    rm -f -- "$out/ws-in.jsonl" "$out/ws-out.jsonl"
+    rm -rf -- "$state"
+    ((${#made[@]} == 0)) || rmdir -- "${made[@]}" || true
+    die "refusing state dir $state: $why"
+  fi
   load
   trap launch_failed EXIT
   # A signal ends bash with $? still 0 in the EXIT trap, so this trap acts on it: it ignores the signals, drops the
