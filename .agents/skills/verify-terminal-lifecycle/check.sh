@@ -83,7 +83,7 @@ FACTS=(NativeMarkBeforeTermopen OwnedUnstartedIsNotEnded OwnedLiveNeedsMark Owne
   NativeAdoptsHiddenTerminal NativeShowsAdoptedHidden NativeExitClearsMark NativeAdoptedExitHandled
   NativeExitForgetsOwnJobOnly NativeExitKeepsLastWindow NativeExitChecksWindowBuffer NativeEntriesForgetEndedJob
   NativeRescansSwappedWindow NativeCloseAdopts NativeCloseForgetsFirst NativeCloseClearsMark NativeKeepsHiddenJob
-  NativeHideKeepsLastWindow NativeFailCleansUp NativeStartSurvivesClosedSplit NativeOpenSkipsDuringStart NativeStopsSnacksClaude
+  NativeHideKeepsLastWindow NativeFailCleansUp NativeStartSurvivesClosedSplit NativeOpenSkipsDuringStart NativeRunsDeferredClose NativeStopsSnacksClaude
   SnacksOpenSkipsDuringStart
   SnacksMarksStartedTerminal SnacksEntriesAdopt SnacksEntriesForgetEndedJob SnacksCloseAdopts SnacksExitForgets
   SnacksForgetChecksInstance
@@ -199,6 +199,14 @@ native_open_skips_during_start() {
     in_order '^  if starting then$' '^  starting = true$' 'pcall\(start_terminal, ' '^  starting = false$' <<<"$open_terminal"
 }
 fact[NativeOpenSkipsDuringStart]=$(as_bool native_open_skips_during_start)
+# A close that an autocmd of the start asked for sets close_after_start (M.close, not read here: without it the close would wait
+# inside termopen, and the model has no nested wait). open_terminal reads the request after the start returns, clears it, and
+# runs close_terminal, also when the start raised.
+native_runs_deferred_close() {
+  in_order '^  starting = false$' '^  local close_requested = close_after_start$' '^  close_after_start = false$' \
+    '^  if close_requested then$' 'pcall\(close_terminal\)' <<<"$open_terminal"
+}
+fact[NativeRunsDeferredClose]=$(as_bool native_runs_deferred_close)
 fact[NativeFailCleansUp]=$(as_bool in_order '^  if failure then$' '^      vim\.api\.nvim_win_close\(new_winid, true\)$' \
   '^      vim\.api\.nvim_buf_delete\(new_bufnr, \{ force = true \}\)$' '^    cleanup_state\(\)$' '^    return$' \
   '^  jobid = termopen_result$' <<<"$start_terminal")
@@ -313,6 +321,7 @@ EXPECT=(
   [NativeFailCleansUp]=FailedStartLeavesNoWindow
   [NativeStartSurvivesClosedSplit]=HideNoError
   [NativeOpenSkipsDuringStart]=AtMostOneClaude
+  [NativeRunsDeferredClose]=CloseStopsClaude
   [NativeStopsSnacksClaude]=AtMostOneClaude
   [SnacksOpenSkipsDuringStart]=AtMostOneClaude
   [SnacksMarksStartedTerminal]=AtMostOneClaude

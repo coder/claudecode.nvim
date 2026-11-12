@@ -169,7 +169,7 @@ file lua/claudecode/terminal.lua 4fed625dd5199b09
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 1757e6f0e35cea4f
+file lua/claudecode/terminal/native.lua aaeff4f2b94bc6a7
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/owned.lua

@@ -57,6 +57,7 @@ CONSTANTS
   NativeFailCleansUp,            \* native.lua open_terminal closes the split, deletes the buffer, clears state
   NativeStartSurvivesClosedSplit, \* native.lua open_terminal goes on, with Claude hidden, when an autocmd of the start closed its split
   NativeOpenSkipsDuringStart,    \* native.lua open_terminal returns while a start runs: an entry that an autocmd of the start calls starts none
+  NativeRunsDeferredClose,       \* native.lua open_terminal runs the close that an autocmd of the start asked for, when the start returns
   NativeStopsSnacksClaude,       \* native.lua stops the snacks provider's Claude before a start and in close
   SnacksOpenSkipsDuringStart,    \* snacks.lua M.open returns while its own Snacks.terminal.open runs
   SnacksMarksStartedTerminal,    \* snacks.lua M.open marks the buffer of a started terminal
@@ -75,14 +76,14 @@ CONSTANTS
 None == "none"
 Gens == {"cur", "old"}
 Items == [k : {"exit", "adopted", "snacksClose"}, t : Terms, g : Gens]
-IdlePc == [op |-> "idle", t |-> None, p |-> None, re |-> FALSE]
+IdlePc == [op |-> "idle", t |-> None, p |-> None, re |-> FALSE, cl |-> FALSE]
 
 VARIABLES
   cfg,       \* setup's terminal options: provider, auto_close, and your 'hidden' option
   loadable,  \* require("snacks") succeeds now
   seen,      \* what snacks.lua read from require("snacks") when the current module copy loaded it
   reloaded,  \* the one modeled reload happened
-  pc,        \* the Lua call in progress: idle, a start ("begin", "split", "started"), or a close in vim.wait
+  pc,        \* the Lua call in progress: idle, a start ("begin", "split", "started"), or a close in vim.wait; cl: a close was asked for during the start
   asked,     \* ghost: the Claudes that ran when the :ClaudeCodeClose in progress began
   closed,    \* ghost: terminals a close began on
   job,       \* per terminal: "none" (before termopen), "running", "exited", "failed"
@@ -395,7 +396,7 @@ TypeOK ==
   /\ cfg \in [provider : Providers, autoClose : BOOLEAN, hidden : BOOLEAN]
   /\ loadable \in BOOLEAN /\ seen \in BOOLEAN /\ reloaded \in BOOLEAN
   /\ pc \in [op : {"idle", "begin", "split", "started", "waiting"}, t : Terms \cup {None},
-             p : {None, "native", "snacks"}, re : BOOLEAN]
+             p : {None, "native", "snacks"}, re : BOOLEAN, cl : BOOLEAN]
   /\ asked \subseteq Terms /\ closed \subseteq Terms
   /\ job \in [Terms -> {"none", "running", "exited", "failed"}]
   /\ by \in [Terms -> {None, "native", "snacks"}]
@@ -439,9 +440,9 @@ YouOpen(kind) ==
        ELSE /\ HasFresh(o.w)
             /\ IF Prov = "native"
                THEN /\ SetW(o.w)        \* the vsplit and the new buffer come in SplitRuns; autocmds can run before
-                    /\ pc' = [op |-> "begin", t |-> None, p |-> Prov, re |-> FALSE]
+                    /\ pc' = [op |-> "begin", t |-> None, p |-> Prov, re |-> FALSE, cl |-> FALSE]
                ELSE /\ SetW(Split(o.w, Prov, FreshT(o.w)))
-                    /\ pc' = [op |-> "split", t |-> FreshT(o.w), p |-> Prov, re |-> FALSE]
+                    /\ pc' = [op |-> "split", t |-> FreshT(o.w), p |-> Prov, re |-> FALSE, cl |-> FALSE]
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
 (* An autocmd calls open or a toggle while a start runs: WinLeave, WinNew,  *)
@@ -455,12 +456,22 @@ AutocmdCalls ==
   /\ pc' = [pc EXCEPT !.re = TRUE]
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
+(* An autocmd of the start calls native.lua M.close. A close waits for the  *)
+(* job to exit, and that wait cannot run inside termopen, so while a start   *)
+(* runs it only records the request: `if starting then close_after_start =   *)
+(* true; return end`. The start runs the close when it returns.             *)
+CloseDuringStart ==
+  /\ AutocmdReenters /\ NativeStarting /\ ~pc.cl
+  /\ pc' = [pc EXCEPT !.cl = TRUE]
+  /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed, job, by, gen, buf, win, swapped, mark, adoptedBy, others,
+                 ntrack, oldTrack, oldWin, strack, queue, bad>>
+
 (* native.lua start_terminal: the vsplit has run, nvim_create_buf made the  *)
 (* buffer, and the mark is set (NativeMarkBeforeTermopen).                  *)
 SplitRuns ==
   /\ pc.op = "begin" /\ HasFresh(W)
   /\ SetW(Split(W, "native", FreshT(W)))
-  /\ pc' = [op |-> "split", t |-> FreshT(W), p |-> "native", re |-> pc.re]
+  /\ pc' = [op |-> "split", t |-> FreshT(W), p |-> "native", re |-> pc.re, cl |-> pc.cl]
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
 (* native.lua open_terminal pcall(vim.fn.termopen); in snacks, termopen in  *)
@@ -471,11 +482,29 @@ TermopenRuns ==
      \/ SetW(Failed(W, pc.p, pc.t)) /\ pc' = IdlePc
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
+(* The start returns. When an autocmd asked for a close, open_terminal runs  *)
+(* it now, like a close you type (YouClose). Without NativeRunsDeferredClose *)
+(* the request is lost, and the Claude that the start made runs on.          *)
+(* A start whose termopen failed has nothing to stop, so TermopenRuns drops  *)
+(* the request.                                                              *)
 StartReturns ==
   /\ pc.op = "started"
-  /\ SetW(Finish(W, pc.p, pc.t))
-  /\ pc' = IdlePc
-  /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
+  /\ LET w1 == Finish(W, pc.p, pc.t)
+         run == {a \in Terms : w1.job[a] = "running"}
+         c == CloseBegin(w1, pc.p)
+         e == IF c.t = None THEN c.w ELSE CloseEnd(c.w, c.t)
+     IN IF ~pc.cl
+        THEN /\ SetW(w1) /\ pc' = IdlePc /\ UNCHANGED <<asked, closed>>
+        ELSE IF ~NativeRunsDeferredClose
+        THEN /\ SetW(IF run # {} THEN Flag(w1, "survived") ELSE w1) /\ pc' = IdlePc /\ UNCHANGED <<asked, closed>>
+        ELSE IF c.wait
+        THEN /\ SetW(c.w)
+             /\ pc' = [op |-> "waiting", t |-> c.t, p |-> pc.p, re |-> FALSE, cl |-> FALSE]
+             /\ asked' = run /\ closed' = closed \cup {c.t}
+        ELSE /\ SetW(IF \E a \in run : e.job[a] = "running" THEN Flag(e, "survived") ELSE e)
+             /\ closed' = IF c.t = None THEN closed ELSE closed \cup {c.t}
+             /\ pc' = IdlePc /\ UNCHANGED asked
+  /\ UNCHANGED <<cfg, loadable, seen, reloaded>>
 
 (* :ClaudeCodeClose -> terminal.lua M.close -> provider close. A running   *)
 (* job makes it wait in vim.wait; an exited one is wiped at once.          *)
@@ -485,7 +514,7 @@ YouClose ==
          run == {a \in Terms : job[a] = "running"}
      IN IF c.wait
         THEN /\ SetW(c.w)
-             /\ pc' = [op |-> "waiting", t |-> c.t, p |-> Prov, re |-> FALSE]
+             /\ pc' = [op |-> "waiting", t |-> c.t, p |-> Prov, re |-> FALSE, cl |-> FALSE]
              /\ asked' = run /\ closed' = closed \cup {c.t}
         ELSE LET e == IF c.t = None THEN c.w ELSE CloseEnd(c.w, c.t)
              IN /\ SetW(IF \E a \in run : e.job[a] = "running" THEN Flag(e, "survived") ELSE e)
@@ -569,6 +598,7 @@ PluginReloads ==
 Next ==
   \/ \E kind \in {"open", "toggle"} : YouOpen(kind)
   \/ AutocmdCalls
+  \/ CloseDuringStart
   \/ SplitRuns
   \/ TermopenRuns
   \/ StartReturns

@@ -106,6 +106,8 @@ export const step = (action: string, from: any, to: any) => {
       return flagged(from, to, "hideError")
         ? "an autocmd calls a toggle during the start (it hides the new window)"
         : "an autocmd calls open or a toggle during the start";
+    case "CloseDuringStart":
+      return "an autocmd calls close during the start (it runs when the start returns)";
     case "SplitRuns":
       return "the start makes its split and its buffer";
     case "TermopenRuns":
@@ -113,9 +115,13 @@ export const step = (action: string, from: any, to: any) => {
         ? "termopen starts Claude"
         : "termopen fails";
     case "StartReturns":
-      return flagged(from, to, "hideError")
-        ? "the start returns and raises Invalid window id (its split is gone)"
-        : "the start returns";
+      if (flagged(from, to, "hideError"))
+        return "the start returns and raises Invalid window id (its split is gone)";
+      if (from.pc.cl)
+        return to.pc.op === "waiting"
+          ? "the start returns and runs the close that an autocmd asked for (it waits)"
+          : "the start returns and runs the close that an autocmd asked for";
+      return "the start returns";
     case "YouClose":
       return to.pc.op === "waiting"
         ? "you run :ClaudeCodeClose (it waits)"
