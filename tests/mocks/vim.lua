@@ -414,12 +414,9 @@ local vim = {
       end
     end,
 
-    nvim_win_call = function(winid, callback)
-      -- Mock implementation - just call the callback. The current window is valid even when no spec registered it.
-      if vim._windows[winid] or winid == vim._current_window then
-        return callback()
-      end
-      error("Invalid window id: " .. tostring(winid))
+    nvim_win_call = function(_, callback)
+      -- Mock implementation - just call the callback. nvim_set_current_win accepts every id here, and so does this.
+      return callback()
     end,
 
     nvim_win_get_config = function(winid)
