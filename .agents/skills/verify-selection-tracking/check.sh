@@ -25,6 +25,7 @@ covered_block demote_text "$SEL" '^local function demote_if_selection_text_chang
 covered_block holds_selection "$SEL" '^local function holds_selection_of\('
 covered_block entry_of "$SEL" '^local function visual_entry_of\('
 covered_block note_edit "$SEL" '^local function note_visual_edit\('
+covered_block check_edits "$SEL" '^local function check_visual_edits\('
 covered_block watch_buffer "$SEL" '^local function watch_selection_buffer\('
 covered_block record_read "$SEL" '^local function record_selection_read\('
 covered_block reconcile "$SEL" '^local function reconcile_held_selection\('
@@ -206,13 +207,24 @@ read_records_tick() {
 fact[ReadRecordsTick]=$(as_bool read_records_tick)
 # record_selection_read listens to the buffer it records, and the listener schedules the check when the buffer changes
 # (a reload or a plugin's edit: TextChanged fires only for the current buffer).
-# on_lines and on_reload each call check_soon, at any indentation: the code before #524 called it straight from on_lines, and
-# since then both calls sit inside `if holds_selection_of(buf) then`.
+# on_lines and on_reload call check_soon while the buffer holds the selection. Since #524 on_lines does it in the branch of
+# `if holds_selection_of(buf) then` (its `elseif not entry` branch detaches the listener, and a check_soon there would
+# check nothing it holds), and before #524 it did it after the `if not holds_selection_of(buf) then ... return true end` that
+# detaches.
 listens_to_selection_buffer() {
+  # Each listener is read inside its own body (up to the next `    end,`), so a check_soon that moved into on_detach does
+  # not count for on_reload.
+  local on_lines on_reload
+  on_lines=$(sed -n '/^    on_lines = function(_, buf)$/,/^    end,$/p' <<<"$watch_buffer")
+  on_reload=$(sed -n '/^    on_reload = function(_, buf)$/,/^    end,$/p' <<<"$watch_buffer")
   in_order '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
     in_order '^  local function check_soon\(\)$' 'vim\.schedule\(function\(\)' '^        demote_if_selection_text_changed\(\)$' \
-      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' '^ *check_soon\(\)$' \
-      '^    on_reload = function\(_, buf\)$' '^ *check_soon\(\)$' <<<"$watch_buffer"
+      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' <<<"$watch_buffer" &&
+    {
+      in_order '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' '^      elseif not entry then$' <<<"$on_lines" ||
+        in_order '^      if not holds_selection_of\(buf\) then$' '^      check_soon\(\)$' <<<"$on_lines"
+    } &&
+    in_order '^ *check_soon\(\)$' <<<"$on_reload"
 }
 fact[ListensToSelectionBuffer]=$(as_bool listens_to_selection_buffer)
 # The check runs in the Claude terminal for a selection of another buffer that is not a Claude terminal, clears the held
@@ -242,11 +254,15 @@ listener_notes_visual_edit() {
     in_order '^  entry\.unchecked_edits = entry\.unchecked_edits \+ 1$' <<<"$note_edit"
 }
 fact[ListenerNotesVisualEdit]=$(as_bool listener_notes_visual_edit)
-# note_visual_edit schedules a check that takes the edit back and marks the entry consumed only when visual mode is over:
-# a plugin's edit leaves the selection on the screen and does not consume it.
+# check_visual_edits takes the counted edits back and marks the entry consumed only when visual mode is over: a plugin's edit
+# leaves the selection on the screen and does not consume it. note_visual_edit runs that check from vim.schedule and from a
+# vim.on_key listener, whichever comes first, so it runs before the flush of the next Esc also when a mapping, a macro or
+# a callback that is already running gets the key in first. Without either trigger an edit that nobody checked reaches the flush.
 visual_check_spares_plugin_edit() {
-  in_order '^  vim\.schedule\(function\(\)$' '^    entry\.unchecked_edits = entry\.unchecked_edits - 1$' \
-    '^    if not is_visual_mode\(vim\.api\.nvim_get_mode\(\)\.mode\) then$' '^      entry\.consumed = true$' <<<"$note_edit"
+  in_order '^  entry\.unchecked_edits = 0$' '^  if not is_visual_mode\(vim\.api\.nvim_get_mode\(\)\.mode\) then$' \
+    '^    entry\.consumed = true$' <<<"$check_edits" &&
+    in_order '^  vim\.schedule\(function\(\)$' '^    check_visual_edits\(entry\)$' '^  vim\.on_key\(function\(\)$' \
+      '^    check_visual_edits\(entry\)$' <<<"$note_edit"
 }
 fact[VisualCheckSparesPluginEdit]=$(as_bool visual_check_spares_plugin_edit)
 # Neither on_mode_changed nor the flush reads a changedtick (comments apart). The code before #524 compared the changedtick

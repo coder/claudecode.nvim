@@ -112,10 +112,20 @@ local function check_server(claudecode)
   if vim.fn.filereadable(lock_path) == 1 then
     ok("Lock file present: " .. lock_path)
   else
-    error_("Lock file missing: " .. lock_path, {
-      "Claude discovers this Neovim instance through the lock file",
-      "Restart the integration with :ClaudeCodeStop and :ClaudeCodeStart",
-    })
+    -- `filereadable` is 0 for a missing file, a folder, and a file that exists but cannot be read (mode 000). Only
+    -- the first two are missing.
+    local stat = vim.loop.fs_stat(lock_path)
+    if stat and stat.type ~= "directory" then
+      error_("Lock file exists but cannot be read: " .. lock_path, {
+        "Claude discovers this Neovim instance through the lock file, and it must be able to read it",
+        "Make the file readable by you (mode 600), or restart the integration with :ClaudeCodeStop and :ClaudeCodeStart",
+      })
+    else
+      error_("Lock file missing: " .. lock_path, {
+        "Claude discovers this Neovim instance through the lock file",
+        "Restart the integration with :ClaudeCodeStop and :ClaudeCodeStart",
+      })
+    end
   end
 
   if claudecode.is_claude_connected() then
