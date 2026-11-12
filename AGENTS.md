@@ -26,13 +26,20 @@
 - Formatting: StyLua configured in `.stylua.toml` (require-sort enabled).
 - Linting: `luacheck` with settings in `.luacheckrc` (uses `luajit+busted` std).
 - Modules/files: lower_snake_case; return a module table `M` with documented functions (EmmyLua annotations encouraged).
-- Avoid one-letter names; prefer explicit, testable functions.
+- Avoid one-letter names.
 - `openFile` write protection: rely only on buffer state that Neovim exposes, and on `new_file_buffers` (`lua/claudecode/tools/open_file.lua`), the one Lua record that stands in for an internal flag (BF_NEW). Do not add Lua-side tracking for another internal buffer flag Neovim has no API for, such as BF_NOTEDITED or BF_READERR. State that gap in `lua/claudecode/tools/README.md` instead.
 - Claude terminal float and diffs: the plugin does not store who hid the float, and it does not show the float again after a diff (a diff in its own tab still calls `ensure_visible` in its original tab when it closes, as before). A diff hides the float only after a live check that a window of the terminal is a float in the diff's own tab (`hide_terminal_float_for_diff` in `lua/claudecode/diff.lua`). The user reopens it with `:ClaudeCode` or `:ClaudeCodeFocus`. Do not add a record of which diff hid the float or a step that restores it: such a record went stale when the user moved or closed the float.
 
 ## Code Shape
 
-- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Deleting a buffer can close each window that shows it, so the same rule holds for those windows. Close a window that the plugin made without `force`: Neovim then refuses when the close would lose a modified buffer. Neovim does not refuse for a `buftype=nofile` buffer, so a close without `force` is still not safe for a window that the plugin cannot show it made. Issue #528 has the cases.
+- Interfaces: put a function on a module table `M` only when another module, the documented Lua API or Neovim calls it. Everything else is `local`. Tests drive behavior through that interface. Do not add `M._name` hooks for tests.
+- Modules: prefer few modules that each hide a lot. Merge a helper module into its only consumer. Do not add a module for one caller.
+- Validation: check data once, where it comes in: the options of `setup(opts)` in `config.apply` (`config.lua`), user command arguments, MCP messages at the socket and at the tool handler, files, user callbacks, other plugins, and Neovim state at the start of an async callback. Below that point, use the data without re-checking it.
+- One-off logic: write logic that has one call site where it is used. Keep a single-use function only when it is recursive, when it is a named algorithm (SHA-1, base64), or when inlining it turns early returns into flags or adds two levels of nesting.
+- `pcall`: use it only where the callee can fail while the plugin's own code and state are correct: optional plugins, user callbacks, data from the socket or a file, file and process IO, and Neovim calls that can throw on valid input, above all in cleanup paths.
+- Fail-closed checks on the auth token path stay, even where today's code cannot reach them.
+- The Busted suite runs on a mock `vim`, which does not throw where Neovim does. Before you remove a `pcall` or a guard around a Neovim call, probe the call in real Neovim.
+- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Deleting a buffer can close each window that shows it, so the same rule holds for those windows. Close without `force` a window that the plugin made: Neovim then refuses when the close would lose a modified buffer. Neovim does not refuse for a `buftype=nofile` buffer, so a close without `force` is still not safe for a window that the plugin cannot show it made. Today's `diff.lua` does not follow this rule yet, and a behavior-preserving refactor leaves that code as it is. Issue #528 has the cases.
 
 ## Testing Guidelines
 
