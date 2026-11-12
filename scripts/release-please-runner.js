@@ -727,7 +727,8 @@ function assertChangelogIsFormatted(content) {
         "A bare CR does that: Communique does not end a line at it, but the update does. " +
         `Run \`mise run format\`, then review its diff of ${CHANGELOG_FILE}. ` +
         "Prettier can change what an entry says, for example around an identifier with underscores. " +
-        "Fix such a line by hand, for example by putting the identifier in backticks.",
+        "Fix such a line by hand, for example by putting the identifier in backticks. " +
+        "Then run `mise run format` again until it changes nothing, and review its diff again.",
     );
   }
 }
