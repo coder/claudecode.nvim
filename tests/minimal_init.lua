@@ -8,6 +8,27 @@ if path:sub(1, #stub_dir + 1) ~= stub_dir .. ":" then
   vim.env.PATH = stub_dir .. (path ~= "" and ":" .. path or "")
 end
 
+-- Neovim forks a pty job's child with its own signal handlers and resets them a few system calls after the fork.
+-- A hangup in that window runs libuv's handler in the child. That handler writes into the signal pipe that the
+-- child shares with Neovim, so Neovim reads a SIGHUP of its own and exits ("Caught deadly signal 'SIGHUP'").
+-- Closing a job soon after termopen (a spec's after_each, or the quit that ends the file) can hit it, and under host
+-- load a spec died that way. So termopen returns only once its child has run exec, and the child then has no
+-- handler of Neovim's. This needs /proc (Linux). Without it the window stays open.
+local self_exe = vim.loop.fs_readlink("/proc/self/exe")
+local real_termopen = vim.fn.termopen
+vim.fn.termopen = function(...)
+  local job = real_termopen(...)
+  local ok, pid = pcall(vim.fn.jobpid, job)
+  if self_exe and ok then
+    local deadline = vim.loop.hrtime() + 10e9
+    while vim.loop.fs_readlink("/proc/" .. pid .. "/exe") == self_exe do
+      assert(vim.loop.hrtime() < deadline, "the terminal job's child did not run exec within 10 s")
+      vim.loop.sleep(1)
+    end
+  end
+  return job
+end
+
 -- Set up package path
 local package_root = vim.fn.stdpath("data") .. "/site/pack/vendor/start/"
 local install_path = package_root .. "plenary.nvim"

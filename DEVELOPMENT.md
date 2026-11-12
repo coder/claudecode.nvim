@@ -110,6 +110,8 @@ Register table-driven tests from an array with `ipairs`, not from `pairs()` over
 
 A test never starts the Claude CLI that is installed on the host. `tests/bin/claude` is a stub that idles, and its directory is first on `PATH` in every Neovim that starts with `tests/minimal_init.lua` (the integration runner, `scripts/run_integration_tests_individually.sh`) and in busted (`tests/helpers/busted_helper.lua` sets it). A bare `claude` in a spec, or in the plugin code that a spec reaches, runs the stub. `tests/unit/claude_stub_spec.lua` and `tests/integration/claude_stub_spec.lua` fail when `claude` resolves to anything else. They do not cover a spec that sets a `terminal_cmd` with an absolute path to the real CLI, so use the bare name or a stub of your own.
 
+`tests/minimal_init.lua` wraps `vim.fn.termopen` so that it returns only after the job's child has run exec. Neovim forks the child with its own signal handlers and resets them a few system calls later. A hangup that reaches the child before that, such as a spec that closes the job at once, makes Neovim exit with `Caught deadly signal 'SIGHUP'`. The wrapper reads `/proc`, so it works on Linux only, and it does not cover a job that a spec starts with `jobstart` or through Snacks. `tests/integration/pty_child_exec_spec.lua` fails when the wrapper is missing.
+
 To check that a change starts no real `claude`, run the integration runner (or `busted tests/unit`, for the unit specs) under `strace`, and count the `execve` calls whose program path ends in `/claude` and is outside `tests/bin`:
 
 ```sh
