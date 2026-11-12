@@ -8,7 +8,7 @@ site lua/claudecode/config.lua: queue_timeout = 5000, -- Unused, kept so that co
 site lua/claudecode/config.lua: type(config.connection_timeout) == "number" and config.connection_timeout > 0, @ function M.validate(config)
 site lua/claudecode/config.lua: type(config.connection_wait_delay) == "number" and config.connection_wait_delay >= 0, @ function M.validate(config)
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua fc28de832b4056df
+file lua/claudecode/init.lua db4b58226c39fd20
 block is_connected           21c035c32b5cee13
 block until_ready            cd0663523297ab20
 block start_timer            067cb9333a8fbff9
@@ -20,7 +20,7 @@ block schedule               d927c59c32177eac
 block queue_mention          22183b749ca8f79a
 block process_queue          816e89295bbfc620
 block send_at_mention        508de16084cc702a
-block broadcast_mention      f270a13f4fab1104
+block broadcast_mention      566bf6e1247e6209
 block main_stop              d754def6d5865650
 site lua/claudecode/init.lua: M.state.mention_queue = M.state.mention_queue or {} @ local function mention_queue()
 site lua/claudecode/init.lua: M.state.mention_queue = {} @ local function clear_mention_queue()
@@ -39,7 +39,7 @@ site lua/claudecode/init.lua: if #mention_queue() == 0 then @ schedule_mention_f
 site lua/claudecode/init.lua: if #mention_queue() > 0 then @ local function flush_mention_queue()
 site lua/claudecode/init.lua: if M.is_claude_connected() then @ function M.send_at_mention(file_path, start_line, end_line, context)
 site lua/claudecode/init.lua: if M.is_claude_connected() then @ local function expire_mentions()
-site lua/claudecode/init.lua: if immediate and #mention_queue() == 0 then @ function M._broadcast_at_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: if immediate and #mention_queue() == 0 and (ms_until_a_client_is_ready() or 0) == 0 then @ function M._broadcast_at_mention(file_path, start_line, end_line)
 site lua/claudecode/init.lua: if info.state == "connected" and info.handshake_complete == true and info.connected_at then @ local function ms_until_a_client_is_ready()
 site lua/claudecode/init.lua: if info.state == "connected" and info.handshake_complete == true then @ function M.is_claude_connected()
 site lua/claudecode/init.lua: if ms_until_a_client_is_ready() == 0 then @ local function expire_mentions()
