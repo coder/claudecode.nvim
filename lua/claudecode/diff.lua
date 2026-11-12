@@ -2047,12 +2047,19 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
   return user_action_result
 end
 
----Resolve each diff whose status is `pending` as rejected, oldest first, each under `pcall`, so one diff that fails to
----reject cannot leave the others waiting. A diff with another status is skipped. A reject can remove its own diff
----(`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a diff whose openDiff setup is
----still running stays in `setup_result` (see `open_diff_blocking`) and sends nothing: the call has no response sender
----yet, and the server's `stop` sends its response.
-local function reject_pending_diffs()
+---Runs at VimLeavePre. At exit Neovim fires BufUnload for each loaded buffer before VimLeavePre, and a proposal
+---buffer's BufUnload autocmd rejects its diff. That loop stops as soon as an autocmd deletes the buffer it fired for.
+---The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
+---its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
+---buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
+---pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre.
+---The reject pass runs first. It resolves each diff whose status is `pending` as rejected, oldest first, each under
+---`pcall`, so one diff that fails to reject cannot leave the others waiting. A diff with another status is skipped. A
+---reject can remove its own diff (`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a
+---diff whose openDiff setup is still running stays in `setup_result` (see `open_diff_blocking`) and sends nothing: the
+---call has no response sender yet, and the server's `stop` sends its response. The cleanup pass of every diff runs
+---after the reject pass.
+local function cleanup_at_exit()
   local pending = {}
   for tab_name, diff_data in pairs(active_diffs) do
     if diff_data.status == "pending" then
@@ -2068,17 +2075,6 @@ local function reject_pending_diffs()
       logger.warn("diff", "Could not reject the pending diff", entry.tab_name, "at exit:", tostring(err))
     end
   end
-end
-
----Runs at VimLeavePre. At exit Neovim fires BufUnload for each loaded buffer before VimLeavePre, and a proposal
----buffer's BufUnload autocmd rejects its diff. That loop stops as soon as an autocmd deletes the buffer it fired for.
----The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
----its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
----buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
----pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre. The reject
----pass runs first. The cleanup pass of every diff runs after it.
-local function cleanup_at_exit()
-  reject_pending_diffs()
   M._cleanup_all_active_diffs("shutdown")
 end
 

@@ -98,7 +98,7 @@ site lua/claudecode/server/client.lua: if not client.handshake_complete then @ f
 site lua/claudecode/server/client.lua: if on_open then @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 site lua/claudecode/server/client.lua: on_open(client) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua 8a3d1b16b91dd5a7
+file lua/claudecode/server/init.lua dbc9b57cf9a7142b
 block on_open                605dc737a2bfdad0
 block server_broadcast       fc69234ae8ed7cf0
 block server_status          e2759841ce0f1b90

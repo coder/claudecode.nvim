@@ -216,8 +216,8 @@ function M._handle_request(client, request)
   end
 
   -- A request has no answer until its handler returns, and a blocking tool has no sender before that. When Neovim
-  -- exits inside the handler (a `nested = true` ClaudeCodeDiffOpened handler that runs :qa!), the handler never returns, so `stop`
-  -- answers the request, and this function sends nothing after it.
+  -- exits inside the handler (a `nested = true` ClaudeCodeDiffOpened handler that runs :qa!), the handler never
+  -- returns, so `stop` answers the request, and this function sends nothing after it.
   local in_flight = { client = client, id = id }
   M.state.in_flight[in_flight] = true
   local success, result, error_data = pcall(handler, client, params)

@@ -175,12 +175,12 @@ return true, result
 
 At exit, Neovim fires `BufUnload` for each loaded buffer, and then runs the `VimLeavePre` autocmds. The plugin registers two of them, and they run in this order. Neovim runs the autocmds of one event in the order that they were registered. `diff.lua` registers its autocmd when it first loads, and `M.setup` loads `diff.lua` before it registers its own [lua/claudecode/init.lua:M.setup].
 
-First, the autocmd of `diff.lua`, in the `ClaudeCodeMCPDiff` group, rejects each diff whose status is `pending`, oldest first, while the server still runs. Then it closes every diff and clears its state. It runs whether or not the server runs [lua/claudecode/diff.lua:cleanup_at_exit] [lua/claudecode/diff.lua:reject_pending_diffs] [lua/claudecode/diff.lua:M._cleanup_all_active_diffs]:
+First, the autocmd of `diff.lua`, in the `ClaudeCodeMCPDiff` group, rejects each diff whose status is `pending`, oldest first, while the server still runs. Then it closes every diff and clears its state. It runs whether or not the server runs [lua/claudecode/diff.lua:cleanup_at_exit] [lua/claudecode/diff.lua:M._cleanup_all_active_diffs]:
 
 ```lua
 -- diff.lua, module level (shortened)
 local function cleanup_at_exit()
-  reject_pending_diffs() -- reject each diff that is pending, oldest first
+  -- reject each diff that is pending, oldest first, each under pcall
   M._cleanup_all_active_diffs("shutdown") -- close each diff and clear its state
 end
 
@@ -190,7 +190,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
-The `BufUnload` loop that runs before both autocmds already rejects most diffs, because the `BufUnload` autocmd of a proposal buffer rejects its diff [lua/claudecode/diff.lua:register_diff_autocmds]. That loop stops when an autocmd deletes the buffer that it fired for, and SIGTERM and SIGHUP run `VimLeavePre` without the loop. `reject_pending_diffs` rejects the diffs that the loop did not reach, and it skips a diff whose status is not `pending`. A reject can remove its own diff (a new-file diff with `on_new_file_reject = "keep_empty"`), so a diff can be gone before the next one is rejected.
+The `BufUnload` loop that runs before both autocmds already rejects most diffs, because the `BufUnload` autocmd of a proposal buffer rejects its diff [lua/claudecode/diff.lua:register_diff_autocmds]. That loop stops when an autocmd deletes the buffer that it fired for, and SIGTERM and SIGHUP run `VimLeavePre` without the loop. The reject pass of `cleanup_at_exit` rejects the diffs that the loop did not reach, and it skips a diff whose status is not `pending`. A reject can remove its own diff (a new-file diff with `on_new_file_reject = "keep_empty"`), so a diff can be gone before the next one is rejected.
 
 Second, the autocmd of `init.lua`, in the `ClaudeCodeShutdown` group, runs `stop` only when the server runs. Without a server, it only clears the @-mention queue [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:clear_mention_queue]. `stop` removes the lock file, stops the server, and clears the queue [lua/claudecode/init.lua:M.stop]. The server's own `stop` sends a response for each request whose handler is still running, and the TCP server then closes each client with the close code 1001 [lua/claudecode/server/init.lua:M.stop] [lua/claudecode/server/tcp.lua:M.stop_server]:
 

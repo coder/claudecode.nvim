@@ -55,9 +55,11 @@ describe("openDiff at exit", function()
         return diff.open_diff_blocking(path, path, "new line\n", "tab_" .. name, nil)
       end)
       local ok, err = coroutine.resume(co)
-      log("resume " .. name .. " ok=" .. tostring(ok) .. " status=" .. coroutine.status(co) .. (ok and "" or " " .. tostring(err)))
+      local resumed = "resume " .. name .. " ok=" .. tostring(ok) .. " status=" .. coroutine.status(co)
+      log(resumed .. (ok and "" or " " .. tostring(err)))
       _G.claude_deferred_responses[tostring(co)] = function(response)
-        log("answer " .. name .. " " .. tostring(response.content and response.content[1].text or vim.inspect(response)))
+        local text = response.content and response.content[1].text or vim.inspect(response)
+        log("answer " .. name .. " " .. tostring(text))
       end
     end
     vim.defer_fn(function()
@@ -112,7 +114,12 @@ describe("openDiff at exit", function()
         method = "tools/call",
         params = {
           name = "openDiff",
-          arguments = { old_file_path = path, new_file_path = path, new_file_contents = "new line\n", tab_name = "tab_" .. name },
+          arguments = {
+            old_file_path = path,
+            new_file_path = path,
+            new_file_contents = "new line\n",
+            tab_name = "tab_" .. name,
+          },
         },
       }))
     end

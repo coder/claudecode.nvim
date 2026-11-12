@@ -107,7 +107,8 @@ end)
 
 -- The answer must leave before the TCP server stops. After `tcp_server.stop_server` the clients are closing, and after
 -- `M.state.server = nil` `send_response` sends nothing, so an answer moved there never reaches Claude. The describe
--- above replaces `send_response` and `stop_server`, so it cannot see the order. This one records what reaches the socket.
+-- above replaces `send_response` and `stop_server`, so it cannot see the order. This one records what reaches the
+-- socket.
 describe("server.stop with a request in flight, as the socket sees it", function()
   local server, tcp, saved, order
 

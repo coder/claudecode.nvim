@@ -1146,7 +1146,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   answered its diff. Each fact below was probed with a real WebSocket client on Neovim 0.8.0, 0.9.5, 0.10.4, 0.11.5
   and 0.12.3. SIGKILL stands in for a crash, which was not probed:
   - An exit that runs `VimLeavePre` (`:qa!`, SIGTERM or SIGHUP) gives each waiting call one `DIFF_REJECTED`
-    [lua/claudecode/diff.lua:reject_pending_diffs]. A call that already has its answer, such as a `FILE_SAVED`,
+    [lua/claudecode/diff.lua:cleanup_at_exit]. A call that already has its answer, such as a `FILE_SAVED`,
     gets no second one.
   - A call that the exit cuts off during its `openDiff` setup gets one -32603 error from the server stop. It has no
     response sender yet, so nothing else can answer it. This happens when a `nested = true` `ClaudeCodeDiffOpened`
