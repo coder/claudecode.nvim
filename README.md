@@ -1168,13 +1168,15 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   files [lua/claudecode/diff.lua:M.open_diff_blocking]. The `saveDocument` tool writes an open buffer to its file
   [lua/claudecode/tools/save_document.lua:handler].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
-  `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`, and `snacks_win_<id>`, one per Snacks terminal whose split the plugin re-creates
-  [lua/claudecode/terminal/snacks.lua:register_window_events]), `nvim_buf_attach` change
-  listeners on the buffer of a held selection [lua/claudecode/selection.lua:watch_selection_buffer], `User` events
-  (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`), the four global `ClaudeCodeInlineDiff*`
-  highlight groups for the `"unified"` diff layout [lua/claudecode/diff_inline.lua:setup_highlights], and a wrapped
-  global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2 or a 0.12.2
-  prerelease [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install]
+  `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`, and `snacks_win_<id>`, one per
+  Snacks terminal whose split the plugin re-creates [lua/claudecode/terminal/snacks.lua:register_window_events]),
+  `nvim_buf_attach` change listeners on the buffer of a held selection and on every buffer where a visual selection
+  starts, until the first edit after the selection ends [lua/claudecode/selection.lua:watch_selection_buffer], `User`
+  events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`), the four global
+  `ClaudeCodeInlineDiff*` highlight groups for the `"unified"` diff layout
+  [lua/claudecode/diff_inline.lua:setup_highlights], and a wrapped global `vim.paste` when
+  `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2 or a 0.12.2 prerelease
+  [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install]
   [lua/claudecode/terminal/paste_fix.lua:M.is_affected_version].
 - Lua globals: the server stores deferred `openDiff` response senders in `_G.claude_deferred_responses`
   [lua/claudecode/server/init.lua:M.\_setup_deferred_response]. The diff module calls and clears them
