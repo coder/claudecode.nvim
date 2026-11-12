@@ -65,6 +65,7 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   '  echo $! > "$STUB_DIR/$name.orphan.pid"',
   "fi",
   'cat "$STUB_DIR/$name.out"',
+  'if [ -f "$STUB_DIR/$name.die_by" ]; then kill -"$(cat "$STUB_DIR/$name.die_by")" $$; fi',
   'exit "$(cat "$STUB_DIR/$name.exit")"',
 })
 
@@ -195,7 +196,15 @@ describe("scripts/run_integration_tests_individually.sh", function()
     temp_dir.remove(dir)
   end)
 
-  ---@param specs { name: string, exit: integer, output: string[], orphan: boolean|nil, ignore_term: boolean|nil }[]
+  ---@class ScriptSpec
+  ---@field name string
+  ---@field exit integer
+  ---@field output string[]
+  ---@field orphan boolean|nil
+  ---@field ignore_term boolean|nil
+  ---@field die_by string|nil A signal the stub nvim sends itself after its output, as `kill -<die_by>` takes it
+
+  ---@param specs ScriptSpec[]
   ---@param locale string|nil The LC_ALL to run the script under
   ---@return string status
   ---@return string output
@@ -210,6 +219,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
       end
       if spec.ignore_term then
         write(dir .. "/" .. spec.name .. ".ignore_term", {})
+      end
+      if spec.die_by then
+        write(dir .. "/" .. spec.name .. ".die_by", { spec.die_by })
       end
     end
     local command = "cd "
@@ -402,13 +414,20 @@ describe("scripts/run_integration_tests_individually.sh", function()
     for token in args:gmatch("%S+") do
       table.insert(tokens, token)
     end
-    local has_no_shada = false
-    for index, token in ipairs(tokens) do
-      if token == "-i" and tokens[index + 1] == "NONE" then
-        has_no_shada = true
+    ---@param first string
+    ---@param second string|nil The token that must follow `first`, or nil when `first` alone is enough
+    ---@return boolean
+    local function has(first, second)
+      for index, token in ipairs(tokens) do
+        if token == first and (second == nil or tokens[index + 1] == second) then
+          return true
+        end
       end
+      return false
     end
-    assert.is_true(has_no_shada, args)
+    assert.is_true(has("-i", "NONE"), args)
+    assert.is_true(has("--headless"), args)
+    assert.is_true(has("-u", "tests/minimal_init.lua"), args)
   end)
 
   ---@class SignalRun
@@ -616,6 +635,88 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     assert.is_truthy(output:find("Failed test files:\n  - crash_spec.lua", 1, true), output)
     assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  ---@param text string
+  ---@param needle string
+  ---@return integer
+  local function occurrences(text, needle)
+    local count, from = 0, 1
+    while true do
+      local found, last = text:find(needle, from, true)
+      if not found then
+        return count
+      end
+      count = count + 1
+      from = last + 1
+    end
+  end
+
+  for _, case in ipairs({
+    { 139, ", SIGSEGV" },
+    { 134, ", SIGABRT" },
+    { 1, "" },
+  }) do
+    local exit_status, note = case[1], case[2]
+    it("names the exit status of a nvim that fails with " .. exit_status .. " after a clean summary", function()
+      local status, output = run_script({
+        { name = "crash_after_spec.lua", exit = exit_status, output = summary(3, 0, 0) },
+      })
+
+      assert.are.equal("1", status, output)
+      assert.is_truthy(
+        output:find("FAILED: crash_after_spec.lua: nvim exit " .. exit_status .. note .. "\n", 1, true),
+        output
+      )
+      assert.are.equal(1, occurrences(output, "FAILED:"), output)
+      assert.is_truthy(output:find("Total Success: 3", 1, true), output)
+      assert.is_truthy(output:find("Failed test files:\n  - crash_after_spec.lua", 1, true), output)
+    end)
+  end
+
+  it("names the signal in the line of a file whose nvim crashed before any summary", function()
+    local status, output = run_script({
+      { name = "crash_spec.lua", exit = 139, output = hung_output("crash_spec.lua") },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(
+      output:find("FAILED: crash_spec.lua: no plenary summary (nvim exit 139, SIGSEGV)", 1, true),
+      output
+    )
+    assert.are.equal(1, occurrences(output, "FAILED:"), output)
+    assert.is_nil(output:find("TIMEOUT", 1, true), output)
+  end)
+
+  it("names SIGKILL in the TIMEOUT line of a nvim that was killed, which the limit may not have done", function()
+    local status, output = run_script({
+      { name = "oom_spec.lua", exit = 0, output = hung_output("oom_spec.lua"), die_by = "KILL" },
+    })
+
+    local _, limit = timeout_limits()
+    assert.are.equal("1", status, output)
+    assert.is_truthy(
+      output:find(
+        "TIMEOUT: oom_spec.lua was stopped (exit 137, SIGKILL): nvim did not exit within "
+          .. limit
+          .. "s, or another process killed it",
+        1,
+        true
+      ),
+      output
+    )
+    assert.are.equal(1, occurrences(output, "TIMEOUT:"), output)
+    assert.is_truthy(output:find("Failed test files:\n  - oom_spec.lua", 1, true), output)
+  end)
+
+  it("prints one line with a reason for a nvim that was killed after a clean summary", function()
+    local status, output = run_script({
+      { name = "oom_after_spec.lua", exit = 0, output = summary(2, 0, 0), die_by = "KILL" },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("TIMEOUT: oom_after_spec.lua was stopped (exit 137, SIGKILL)", 1, true), output)
+    assert.is_nil(output:find("FAILED:", 1, true), output)
   end)
 
   it("fails a file whose nvim exited 0 after passing tests without printing a summary", function()
@@ -904,7 +1005,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     })
 
     assert.are.equal("1", status, output)
-    assert.is_truthy(output:find("TIMEOUT: stuck_spec.lua was stopped (exit 137)", 1, true), output)
+    assert.is_truthy(output:find("TIMEOUT: stuck_spec.lua was stopped (exit 137, SIGKILL)", 1, true), output)
     assert.is_truthy(output:find("Failed test files:\n  - stuck_spec.lua", 1, true), output)
   end)
 

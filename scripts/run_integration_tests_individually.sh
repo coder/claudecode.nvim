@@ -44,6 +44,14 @@ TOTAL_FAILED=0
 TOTAL_ERRORS=0
 FAILED_FILES=()
 
+# The signal behind an exit status above 128, as ", SIGSEGV". Nothing for any other status.
+signal_note() {
+  local name
+  if [[ $1 -gt 128 ]] && name=$(kill -l $(($1 - 128)) 2>/dev/null) && [[ -n $name ]]; then
+    printf ', SIG%s' "$name"
+  fi
+}
+
 # Function to run a single test file
 run_test_file() {
   local test_file=$1
@@ -70,8 +78,9 @@ run_test_file() {
   # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
   # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
-  # subshell has no pipefail and exits with the status of the first command itself: with pipefail, bash prints a job
-  # report ("Killed", two lines) in the subshell when the cleanup above kills `timeout`.
+  # subshell has no pipefail, because with it bash prints a job report ("Killed", two lines) when the cleanup above
+  # kills `timeout`. It exits with the status of the first command. When `tee` fails, set -e ends the subshell with
+  # the status of `tee`, as pipefail did.
   (
     set +o pipefail
     VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
@@ -102,8 +111,10 @@ run_test_file() {
   # whatever its exit code says. A count that is not 0 or 1 to 9 digits without a leading zero would stop bash or wrap
   # in the arithmetic below. The digits are spelled out because [0-9] also matches other digits in some locales.
   local plain_count='^(0|[123456789][0123456789]{0,8})$'
+  local reason_printed=false
   if [[ ! $success_count =~ $plain_count ]] || [[ ! $failed_count =~ $plain_count ]] || [[ ! $error_count =~ $plain_count ]]; then
-    echo "FAILED: $basename: no plenary summary (nvim exit $EXIT_CODE)"
+    echo "FAILED: $basename: no plenary summary (nvim exit $EXIT_CODE$(signal_note "$EXIT_CODE"))"
+    reason_printed=true
     success_count=0
     failed_count=0
     error_count=1
@@ -116,9 +127,21 @@ run_test_file() {
 
   # Exit 124 is timeout's, 137 is its SIGKILL after 5 more seconds, and 143 is SIGTERM.
   if [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 137 ]] || [[ $EXIT_CODE -eq 143 ]]; then
-    echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within $FILE_TIMEOUT"
+    if [[ $EXIT_CODE -eq 137 ]]; then
+      # The out-of-memory killer gives 137 too, so this line does not claim that the limit was hit.
+      echo "TIMEOUT: $basename was stopped (exit 137, SIGKILL): nvim did not exit within $FILE_TIMEOUT," \
+        "or another process killed it"
+    else
+      echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within $FILE_TIMEOUT"
+    fi
+    reason_printed=true
     # nvim busy in a Lua loop ignores SIGTERM and outlives timeout.
     kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
+  fi
+
+  # A file that failed with a non-zero exit status always gets one line with a reason: the one above, or this one.
+  if [[ $EXIT_CODE -ne 0 ]] && [[ $reason_printed == false ]]; then
+    echo "FAILED: $basename: nvim exit $EXIT_CODE$(signal_note "$EXIT_CODE")"
   fi
 
   # Check if test failed
