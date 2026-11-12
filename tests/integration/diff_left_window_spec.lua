@@ -203,6 +203,47 @@ describe("diff mode in a window that left a split diff", function()
       assert.is_true(option(state.new_window, "diff"), "the proposal window is in diff mode")
       assert.equal(2, diff_windows())
     end)
+
+    local function entries_of(win, open)
+      local entered = 0
+      local group = vim.api.nvim_create_augroup("left_window_spec_entries", { clear = true })
+      vim.api.nvim_create_autocmd("WinEnter", {
+        group = group,
+        callback = function()
+          if vim.api.nvim_get_current_win() == win then
+            entered = entered + 1
+          end
+        end,
+      })
+      local ok, err = pcall(open)
+      vim.api.nvim_del_augroup_by_id(group)
+      assert.is_true(ok, tostring(err))
+      return entered
+    end
+
+    it("runs no WinEnter handler for the original window while the diff opens", function()
+      local original = vim.api.nvim_get_current_win()
+
+      local entered = entries_of(original, open_diff)
+
+      assert.equal(0, entered, "the original window is not entered again, as on main")
+    end)
+
+    it("runs no WinEnter handler for the original window while the legacy diff opens", function()
+      local original = vim.api.nvim_get_current_win()
+      -- The legacy diff.open_diff writes its proposal under stdpath("cache"); keep that out of the real cache folder.
+      local saved_cache_home = vim.env.XDG_CACHE_HOME
+      vim.env.XDG_CACHE_HOME = dir .. "/cache"
+      diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
+
+      local entered = entries_of(original, function()
+        diff.open_diff(file, file, "one\nTWO\n", "legacy")
+      end)
+
+      vim.env.XDG_CACHE_HOME = saved_cache_home
+      vim.cmd("silent! diffoff!")
+      assert.equal(0, entered, "the original window is not entered again, as on main")
+    end)
   end)
 
   describe("a file that comes back after the cleanup, which the cleanup does not look at (as on main)", function()
