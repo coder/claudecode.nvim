@@ -12,7 +12,9 @@ NVIM=${NVIM:-nvim}
 OUT=${OUT:-$(mktemp -d "${TMPDIR:-/tmp}/mention-replays.XXXXXX")}
 # Each replay runs from its own cwd, so a relative OUT or NVIM must become absolute first.
 mkdir -p "$OUT" && OUT=$(cd "$OUT" && pwd) || exit 2
-if [[ $NVIM == */* ]]; then NVIM=$(cd "$(dirname "$NVIM")" && pwd)/$(basename "$NVIM") || exit 2; fi
+if [[ $NVIM == */* ]] && nvim_dir=$(cd "$(dirname "$NVIM")" 2>/dev/null && pwd); then
+  NVIM=$nvim_dir/$(basename "$NVIM")
+fi
 command -v "$NVIM" >/dev/null || {
   echo "ERROR: no Neovim at $NVIM (set NVIM=<path to nvim>)" >&2
   exit 2
