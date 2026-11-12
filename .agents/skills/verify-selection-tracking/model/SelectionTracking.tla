@@ -35,7 +35,8 @@ CONSTANTS
   Pos,        \* cursor positions
   Ranges,     \* visual selection ranges
   None,       \* nil (model value)
-  MaxEdits,   \* edits per file buffer (each one advances its changedtick)
+  MaxEdits,   \* edits per file buffer that change the text a selection can hold (YouEditSelection, YouEditAtCursor,
+              \* YouEditByPlugin, YouEditOtherBuffer). Each one also moves the buffer's changedtick
   DelayBelowDebounce, \* environment: visual_demotion_delay_ms < debounce_ms, so a
                       \* demotion timer always fires before a later debounce timer
   WithTerminal,       \* environment: a Claude terminal buffer exists in Neovim (FALSE: terminal.provider
@@ -43,8 +44,8 @@ CONSTANTS
 
   \* Code facts, see check.sh for the source lines each one reads.
   FlushOnVisualExit,     \* on_mode_changed calls flush_visual_selection when visual mode ends
-  FlushSkipsOperator,    \* on_mode_changed records visual_entry; the flush returns when the
-                         \* changedtick moved since then (an operator such as d consumed it)
+  FlushSkipsOperator,    \* on_mode_changed records visual_entry; the flush returns when the entry has an edit that the
+                         \* listener counted (an operator such as d consumed the selection)
   FlushSkipsTerminal,    \* flush_visual_selection returns in the Claude terminal buffer
   FlushRecordsCursor,    \* flush_visual_selection sets cursor_at_flush
   UpdateSkipsTerminal,   \* update_selection returns in the Claude terminal buffer
@@ -77,7 +78,13 @@ CONSTANTS
                             \* that buffer schedules the check
   TerminalReportsHeldBuffer, \* the check, in the Claude terminal, sends the cursor of the selection's buffer when the
                              \* held text changed
-  UpdateChecksHeldText      \* update_selection runs that check in the Claude terminal too
+  UpdateChecksHeldText,  \* update_selection runs that check in the Claude terminal too
+  ListenerNotesVisualEdit, \* entering visual mode listens to the buffer, and an edit of it counts on the visual_entry
+                           \* (note_visual_edit)
+  VisualCheckSparesPluginEdit, \* the check that note_visual_edit schedules marks the entry consumed only when visual mode
+                               \* has ended, so a plugin's edit that leaves the selection on the screen does not
+  FlushIgnoresTick       \* neither on_mode_changed nor the flush reads a changedtick. FALSE models the code before #524, whose
+                         \* flush returned when the changedtick moved since visual mode started
 
 Bufs == Files \cup {Term}
 Modes == {"n", "v"}         \* "n" is every mode without a selection (normal, insert, terminal)
@@ -104,7 +111,8 @@ VARIABLES
   mode,       \* "v" in Visual or Select mode
   cur,        \* the window cursor
   vsel,       \* the live visual range, None outside visual mode
-  ver,        \* per buffer: text version (changedtick)
+  ver,        \* per buffer: the version of the text that a selection can hold. An edit of the selected text advances it,
+              \* a :write or an edit of another line does not (both move the changedtick all the same)
   \* selection.lua M.state
   latest,     \* latest_selection: what Claude holds
   lastVis,    \* last_active_visual_selection.bufnr, or None
@@ -115,7 +123,9 @@ VARIABLES
   rdBuf,      \* selection_tick.bufnr, or None
   rdVer,      \* selection_tick.tick (as a text version)
   entryBuf,   \* visual_entry.bufnr, or None
-  entryVer,   \* visual_entry.tick
+  entryDirty, \* visual_entry.consumed or visual_entry.unchecked_edits > 0: the listener counted an edit since visual mode started
+  entryMoved, \* the changedtick of that buffer moved since visual mode started: any edit, or a :write. The code before #524
+              \* compared the tick with the one recorded then. A tick only grows, so this bit is all the comparison reads
   db,         \* debounce_timer
   dbStale,    \* a callback of a cancelled debounce timer waits in the schedule queue
   dbLoose,    \* (only without DebounceIgnoresStale) a live debounce timer that the state lost
@@ -133,8 +143,8 @@ VARIABLES
   released    \* the last step was the release itself
 
 nvim == <<buf, mode, cur, vsel, ver>>
-plugin == <<latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, dm, dmBuf, dmStale,
-            dmLoose, chk, phantom, closedTwice>>
+plugin == <<latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryDirty, entryMoved, db, dbStale, dbLoose, dm,
+            dmBuf, dmStale, dmLoose, chk, phantom, closedTwice>>
 spec == <<hold, holdPos, holdLoose, released>>
 vars == <<nvim, plugin, spec>>
 
@@ -146,7 +156,7 @@ TypeOK ==
   /\ lastVis \in Bufs \cup {None}
   /\ cafBuf \in Bufs \cup {None} /\ cafPos \in Pos /\ cafLeft \in BOOLEAN /\ cafAway \in Bufs \cup {None}
   /\ rdBuf \in Bufs \cup {None} /\ rdVer \in 0..MaxEdits
-  /\ entryBuf \in Bufs \cup {None} /\ entryVer \in 0..MaxEdits
+  /\ entryBuf \in Bufs \cup {None} /\ entryDirty \in BOOLEAN /\ entryMoved \in BOOLEAN
   /\ db \in TStates /\ dbStale \in BOOLEAN /\ dbLoose \in BOOLEAN
   /\ dm \in TStates /\ dmBuf \in Bufs \cup {None} /\ (dm = "nil") = (dmBuf = None)
   /\ dmStale \in BOOLEAN /\ dmLoose \subseteq Bufs /\ chk \in BOOLEAN
@@ -157,7 +167,7 @@ Init ==
   /\ buf = CHOOSE f \in Files : TRUE
   /\ mode = "n" /\ cur = P0 /\ vsel = None
   /\ ver = [b \in Bufs |-> 0]
-  /\ latest = None /\ lastVis = None /\ cafBuf = None /\ cafPos = P0 /\ cafLeft = FALSE /\ cafAway = None /\ rdBuf = None /\ rdVer = 0 /\ entryBuf = None /\ entryVer = 0
+  /\ latest = None /\ lastVis = None /\ cafBuf = None /\ cafPos = P0 /\ cafLeft = FALSE /\ cafAway = None /\ rdBuf = None /\ rdVer = 0 /\ entryBuf = None /\ entryDirty = FALSE /\ entryMoved = FALSE
   /\ db = "nil" /\ dbStale = FALSE /\ dbLoose = FALSE
   /\ dm = "nil" /\ dmBuf = None /\ dmStale = FALSE /\ dmLoose = {} /\ chk = FALSE
   /\ phantom = FALSE /\ closedTwice = FALSE
@@ -168,7 +178,7 @@ Init ==
 (* operators over it. E is the Neovim state the code reads (after the key). *)
 
 S == [latest |-> latest, lastVis |-> lastVis, cafBuf |-> cafBuf, cafPos |-> cafPos, cafLeft |-> cafLeft, cafAway |-> cafAway, rdBuf |-> rdBuf, rdVer |-> rdVer, entryBuf |-> entryBuf,
-      entryVer |-> entryVer, db |-> db, dbStale |-> dbStale, dbLoose |-> dbLoose, dm |-> dm, dmBuf |-> dmBuf,
+      entryDirty |-> entryDirty, entryMoved |-> entryMoved, db |-> db, dbStale |-> dbStale, dbLoose |-> dbLoose, dm |-> dm, dmBuf |-> dmBuf,
       dmStale |-> dmStale, dmLoose |-> dmLoose, chk |-> chk, phantom |-> phantom, closedTwice |-> closedTwice]
 
 SetS(s) ==
@@ -177,7 +187,9 @@ SetS(s) ==
   /\ cafLeft' = IF s.cafBuf = None THEN FALSE ELSE s.cafLeft
   /\ cafAway' = IF s.cafBuf = None THEN None ELSE s.cafAway
   /\ rdBuf' = s.rdBuf /\ rdVer' = IF s.rdBuf = None THEN 0 ELSE s.rdVer
-  /\ entryBuf' = s.entryBuf /\ entryVer' = s.entryVer
+  /\ entryBuf' = s.entryBuf
+  /\ entryDirty' = (s.entryBuf # None /\ FlushSkipsOperator /\ s.entryDirty)  \* kept only while a guard reads it
+  /\ entryMoved' = (s.entryBuf # None /\ ~FlushIgnoresTick /\ s.entryMoved)
   /\ db' = s.db /\ dbStale' = s.dbStale /\ dbLoose' = s.dbLoose
   /\ dm' = s.dm /\ dmBuf' = IF s.dm = "nil" THEN None ELSE s.dmBuf
   /\ dmStale' = s.dmStale /\ dmLoose' = s.dmLoose /\ chk' = s.chk
@@ -281,21 +293,35 @@ Flush(s, e) ==
                        !.phantom = @ \/ (sel # s.latest /\ e.marks.ver # e.ver[here])]
   IN
   CASE here = Term /\ FlushSkipsTerminal -> s
-    [] FlushSkipsOperator /\ s.entryBuf = here /\ s.entryVer # e.ver[here] ->
+    [] s.entryBuf = here /\ ((FlushSkipsOperator /\ s.entryDirty) \/ (~FlushIgnoresTick /\ s.entryMoved)) ->
          IF ~FlushSkipReports THEN s
          ELSE IF s.latest \in VisValues THEN Update(ClearHeld(s), e)
          ELSE ClearHeld(s)
     [] OTHER -> Publish(CancelDemotion(rec), sel)
 
-(* selection.lua on_mode_changed, then the debounce. *)
+(* selection.lua on_mode_changed, then the debounce. Entering visual mode makes the visual_entry, leaving it flushes and *)
+(* then forgets the entry.                                                                                               *)
 OnModeChanged(s, e, entering, leaving) ==
-  LET entered == IF FlushSkipsOperator THEN [s EXCEPT !.entryBuf = e.buf, !.entryVer = e.ver[e.buf]] ELSE s
+  LET entered == [s EXCEPT !.entryBuf = e.buf, !.entryDirty = FALSE, !.entryMoved = FALSE]
+      left == IF FlushOnVisualExit THEN Flush(s, e) ELSE s
       s1 == CASE entering -> IF e.buf = Term \/ ~EntryClearsHeld THEN entered ELSE ClearHeld(entered)
-              [] leaving /\ FlushOnVisualExit -> Flush(s, e)
+              [] leaving -> [left EXCEPT !.entryBuf = None]
               [] OTHER -> s
   IN DebounceUpdate(s1)
 
 E2(b, m, c, v, mk, vr) == [buf |-> b, mode |-> m, cur |-> c, vsel |-> v, marks |-> mk, ver |-> vr]
+
+\* The changedtick of buffer b moved: an edit, or a :write. The visual_entry of b notes that it moved.
+TickMoved(s, b) == IF s.entryBuf = b THEN [s EXCEPT !.entryMoved = TRUE] ELSE s
+
+\* An edit of buffer b reaches the listener (on_lines): note_visual_edit counts it on the visual_entry of b.
+EntryEdited(s, b) == IF s.entryBuf = b /\ ListenerNotesVisualEdit THEN [s EXCEPT !.entryDirty = TRUE] ELSE s
+
+\* A plugin's edit in visual mode: the listener counts it, and the check that it schedules runs before the next key (the edit
+\* comes from a callback of the main loop). The visual mode is still on then, so the entry is not consumed, unless the code
+\* takes every counted edit for an operator's.
+PluginEditedInVisual(s, b) ==
+  TickMoved(IF VisualCheckSparesPluginEdit THEN s ELSE EntryEdited(s, b), b)
 
 \* reconcile_held_selection (on_cursor_moved, on_text_changed): changed text makes the plugin report the cursor at
 \* once. A cursor that left the flushed position is reported at once (it is final at CursorMoved), another buffer is noted. At CursorMoved and TextChanged the
@@ -368,8 +394,8 @@ YouReleaseSelection ==
      THEN hold' = Vis(buf, vsel, ver[buf]) /\ holdPos' = cur /\ holdLoose' = FALSE /\ released' = TRUE
      ELSE NoSpecChange
 
-(* d, c, x, > or another operator on the selection: the text changes, visual mode ends *)
-(* (ModeChanged sees the new changedtick) and the cursor lands on p. CursorMoved and    *)
+(* d, c, x, > or another operator on the selection: the text changes (the listener sees *)
+(* the edit, then visual mode ends) and the cursor lands on p. CursorMoved and          *)
 (* TextChanged fire when Neovim waits for the next key, so a mapping, a macro or         *)
 (* typeahead runs the next key first. The step leaves them out: it is the case in which  *)
 (* they have not fired yet.                                                              *)
@@ -377,8 +403,8 @@ YouEditSelection(p) ==
   /\ buf \in Files /\ mode = "v" /\ ver[buf] < MaxEdits
   /\ LET vr == [ver EXCEPT ![buf] = @ + 1]
      IN /\ ver' = vr
-        /\ SetS(DebounceUpdate(OnModeChanged(S, E2(buf, "n", p, None, [at |-> vsel, ver |-> ver[buf]], vr),
-                                              FALSE, TRUE)))
+        /\ SetS(DebounceUpdate(OnModeChanged(TickMoved(EntryEdited(S, buf), buf),
+                                              E2(buf, "n", p, None, [at |-> vsel, ver |-> ver[buf]], vr), FALSE, TRUE)))
   /\ mode' = "n" /\ vsel' = None /\ cur' = p
   /\ UNCHANGED buf
   /\ DropHold
@@ -406,6 +432,23 @@ YouEditByPlugin ==
   /\ ver' = [ver EXCEPT ![buf] = @ + 1]
   /\ SetS(DebounceUpdate(OnText(S, E2(buf, "n", cur, None, None, ver'))))
   /\ UNCHANGED <<buf, mode, cur, vsel>>
+  /\ NoSpecChange
+
+(* A plugin edits another line while you select, and the selection stays on the screen with the *)
+(* text it had: the changedtick moves, and the listener counts the edit. No TextChanged and no   *)
+(* CursorMoved fire in visual mode. A key-driven edit followed by Esc in the same typeahead      *)
+(* would reach the flush before the check: not modeled.                                          *)
+YouEditByPluginInVisual ==
+  /\ buf \in Files /\ mode = "v"
+  /\ SetS(PluginEditedInVisual(S, buf))
+  /\ UNCHANGED nvim
+  /\ NoSpecChange
+
+(* :write in visual mode: it moves the changedtick of a modified buffer and fires no on_lines. *)
+YouWriteInVisual ==
+  /\ buf \in Files /\ mode = "v"
+  /\ SetS(TickMoved(S, buf))
+  /\ UNCHANGED nvim
   /\ NoSpecChange
 
 (* A plugin edits, or Neovim reloads, a file that is not the current buffer, and the held *)
@@ -456,7 +499,7 @@ DebounceTimerFires ==
   /\ db = "armed"
   /\ DelayBelowDebounce => dm \notin Alive
   /\ db' = "queued"
-  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, dbStale, dbLoose, dm, dmBuf, dmStale,
+  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryDirty, entryMoved, dbStale, dbLoose, dm, dmBuf, dmStale,
                  dmLoose, chk, phantom, closedTwice>>
   /\ NoSpecChange
 
@@ -478,7 +521,7 @@ StaleDebounceCallbackRuns ==
      ELSE /\ db' = IF ClearsBeforeClose THEN "nil" ELSE db
           /\ dbLoose' = (dbLoose \/ (ClearsBeforeClose /\ db \in Alive))
           /\ closedTwice' = TRUE
-  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, dm, dmBuf, dmStale, dmLoose, chk, phantom>>
+  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryDirty, entryMoved, dm, dmBuf, dmStale, dmLoose, chk, phantom>>
   /\ NoSpecChange
 
 (* Without the identity check: a live debounce timer the field lost fires and runs in full. *)
@@ -499,7 +542,7 @@ ListenerCheckRuns ==
 DemotionTimerFires ==
   /\ dm = "armed"
   /\ dm' = "queued"
-  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, dmBuf, dmStale,
+  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryDirty, entryMoved, db, dbStale, dbLoose, dmBuf, dmStale,
                  dmLoose, chk, phantom, closedTwice>>
   /\ NoSpecChange
 
@@ -520,7 +563,7 @@ StaleDemotionCallbackRuns ==
           /\ dmBuf' = IF ClearsBeforeClose THEN None ELSE dmBuf
           /\ dmLoose' = IF ClearsBeforeClose /\ dm \in Alive THEN dmLoose \cup {dmBuf} ELSE dmLoose
           /\ closedTwice' = TRUE
-  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryVer, db, dbStale, dbLoose, chk, phantom>>
+  /\ UNCHANGED <<nvim, latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryDirty, entryMoved, db, dbStale, dbLoose, chk, phantom>>
   /\ NoSpecChange
 
 LooseDemotionCallbackRuns(b) ==
@@ -540,6 +583,8 @@ Next ==
   \/ \E p \in Pos : YouMoveCursor(p)
   \/ YouEditAtCursor
   \/ YouEditByPlugin
+  \/ YouEditByPluginInVisual
+  \/ YouWriteInVisual
   \/ \E b \in Files : YouEditOtherBuffer(b)
   \/ YouEditElsewhere
   \/ \E b \in Bufs, p \in Pos : YouSwitchBuffer(b, p)

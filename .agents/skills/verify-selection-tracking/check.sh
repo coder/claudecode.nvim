@@ -23,6 +23,8 @@ covered_block text_there "$SEL" '^local function selection_text_is_there\('
 covered_block cursor_other "$SEL" '^local function cursor_in_other_buffer\('
 covered_block demote_text "$SEL" '^local function demote_if_selection_text_changed\('
 covered_block holds_selection "$SEL" '^local function holds_selection_of\('
+covered_block entry_of "$SEL" '^local function visual_entry_of\('
+covered_block note_edit "$SEL" '^local function note_visual_edit\('
 covered_block watch_buffer "$SEL" '^local function watch_selection_buffer\('
 covered_block record_read "$SEL" '^local function record_selection_read\('
 covered_block reconcile "$SEL" '^local function reconcile_held_selection\('
@@ -54,7 +56,7 @@ FACTS=(FlushOnVisualExit FlushSkipsOperator FlushSkipsTerminal FlushRecordsCurso
   PendingKeepsHeld ElseClearsHeldState DemotionWaitsForMove DemotionClearsHeldState DebounceIgnoresStale
   DemotionIgnoresStale ClearsBeforeClose EntryClearsHeld FlushSkipReports PendingClearsHeld ReconcileOnCursorMoved
   ReconcileOnTextChanged TextChangeReports MoveReports LeaveNoted ReadRecordsTick ListensToSelectionBuffer
-  TerminalReportsHeldBuffer UpdateChecksHeldText)
+  TerminalReportsHeldBuffer UpdateChecksHeldText ListenerNotesVisualEdit VisualCheckSparesPluginEdit FlushIgnoresTick)
 
 # ModeChanged runs on_mode_changed, which flushes when visual mode ends.
 flush_on_visual_exit() {
@@ -63,13 +65,14 @@ flush_on_visual_exit() {
       '^    elseif leaving_visual then$' '^      M\.flush_visual_selection\(\)$' <<<"$on_mode_changed"
 }
 fact[FlushOnVisualExit]=$(as_bool flush_on_visual_exit)
-# Entering visual mode records the changedtick; the flush returns when it moved (an operator consumed the selection).
+# Entering visual mode makes a visual_entry. The flush returns when the entry is consumed or has an edit that the listener
+# counted and no check has cleared yet (an operator such as d: its edit comes before the ModeChanged that flushes).
 flush_skips_operator() {
   in_order '^    if entering_visual then$' \
-    '^      M\.state\.visual_entry = \{ bufnr = buf, tick = vim\.api\.nvim_buf_get_changedtick\(buf\) \}$' \
+    '^      M\.state\.visual_entry = \{ bufnr = buf, consumed = false, unchecked_edits = 0 \}$' \
     <<<"$on_mode_changed" &&
     in_order '^  local entry = M\.state\.visual_entry$' \
-      '^  if entry and entry\.bufnr == current_buf and vim\.api\.nvim_buf_get_changedtick\(current_buf\) ~= entry\.tick then$' \
+      '^  if entry and entry\.bufnr == current_buf and \(entry\.consumed or entry\.unchecked_edits > 0\) then$' \
       '^    return$' 'M\.get_visual_selection_from_marks\(\)' <<<"$flush"
 }
 fact[FlushSkipsOperator]=$(as_bool flush_skips_operator)
@@ -206,8 +209,9 @@ fact[ReadRecordsTick]=$(as_bool read_records_tick)
 listens_to_selection_buffer() {
   in_order '^  watch_selection_buffer\(bufnr\)$' <<<"$record_read" &&
     in_order '^  local function check_soon\(\)$' 'vim\.schedule\(function\(\)' '^        demote_if_selection_text_changed\(\)$' \
-      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' '^      check_soon\(\)$' \
-      '^    on_reload = function\(_, buf\)$' '^        check_soon\(\)$' <<<"$watch_buffer"
+      '^  vim\.api\.nvim_buf_attach\(bufnr, false, \{$' '^    on_lines = function\(_, buf\)$' \
+      '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' \
+      '^    on_reload = function\(_, buf\)$' '^      if holds_selection_of\(buf\) then$' '^        check_soon\(\)$' <<<"$watch_buffer"
 }
 fact[ListensToSelectionBuffer]=$(as_bool listens_to_selection_buffer)
 # The check runs in the Claude terminal for a selection of another buffer that is not a Claude terminal, clears the held
@@ -226,6 +230,30 @@ update_checks_held_text() {
   in_order '^    M\._cancel_demotion_timer\(\)$' '^    demote_if_selection_text_changed\(\)$' <<<"$update_selection"
 }
 fact[UpdateChecksHeldText]=$(as_bool update_checks_held_text)
+# Entering visual mode in a buffer that is not the Claude terminal listens to it, and the listener's on_lines counts an edit
+# on the visual_entry of that buffer: visual_entry_of finds it, note_visual_edit adds one to unchecked_edits.
+listener_notes_visual_edit() {
+  in_order '^    if entering_visual then$' '^      if not M\.is_claude_terminal_buffer\(buf\) then$' '^        watch_selection_buffer\(buf\)$' \
+    '^    elseif leaving_visual then$' <<<"$on_mode_changed" &&
+    in_order '^  local entry = M\.state\.visual_entry$' '^  return entry and entry\.bufnr == bufnr and entry or nil$' <<<"$entry_of" &&
+    in_order '^    on_lines = function\(_, buf\)$' '^      local entry = visual_entry_of\(buf\)$' '^      if entry then$' \
+      '^        note_visual_edit\(entry\)$' '^    on_reload = function\(_, buf\)$' <<<"$watch_buffer" &&
+    in_order '^  entry\.unchecked_edits = entry\.unchecked_edits \+ 1$' <<<"$note_edit"
+}
+fact[ListenerNotesVisualEdit]=$(as_bool listener_notes_visual_edit)
+# note_visual_edit schedules a check that takes the edit back and marks the entry consumed only when visual mode is over:
+# a plugin's edit leaves the selection on the screen and does not consume it.
+visual_check_spares_plugin_edit() {
+  in_order '^  vim\.schedule\(function\(\)$' '^    entry\.unchecked_edits = entry\.unchecked_edits - 1$' \
+    '^    if not is_visual_mode\(vim\.api\.nvim_get_mode\(\)\.mode\) then$' '^      entry\.consumed = true$' <<<"$note_edit"
+}
+fact[VisualCheckSparesPluginEdit]=$(as_bool visual_check_spares_plugin_edit)
+# Neither on_mode_changed nor the flush reads a changedtick (comments apart). The code before #524 compared the changedtick
+# with the one it recorded at visual entry, which took a plugin's edit or a :write for an operator.
+flush_ignores_tick() {
+  ! awk '!/^ *--/ && /changedtick/ { found = 1 } END { exit !found }' <<<"$on_mode_changed"$'\n'"$flush"
+}
+fact[FlushIgnoresTick]=$(as_bool flush_ignores_tick)
 
 RULES=(ReleaseSent NoPhantomSelection NoTerminalSelection HeldUntilMoved HeldInTerminal HeldEndsWhenMoved SameFile ClaudeSeesCursor
   NoDeletedText TimerClosedOnce)
@@ -240,6 +268,7 @@ EXPECT=(
   [ReadRecordsTick]=NoDeletedText [TextChangeReports]=NoDeletedText
   [ListensToSelectionBuffer]=NoDeletedText [TerminalReportsHeldBuffer]=NoDeletedText
   [UpdateChecksHeldText]=NoDeletedText
+  [ListenerNotesVisualEdit]=NoPhantomSelection [VisualCheckSparesPluginEdit]=ReleaseSent [FlushIgnoresTick]=ReleaseSent
   [ReconcileOnTextChanged]=NoDeletedText [ReconcileOnCursorMoved]=HeldEndsWhenMoved [MoveReports]=HeldEndsWhenMoved
   [LeaveNoted]=HeldEndsWhenMoved
   ["DemotionClearsHeldState+MoveReports"]=ClaudeSeesCursor
