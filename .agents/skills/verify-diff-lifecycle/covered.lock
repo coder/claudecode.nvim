@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 35b7af3572d13018
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 0ec43e91b199531e
+file lua/claudecode/diff.lua ac01bc69a313e411
 block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -23,7 +23,7 @@ block cleanup_all            43e7b595cf106229
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
 block register_state         8cf78b6711a9ecc6
-block cleanup_state          a5abba550a9bd679
+block cleanup_state          2ff77c6e3ecddf07
 block diff_autocmds          01fff2946c5a2149
 block write_proposal         9baeff1cd3273193
 block reject_when_hidden     dd45932e5cd7090d
@@ -123,7 +123,7 @@ site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ fun
 site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ function M.resolve_inline_as_saved(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, @ function M.setup_inline_diff(params, resolution_callback, config)
 == lua/claudecode/health.lua
-file lua/claudecode/health.lua 5ab73bf388f3ac97
+file lua/claudecode/health.lua 715d79c89291f563
 == lua/claudecode/init.lua
 file lua/claudecode/init.lua fc28de832b4056df
 block user_close_all         10e024fd8ada1c16
@@ -133,7 +133,7 @@ site lua/claudecode/init.lua: local saved, unsaved, kept = diff.close_saved_diff
 == lua/claudecode/integrations.lua
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 == lua/claudecode/lockfile.lua
-file lua/claudecode/lockfile.lua 2746b4c6e0b2b630
+file lua/claudecode/lockfile.lua e743c68b37d6fcce
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua

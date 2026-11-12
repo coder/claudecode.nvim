@@ -3,8 +3,10 @@ set -euo pipefail
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 V="$SCRIPTS/vcn.sh"
 OBSERVE="$SCRIPTS/observe-windows.lua"
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
+# Read OUT and WORK through vcn.sh get, which checks $VCN_STATE first. -z keeps a newline at the end of a path.
+get() { IFS= read -r -d "" "$1" < <("$V" get -z "$1"); }
+get OUT
+get WORK
 TAB="✻ [Claude Code] hello.txt (float) ⧉"
 
 fail() {
