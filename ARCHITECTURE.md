@@ -209,7 +209,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
-SIGKILL, a crash, and a quit from inside an autocmd that is not `nested` run neither autocmd. What Claude receives for each kind of call, in each kind of exit, is in the root [README.md](./README.md), under Global Invariants.
+SIGKILL, a crash, and a quit from inside an autocmd that is not `nested` run neither autocmd. A quit or a signal that comes while such an autocmd pumps the event loop (for example one that waits in `vim.wait`) runs neither either. What Claude receives for each kind of call, in each kind of exit, is in the root [README.md](./README.md), under Global Invariants.
 
 ## Module Structure
 
