@@ -29,7 +29,7 @@ describe("openDiff answers every call", function()
       diff_opts = { layout = layout },
     })
     local tools = require("claudecode.tools.init")
-    tools.register_all()
+    tools.setup()
     return require("claudecode.diff"), tools
   end
 
@@ -99,6 +99,43 @@ describe("openDiff answers every call", function()
     end)
   end
 
+  -- Count the open and close events of each diff, by file name.
+  local function watch_events()
+    local counts = {}
+    vim.api.nvim_create_autocmd("User", {
+      group = vim.api.nvim_create_augroup("OverlapSpecEvents", { clear = true }),
+      pattern = { "ClaudeCodeDiffOpened", "ClaudeCodeDiffClosed" },
+      callback = function(args)
+        local file = vim.fn.fnamemodify(args.data.file_path, ":t")
+        counts[file] = counts[file] or { opened = 0, closed = 0 }
+        local kind = args.match == "ClaudeCodeDiffOpened" and "opened" or "closed"
+        counts[file][kind] = counts[file][kind] + 1
+      end,
+    })
+    return counts
+  end
+
+  -- A statusline that counts open diffs (+1 on open, -1 on close) must end at 0, and no diff closes twice.
+  local function assert_events_paired(counts)
+    for file, count in pairs(counts) do
+      assert.equal(
+        count.opened,
+        count.closed,
+        "the open and close events of " .. file .. " pair: " .. vim.inspect(count)
+      )
+    end
+  end
+
+  local function proposal_window(text)
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      local lines = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+      if #vim.fn.win_findbuf(buf) > 0 and lines:find(text, 1, true) then
+        return vim.fn.win_findbuf(buf)[1]
+      end
+    end
+    error("no window shows " .. text)
+  end
+
   before_each(function()
     dir = vim.fn.tempname()
     vim.fn.mkdir(dir, "p")
@@ -112,6 +149,7 @@ describe("openDiff answers every call", function()
   after_each(function()
     vim.api.nvim_create_augroup("OverlapSpec", { clear = true })
     vim.api.nvim_create_augroup("OverlapSpecClosed", { clear = true })
+    vim.api.nvim_create_augroup("OverlapSpecEvents", { clear = true })
     pcall(function()
       require("claudecode.diff")._cleanup_all_active_diffs("test cleanup")
     end)
@@ -231,6 +269,7 @@ describe("openDiff answers every call", function()
         .. order.second_file,
       function()
         local windows, tabs = #vim.api.nvim_tabpage_list_wins(0), #vim.api.nvim_list_tabpages()
+        local counts = watch_events()
         local diff, answers, first, second =
           reload_inside_setup(order.layout, order.partial, dir .. "/" .. order.second_file)
 
@@ -243,6 +282,7 @@ describe("openDiff answers every call", function()
         assert_answered_once(answers, "A", "FILE_SAVED", "A PROPOSAL\n")
         assert.equal(tabs, #vim.api.nvim_list_tabpages(), "no extra tab stays")
         assert.equal(windows, #vim.api.nvim_tabpage_list_wins(0), "no window of a diff stays")
+        assert_events_paired(counts)
       end
     )
   end
@@ -305,7 +345,7 @@ describe("openDiff answers every call", function()
 
   for _, layout in ipairs({ "vertical", "unified" }) do
     it(
-      "rejects the late first call once, and fires no open event, when a handler reloads the plugin again while the "
+      "closes the late first call once, with its open event first, when a handler reloads the plugin again while the "
         .. "second module rejects the second call: "
         .. layout,
       function()
@@ -352,9 +392,9 @@ describe("openDiff answers every call", function()
           return event:find("a.txt", 1, true) ~= nil
         end, events)
         assert.same(
-          { "ClaudeCodeDiffClosed:a.txt" },
+          { "ClaudeCodeDiffOpened:a.txt", "ClaudeCodeDiffClosed:a.txt" },
           first_events,
-          "the late diff closes once, and no open event follows"
+          "the late diff closes once, and its open event comes first"
         )
       end
     )
@@ -411,11 +451,175 @@ describe("openDiff answers every call", function()
           return event:find("a.txt", 1, true) ~= nil
         end, events)
         assert.same(
-          { "ClaudeCodeDiffClosed:a.txt" },
+          { "ClaudeCodeDiffOpened:a.txt", "ClaudeCodeDiffClosed:a.txt" },
           first_events,
-          "no open event follows the close of the rejected call"
+          "the rejected call closes once, and no open event follows its close"
         )
       end
     )
   end
+
+  -- A user handler reloads the plugin while openDiff A for a new file sets up. The diff of that setup is then tracked in
+  -- both modules, and the user or Claude can end it from either one.
+  local endings = {
+    { name = "quit", cmd = "quit", answer = "DIFF_REJECTED" },
+    { name = "bwipeout", cmd = "bwipeout!", answer = "DIFF_REJECTED" },
+    { name = "deny", cmd = "ClaudeCodeDiffDeny", answer = "DIFF_REJECTED" },
+    { name = "write", cmd = "write", answer = "FILE_SAVED" },
+  }
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    for _, synchronous in ipairs({ true, false }) do
+      for _, ending in ipairs(endings) do
+        it(
+          "fires one open and one close event for a new file that a reload inside its setup left in two modules: "
+            .. layout
+            .. ", "
+            .. (synchronous and "a reload that does not run the event loop" or "a reload inside the event loop")
+            .. ", "
+            .. ending.name
+            .. " then close_tab",
+          function()
+            local counts, answers = watch_events(), {}
+            local diff_before, tools = load_plugin(layout)
+            local suffix = layout == "unified" and "(unified diff)" or "proposed)"
+            local fired = false
+            local group = vim.api.nvim_create_augroup("OverlapSpec", { clear = true })
+            vim.api.nvim_create_autocmd("BufEnter", {
+              group = group,
+              callback = function(args)
+                if fired or not vim.api.nvim_buf_get_name(args.buf):find(suffix, 1, true) then
+                  return
+                end
+                fired = true
+                if synchronous then
+                  tools = select(2, load_plugin(layout))
+                  return
+                end
+                local reloaded = false
+                vim.schedule(function()
+                  tools = select(2, load_plugin(layout))
+                  reloaded = true
+                end)
+                vim.wait(1000, function()
+                  return reloaded
+                end, 10)
+              end,
+            })
+            silence_notify(function()
+              open_recording(tools, "A", dir .. "/new.txt", answers)
+            end)
+            vim.api.nvim_del_augroup_by_id(group)
+            assert.is_true(fired, "the reload ran inside the setup")
+            assert.is_not_equal(diff_before, require("claudecode.diff"), "the diff module was reloaded")
+
+            silence_notify(function()
+              vim.api.nvim_set_current_win(proposal_window("A PROPOSAL"))
+              vim.cmd(ending.cmd)
+            end)
+            vim.wait(100)
+            tools.handle_invoke({ id = "close_tab" }, { name = "close_tab", arguments = { tab_name = tab_name } })
+            close_all()
+            vim.wait(100)
+
+            assert_answered_once(answers, "A", ending.answer)
+            assert.same({ opened = 1, closed = 1 }, counts["new.txt"], "one open event and one close event")
+            assert.is_nil(diff_before._get_active_diffs()[tab_name], "the old module forgot the diff")
+            assert.is_nil(require("claudecode.diff")._get_active_diffs()[tab_name], "the new module forgot the diff")
+          end
+        )
+      end
+    end
+  end
+
+  it("rejects the late first call when the new module holds a second call that the user denied", function()
+    local counts, answers = watch_events(), {}
+    local windows, tabs = #vim.api.nvim_tabpage_list_wins(0), #vim.api.nvim_list_tabpages()
+    local diff_before, tools = load_plugin("unified")
+    local fired, second = false, nil
+    local group = vim.api.nvim_create_augroup("OverlapSpec", { clear = true })
+    vim.api.nvim_create_autocmd("BufEnter", {
+      group = group,
+      callback = function(args)
+        if fired or not vim.api.nvim_buf_get_name(args.buf):find("(unified diff)", 1, true) then
+          return
+        end
+        fired = true
+        vim.schedule(function()
+          local _, reloaded = load_plugin("unified")
+          second = open_recording(reloaded, "B", dir .. "/a.txt", answers)
+          silence_notify(function()
+            vim.api.nvim_set_current_win(proposal_window("B PROPOSAL"))
+            vim.cmd("ClaudeCodeDiffDeny")
+          end)
+        end)
+        vim.wait(1000, function()
+          return second ~= nil
+        end, 10)
+      end,
+    })
+    local first
+    silence_notify(function()
+      first = open_recording(tools, "A", dir .. "/a.txt", answers)
+    end)
+    vim.api.nvim_del_augroup_by_id(group)
+
+    assert.is_true(fired, "the reload ran inside the first setup")
+    assert.is_not_equal(diff_before, require("claudecode.diff"), "the diff module was reloaded")
+    assert.is_nil(first._deferred, "the first call is answered at once, as the new module holds an answered diff")
+    assert_answered_once(answers, "A", "DIFF_REJECTED")
+    assert_answered_once(answers, "B", "DIFF_REJECTED")
+    close_all()
+    assert.equal(tabs, #vim.api.nvim_list_tabpages(), "no extra tab stays")
+    assert.equal(windows, #vim.api.nvim_tabpage_list_wins(0), "no window of a diff stays")
+    assert_events_paired(counts)
+  end)
+
+  it("answers a call that registers while the new module rejects a second call that sits in an empty tab", function()
+    local answers, reloaded_tools, fired, second, third = {}, nil, false, nil, nil
+    local _, tools = load_plugin("vertical")
+    vim.api.nvim_create_autocmd("User", {
+      group = vim.api.nvim_create_augroup("OverlapSpecClosed", { clear = true }),
+      pattern = "ClaudeCodeDiffClosed",
+      once = true,
+      callback = function()
+        vim.schedule(function()
+          third = open_recording(reloaded_tools, "C", dir .. "/missing.txt", answers)
+        end)
+        vim.wait(1000, function()
+          return third ~= nil
+        end, 10)
+      end,
+    })
+    local group = vim.api.nvim_create_augroup("OverlapSpec", { clear = true })
+    vim.api.nvim_create_autocmd("BufEnter", {
+      group = group,
+      callback = function(args)
+        if fired or not vim.api.nvim_buf_get_name(args.buf):find("(proposed)", 1, true) then
+          return
+        end
+        fired = true
+        vim.schedule(function()
+          -- The new file of the second call then opens in an empty tab of the user, and its rejection cleans up at once.
+          vim.cmd("noautocmd tabnew")
+          reloaded_tools = select(2, load_plugin("vertical"))
+          second = open_recording(reloaded_tools, "B", dir .. "/missing.txt", answers)
+        end)
+        vim.wait(1000, function()
+          return second ~= nil
+        end, 10)
+      end,
+    })
+    local first
+    silence_notify(function()
+      first = open_recording(tools, "A", dir .. "/a.txt", answers)
+    end)
+    vim.api.nvim_del_augroup_by_id(group)
+
+    assert.is_true(fired, "the reload ran inside the first setup")
+    assert.is_true(first._deferred, vim.inspect(first.error))
+    assert.is_not_nil(third, "the close event of the second call ran the third call")
+    assert_answered_once(answers, "B", "DIFF_REJECTED")
+    assert_answered_once(answers, "C", "DIFF_REJECTED")
+    assert.same({}, answers.A, "the first call waits for the user")
+  end)
 end)

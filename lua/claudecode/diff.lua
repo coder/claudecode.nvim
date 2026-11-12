@@ -1017,6 +1017,27 @@ end
 
 local diffs_registered = 0
 
+---Remember that this module tracks a diff that another module tracks too, so that the one cleanup of the diff, which
+---runs in any of those modules, forgets it in all of them.
+---@param diff_data table
+local function share_diff_state(diff_data)
+  diff_data.registries = diff_data.registries or {}
+  diff_data.registries[active_diffs] = true
+end
+
+---Forget a diff that was cleaned up, in this module and in each module that tracks the same diff. A module that kept
+---the entry would clean the diff up again and fire `ClaudeCodeDiffClosed` a second time.
+---@param tab_name string
+---@param diff_data table
+local function forget_diff_state(tab_name, diff_data)
+  active_diffs[tab_name] = nil
+  for registry in pairs(diff_data.registries or {}) do
+    if registry[tab_name] == diff_data then
+      registry[tab_name] = nil
+    end
+  end
+end
+
 ---Track a diff in this module. A plugin reload during the setup leaves this module's table out of reach of every
 ---command, which use the new module. So the diff is registered there too, and accept, deny and close-all answer it.
 ---@param tab_name string
@@ -1029,6 +1050,7 @@ local function track_diff_state(tab_name, diff_data)
   active_diffs[tab_name] = diff_data
   local current = package.loaded["claudecode.diff"]
   if type(current) == "table" and current ~= M and current._adopt_diff_state then
+    share_diff_state(diff_data)
     return current._adopt_diff_state(tab_name, diff_data)
   end
   return true
@@ -1039,6 +1061,17 @@ end
 ---@param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
   if not track_diff_state(tab_name, diff_data) then
+    -- The setup opened this diff, so its close event gets an open event, the same one that the setup fires.
+    fire_diff_event("ClaudeCodeDiffOpened", {
+      tab_name = tab_name,
+      file_path = diff_data.old_file_path,
+      new_file_path = diff_data.new_file_path,
+      is_new_file = diff_data.is_new_file,
+      diff_window = diff_data.new_window,
+      target_window = diff_data.target_window,
+      terminal_window = diff_data.terminal_win_in_new_tab or find_claudecode_terminal_window(),
+      tab_number = diff_data.created_new_tab and diff_data.new_tab_number or nil,
+    })
     M._resolve_diff_as_rejected(tab_name)
     M._cleanup_diff_state(tab_name, "replaced by new diff")
   end
@@ -1063,13 +1096,8 @@ function M._adopt_diff_state(tab_name, diff_data)
     assert(active_diffs[tab_name] ~= existing, "the replaced diff is still registered")
     existing = active_diffs[tab_name]
   end
-  if track_diff_state(tab_name, diff_data) then
-    return true
-  end
-  if active_diffs[tab_name] == diff_data then
-    active_diffs[tab_name] = nil
-  end
-  return false
+  share_diff_state(diff_data)
+  return track_diff_state(tab_name, diff_data)
 end
 
 ---While the proposal buffer stays modified, `:wq`, `:x` and `ZZ` leave its window open, and `:qa` stops with E37 or
@@ -1479,7 +1507,7 @@ function M._cleanup_diff_state(tab_name, reason)
   if diff_data.layout == "unified" then
     local inline = require("claudecode.diff_inline")
     inline.cleanup_inline_diff(tab_name, diff_data)
-    active_diffs[tab_name] = nil
+    forget_diff_state(tab_name, diff_data)
     fire_diff_event("ClaudeCodeDiffClosed", {
       tab_name = tab_name,
       file_path = diff_data.old_file_path,
@@ -1585,7 +1613,7 @@ function M._cleanup_diff_state(tab_name, reason)
   end
 
   -- Remove from active diffs
-  active_diffs[tab_name] = nil
+  forget_diff_state(tab_name, diff_data)
 
   -- Notify listeners that the diff has closed. Always emitted; pairs with
   -- ClaudeCodeDiffOpened. `reason` describes why (accepted/rejected/replaced/etc.).
