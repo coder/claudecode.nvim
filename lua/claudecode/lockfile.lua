@@ -258,7 +258,8 @@ function M.get_auth_token(port)
     return false, nil, "Lock file does not exist: " .. lock_path
   end
 
-  -- The file exists, so a failure here is a refusal to read it. io.open's message names the path and the reason.
+  -- The file existed a moment ago, so a failure here is a refusal to read it, unless another process deleted it since.
+  -- io.open's message names the path and the reason either way ("Permission denied", "No such file or directory").
   local file, open_error = io.open(lock_path, "r")
   if not file then
     return false, nil, "Lock file exists but cannot be read: " .. (open_error or lock_path)

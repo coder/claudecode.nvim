@@ -618,7 +618,7 @@ describe("Lockfile Module", function()
       assert(still_there, "the folder is gone")
     end)
 
-    it("should report the os.remove error and keep the lock file when the folder is read-only", function()
+    it("should report the fs_unlink error and keep the lock file when the folder is read-only", function()
       local port = 12356
       local created, lock_path = lockfile.create(port)
       assert(created == true)
@@ -959,6 +959,21 @@ describe("Lockfile Module", function()
 
       local success, token, err = lockfile.get_auth_token(port)
       os.execute("rmdir " .. temp_dir.quote(lock_path))
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
+    it("should say that a link that points nowhere is no lock file", function()
+      local port = 12372
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      assert(
+        os.execute("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
+      )
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.execute("rm -f " .. temp_dir.quote(lock_path))
 
       assert(success == false)
       assert(token == nil, "a token came back")
