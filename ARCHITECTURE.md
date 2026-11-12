@@ -46,7 +46,7 @@ Writes the discovery file that Claude CLI reads to find the server, and removes 
 - The file is `<port>.lock` in `$CLAUDE_CONFIG_DIR/ide`, or in `~/.claude/ide` when that variable is unset or empty [lua/claudecode/lockfile.lua:get_lock_dir].
 - It holds JSON with `pid`, `workspaceFolders` (the working directory, then the workspace folders of each LSP client), `ideName` (`"Neovim"`), `transport` (`"ws"`) and `authToken` [lua/claudecode/lockfile.lua:M.create] [lua/claudecode/lockfile.lua:M.get_workspace_folders].
 - A new lock directory gets mode `0700`, and `create` tries to tighten an existing one to `0700`.
-- `create` writes the file atomically: it writes a temp file in the same directory, then renames it onto the lock path. The temp file has mode `0600` and is opened with `wx`, so an existing file or symlink at its path makes the open fail. A failed write or rename removes the temp file:
+- `create` writes the file atomically: it writes a temp file in the same directory, then renames it onto the lock path. The temp file has mode `0600` and is opened with `wx`, so an existing file or symlink at its path makes the open fail. A failed write or rename makes `create` try to remove the temp file:
 
 ```lua
 -- lockfile.lua, M.create (shortened)
@@ -95,9 +95,9 @@ end
 
 ### 4. Diff System (`diff.lua`, `diff_inline.lua`)
 
-The `openDiff` tool calls `open_diff_blocking`. It runs in the tool's coroutine, sets up the diff, and yields until the diff is resolved. The reply to Claude goes out then [lua/claudecode/tools/open_diff.lua:handler] [lua/claudecode/diff.lua:M.open_diff_blocking].
+The `openDiff` tool calls `open_diff_blocking`. It runs in the tool's coroutine, sets up the diff, and yields until the diff is resolved. The reply to Claude goes out then. A `ClaudeCodeDiffOpened` handler can resolve the diff while it is set up. `open_diff_blocking` then returns that result at once and does not yield [lua/claudecode/tools/open_diff.lua:handler] [lua/claudecode/diff.lua:M.open_diff_blocking].
 
-- `diff_opts.layout` picks the layout. `"vertical"` (the default) and `"horizontal"` use Neovim's diff mode: the old file in one window, and the proposal in a split to its right or below it. `"unified"` is drawn inline by `diff_inline.lua` and is not a Neovim diff [lua/claudecode/diff.lua:create_split] [lua/claudecode/diff.lua:M._setup_blocking_diff]:
+- `diff_opts.layout` picks the layout. `"vertical"` (the default) and `"horizontal"` use Neovim's diff mode: the old file in one window (a read-only placeholder for a new file), and the proposal in a split to its right or below it. `"unified"` is drawn inline by `diff_inline.lua` and is not a Neovim diff [lua/claudecode/diff.lua:create_split] [lua/claudecode/diff.lua:M._setup_blocking_diff]:
 
 ```lua
 -- diff.lua, setup_new_buffer (shortened)
@@ -111,10 +111,10 @@ vim.api.nvim_win_set_buf(new_win, new_buf)
 vim.cmd("diffthis")
 ```
 
-- The proposal is an unlisted scratch buffer named `<tab_name> (proposed)`. Its `buftype` is `acwrite`, so `:w` runs the plugin's write handler. It is not a temp file [lua/claudecode/diff.lua:M._setup_blocking_diff].
-- A native diff opens in the current tab by default (`diff_opts.open_in_new_tab = false`). It opens in a new tab when that option is set, or when the tab that it picks already has a diff window [lua/claudecode/diff.lua:M._setup_blocking_diff].
-- The plugin sets no keymap for the diff. `:w` on the proposal accepts it (so do `:wq`, `:x` and `ZZ`), and so does `:ClaudeCodeDiffAccept`. `:ClaudeCodeDiffDeny` rejects it, and so does closing the last window that shows the proposal or deleting its buffer. The README's example config maps `<leader>aa` and `<leader>ad` to the two commands [lua/claudecode/diff.lua:M._write_proposal] [lua/claudecode/diff.lua:M.accept_current_diff] [lua/claudecode/diff.lua:M.deny_current_diff] [lua/claudecode/diff.lua:M._register_reject_when_hidden].
-- A diff resolves once. Accept replies `FILE_SAVED` with the content, and reject replies `DIFF_REJECTED` [lua/claudecode/diff.lua:M._resolve_diff_as_saved] [lua/claudecode/diff.lua:M._resolve_diff_as_rejected]. The plugin does not write the target file. Claude writes it after `FILE_SAVED`.
+- The proposal is an unlisted `acwrite` scratch buffer, so `:w` runs the plugin's write handler. It is not a temp file. Its name is `<tab_name> (proposed)` for a native diff of an existing file, `<tab_name> (NEW FILE - proposed)` for a native diff of a new file, and `<tab_name> (unified diff)` for the unified layout [lua/claudecode/diff.lua:M._setup_blocking_diff] [lua/claudecode/diff_inline.lua:M.setup_inline_diff].
+- A native diff prefers the current tab (`diff_opts.open_in_new_tab = false`), and goes to an editor window in another tab only when the current tab has none. It opens in a new tab when that option is set, or when the tab that it picks already has a diff window [lua/claudecode/diff.lua:windows_current_tab_first] [lua/claudecode/diff.lua:find_main_editor_window] [lua/claudecode/diff.lua:M._setup_blocking_diff].
+- The plugin sets no keymap for the diff. In the proposal buffer, `:w` accepts it (so do `:wq`, `:x` and `ZZ`), and so does `:ClaudeCodeDiffAccept`. `:ClaudeCodeDiffDeny` rejects it, and so does closing the last window that shows the proposal or deleting its buffer. The two commands read the diff from the current buffer, so run them in the proposal buffer: in any other buffer they only warn that no diff is active. The README's example config maps `<leader>aa` and `<leader>ad` to the two commands [lua/claudecode/diff.lua:M._write_proposal] [lua/claudecode/diff.lua:M.accept_current_diff] [lua/claudecode/diff.lua:M.deny_current_diff] [lua/claudecode/diff.lua:M._register_reject_when_hidden].
+- A diff resolves once. Accept replies `FILE_SAVED` with the content, and reject replies `DIFF_REJECTED` [lua/claudecode/diff.lua:M._resolve_diff_as_saved] [lua/claudecode/diff.lua:M._resolve_diff_as_rejected]. The plugin does not write the target file. Normally Claude writes it after `FILE_SAVED`. When that Claude session ends before it writes, `:ClaudeCodeCloseAllDiffs` puts the accepted text into the file's buffer as unsaved changes [lua/claudecode/diff.lua:M.close_saved_diffs].
 - Only `open_diff` writes a temp file. It is the non-blocking entry point, and the plugin does not call it. The file goes under `stdpath("cache")/claudecode_diffs/<session folder>`, or under `claudecode_diffs_fallback` when the first folder cannot be made. `vim.fn.tempname()` supplies only a part of the session folder name, with the time and the PID [lua/claudecode/diff.lua:create_temp_file] [lua/claudecode/diff.lua:M._open_native_diff].
 
 ### 5. Selection Tracking (`selection.lua`)
