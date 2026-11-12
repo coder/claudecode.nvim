@@ -55,6 +55,33 @@ function testPrettierResolution() {
   );
 }
 
+/**
+ * The update refuses what `prettier --check` rejects, so the runner must run the Prettier that `mise run format-check`
+ * runs. `mise.toml` pins the one, `scripts/package.json` pins the other, and the runner runs the one that `npm ci`
+ * installs. All three must be the same version, or the runner could refuse a changelog that the gate accepts.
+ */
+function testPrettierMatchesFormatGate() {
+  const gate = /^prettier = "([^"]+)"$/m.exec(
+    readFileSync(join(__dirname, "..", "mise.toml"), "utf8"),
+  );
+  assert.notEqual(gate, null, "mise.toml pins prettier");
+  assert.equal(
+    JSON.parse(readFileSync(join(__dirname, "package.json"), "utf8"))
+      .devDependencies.prettier,
+    gate[1],
+    "scripts/package.json and mise.toml pin one prettier",
+  );
+  assert.equal(
+    execFileSync(
+      join(__dirname, "node_modules", ".bin", "prettier"),
+      ["--version"],
+      { encoding: "utf8" },
+    ).trim(),
+    gate[1],
+    "npm ci installs the prettier that the format gate runs",
+  );
+}
+
 async function testCommuniqueArgs() {
   assert.deepEqual(
     runner.buildCommuniqueArgs({
@@ -4239,6 +4266,7 @@ async function testCommuniqueConfigFitsReleaseNotes() {
 
 async function main() {
   testPrettierResolution();
+  testPrettierMatchesFormatGate();
   await testCommuniqueArgs();
   await testHeadingNormalization();
   await testUnreleasedUpdater();
