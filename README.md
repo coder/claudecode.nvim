@@ -1159,9 +1159,10 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
     [lua/claudecode/server/init.lua:M.\_handle_request].
   - The answers go out before the server closes each client with close code 1001. `stop` also tries to remove the lock
     file [lua/claudecode/init.lua:M.stop].
-  - SIGKILL, a crash, and a `:qa!`, SIGTERM or SIGHUP that comes while an autocmd that is not `nested` runs (for
-    example one that waits in `vim.wait`) run no `VimLeavePre`. Claude gets no answer, its socket closes with 1006, and
-    the lock file stays. The signal case was probed on Neovim 0.8.0 and 0.12.3.
+  - SIGKILL, a crash, and a `:qa!`, SIGTERM or SIGHUP that comes while an autocmd that is not `nested` runs and pumps
+    the event loop (for example one that waits in `vim.wait`) run no `VimLeavePre`. Claude gets no answer, its socket
+    closes with 1006, and the lock file stays. An autocmd that does not pump the event loop does not stop the exit: the
+    signal is handled after it returns. The signal case was probed on Neovim 0.8.0 and 0.12.3.
   - In an exit that runs `VimLeavePre`, the autocmd of `ClaudeCodeMCPDiff` rejects every diff with the status
     `pending` first and removes every diff after that [lua/claudecode/diff.lua:cleanup_at_exit]. A reject can remove
     its own diff at once. With the default `on_new_file_reject = "keep_empty"`, a new-file diff in the `vertical`
