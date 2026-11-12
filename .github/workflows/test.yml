@@ -63,15 +63,25 @@ jobs:
       - name: Run release tooling tests
         run: npm --prefix scripts run test:release-please-runner
 
-      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds.
-      - name: Cache Lua test rocks
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds. actions/cache would save it in
+      # a post step on every event, after the PR's own scripts ran, so restore and save are separate steps, and only a
+      # push to main saves.
+      - name: Restore Lua test rocks
+        id: luarocks-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .luarocks
           key: luarocks-${{ runner.os }}-${{ hashFiles('mise.toml') }}
 
       - name: Install Lua test rocks
         run: mise run setup
+
+      - name: Save Lua test rocks
+        if: github.event_name == 'push' && steps.luarocks-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .luarocks
+          key: ${{ steps.luarocks-cache.outputs.cache-primary-key }}
 
       - name: Run luacheck
         run: mise run check
