@@ -2670,6 +2670,9 @@ async function testUnreleasedDraftEnd() {
       ["two spaces after the marks", "##  [0.2.0] MK2"],
       ["a closing sequence", "## [0.2.0] MK2 ##"],
       ["blanks after the heading", "## [0.2.0] MK2   "],
+      // The version is the text up to the first blank, and it needs a dot and a first digit, nothing more.
+      ["a byte order mark inside the version", "## 1\ufeff.2 MK2"],
+      ["a version with a letter before the dot", "## 1x.y MK2"],
     ].map(([name, line]) => ({ name, line, ends: true, accepted: true })),
     // Neither ends the draft at the line, so both end it at the older release.
     ...[
@@ -2693,6 +2696,10 @@ async function testUnreleasedDraftEnd() {
       ["an H2 with a bracketed number and a dot after it", "## [1] 2.0 MK2"],
       ["an H2 with a name that starts with a letter", "## x1.2 MK2"],
       ["an H2 with a capital V", "## V1.2 MK2"],
+      // A digit is an ASCII digit, and a blank is a Unicode blank: NEL ends the version, a byte order mark does not.
+      ["an H2 with an Arabic-Indic digit", "## \u0661.2 MK2"],
+      ["an H2 with a NEL inside the version", "## 1\u0085.2 MK2"],
+      ["an H2 with a second closing bracket", "## [1] x.] MK2"],
       ["an H1 with a version", "# [0.2.0] - 2026-02-02 MK2"],
       ["an H1 with no version", "# Top MK2"],
     ].map(([name, line]) => ({ name, line, ends: false, accepted: false })),
@@ -3012,6 +3019,20 @@ async function testUnreleasedDraftEnd() {
       ),
     },
     "the same line number for another end",
+  );
+  // Both ends are the same line of text, and a bare CR hides one of the two copies from Communique: the lines match by
+  // their text and differ by their place.
+  const crSameText = `${title}\n\n## [Unreleased]\n\n- MK1\r${release}\n- MK2\n\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => withMissingFormatter(() => update(crSameText)),
+    {
+      message: endMismatchRefusal(
+        { number: 6, line: release },
+        { number: 8, line: release },
+        true,
+      ),
+    },
+    "the same line text for another end",
   );
 }
 
@@ -3504,7 +3525,7 @@ function generateDraftFragment(random, fragments) {
     ],
     ["a setext H1", () => ["Title", "====="]],
     ["a setext H2", () => ["Title", "-----"]],
-    // Communique ends its draft at an indented version heading, as the update does, and main did not see it.
+    // Communique ends its draft at an indented version heading, as the update does, and the runner before #531 did not see it.
     ["an indented H2", () => [" ## [0.9.0] - 2025-12-01", "", "- Old nine"]],
     [
       "an H2 that is indented by three spaces",
@@ -3573,8 +3594,8 @@ function generateUpdaterDocument(random, fragments, lineCoverage) {
     plain = false;
   }
   lines.push(...OLDER_RELEASES.split("\n"));
-  // Communique ends a line at LF only, so it reads no draft in a text with a bare CR, and the update refuses the
-  // draft (see `testUnreleasedDraftEnd`). A document with a bare CR would only test that.
+  // Communique ends a line at LF only, so a bare CR can hide a heading from it. Such a document mostly tests that
+  // refusal (see `testUnreleasedDraftEnd`).
   return [joinWithEndings(random, lines, false), plain];
 }
 
