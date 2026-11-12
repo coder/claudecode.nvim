@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 5c17a15e46f2873a
+file lua/claudecode/diff.lua 909f63ebcd8389e0
 block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -128,7 +128,7 @@ site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, 
 == lua/claudecode/health.lua
 file lua/claudecode/health.lua 715d79c89291f563
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua fc28de832b4056df
+file lua/claudecode/init.lua db4b58226c39fd20
 block user_close_all         10e024fd8ada1c16
 site lua/claudecode/init.lua: local pending = diff.close_pending_diffs("user command") @ function M._create_commands()
 site lua/claudecode/init.lua: local rejected = diff.close_rejected_diffs("user command") @ function M._create_commands()
@@ -140,7 +140,7 @@ file lua/claudecode/lockfile.lua e743c68b37d6fcce
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua cf8e6464c4302b2f
+file lua/claudecode/selection.lua 934ac10f13438228
 == lua/claudecode/server/client.lua
 file lua/claudecode/server/client.lua b8165df16f194471
 block create_client          24fa2a266b76e6ad
