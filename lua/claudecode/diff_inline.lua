@@ -527,8 +527,9 @@ function M.resolve_inline_as_saved(tab_name, diff_data)
   logger.debug("diff", "Accepting inline diff for", tab_name)
 
   local content = M.extract_new_content(diff_data.lines, diff_data.line_types)
-  -- Preserve trailing newline when original new_file_contents had one
-  if diff_data.new_file_contents:sub(-1) == "\n" and content:sub(-1) ~= "\n" then
+  -- The lines carry no line break after the last one. A proposal that ends with a line break gets exactly one back,
+  -- even when its last line is blank: "a\n\n" is the lines "a" and "", which join to "a\n".
+  if diff_data.new_file_contents:sub(-1) == "\n" then
     content = content .. "\n"
   end
 
