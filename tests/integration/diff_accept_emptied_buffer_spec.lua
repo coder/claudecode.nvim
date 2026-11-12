@@ -123,6 +123,7 @@ describe("the text a diff accepts after the user empties the proposal", function
       local controls = {
         { name = "a blank line left in the buffer", text = "\n", commands = {} },
         { name = "no edit at all", text = "a\nb\n", commands = {} },
+        { name = "an empty proposal without an edit", text = "", commands = {} },
         { name = "one line deleted", text = "a\nb\n", commands = { "normal! ggdd" } },
         { name = "text typed into the emptied buffer", text = "a\nb\n", commands = { "normal! ggdG", "normal! ix" } },
       }

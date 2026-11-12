@@ -1749,6 +1749,9 @@ function M._setup_blocking_diff(params, resolution_callback)
       table.remove(lines, #lines)
     end
     vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
+    -- A new buffer has 'eol' on, and the saved text ends with a line break exactly when 'eol' is on. So the buffer takes
+    -- the ending of the proposal, and a proposal without a final line break is saved without one.
+    vim.api.nvim_buf_set_option(new_buffer, "eol", params.new_file_contents:sub(-1) == "\n")
 
     vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
     vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
