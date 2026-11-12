@@ -53,9 +53,10 @@ bin() {
 # cannot run never stops the cleanup of a run that exists.
 # A tool that is found but cannot run, such as a mise shim in a checkout that mise does not trust, stops launch here and is
 # named. Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes
-# doctor"). The message takes the tool's name from its path, so no code line of this function holds the word jq or setsid:
-# proof-static.sh fails on that word in a code line, and skips a line that is only a comment. $2, when given, is the advice
-# that ends the message, for a tool that does not come from PATH.
+# doctor"). The message takes the tool's name from its path, so no code line of this function holds the word jq or setsid.
+# The no-bare-tools case of proof-static.sh fails on a code line that names either as a bare call or as the default of a
+# parameter expansion, except the two resolutions, and it skips a line that is only a comment. $2, when given, is the
+# advice that ends the message, for a tool that does not come from PATH.
 runs_or_die() {
   local why first tool=${1##*/} fix
   fix=${2-put a working $tool on PATH}
