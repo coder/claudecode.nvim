@@ -23,6 +23,7 @@
 #                  leads to a safe dir: the resolved path is read with its newline
 #   tmp-load-refused  mktemp answers with a path that is not its own resolved path (a // in it): load refuses the new state dir,
 #                  and launch leaves no state dir and no evidence dir
+#   node-relative  node is found through a relative PATH entry (no mise): its dir would go on PATH in every agent-tty call
 #   tmp-root       TMPDIR is /: launch gives mktemp /vcn.XXXXXX, not //vcn.XXXXXX (a mktemp shim stops launch and prints it)
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
 #   out-space      the same above VERIFY_OUT
@@ -50,7 +51,7 @@
 # Prints PASS <case> per case, or FAIL: <reason> and exits 1. The init case's evidence dir is
 # deleted when every case passes, and kept with its path printed when one fails.
 set -euo pipefail
-V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
+V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 # Resolved, because launch prints the state dir under the resolved path of TMPDIR.
 TMP=$(realpath -- "$(mktemp -d)")
 init_out=""
@@ -143,6 +144,17 @@ refused tmp-dot "TMPDIR=$TMP/dd/./y has a . or .. part" TMPDIR="$TMP/dd/./y" VER
 mkdir "$TMP/mktemp-bin"
 printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-bin/mktemp"
 chmod +x "$TMP/mktemp-bin/mktemp"
+# launch resolves node itself. Without mise, `command -v node` prints a relative path for a relative PATH entry, and the dir of that
+# path would go in front of PATH in every agent-tty call. Launch refuses before it makes anything.
+mkdir -m 700 "$TMP/relnode" "$TMP/relnode/nb" "$TMP/relnode/t"
+printf '#!/bin/sh\nexit 0\n' >"$TMP/relnode/nb/node"
+chmod +x "$TMP/relnode/nb/node"
+nvim_dir=$(dirname -- "$(mise which nvim 2>/dev/null || command -v nvim)")
+(
+  cd "$TMP/relnode"
+  refused node-relative "node is at ./nb/node, and its dir is not usable: it is not an absolute path" \
+    PATH="./nb:$nvim_dir:/usr/bin:/bin" VCN_AGENT_TTY=/usr/bin/true TMPDIR="$TMP/relnode/t" VERIFY_OUT="$TMP/relnode/o"
+)
 refused tmp-root "mktemp shim: template=/vcn.XXXXXX" PATH="$TMP/mktemp-bin:$PATH" TMPDIR=/ VERIFY_OUT="$TMP/tmp-out"
 # mktemp gets the resolved path. The path as given must pass the same walk, which is main's rule: the symlink itself, its
 # owner and the dirs above it.

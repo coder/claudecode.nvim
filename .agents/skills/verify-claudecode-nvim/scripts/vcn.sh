@@ -15,6 +15,9 @@
 #   record <name>               save a WebM of the session so far to $OUT/<name>.webm and print its path
 #   connect                     start one more client, named by VCN_CLIENT, and finish its handshake
 #   disconnect                  kill the client VCN_CLIENT names (unset: the launch client)
+#   get [-z] <NAME>             print one value of run.env (OUT, WORK, SID, PORT, ...) after the check that every command makes; -z
+#                               ends it with a NUL, so `read -r -d ""` keeps a newline at its end
+#   dashboard                   show the session live (agent-tty dashboard): run it in a terminal
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
 # VCN_CLIENT=<name> makes rpc, tool, await, connect and disconnect act as that client.
 # VCN_AGENT_TTY=<path> makes launch run that agent-tty (default: the first agent-tty on PATH, then mise's, that
@@ -74,6 +77,16 @@ unsafe_state() {
   fi
 }
 
+# att() puts NODE_DIR in front of PATH. An empty or relative one puts the current dir on PATH, and a colon adds a second entry. A
+# dir that has lost its node since launch is not refused here: cleanup must still run. Prints why <dir> is no good, or nothing.
+bad_node_dir() {
+  if [[ $1 != /* ]]; then
+    echo "it is not an absolute path"
+  elif [[ $1 == *:* ]]; then
+    echo "it has a colon, which PATH would split"
+  fi
+}
+
 load() {
   local why
   [[ -n ${VCN_STATE-} ]] || die "VCN_STATE is not set (launch prints it)"
@@ -87,6 +100,8 @@ load() {
   [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
+  why=$(bad_node_dir "${NODE_DIR-}")
+  [[ -z $why ]] || die "NODE_DIR=${NODE_DIR-} in $VCN_STATE/run.env is not usable: $why"
   # A run that an older vcn.sh started has no JQ_BIN.
   [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
 }
@@ -477,6 +492,27 @@ cmd_connect() {
   echo "client $VCN_CLIENT connected; its messages are in $OUT/ws-out$(chan).jsonl and $OUT/ws-in$(chan).jsonl"
 }
 
+# A caller that sources run.env runs every line of it in its own shell, with no check of $VCN_STATE. A value read through get
+# comes from the run.env that load has checked, and the caller parses no printed text: a path can hold a space, an equals sign or
+# a newline. Only a name that run.env holds is answered, so get cannot be used to read the rest of the environment.
+cmd_get() {
+  local nul="" name
+  if [[ ${1-} == -z ]]; then
+    nul=1
+    shift
+  fi
+  (($# == 1)) || die "get needs one name: get [-z] <NAME>"
+  name=$1
+  [[ $name =~ ^[A-Za-z][A-Za-z0-9_]*$ ]] || die "get: $name is not the name of a value of run.env"
+  grep -q -- "^$name=" "$VCN_STATE/run.env" || die "get: run.env of this run holds no $name"
+  if [[ -n $nul ]]; then printf '%s\0' "${!name}"; else printf '%s\n' "${!name}"; fi
+}
+
+cmd_dashboard() {
+  [[ -n ${SID-} ]] || die "this run has no agent-tty session"
+  att dashboard --session "$SID"
+}
+
 # Kill a client by its recorded PID, the way a Claude CLI that exits drops its socket.
 cmd_disconnect() {
   local var
@@ -502,6 +538,8 @@ cmd_launch() {
   mapfile -t att_cands <<<"$att_cands"
   VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
+  why=$(bad_node_dir "$(dirname -- "$node_exe")")
+  [[ -z $why ]] || die "node is at $node_exe, and its dir is not usable: $why"
   # Every call runs these paths, not the bare names: another setsid or jq earlier on PATH could differ or fail.
   SETSID_BIN=$(bin setsid)
   JQ_BIN=$(bin jq)
@@ -688,7 +726,7 @@ launch)
   cmd_launch "$@"
   ;;
 cleanup) cmd_cleanup ;;
-doctor | keys | expr | until | rpc | tool | await | capture | screenshot | record | connect | disconnect)
+doctor | keys | expr | until | rpc | tool | await | capture | screenshot | record | connect | disconnect | get | dashboard)
   load
   c=$1
   shift
@@ -708,6 +746,8 @@ doctor | keys | expr | until | rpc | tool | await | capture | screenshot | recor
   record) cmd_record "$1" ;;
   connect) cmd_connect ;;
   disconnect) cmd_disconnect ;;
+  get) cmd_get "$@" ;;
+  dashboard) cmd_dashboard ;;
   esac
   ;;
 help | -h | --help)

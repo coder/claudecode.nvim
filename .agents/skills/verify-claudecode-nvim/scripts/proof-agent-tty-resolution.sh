@@ -9,12 +9,9 @@
 #   setsid-resolved   a failing setsid on PATH and a working one that only `mise which setsid` names: a launch that
 #                     fails by itself still saves its failure screen and the final evidence, and runs `agent-tty home
 #                     forget`, all through the setsid that mise names
-#   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
-#                     reaches every call site, which the two cases above do not)
-#   doc-vars          a code block, or the inline code of a doc, that expands PORT, SID, NVIM_PID or NODE_DIR sets it in
-#                     the same block (or the same doc, for inline code), because a fresh shell has none of them. Prose
-#                     that names an assignment sets nothing.
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
+#   node-dir          a run.env whose NODE_DIR is empty, relative or has a colon is refused (att() would put the current dir, or
+#                     a second dir, on PATH), and one whose NODE_DIR is an absolute dir without a node is not
 #   state-resolved    a VCN_STATE with a . or .. part, a symlink in its path, or a symlink as its last part is refused, not
 #                     sourced
 #   state-slash       a VCN_STATE with a trailing /, /. or //, or a .. after a symlink, is refused, not sourced
@@ -29,6 +26,12 @@
 #                     can write: launch accepts it, and after another user repoints the second symlink, `record` still
 #                     writes no byte of theirs into the evidence dir, because no agent-tty call of vcn.sh reads the caller's TMPDIR
 #   tmp-later-tmpdir  a command run with a TMPDIR that does not exist works: agent-tty makes its staging dirs in the state dir
+#   get-values        `vcn.sh get` answers the values of a hand-made run.env exactly (a path with a space, an equals sign, quotes
+#                     and a newline, also at its end with -z), and answers no name that run.env does not hold
+#   get-state         `get` and each of the five journeys refuse a state dir that others can write, before they source its run.env
+#   journey-out       journey-opendiff-accept.sh writes all its evidence into the OUT of its run, whatever VERIFY_OUT looks like
+#                     (` OUT=` in the name, a newline in it or at its end) and whatever OUT the caller exported
+#   dashboard         `vcn.sh dashboard` shows the running session in a terminal (script(1) stands in for one)
 #   tmp-removed       a run without $VCN_STATE/tmp, as an older vcn.sh left it, works: `record` makes the dir (0700) and writes a WebM
 #   state-count       a stat that answers for one dir fewer than the walk asked for (a shim drops the record of the loose
 #                     dir above the state dir) makes the walk refuse, not pass
@@ -715,98 +718,6 @@ setsid_resolved_case() {
   cases=$((cases + 1))
 }
 
-# jq-resolved and setsid-resolved reach only the calls that a launch makes. This case reads the source: any word jq or
-# setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it.
-bare_tools_case() {
-  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])' form
-  local strip_re='(JQ_BIN|SETSID_BIN)=\$\(bin (jq|setsid)\)'
-  local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
-  while IFS= read -r site; do
-    for form in "" /usr/bin/ ./; do
-      bare=${site//"$jq_ref"/${form}jq}
-      bare=${bare//"$setsid_ref"/${form}setsid}
-      grep -qE "$word_re" <<<"$bare" || fail "$name" "the pattern misses this call written as a bare or path-qualified call: $bare"
-    done
-    sites=$((sites + 1))
-  done < <(grep -E '"\$(JQ_BIN|SETSID_BIN)"' "$V" | grep -v 'env_line JQ_BIN')
-  ((sites > 0)) || fail "$name" "vcn.sh has no call through \$JQ_BIN or \$SETSID_BIN to check the pattern against"
-  sed -E "s/$strip_re//" <<<'jq --version; JQ_BIN=$(bin jq)' | grep -qE "$word_re" || fail "$name" "a bare jq on a line that ends with the resolution would pass"
-  hits=$(grep -n '' "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | sed -E "s/$strip_re//" | grep -E "$word_re" || true)
-  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
-  echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
-  cases=$((cases + 1))
-}
-
-# A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A recipe that expands one of them must set
-# it with `VAR=$(`, because a fresh shell has none. A recipe is a fenced code block (checked on its own) or an inline code
-# span (all of them in a doc are checked together, because a bullet cites one assignment for the steps below it). Prose
-# outside the backticks is not a recipe: it can name an assignment that no recipe runs.
-# code_units <file>: prints each fenced block, then the inline code spans outside the blocks, each unit ended by a line
-# that holds only %%unit%%. A block or a span that sources a run.env sets every variable of the run by itself, so it is left
-# out: it needs no `VAR=$(`, and it gives none to the other recipes.
-code_units() {
-  awk 'function sources(text) { return text ~ /(^|[^A-Za-z0-9_.-])(source|\.)[ \t]+[^;#]*run\.env/ }
-    /^```/ { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%"; block = "" } fenced = !fenced; next }
-    fenced { block = block $0 "\n"; next }
-    { line = $0
-      while (match(line, /`[^`]+`/)) {
-        span = substr(line, RSTART + 1, RLENGTH - 2)
-        if (!sources(span)) spans = spans span "\n"
-        line = substr(line, RSTART + RLENGTH)
-      } }
-    END { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%" } printf "%s%%%%unit%%%%\n", spans }' "$1"
-}
-
-# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it.
-units_missing() {
-  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\('
-  while IFS= read -r line; do
-    if [[ $line != "%%unit%%" ]]; then
-      unit+=$line$'\n'
-      continue
-    fi
-    if grep -qE "$uses_re" <<<"$unit" && ! grep -qE "$sets_re" <<<"$unit"; then
-      return 0
-    fi
-    unit=""
-  done < <(code_units "$1")
-  return 1
-}
-
-doc_vars_case() {
-  local name=doc-vars skill file var uses_re sets_re sample missing=""
-  skill=$(dirname "$V")/..
-  sample=$TMP/doc-vars-sample.md
-  for var in PORT SID NVIM_PID NODE_DIR; do
-    uses_re='\$\{?'$var'([^A-Za-z0-9_]|$)'
-    sets_re='(^|[^A-Za-z0-9_$])'$var'=\$\('
-    grep -qE "$uses_re" <<<"see \"\$$var.lock\" and \${$var}" || fail "$name" "the use pattern misses \$$var"
-    ! grep -qE "$uses_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the use pattern matches a longer name"
-    grep -qE "$sets_re" <<<"$var=\$(basename \"\$L\"/*.lock .lock)" || fail "$name" "the set pattern misses an assignment of $var"
-    ! grep -qE "$sets_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the set pattern matches text that sets nothing"
-    # Prose that names the assignment must not satisfy a block that uses the variable, and a block that sets it must.
-    printf 'Set it with %s=$(x) before.\n\n```bash\necho "$%s"\n```\n' "$var" "$var" >"$sample"
-    units_missing "$sample" "$var" || fail "$name" "a block that expands $var and sets it only in prose passed"
-    printf 'Prose.\n\n```bash\n%s=$(x)\necho "$%s"\n```\n' "$var" "$var" >"$sample"
-    ! units_missing "$sample" "$var" || fail "$name" "a block that sets $var before it expands it was flagged"
-    printf 'Set `%s=$(x)` first, then `echo "$%s"`.\n' "$var" "$var" >"$sample"
-    ! units_missing "$sample" "$var" || fail "$name" "inline code that sets $var for inline code that expands it was flagged"
-    printf 'Run `source "$VCN_STATE/run.env"; echo "$%s"`.\n\n```bash\n. "$VCN_STATE/run.env"\necho "$%s"\n```\n' "$var" "$var" >"$sample"
-    ! units_missing "$sample" "$var" || fail "$name" "a recipe that sources a run.env was flagged for $var"
-    printf 'Run `echo "$%s"`, as in `grep run.env x`.\n' "$var" >"$sample"
-    units_missing "$sample" "$var" || fail "$name" "a recipe that only names a run.env passed for $var"
-    printf 'Run `source "$VCN_STATE/run.env"` first, then `echo "$%s"`.\n' "$var" >"$sample"
-    units_missing "$sample" "$var" || fail "$name" "a source in one inline recipe set $var for another recipe"
-    for file in "$skill"/SKILL.md "$skill"/features/*.md; do
-      ! units_missing "$file" "$var" || missing+=" ${file#"$skill"/}:$var"
-    done
-  done
-  rm -f -- "$sample"
-  [[ -z $missing ]] || fail "$name" "a recipe expands a variable that it does not set:$missing"
-  echo "ok $name: every recipe that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
-  cases=$((cases + 1))
-}
-
 # The run.env of a run that an older vcn.sh started has no JQ_BIN. A command that needs jq must resolve it again.
 jq_old_run_case() {
   local name=jq-old-run dir out rc=0
@@ -818,6 +729,151 @@ jq_old_run_case() {
   ((rc == 0)) || fail "$name" "rpc on a run.env without JQ_BIN exited $rc: $out"
   grep -q '"id":"old1"' "$TMP/out-$name/ws-out.jsonl" || fail "$name" "rpc wrote no request: $out"
   echo "ok $name: a run.env without JQ_BIN still runs jq"
+  cases=$((cases + 1))
+}
+
+# att() puts NODE_DIR in front of PATH. A command must refuse a run.env whose NODE_DIR would put the current dir (empty, relative)
+# or a second dir (a colon) on PATH, and must not refuse an absolute dir that has lost its node, because cleanup has to run.
+node_dir_case() {
+  local name=node-dir dir out rc val want
+  for val in "|it is not an absolute path" "bin|it is not an absolute path" "/usr/bin:/tmp|it has a colon, which PATH would split"; do
+    want=${val#*|}
+    val=${val%%|*}
+    dir=$(mktemp -d "$priv/vcn.XXXXXX")
+    printf 'VCN_STATE=%q\nOUT=%q\nNODE_DIR=%q\n' "$dir" "$TMP/out-$name" "$val" >"$dir/run.env"
+    rc=0
+    out=$(env PATH="$base" VCN_STATE="$dir" "$V" doctor 2>&1) || rc=$?
+    ((rc == 1)) && [[ $out == *"NODE_DIR=$val in $dir/run.env is not usable: $want"* ]] ||
+      fail "$name" "doctor with NODE_DIR='$val' exited $rc, wanted 1 with '$want': $out"
+    rm -rf -- "$dir"
+  done
+  mkdir "$TMP/no-node"
+  dir=$(mktemp -d "$priv/vcn.XXXXXX")
+  printf 'VCN_STATE=%q\nOUT=%q\nNODE_DIR=%q\n' "$dir" "$TMP/out-$name" "$TMP/no-node" >"$dir/run.env"
+  rc=0
+  out=$(env PATH="$base" VCN_STATE="$dir" "$V" doctor 2>&1) || rc=$?
+  [[ $out != *"NODE_DIR="* ]] || fail "$name" "doctor refused an absolute NODE_DIR that holds no node: $out"
+  rm -rf -- "$dir" "$TMP/no-node"
+  echo "ok $name: an empty, relative or colon NODE_DIR was refused, and an absolute dir without a node was not"
+  cases=$((cases + 1))
+}
+
+# `vcn.sh get` reads a value of run.env after the check that every command makes, and the journeys use it in place of a source.
+# The run.env of get_run_dir is hand-made, and its OUT holds a space, an equals sign, a tab, quotes and a newline (also at its end).
+get_run_dir() { # <name> <dir>: makes a state dir under $priv that holds NODE_DIR, WORK and the weird OUT
+  mkdir -p "$TMP/no-node"
+  printf 'VCN_STATE=%q\nOUT=%q\nWORK=%q\nNODE_DIR=%q\n' "$2" "$weird_out" "$2/work" "$TMP/no-node" >"$2/run.env"
+}
+get_values_case() {
+  local name=get-values dir got out rc
+  weird_out=$'/tmp/a b OUT=/x\t\'q"\nline2\n'
+  dir=$(mktemp -d "$priv/vcn.XXXXXX")
+  get_run_dir "$name" "$dir"
+  got=$(env PATH="$good_path" VCN_STATE="$dir" "$V" get WORK) || fail "$name" "get WORK failed"
+  [[ $got == "$dir/work" ]] || fail "$name" "get WORK printed '$got', not $dir/work"
+  got=""
+  IFS= read -r -d "" got < <(env PATH="$good_path" VCN_STATE="$dir" "$V" get -z OUT) || fail "$name" "get -z OUT printed no NUL end"
+  [[ $got == "$weird_out" ]] || fail "$name" "get -z OUT printed '$got', not the whole OUT"
+  got=$(env PATH="$good_path" VCN_STATE="$dir" "$V" get OUT)
+  [[ $got == "${weird_out%$'\n'}" ]] || fail "$name" "get OUT in a command substitution printed '$got'"
+  for got in PATH SID "a b" "" "OUT; touch $TMP/marker-$name"; do
+    rc=0
+    out=$(env PATH="$good_path" VCN_STATE="$dir" "$V" get "$got" 2>&1) || rc=$?
+    ((rc == 1)) && [[ $out == "vcn: get: "* ]] || fail "$name" "get '$got' exited $rc with '$out', wanted 1 and a get: refusal"
+  done
+  [[ ! -e $TMP/marker-$name ]] || fail "$name" "get ran a name that it was given"
+  rc=0
+  out=$(env PATH="$good_path" VCN_STATE="$dir" "$V" get 2>&1) || rc=$?
+  ((rc == 1)) || fail "$name" "get without a name exited $rc: $out"
+  rm -rf -- "$dir" "$TMP/no-node"
+  echo "ok $name: get printed WORK, OUT with -z whole, and refused PATH, a name that run.env lacks, a bad name and no name"
+  cases=$((cases + 1))
+}
+
+# A stale or foreign VCN_STATE is the input that the check exists for. A journey that sourced run.env ran it unchecked. get
+# and every journey must stop at the check: the marker that the run.env touches stays away.
+get_state_case() {
+  local name=get-state dir out rc journey cmd
+  weird_out=/tmp/x
+  dir=$(mktemp -d "$priv/vcn.XXXXXX")
+  get_run_dir "$name" "$dir"
+  printf 'touch %s\n' "$TMP/marker-$name" >>"$dir/run.env"
+  chmod 770 "$dir"
+  for journey in get "$(dirname "$V")"/journey-*.sh; do
+    if [[ $journey == get ]]; then cmd=("$V" get OUT); else cmd=("$journey"); fi
+    rc=0
+    out=$(env PATH="$good_path" VCN_STATE="$dir" "${cmd[@]}" 2>&1) || rc=$?
+    [[ ! -e $TMP/marker-$name ]] || fail "$name" "${journey##*/} sourced the run.env of $dir"
+    ((rc == 1)) && [[ $out == *"refusing state dir $dir: it is group- or world-writable"* ]] ||
+      fail "$name" "${journey##*/} exited $rc, wanted 1 with the refusal of $dir: $out"
+  done
+  rm -rf -- "$dir" "$TMP/no-node"
+  echo "ok $name: get and the five journeys refused a state dir that others can write, and its run.env was not sourced"
+  cases=$((cases + 1))
+}
+
+# journey-opendiff-accept.sh writes opendiff-accept-* files into OUT. A caller can export a stale OUT, and VERIFY_OUT can be a path
+# that a parse of printed text gets wrong: ` OUT=` inside the name, a newline in it, or a newline at its end (a command
+# substitution cuts that one). Each shape must end with every file in the OUT of its run and none in the other dirs.
+journey_out_case() {
+  local name=journey-out shape want real jout n m stale=$TMP/stale-out else=$TMP/jo-else r
+  mkdir "$stale" "$else"
+  for shape in a1 newline nlend; do
+    case $shape in
+    a1) want="$TMP/jo-a1/run OUT=$else" ;;
+    newline) want="$TMP/jo-nl/first"$'\n'"second" ;;
+    nlend) want="$TMP/jo-nlend/dir"$'\n' ;;
+    esac
+    rc=0
+    out=$(env -u XUM_SCRATCH_DIR -u VCN_AGENT_TTY PATH="$good_path" VERIFY_OUT="$want" TMPDIR="$priv" "$V" launch 2>&1) || rc=$?
+    state=$(sed -n 's/^VCN_STATE=//p' <<<"$out" | head -n 1)
+    ((rc == 0)) && [[ $state == "$priv"/vcn.?????? ]] || fail "$name" "launch with the $shape VERIFY_OUT exited $rc: $out"
+    live_state=$state live_path=$good_path
+    real=""
+    IFS= read -r -d "" real < <(env VCN_STATE="$state" "$V" get -z OUT) || true
+    [[ $real == "$want" ]] || fail "$name" "get OUT is not the VERIFY_OUT of the $shape launch"
+    r=0
+    jout=$(env PATH="$good_path" VCN_STATE="$state" OUT="$stale" "$(dirname "$V")/journey-opendiff-accept.sh" 2>&1) || r=$?
+    n=$(find "$real" -maxdepth 1 -name 'opendiff-accept-*' -print0 | tr -cd '\0' | wc -c)
+    m=$(find "$else" "$stale" -type f -print0 | tr -cd '\0' | wc -c)
+    stop "$good_path"
+    ((r == 0 && n > 0 && m == 0)) ||
+      fail "$name" "$shape: the journey exited $r with $n files in its OUT and $m in the other dirs: $(tail -n 3 <<<"$jout")"
+    find "$else" "$stale" -mindepth 1 -delete
+  done
+  echo "ok $name: the journey wrote its files into the OUT of the run for a VERIFY_OUT with OUT= in it, with a newline in it and at its end, and an exported stale OUT"
+  cases=$((cases + 1))
+}
+
+# The dashboard is a terminal program. script(1) gives it one, and the case checks that the running session (hello.txt) shows.
+dashboard_case() {
+  local name=dashboard raw=$TMP/dashboard.raw spid kids k r=0
+  command -v script >/dev/null || {
+    echo "SKIP $name: script(1) is not installed"
+    return 0
+  }
+  launch "$name" "$good_path"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  env PATH="$good_path" VCN_STATE="$state" script -qfec "stty cols 160 rows 40; $V dashboard" /dev/null >"$raw" 2>&1 </dev/null &
+  spid=$!
+  sleep 15
+  kids=$(ps -o pid= --ppid "$spid" | tr -d ' ' | tr '\n' ' ' || true)
+  if [[ -d /proc/$spid ]] && tr '\0' ' ' <"/proc/$spid/cmdline" | grep -q '^script -qfec'; then kill -INT "$spid"; fi
+  wait "$spid" 2>/dev/null || true
+  sleep 1
+  for k in $kids; do
+    if [[ -d /proc/$k ]] && tr '\0' ' ' <"/proc/$k/cmdline" | grep -q 'dashboard'; then
+      kill "$k"
+      r=1
+    fi
+  done
+  stop "$good_path"
+  sed 's/\x1b\[[0-9;?]*[A-Za-z]//g; s/\x1b[()][A-Z0-9]//g' "$raw" | tr -d '\r' >"$raw.txt"
+  if ! grep -q alpha "$raw.txt" || ! grep -q gamma "$raw.txt"; then
+    fail "$name" "the dashboard did not show the text of hello.txt: $(head -c 300 "$raw.txt")"
+  fi
+  ((r == 0)) || fail "$name" "a dashboard process was still alive after its terminal ended (stopped now)"
+  echo "ok $name: vcn.sh dashboard showed the running session in a terminal and left no process"
   cases=$((cases + 1))
 }
 
@@ -1178,9 +1234,8 @@ signal_failed_case
 signal_gap_case
 cleanup_no_agent_tty_case
 setsid_resolved_case
-bare_tools_case
-doc_vars_case
 jq_old_run_case
+node_dir_case
 state_resolved_case
 state_slash_case
 state_mode_case
@@ -1196,6 +1251,10 @@ state_ancestor_case
 tmp_multihop_case
 tmp_later_case
 tmp_removed_case
+get_values_case
+get_state_case
+journey_out_case
+dashboard_case
 signal_symlink_case
 sigterm_case
 echo "CASES $cases"

@@ -9,8 +9,10 @@
 # `PASS` or `FAIL: <count> of <total> checks failed` last. Evidence lands in $OUT as diff-close-save-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
+# Read OUT and WORK through vcn.sh get, which checks $VCN_STATE first. -z keeps a newline at the end of a path.
+get() { IFS= read -r -d "" "$1" < <("$V" get -z "$1"); }
+get OUT
+get WORK
 target=${1:-existing}
 [[ $target == existing || $target == new ]] || {
   echo "usage: journey-diff-close-save.sh [existing|new]" >&2
