@@ -297,6 +297,15 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       assert.same({ "plain set_buf 1001 8" }, log)
     end)
 
+    it("when the split already shows the buffer, and another window shows it too", function()
+      state.win_bufs[SPLIT] = TERMINAL
+      state.win_bufs[OTHER] = TERMINAL
+
+      utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+      assert.same({ "plain set_buf 1001 8" }, log)
+    end)
+
     it("when the split is not the current window", function()
       state.current = OTHER
 

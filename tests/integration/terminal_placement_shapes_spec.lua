@@ -135,7 +135,7 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     })
 
     -- A BufLeave autocmd of the user's that enters their window in the first tab, once the new tab has its two windows.
-    local armed = true
+    local armed = os.getenv("SWAP_ARMED") ~= "0"
     vim.api.nvim_create_autocmd("BufLeave", {
       callback = function()
         if armed and vim.fn.tabpagenr() == 2 and #vim.api.nvim_tabpage_list_wins(0) == 2 then
@@ -267,6 +267,17 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     assert.is_true(result.deferred, "openDiff must open: " .. result.err)
     assert.equal(2, result.tabs)
     assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
+    assert.is_true(result.terminal_in_new_tab, "the terminal must be in a window of the new tab")
+  end)
+
+  -- Without the autocmd above, Neovim fires BufEnter for the terminal buffer when the cursor enters the split, and a
+  -- handler of that buffer, as Snacks' auto_insert is, can queue an insert that starts in the window the cursor ends in.
+  it("opens a diff in a new tab without running a BufEnter autocmd of the terminal buffer", function()
+    local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_ARMED = "0" })
+
+    assert.equal(0, exit_code, "Neovim must survive (nil is a hang): " .. vim.inspect(result))
+    assert.is_not_nil(result, "the case wrote no result")
+    assert.is_true(result.deferred, "openDiff must open: " .. result.err)
     assert.is_true(result.terminal_in_new_tab, "the terminal must be in a window of the new tab")
     assert.equal(0, result.terminal_bufenter_runs, "no BufEnter autocmd of the terminal buffer may run for the swap")
   end)
