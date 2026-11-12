@@ -104,8 +104,8 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 6ebc375cd00f480f
-block inline_saved           53e3ff9a47388fc9
+file lua/claudecode/diff_inline.lua 38c961cbff293013
+block inline_saved           0516057dbab0688a
 block inline_rejected        3a098216eef4b774
 block setup_inline           6c384d6803b05800
 site lua/claudecode/diff_inline.lua: diff._cleanup_diff_state(tab_name, "setup failed") @ local function cleanup_unregistered_inline_setup(tab_name, partial)
