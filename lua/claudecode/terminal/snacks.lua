@@ -416,10 +416,16 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
+  local placed
   if focus then
-    utils.win_set_buf_in_split(new_win, term.buf)
+    placed = utils.win_set_buf_in_split(new_win, term.buf)
   else
-    utils.win_set_buf_in_split(new_win, term.buf, { ignore_bufenter = true })
+    placed = utils.win_set_buf_in_split(new_win, term.buf, { ignore_bufenter = true })
+  end
+  if not placed then
+    -- A BufLeave autocmd of the user's closed the split, so the terminal shows nowhere and stays hidden.
+    term.win = nil
+    return false
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native

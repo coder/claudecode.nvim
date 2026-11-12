@@ -649,6 +649,84 @@ describe("the terminal's placement in its own split", function()
       assert.same(result.plain.log, result.helper.log)
     end)
 
+    it("makes a plain swap, and fails as it does, in a window with 'winfixbuf'", function()
+      if vim.fn.exists("&winfixbuf") ~= 1 then
+        return pending("needs Neovim 0.10")
+      end
+      local result = logs(
+        [[
+        local _, _, split = ...
+        vim.wo[split].winfixbuf = true
+        _G.leaves = 0
+        vim.api.nvim_create_autocmd("BufLeave", {
+          callback = function()
+            _G.leaves = _G.leaves + 1
+          end,
+        })
+      ]],
+        {}
+      )
+
+      assert.is_false(result.plain.ok)
+      assert.is_false(result.helper.ok)
+      assert.equal(result.plain.err, result.helper.err)
+      assert.equal("file", result.helper.split_shows)
+      assert.equal(0, call([[return _G.leaves]]), "a swap that Neovim refuses fires no BufLeave")
+    end)
+
+    -- Inside an autocmd Neovim fires no event of its own for a swap, unless the autocmd is nested. The helper makes the
+    -- plain swap there, with the redirect of a BufLeave autocmd that is nested and enters another window, and fires
+    -- BufLeave once, as the plain swap does.
+    it("makes a plain swap inside a nested autocmd, and fires BufLeave once", function()
+      start_child()
+      local result = call([[
+        local utils = require("claudecode.utils")
+        local function run(use_helper)
+          vim.cmd("tabnew")
+          local file = vim.api.nvim_create_buf(true, false)
+          vim.api.nvim_win_set_buf(0, file)
+          local first = vim.api.nvim_get_current_win()
+          vim.cmd("vsplit")
+          local split = vim.api.nvim_get_current_win()
+          local terminal = vim.api.nvim_create_buf(true, false)
+          local group = vim.api.nvim_create_augroup("inside_autocmd_" .. tostring(use_helper), { clear = true })
+          local leaves = 0
+          vim.api.nvim_create_autocmd("BufLeave", {
+            group = group,
+            buffer = file,
+            nested = true,
+            callback = function()
+              leaves = leaves + 1
+              vim.api.nvim_set_current_win(first)
+            end,
+          })
+          vim.api.nvim_create_autocmd("User", {
+            group = group,
+            pattern = "PlacementRun",
+            nested = true,
+            callback = function()
+              if use_helper then
+                utils.win_set_buf_in_split(split, terminal)
+              else
+                vim.api.nvim_win_set_buf(split, terminal)
+              end
+            end,
+          })
+          vim.api.nvim_exec_autocmds("User", { pattern = "PlacementRun", group = group })
+          vim.api.nvim_clear_autocmds({ group = group })
+          return {
+            leaves = leaves,
+            first_shows_terminal = vim.api.nvim_win_get_buf(first) == terminal,
+            split_shows_terminal = vim.api.nvim_win_get_buf(split) == terminal,
+          }
+        end
+        return { plain = run(false), helper = run(true) }
+      ]])
+
+      assert.equal(1, result.plain.leaves)
+      assert.same(result.plain, result.helper)
+    end)
+
     it("makes a plain swap, and fails as it does, for an unsaved file that no other window shows", function()
       local result = logs(
         [[

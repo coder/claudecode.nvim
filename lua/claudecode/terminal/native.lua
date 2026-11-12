@@ -415,7 +415,11 @@ function show_hidden_terminal(effective_config, focus)
   vim.api.nvim_win_set_height(new_winid, full_height)
 
   -- Set the existing buffer in the new window
-  utils.win_set_buf_in_split(new_winid, bufnr)
+  if not utils.win_set_buf_in_split(new_winid, bufnr) then
+    -- A BufLeave autocmd of the user's closed the split, so the terminal shows nowhere and stays hidden.
+    logger.debug("terminal", "The window for the hidden terminal was closed by an autocmd")
+    return false
+  end
   winid = new_winid
 
   if focus then

@@ -233,7 +233,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           fn()
         end,
         -- Neovim 0.8 has no 'winfixbuf', so the option read raises.
-        nvim_win_get_option = function()
+        nvim_get_option_value = function()
           error("Invalid option name: 'winfixbuf'")
         end,
       },

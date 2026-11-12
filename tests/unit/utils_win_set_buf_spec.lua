@@ -45,22 +45,14 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     stub(vim.api, "nvim_buf_is_valid", function(buf)
       return not state.invalid_bufs[buf]
     end)
-    stub(vim.api, "nvim_win_get_option", function(_, name)
+    stub(vim.api, "nvim_get_option_value", function(name, opts)
       assert.equal("winfixbuf", name)
+      assert.same({ win = SPLIT }, opts)
       if not state.winfixbuf_option then
         error("Invalid option name: 'winfixbuf'", 0)
       end
       return state.winfixbuf
     end)
-    stub(
-      vim,
-      "wo",
-      setmetatable({}, {
-        __index = function()
-          return { winfixbuf = state.winfixbuf }
-        end,
-      })
-    )
     stub(
       vim,
       "bo",
