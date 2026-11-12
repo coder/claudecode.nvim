@@ -68,6 +68,7 @@ Optional fields (the dispatcher does not require them):
 - `snacks` hides floats with `nvim_win_set_config({hide=true})` only on Neovim 0.10 and later. It closes split windows and re-creates them on show [terminal/snacks.lua:cc_hide]
 - `paste_fix` decides at phase 1 whether a streamed paste targets the managed terminal. It replays the whole paste once as phase -1, inside the captured window if focus moved [terminal/paste_fix.lua:M.install]
 - `paste_fix` passes other pastes, and all pastes while disabled, to the original `vim.paste` unchanged. `is_managed_terminal` reads `vim.bo[bufnr].buftype` outside `pcall`, so it throws for an invalid `bufnr`. Its only caller passes the current buffer [terminal/paste_fix.lua:is_managed_terminal]
+- The dispatcher's `setup` accepts a `provider` that is a table or one of `auto`, `snacks`, `native`, `external`, and `none`. It rejects any other value with a WARN notification, `Invalid value for provider: <value>. Keeping <provider>.`, and keeps the provider it had. That is `auto` until a valid value is set, and `auto` uses `snacks` when Snacks is available, else `native`. `get_provider` falls back to `native` with a warning for a stored value that `setup` would have rejected, which only a write to `terminal.defaults.provider` can leave [terminal.lua:M.setup] [terminal.lua:get_provider]
 
 ## Side Effects
 

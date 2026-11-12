@@ -165,7 +165,7 @@ file lua/claudecode/server/tcp.lua 0cfb4b3ed4c138a1
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
-file lua/claudecode/terminal.lua 37d9b6e1f414123e
+file lua/claudecode/terminal.lua 4fed625dd5199b09
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
