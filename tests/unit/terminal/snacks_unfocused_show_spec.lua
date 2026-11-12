@@ -13,6 +13,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local pending_insert
   local fail_swap
   local exec_log
+  local enter_probes
   local bufenter_handlers
   local bufenter_ignored_during_set_buf
   local eventignore_during_set_buf
@@ -59,6 +60,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     pending_insert = false
     fail_swap = false
     exec_log = {}
+    enter_probes = {}
     bufenter_handlers = {}
     bufenter_ignored_during_set_buf = nil
     eventignore_during_set_buf = nil
@@ -94,6 +96,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           table.sort(wins)
           return wins
         end,
+        winnr = function()
+          return 0
+        end,
         maparg = function()
           return {}
         end,
@@ -103,15 +108,15 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       },
       cmd = function(c)
         c = tostring(c)
-        local swap_buf = c:match("^noautocmd buffer! (%d+)$")
+        local swap_win, swap_buf = c:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
         local enter_win = c:match("^noautocmd call nvim_set_current_win%((%d+)%)$")
         if c == "startinsert" then
           pending_insert = true
-        elseif swap_buf then
+        elseif swap_win then
           if fail_swap then
             error("E5555: boom")
           end
-          windows[current_win].buf = tonumber(swap_buf)
+          windows[tonumber(swap_win)].buf = tonumber(swap_buf)
           bufenter_ignored_during_set_buf = ignores_bufenter()
           eventignore_during_set_buf = vim.o.eventignore
         elseif enter_win then
@@ -193,21 +198,45 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         nvim_get_current_buf = function()
           return windows[current_win].buf
         end,
-        -- The events that the placement runs after its swap. An ignored event does not run.
+        -- BufWinEnter, which the placement fires itself.
         nvim_exec_autocmds = function(event, opts)
           table.insert(exec_log, { event = event, buffer = opts.buffer, win = current_win })
-          if event == "BufEnter" and bufenter_handlers[opts.buffer] and not ignores_bufenter() then
-            bufenter_handlers[opts.buffer]()
-          end
         end,
         nvim_get_current_win = function()
           return current_win
         end,
+        -- Neovim's enter events: the placement's probe sees WinEnter, and a BufEnter handler of the buffer runs unless
+        -- 'eventignore' lists BufEnter.
         nvim_set_current_win = function(w)
           current_win = w
+          for _, probe in ipairs(enter_probes) do
+            probe()
+          end
+          local buf = windows[w] and windows[w].buf
+          if bufenter_handlers[buf] and not ignores_bufenter() then
+            bufenter_handlers[buf]()
+          end
         end,
-        nvim_win_call = function(_, fn)
+        nvim_create_augroup = function()
+          enter_probes = {}
+          return 1
+        end,
+        nvim_create_autocmd = function(_, opts)
+          if opts.group == 1 then
+            table.insert(enter_probes, opts.callback)
+          end
+        end,
+        nvim_del_augroup_by_id = function()
+          enter_probes = {}
+        end,
+        nvim_win_get_tabpage = function()
+          return 1
+        end,
+        nvim_win_call = function(w, fn)
+          local saved = current_win
+          current_win = w
           fn()
+          current_win = saved
         end,
       },
     }

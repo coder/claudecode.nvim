@@ -49,33 +49,78 @@ local function ignoring_bufenter(fn)
   end
 end
 
----Show `buf` in the current window with no autocmd and no option write: `:noautocmd` sets 'eventignore' inside Neovim,
----and no `OptionSet` autocmd sees that. The `!` skips the check that the buffer that leaves can be abandoned. A plain
----`nvim_win_set_buf` makes that check before it runs `BufLeave`, and the caller made it that way too: the buffer shows
----in another window, or stays loaded when hidden. An autocmd that closed that other window must not turn it into E37
----now. The buffer then stays loaded and hidden, as after a plain swap.
+---A window of `win`'s tab that shows `buf`, other than `win`, to leave `win` for and come back from. The previous window
+---is the one that the split was made from, so it comes first.
+---@param win number
 ---@param buf number
-local function swap_current_window_to(buf)
-  vim.cmd(string.format("noautocmd buffer! %d", buf))
+---@return number? other
+local function other_window_showing(win, buf)
+  local others = {}
+  for _, other in ipairs(vim.fn.win_findbuf(buf)) do
+    if other ~= win then
+      table.insert(others, other)
+    end
+  end
+  if #others == 0 then
+    return nil
+  end
+  local tab = vim.api.nvim_win_get_tabpage(win)
+  local function qualifies(other)
+    return vim.api.nvim_win_get_tabpage(other) == tab and vim.api.nvim_win_get_config(other).relative == ""
+  end
+  local previous_nr = vim.fn.winnr("#")
+  local previous = previous_nr ~= 0 and vim.fn.win_getid(previous_nr) or nil
+  for _, other in ipairs(others) do
+    if other == previous and qualifies(other) then
+      return other
+    end
+  end
+  for _, other in ipairs(others) do
+    if qualifies(other) then
+      return other
+    end
+  end
+  return nil
 end
 
----Whether `buf` stays loaded, with its job running, after it loses its last window.
----@param buf number
----@return boolean
-local function stays_loaded_when_hidden(buf)
-  local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
-  return bufhidden == "hide" or (bufhidden == "" and vim.o.hidden)
+---Make `win` the current window, with the events that Neovim fires for the move, as `nvim_set_current_win` does, and
+---tell whether Neovim fired any. It fires none inside a non-nested autocmd, and none that 'eventignore' lists. An autocmd
+---of those events can enter another window, also one of another tab, or close `win`. Then `nvim_set_current_win` can
+---raise an error, and this does not pass it on.
+---@param win number
+---@return boolean events_ran
+local function enter_window(win)
+  local ran = false
+  local group = vim.api.nvim_create_augroup("claudecode_placement_probe", { clear = true })
+  vim.api.nvim_create_autocmd({ "WinLeave", "BufLeave", "WinEnter", "BufEnter" }, {
+    group = group,
+    callback = function()
+      ran = true
+    end,
+  })
+  local ok, err = pcall(vim.api.nvim_set_current_win, win)
+  pcall(vim.api.nvim_del_augroup_by_id, group)
+  -- No error to pass on when an autocmd closed `win` or moved the cursor, the swap is done and it is theirs.
+  if not ok and vim.api.nvim_win_is_valid(win) and vim.api.nvim_get_current_win() == win then
+    error(err, 0)
+  end
+  return ran
 end
 
----Show `buf` in `win`, a split that was just made for it and that is the current window, with the events that
----`nvim_win_set_buf` fires, in the order it fires them, except that no autocmd can run while the swap is under way.
----`BufLeave` autocmds of the buffer that `win` showed run inside the call, and one that enters another window there
----makes Neovim load `buf` into that window, even though the call names `win`. Here the events of the buffer that
----leaves run before the swap, so an autocmd that enters another window only moves the cursor, and the cursor goes back
----to `win`. The swap runs under `:noautocmd`, and `BufEnter` and `BufWinEnter` run after it, in `win`.
----The events of the leaving buffer are `BufLeave`, and when `win` was its last window, also `BufWinLeave` and `BufHidden`.
----That order is only the order of a buffer that stays loaded when it is hidden, or that shows in another window. For
----another buffer (the swap would unload it, or raise E37 for an unsaved one) the plain swap runs.
+---Show `buf` in `win`, a split that was just made for it and that is the current window. A plain `nvim_win_set_buf` runs
+---the `BufLeave` autocmds of the buffer that `win` showed inside the call, and one that enters another window there
+---makes Neovim load `buf` into that window, even though the call names `win`.
+---This helper fires no leave event itself. While no autocmd can run, it puts `buf` into `win`, with the old buffer still
+---shown in another window of the tab, so Neovim has no leave event to fire for it. It goes back to that window and then
+---enters `win`. Neovim fires the events of that move: `BufLeave` for the old buffer, `WinLeave`, `WinEnter`, and
+---`BufEnter` for `buf`. A `BufLeave` autocmd that enters another window there only moves the cursor, and the helper puts
+---the cursor back in `win`. Neovim fires no `BufWinEnter` for the move, so the helper fires it, for the buffer in `win`,
+---in `win`, but only when Neovim fired some event of the move, so not inside a non-nested autocmd. If 'eventignore' lists
+---all four of `WinLeave`, `BufLeave`, `WinEnter` and `BufEnter`, no `BufWinEnter` is fired.
+---It differs from a plain swap in two things: `WinLeave` and `WinEnter` run once more, and `BufLeave` runs in the other
+---window, not in `win`.
+---With no other window of the tab that shows the old buffer, the plain swap runs, and a `BufLeave` autocmd that enters
+---another window can still redirect it, as it does for any plain swap.
 ---@param win number
 ---@param buf number
 ---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events. A handler of a terminal
@@ -84,35 +129,26 @@ end
 function M.win_set_buf_in_split(win, buf, opts)
   local function place()
     local old = vim.api.nvim_win_get_buf(win)
-    local shown_elsewhere = false
-    for _, other in ipairs(vim.fn.win_findbuf(old)) do
-      shown_elsewhere = shown_elsewhere or other ~= win
-    end
-    if
-      old == buf
-      or vim.api.nvim_get_current_win() ~= win
-      or not (shown_elsewhere or stays_loaded_when_hidden(old))
-    then
+    local other = old ~= buf and vim.api.nvim_get_current_win() == win and other_window_showing(win, old) or nil
+    if not other then
       vim.api.nvim_win_set_buf(win, buf)
       return
     end
 
-    vim.api.nvim_exec_autocmds("BufLeave", { buffer = old, modeline = false })
-    if not shown_elsewhere and vim.api.nvim_win_is_valid(win) then
-      vim.api.nvim_exec_autocmds("BufWinLeave", { buffer = old, modeline = false })
-      vim.api.nvim_exec_autocmds("BufHidden", { buffer = old, modeline = false })
-    end
+    vim.cmd(string.format("noautocmd call nvim_win_set_buf(%d, %d)", win, buf))
+    vim.cmd(string.format("noautocmd call nvim_set_current_win(%d)", other))
+    local enter_events_ran = enter_window(win)
     if not vim.api.nvim_win_is_valid(win) then
       return
     end
-    -- Back to `win`, as `nvim_win_set_buf` leaves the cursor after such an autocmd, without the events of entering it.
+    -- A plain swap leaves the cursor in `win`, also when an autocmd entered another window, a window of another tab as
+    -- well, and the code that called this goes on in the tab it was in.
     if vim.api.nvim_get_current_win() ~= win then
       vim.cmd(string.format("noautocmd call nvim_set_current_win(%d)", win))
     end
-    swap_current_window_to(buf)
-    vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf, modeline = false })
-    -- A BufEnter autocmd can swap another buffer into the window, and then BufWinEnter is for that buffer.
-    vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = vim.api.nvim_get_current_buf(), modeline = false })
+    if enter_events_ran then
+      vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = vim.api.nvim_get_current_buf(), modeline = false })
+    end
   end
 
   if opts and opts.ignore_bufenter then
