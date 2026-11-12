@@ -1,5 +1,5 @@
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua fc28de832b4056df
+file lua/claudecode/init.lua db4b58226c39fd20
 block start                  7bf331d94d09a034
 block stop                   d754def6d5865650
 site lua/claudecode/init.lua: selection.disable() @ function M.stop()
