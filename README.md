@@ -1147,7 +1147,7 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   about `:qa!`, SIGTERM and a quit from a non-nested autocmd also hold on 0.9.5, 0.10.4 and 0.11.5. SIGKILL stands in
   for a crash, which was not probed:
   - An exit that runs `VimLeavePre` (`:qa!`, SIGTERM or SIGHUP) gives each waiting call one `DIFF_REJECTED`
-    [lua/claudecode/diff.lua:M._reject_pending_diffs]. A call that already has its answer, such as a `FILE_SAVED`,
+    [lua/claudecode/diff.lua:reject_pending_diffs]. A call that already has its answer, such as a `FILE_SAVED`,
     gets no second one.
   - A call that the exit cuts off during its `openDiff` setup gets one -32603 error from the server stop. It has no
     response sender yet, so nothing else can answer it. This happens when a `nested = true` `ClaudeCodeDiffOpened`

@@ -2013,7 +2013,7 @@ end
 ---(`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a diff whose openDiff setup is
 ---still running stays in `setup_result` (see `open_diff_blocking`) and sends nothing: the call has no response sender
 ---yet, and the server's `stop` sends its response.
-function M._reject_pending_diffs()
+local function reject_pending_diffs()
   local pending = {}
   for tab_name, diff_data in pairs(active_diffs) do
     if diff_data.status == "pending" then
@@ -2039,7 +2039,7 @@ end
 ---pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre. The reject
 ---pass runs first. The cleanup pass of every diff runs after it.
 local function cleanup_at_exit()
-  M._reject_pending_diffs()
+  reject_pending_diffs()
   M._cleanup_all_active_diffs("shutdown")
 end
 

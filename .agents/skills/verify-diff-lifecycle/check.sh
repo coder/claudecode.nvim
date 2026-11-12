@@ -50,7 +50,7 @@ covered_block setup_deferred "$SERVER" '^function M\._setup_deferred_response\('
 covered_block user_close_all "$MAIN" 'nvim_create_user_command\("ClaudeCodeCloseAllDiffs"'
 covered_block close_active "$DIFF" '^local function close_active_diffs\('
 covered_block cleanup_all "$DIFF" '^function M\._cleanup_all_active_diffs\('
-covered_block reject_pending "$DIFF" '^function M\._reject_pending_diffs\('
+covered_block reject_pending "$DIFF" '^local function reject_pending_diffs\('
 covered_block exit_cleanup "$DIFF" '^local function cleanup_at_exit\('
 covered_block inline_saved "$INLINE" '^function M\.resolve_inline_as_saved\('
 covered_block inline_rejected "$INLINE" '^function M\.resolve_inline_as_rejected\('
@@ -139,13 +139,13 @@ fact[ClientIdsUnique]=$(as_bool client_ids_unique)
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \
   '_G\.claude_deferred_responses = \{\}' <<<"$server_stop")
 fact[StopPendingOnly]=$(as_bool grep -qE '^ *return diff_data\.status == "pending"$' <<<"$close_pending")
-# The VimLeavePre callback runs _reject_pending_diffs before _cleanup_all_active_diffs, so a diff that no BufUnload
+# The VimLeavePre callback runs reject_pending_diffs before _cleanup_all_active_diffs, so a diff that no BufUnload
 # rejected is rejected before the final cleanup pass.
 FACTS+=(ExitRejectsPending)
 exit_rejects_pending() {
-  in_order '^function M\._reject_pending_diffs\(\)$' 'diff_data\.status == "pending"' \
+  in_order '^local function reject_pending_diffs\(\)$' 'diff_data\.status == "pending"' \
     'pcall\(M\._resolve_diff_as_rejected, entry\.tab_name\)' <<<"$reject_pending" &&
-    in_order '^local function cleanup_at_exit\(\)$' '^  M\._reject_pending_diffs\(\)$' \
+    in_order '^local function cleanup_at_exit\(\)$' '^  reject_pending_diffs\(\)$' \
       '^  M\._cleanup_all_active_diffs\("shutdown"\)$' <<<"$exit_cleanup" &&
     in_order '^vim\.api\.nvim_create_autocmd\("VimLeavePre", \{$' '^  callback = cleanup_at_exit,$' <"$DIFF"
 }

@@ -343,7 +343,7 @@ ServerStops ==
        SetW([v EXCEPT !.sender = [q \in Reqs |-> FALSE]])
   /\ UNCHANGED <<reqTab, reqClient, scheduled, staleOwner>>
 
-(* diff.lua _reject_pending_diffs: _resolve_diff_as_rejected for each diff that is still pending. *)
+(* diff.lua reject_pending_diffs: _resolve_diff_as_rejected for each diff that is still pending. *)
 (* The order does not matter: each rejection touches only its own diff and its own call.        *)
 RECURSIVE RejectEach(_, _)
 RejectEach(w, S) ==
@@ -352,7 +352,7 @@ RejectEach(w, S) ==
        IN RejectEach(IF w.active[t] # NoDiff /\ w.active[t].status = "pending" THEN Resolve(w, t, "rejected") ELSE w,
                      S \ {t})
 
-(* diff.lua VimLeavePre autocmd: _reject_pending_diffs, then _cleanup_all_active_diffs("shutdown"), which   *)
+(* diff.lua VimLeavePre autocmd: reject_pending_diffs, then _cleanup_all_active_diffs("shutdown"), which   *)
 (* removes every entry in any status. Neovim fires BufUnload for each loaded buffer before VimLeavePre, and *)
 (* the proposal buffers' autocmds reject their diffs there (the UserRejects action). That loop stops when an *)
 (* autocmd deletes the buffer it fired for, so a pending diff can still reach this step. Neovim quits right  *)
