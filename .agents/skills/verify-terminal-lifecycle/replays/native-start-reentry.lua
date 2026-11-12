@@ -6,9 +6,10 @@
 -- calls runs when the start returns, because it cannot wait for the job inside termopen (on Neovim 0.8 that aborts the editor).
 -- A hide writes bufhidden=hide when an autocmd of yours changed it, which fires OptionSet inside the hide. An autocmd of that event
 -- can end, hide or show Claude, and the hide must not close a window that it did not read.
--- The body runs from a timer: Neovim fires no OptionSet while it starts up, which includes the -c commands.
+-- The body runs after startup (lib.after_startup): Neovim fires no OptionSet while it starts up, which includes the -c commands
+-- that run.sh uses.
 local lib = dofile(os.getenv("REPLAY_LIB"))
-vim.defer_fn(function()
+lib.after_startup(function()
   local function first_line(text)
     return (tostring(text):gsub("\n.*", ""))
   end
@@ -243,4 +244,4 @@ vim.defer_fn(function()
     end)
   end
   lib.finish()
-end, 50)
+end)
