@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Sends malformed and valid `tools/call` messages to the plugin server of one tree over a real WebSocket and judges
 // every answer against the case table below. Prints one line per case and ends with one COUNT line.
-// Usage: node proof-tools-call-wire.mjs <lock file> <tree> <cwd>   (proof-tools-call-wire.sh starts nvim, then this)
+// Usage: node proof-tools-call-wire.mjs <lock file> <tree> <cwd> <run>   (the launcher starts nvim, then this)
 // Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
 // the table holds (no case at all included), or a path that the leak rule looks for holds a double quote, a backslash
 // or a control character.
@@ -11,7 +11,6 @@
 // or a library raised, because such a message can quote its input: `die` prints only the class name.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 const stop = (message) => {
@@ -22,39 +21,27 @@ const die = (error) =>
   stop(`stopped by an unexpected ${error?.constructor?.name}`);
 process.on("uncaughtException", die);
 
-const [lockPath, tree, cwd] = process.argv.slice(2); // cwd: nvim's, the workspace folder getWorkspaceFolders reports
-if (!cwd) stop("usage: proof-tools-call-wire.mjs <lock file> <tree> <cwd>");
+const [lockPath, tree, cwd, run] = process.argv.slice(2); // cwd: nvim's, which getWorkspaceFolders reports
+if (!run)
+  stop("usage: proof-tools-call-wire.mjs <lock file> <tree> <cwd> <run>");
 
-// Normalization. The path rewrite below applies to a text on its own. The cwd goes first, so a run dir under the real
-// home folder is not a leak: getWorkspaceFolders names the cwd on purpose. Two readers use it. The leak rule reads the
-// text of each frame as the wire sent it (see ws.onmessage). The comparison with the table reads a rebuilt copy of the
-// answer (`normalize`), which decodes a text item that holds JSON and rewrites strings but not keys, so two keys that the
-// rewrite would make equal never pass as a correct answer.
+// Normalization. The path rewrite below applies to a text on its own. The cwd goes first, so a work folder under the
+// real home folder is not a leak: getWorkspaceFolders names the cwd on purpose. Two readers use it. The leak rule
+// reads the text of each frame as the wire sent it (see ws.onmessage). The comparison with the table reads a rebuilt
+// copy of the answer (`normalize`), which decodes a text item that holds JSON and rewrites strings but not keys, so
+// two keys that the rewrite would make equal never pass as a correct answer.
 const PLACEHOLDERS = [
   [cwd, "$CWD"],
-  [dirname(cwd), "$RUN"], // the run dir (cwd is $RUN/work): nvim's HOME, XDG dirs, TMPDIR, CLAUDE_CONFIG_DIR, lock file
+  [run, "$RUN"], // the run dir: HOME, XDG dirs, TMPDIR, CLAUDE_CONFIG_DIR, lock file. cwd is beside it, not in it
   [tree, "$TREE"],
   [homedir(), "$HOME"], // the checker has an empty environment, so this is the home of the password database
 ].filter(([path]) => path.length > 1);
 const PATHS = {
   $CWD: "the work folder",
-  $RUN: "the temp dir", // never named: the loop refuses the work folder path first, which starts with it
+  $RUN: "the temp dir",
   $TREE: "the tree",
   $HOME: "the home folder",
 };
-// The work folder is the one path that a frame may hold, so it is rewritten only as a whole path: where `/`, the end of
-// a JSON string (a quote, with backslashes before it in a nested string) or the end of the text follows it. The work
-// folder plus `X` is then no work folder, and it reads as a `$RUN` path. The other paths are rewritten wherever their
-// text appears: an over-match of a leak path is a leak.
-const REWRITES = PLACEHOLDERS.map(([path, mark]) => [
-  mark === "$CWD"
-    ? new RegExp(
-        `${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=/|\\\\*"|$)`,
-        "g",
-      )
-    : path,
-  mark,
-]);
 // A leak is a Lua position (`.lua:` and a digit), or a path under the run dir, the plugin tree or the real home folder.
 // The last three are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is
 // one too.
@@ -145,10 +132,7 @@ for (const { name, ok, strings = {} } of TOOLS) {
 }
 
 const rewrite = (text) =>
-  REWRITES.reduce(
-    (out, [pattern, mark]) => out.replaceAll(pattern, mark),
-    text,
-  );
+  PLACEHOLDERS.reduce((out, [path, mark]) => out.replaceAll(path, mark), text);
 const parse = (text) => {
   try {
     return /^[[{]/.test(text) ? JSON.parse(text) : text;
