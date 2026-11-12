@@ -74,7 +74,7 @@ fact[GuardRejected]=$(as_bool in_order 'if not diff_data or diff_data\.status ~=
   'diff_data\.status = "rejected"' <<<"$resolve_rejected")
 fact[SenderCleared]=$(as_bool in_order '_G\.claude_deferred_responses\[co_key\]\(' \
   '_G\.claude_deferred_responses\[co_key\] = nil' <<<"$open_blocking")
-fact[ReplaceRejects]=$(as_bool in_order 'if active_diffs\[tab_name\] then' 'existing_diff\.status == "pending"' \
+fact[ReplaceRejects]=$(as_bool in_order 'while existing_diff do' 'existing_diff\.status == "pending"' \
   'M\._resolve_diff_as_rejected\(tab_name\)' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' \
   'coroutine\.running\(\)' <<<"$open_blocking")
 fact[CloseTabRejectsPending]=$(as_bool in_order 'if diff_data\.status == "pending" then' \
@@ -88,7 +88,7 @@ held_for_other_reads_owner() {
 }
 replace_keeps_others_saved() {
   held_for_other_reads_owner &&
-    in_order 'if active_diffs\[tab_name\] then' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
+    in_order 'while existing_diff do' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
       '^ *error\(\{$' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' <<<"$open_blocking"
 }
 fact[ReplaceKeepsOthersSaved]=$(as_bool replace_keeps_others_saved)
