@@ -11,6 +11,7 @@
 // or a library raised, because such a message can quote its input: `die` prints only the class name.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 const stop = (message) => {
@@ -31,17 +32,20 @@ if (!cwd) stop("usage: proof-tools-call-wire.mjs <lock file> <tree> <cwd>");
 // rewrite would make equal never pass as a correct answer.
 const PLACEHOLDERS = [
   [cwd, "$CWD"],
+  [dirname(cwd), "$RUN"], // the run dir (cwd is $RUN/work): nvim's HOME, XDG dirs, TMPDIR, CLAUDE_CONFIG_DIR, lock file
   [tree, "$TREE"],
   [homedir(), "$HOME"], // the checker has an empty environment, so this is the home of the password database
 ].filter(([path]) => path.length > 1);
 const PATHS = {
   $CWD: "the work folder",
+  $RUN: "the temp dir",
   $TREE: "the tree",
   $HOME: "the home folder",
 };
-// A leak is a Lua source path with a line number, the plugin tree, or a path under the real home folder. The last
-// two are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is one too.
-const LEAK = /\.lua:\d|\$TREE|\$HOME/;
+// A leak is a Lua position (`.lua:` and a digit), or a path under the run dir, the plugin tree or the real home folder.
+// The last three are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is
+// one too.
+const LEAK = /\.lua:\d|\$RUN|\$TREE|\$HOME/;
 
 // The case table. A row is [name, params of tools/call, expected answer]. An expected answer is one of:
 //   refuses(p)  error -32602 whose data names the parameter p
