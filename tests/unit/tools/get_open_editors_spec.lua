@@ -389,6 +389,7 @@ describe("Tool: get_open_editors", function()
 
     after_each(function()
       package.loaded["claudecode.selection"] = nil
+      _G.vim.uri_from_fname = nil
     end)
 
     it("marks a terminal buffer as untitled and a file as not", function()
@@ -399,6 +400,20 @@ describe("Tool: get_open_editors", function()
 
       expect(tabs[1].isUntitled).to_be_false()
       expect(tabs[2].isUntitled).to_be_true()
+    end)
+
+    it("writes the file URI of a path with a space without percent-encoding (pins today's answer)", function()
+      -- Neovim has vim.uri_from_fname, which writes %20 for the space. getOpenEditors does not call it today.
+      _G.vim.uri_from_fname = function(path)
+        return "file://"
+          .. path:gsub("[^%w/._~:@!$&'()*+,;=-]", function(char)
+            return string.format("%%%02x", char:byte())
+          end)
+      end
+
+      local tabs = open_editors({ { name = "/path/to/a b.lua" } })
+
+      expect(tabs[1].uri).to_be("file:///path/to/a b.lua")
     end)
 
     it("reports plaintext when the buffer has no filetype", function()
