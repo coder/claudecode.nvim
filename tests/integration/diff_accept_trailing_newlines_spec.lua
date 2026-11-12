@@ -78,13 +78,7 @@ describe("the text a proposed diff accepts", function()
     describe("in the " .. layout .. " layout", function()
       for _, old_file in ipairs(old_files) do
         for _, proposal in ipairs(proposals) do
-          -- The vertical layout writes a final line break after a proposal that has none. That is not what the
-          -- unified fix changes, so this case stays pending there.
-          local case = it
-          if layout == "vertical" and proposal.text:sub(-1) ~= "\n" then
-            case = pending
-          end
-          case(("keeps %s of a proposal against %s"):format(proposal.name, old_file.name), function()
+          it(("keeps %s of a proposal against %s"):format(proposal.name, old_file.name), function()
             local state = open_diff(layout, old_file.text, proposal.text)
 
             vim.api.nvim_set_current_win(state.new_window)
