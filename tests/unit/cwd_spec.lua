@@ -41,18 +41,22 @@ describe("The git root lookup", function()
     assert.same({ "git", "-C", dir, "rev-parse", "--show-toplevel" }, git_calls[1])
   end)
 
-  it("runs git rev-parse once for a folder that is not in a repository, then searches for .git", function()
+  it("runs git rev-parse once for a folder that is not in a repository, then walks up to find a .git folder", function()
     stub_git({ lines = { "fatal: not a git repository" }, exit_code = 128 })
-    local searched
-    vim.fn.finddir = function(name, path)
-      searched = { name = name, path = path }
-      return ""
-    end
+    assert(os.execute("mkdir -p " .. temp_dir.quote(dir .. "/sub/deeper")))
 
-    assert.is_nil(cwd.git_root(dir))
-
+    -- A TMPDIR that sits inside a repository (a checkout, say) has a `.git` folder above `dir`, and the walk finds it.
+    -- So the lookup may find that repository, but never one inside `dir`.
+    local found = cwd.git_root(dir .. "/sub/deeper")
+    assert.is_true(
+      found == nil or found:sub(1, #dir) ~= dir,
+      "no repository inside " .. dir .. ", found " .. tostring(found)
+    )
     assert.equals(1, git_runs, vim.inspect(git_calls))
-    assert.same({ name = ".git", path = dir .. ";" }, searched)
+
+    assert(os.execute("mkdir -p " .. temp_dir.quote(dir .. "/.git")))
+    assert.equals(dir, cwd.git_root(dir .. "/sub/deeper"))
+    assert.equals(2, git_runs, vim.inspect(git_calls))
   end)
 
   it("runs git rev-parse as a shell string, once, when systemlist refuses a list", function()

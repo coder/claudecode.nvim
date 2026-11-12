@@ -447,6 +447,36 @@ describe("Tools Module", function()
     end)
   end)
 
+  describe("Tool list (get_tool_list)", function()
+    it(
+      "lists exactly the ten MCP tools, with their schema description and input schema, and hides close_tab",
+      function()
+        local names = {}
+        for _, tool in ipairs(tools.get_tool_list()) do
+          table.insert(names, tool.name)
+          expect(tool.description).to_be(tools.tools[tool.name].schema.description)
+          assert.are.same(tools.tools[tool.name].schema.inputSchema, tool.inputSchema)
+        end
+        table.sort(names)
+
+        assert.are.same({
+          "checkDocumentDirty",
+          "closeAllDiffTabs",
+          "getCurrentSelection",
+          "getDiagnostics",
+          "getLatestSelection",
+          "getOpenEditors",
+          "getWorkspaceFolders",
+          "openDiff",
+          "openFile",
+          "saveDocument",
+        }, names)
+        expect(tools.tools.close_tab.handler).to_be_function()
+        expect(tools.tools.close_tab.schema).to_be_nil()
+      end
+    )
+  end)
+
   -- All individual tool describe blocks (e.g., "Open File Tool", "Get Diagnostics Tool", etc.)
   -- were removed from this file as of the refactoring on 2025-05-26.
   -- Their functionality is now tested in their respective spec files
