@@ -606,9 +606,10 @@ end
 ---@return table instance
 local function wrap_terminal(buf, config)
   local instance = Snacks.win(wrapper_options(buf, config))
-  -- The style sets a filetype, and the window options that the terminal started with (an older version's, built from
-  -- the config) can hold `bo` too. The buffer has its own filetype already, and Snacks sets `bo` on the buffer again on
-  -- every VimResized, which would fire FileType again. So the reset runs right after the constructor.
+  -- The style sets a filetype, and the stored window options can hold `bo` too (a start of this version stores the `bo` of
+  -- its instance, and an older version's options are built from the config). The buffer has its own filetype already,
+  -- and Snacks sets `bo` on the buffer again on every VimResized, which would fire FileType again. So the reset runs
+  -- right after the constructor.
   instance.opts.bo = {}
   -- Snacks sets `buf` when it shows an instance. This one shows no window of its own, so set it here. Snacks wipes the
   -- buffer of a scratch instance when it closes, and this terminal buffer was started by Snacks.terminal.
