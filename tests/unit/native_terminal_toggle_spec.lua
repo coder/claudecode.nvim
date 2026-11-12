@@ -137,15 +137,17 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
           local closing_bufnr = mock_state.windows[winid].bufnr
           mock_state.windows[winid] = nil
-          -- With 'nohidden', closing the last window of a buffer that is not bufhidden=hide unloads it. A terminal
-          -- buffer ends its job with it.
+          -- Closing the last window of a buffer ends it when its bufhidden is wipe or delete, and with 'nohidden' when it is
+          -- not hide. A terminal buffer ends its job with it, and another buffer unloads.
           local closing = mock_state.buffers[closing_bufnr]
-          if mock_state.nohidden and closing and closing.options.bufhidden ~= "hide" then
+          local policy = closing and closing.options.bufhidden
+          local ends_buffer = policy == "wipe" or policy == "delete"
+          if closing and (ends_buffer or (mock_state.nohidden and policy ~= "hide")) then
             local shown = false
             for _, win in pairs(mock_state.windows) do
               shown = shown or win.bufnr == closing_bufnr
             end
-            if not shown and closing.options.buftype == "terminal" then
+            if not shown and (ends_buffer or closing.options.buftype == "terminal") then
               mock_vim.api.nvim_buf_delete(closing_bufnr, { force = true })
             elseif not shown then
               closing.unloaded = true
@@ -1564,6 +1566,23 @@ describe("claudecode.terminal.native toggle behavior", function()
       local active = native_provider.get_active_bufnr()
       assert.is_not_nil(active)
       assert.are.equal("hide", mock_state.buffers[active].options.bufhidden)
+    end)
+
+    -- An autocmd of the user's can set bufhidden after the start (a TermEnter autocmd that sets wipe). The next hide closes
+    -- the window, which would then end Claude, so the hide sets bufhidden=hide again.
+    it("should keep Claude running when a hide follows a change of bufhidden to wipe", function()
+      local mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config, true)
+      local active = native_provider.get_active_bufnr()
+      mock_vim.bo[active].bufhidden = "wipe"
+
+      native_provider.simple_toggle("claude", {}, config)
+
+      assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      assert.are.equal(active, native_provider.get_active_bufnr())
+      assert.are.equal(0, windows_showing(active))
+      native_provider.simple_toggle("claude", {}, config)
+      assert.are.equal(1, windows_showing(active))
     end)
 
     -- With 'nohidden', a window that closes during the start unloads a buffer that is not bufhidden=hide. Before termopen,

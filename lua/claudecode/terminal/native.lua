@@ -424,6 +424,9 @@ local function hide_terminal()
       logger.debug("terminal", "Terminal window is the last window, not hiding it")
       return
     end
+    -- An autocmd of yours can have changed bufhidden since the start (a TermEnter autocmd that sets wipe, for one), and
+    -- closing the window would then end Claude. So a hide sets it again.
+    vim.bo[bufnr].bufhidden = "hide"
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
     winid = nil -- Clear window reference
