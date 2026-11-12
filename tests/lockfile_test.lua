@@ -666,7 +666,7 @@ describe("Lockfile Module", function()
         local quoted = temp_dir.quote(lock_path)
         local file = assert(io.open(lock_path, "w"))
         file:close()
-        os.execute("chmod " .. mode .. " " .. quoted)
+        shell("chmod " .. mode .. " " .. quoted)
 
         local replaced = false
         local real_stat, real_lstat = vim.loop.fs_stat, vim.loop.fs_lstat
