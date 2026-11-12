@@ -453,7 +453,7 @@ describe("Tool: open_file", function()
         return ""
       end)
       _G.vim.api.nvim_win_get_config = spy.new(function(win)
-        return win == 1000 and case.config or {}
+        return win == 1000 and case.config or { relative = "" }
       end)
       local called_win
       _G.vim.api.nvim_win_call = spy.new(function(win, callback)
