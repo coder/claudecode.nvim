@@ -1058,8 +1058,13 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
   local final_content = table.concat(content_lines, "\n")
-  -- Add trailing newline if the buffer has one
-  if #content_lines > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
+  -- Add trailing newline if the buffer has one, as :w does. :w writes nothing for an empty buffer, whatever 'eol' is.
+  -- Such a buffer has no lines, but nvim_buf_get_lines still returns one empty string for it, so the count of bytes tells
+  -- it from a buffer with one empty line.
+  local byte_count = vim.api.nvim_buf_call(buffer_id, function()
+    return vim.fn.wordcount().bytes
+  end)
+  if byte_count > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
     final_content = final_content .. "\n"
   end
 
