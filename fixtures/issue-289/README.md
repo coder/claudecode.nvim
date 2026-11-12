@@ -55,8 +55,9 @@ NVIM_APPNAME=issue-289 XDG_CONFIG_HOME=fixtures \
 
 Then, in the buffer:
 
-1. **Visual path** (the README-default `<leader>as`, which maps to
-   `<cmd>ClaudeCodeSend<cr>` and keeps visual mode): visually select a few lines
+1. **Visual path** (the `<leader>as` mapping from the README's Installation spec,
+   which this fixture sets and which maps to `<cmd>ClaudeCodeSend<cr>` and keeps
+   visual mode): visually select a few lines
    (`Vjj`) and press `<leader>as`.
    → `ClaudeCode Error [ClaudeCode] [command] [ERROR] ClaudeCodeSend_visual->TreeAdd: Not in visual mode (current mode: n)`
 2. **Range path**: visually select a few lines, then `:'<,'>ClaudeCodeSend`.
