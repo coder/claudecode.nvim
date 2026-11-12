@@ -3,6 +3,7 @@
 # Usage: replays/run.sh [NAME...]   (default: every *.lua replay except lib.lua and sync.lua)
 # NVIM overrides the Neovim binary. Each replay's full timeline goes to $OUT/<name>.log (OUT defaults to a new
 # mktemp -d dir, printed first). Prints one verdict line per replay (KEPT or BROKEN, and the rule) and a count line.
+# A replay is KEPT only when it printed KEPT and its Neovim exited 0.
 # Exits 0 when every replay kept its promise, 1 otherwise.
 set -uo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -33,8 +34,14 @@ for name in "${names[@]}"; do
     perl -e 'alarm 120; exec @ARGV' "$NVIM" --headless -u NONE -i NONE \
     --cmd 'lua vim.opt.rtp:prepend(vim.env.REPLAY_REPO)' -c 'execute "luafile" fnameescape($REPLAY_SCRIPT)' \
     -c 'cquit 2') >"$OUT/$name.log" 2>&1
+  rc=$?
   verdict=$(grep -E '^(KEPT|BROKEN) ' "$OUT/$name.log" | tail -1)
-  [[ -n $verdict ]] || verdict="BROKEN $name: the replay printed no verdict (see $OUT/$name.log)"
+  if [[ -z $verdict ]]; then
+    verdict="BROKEN $name: the replay printed no verdict, and Neovim exited $rc (see $OUT/$name.log)"
+  elif ((rc != 0)); then
+    # A verdict, then a failed exit (a VimLeavePre error, the alarm): the run failed whatever the verdict said.
+    verdict="BROKEN $name: Neovim exited $rc after the verdict \"$verdict\" (see $OUT/$name.log)"
+  fi
   [[ $verdict == KEPT* ]] && kept=$((kept + 1))
   echo "$name: $verdict"
 done
