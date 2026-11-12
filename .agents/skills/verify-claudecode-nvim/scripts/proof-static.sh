@@ -412,8 +412,8 @@ no_trust_hint_case() {
   [[ $hits != *skip.sh* && $hits != *clean.md* ]] || fail "$name" "the scanner names a file that it skips or a file with no hit: $hits"
   dir=$(realpath -- "$skill")
   self=$(realpath -- "${BASH_SOURCE[0]}")
-  files=$(find "$dir" -type f | wc -l)
-  ((files > 1)) || fail "$name" "$dir holds $files files, so there is nothing to scan"
+  files=$(find "$dir" -type f ! -path "$self" | wc -l)
+  ((files > 0)) || fail "$name" "$dir holds no file but this script, so there is nothing to scan"
   hits=$(trust_hits "$dir" "$self")
   [[ -z $hits ]] || fail "$name" "a file of the skill folder tells the reader to trust the checkout, and a trusted mise.toml runs code as the reader: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: no file of the skill folder, apart from this script, names mise's trust command or its trust variable ($files files read)"
