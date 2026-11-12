@@ -6,8 +6,9 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
 end
 
 -- A BufLeave autocmd of the user's that enters another window during `nvim_win_set_buf` makes Neovim load the terminal
--- into that window. `utils.win_set_buf_in_split` runs the events of the leaving buffer before the swap, so the terminal
--- lands in its split. In the shapes below the window that the autocmd enters, the options of the user's file and of the
+-- into that window. `utils.win_set_buf_in_split` swaps while the old buffer still shows in the window that the split was
+-- made from, and then enters the split, so Neovim fires the BufLeave autocmds itself, in that window, and the terminal
+-- lands in the split. In the shapes below the window that the autocmd enters, the options of the user's file and of the
 -- terminal buffer decide whether a buffer is unloaded, hidden or refused with E37, so the helper must keep the outcome
 -- of a plain swap: the command works, the user's file is loaded and still shows in its window, and the terminal runs
 -- in one window. Each case runs in its own headless Neovim, so a crash or a hang fails one case, with its exit code,

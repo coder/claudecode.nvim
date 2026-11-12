@@ -7,8 +7,11 @@ end
 
 -- `nvim_win_set_buf` runs the BufLeave autocmds of the buffer it replaces inside the call. When one of them enters
 -- another window, Neovim loads the new buffer into that window, even though the call names another one. The providers
--- put the terminal into the split they made with `utils.win_set_buf_in_split`, which runs those events before the swap,
--- so such an autocmd only moves the cursor. The swap itself fires the events that a plain swap fires, in the same order.
+-- put the terminal into the split they made with `utils.win_set_buf_in_split`. It swaps while the old buffer still shows
+-- in the window that the split was made from, goes back to that window, and enters the split. Neovim fires the leave
+-- and enter events of that move, and an autocmd that enters another window only moves the cursor. The helper fires no
+-- leave event itself, so the events of a buffer that loses its last window come from Neovim, also when a BufLeave
+-- autocmd closes the window.
 describe("the terminal's placement in its own split", function()
   local chan
 
@@ -223,11 +226,11 @@ describe("the terminal's placement in its own split", function()
     end
   )
 
-  describe("fires the events of a plain swap", function()
+  describe("the events of the placement", function()
     ---Runs `swap` for a split of a file in a tab of its own, once as a plain `nvim_win_set_buf` (`use_helper` false) and
     ---once as the helper, with a logger on the events a swap fires. `prepare` gets the file, the terminal buffer, the
-    ---split and the window that the file also shows in, and can add autocmds and set options. `context` adds the
-    ---current window and buffer to each log line, for a swap that no autocmd redirects.
+    ---split, the window that the file also shows in and the augroup of the logger, and can add autocmds and set options.
+    ---Each line of a log has the event, the buffer it is for, the window that is current and the buffer in it.
     local function logs(prepare, opts)
       start_child()
       return call(
@@ -247,13 +250,8 @@ describe("the terminal's placement in its own split", function()
           local function role(buf)
             return roles[buf] or "other"
           end
-          local function index(win)
-            for i, other in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-              if other == win then
-                return i
-              end
-            end
-            return -1
+          local function window_name(win)
+            return win == split and "split" or (win == first and "first" or "other")
           end
           local group = vim.api.nvim_create_augroup("swap_events_" .. tostring(use_helper), { clear = true })
           prepare(file, terminal, split, first, group, opts.close_first)
@@ -263,12 +261,12 @@ describe("the terminal's placement in its own split", function()
             {
               group = group,
               callback = function(event)
-                local line = event.event .. "@" .. role(event.buf)
-                if opts.context then
-                  line = line .. " in window " .. index(vim.api.nvim_get_current_win())
+                table.insert(
+                  log,
+                  event.event .. "@" .. role(event.buf)
+                    .. " in " .. window_name(vim.api.nvim_get_current_win())
                     .. " showing " .. role(vim.api.nvim_get_current_buf())
-                end
-                table.insert(log, line)
+                )
               end,
             }
           )
@@ -288,7 +286,7 @@ describe("the terminal's placement in its own split", function()
             tabstops = { file = vim.bo[file].tabstop, terminal = vim.bo[terminal].tabstop },
             split_shows = role(vim.api.nvim_win_get_buf(split)),
             first_shows = vim.api.nvim_win_is_valid(first) and role(vim.api.nvim_win_get_buf(first)) or "closed",
-            current = index(vim.api.nvim_get_current_win()),
+            current = window_name(vim.api.nvim_get_current_win()),
           }
         end
         return { plain = run(false), helper = run(true) }
@@ -298,88 +296,95 @@ describe("the terminal's placement in its own split", function()
       )
     end
 
-    ---A swap that no autocmd redirects gives the same events, each with the same current window and buffer.
-    local function expect_same(prepare, opts)
-      local result = logs(prepare, vim.tbl_extend("force", { context = true }, opts or {}))
-
-      assert.equal("terminal", result.plain.split_shows)
-      assert.is_true(#result.plain.log > 0, "the swap must fire events, or the test proves nothing")
-      assert.same(result.plain.log, result.helper.log)
-      assert.same({ split_shows = "terminal", first_shows = result.plain.first_shows }, {
-        split_shows = result.helper.split_shows,
-        first_shows = result.helper.first_shows,
-      })
-      assert.equal(result.plain.current, result.helper.current)
+    ---The plain swap's events with what the placement adds: the cursor leaves the other window for the split, so
+    ---`WinLeave` and `WinEnter` run after `BufLeave`, and `BufLeave` runs in the other window.
+    local function placement_events()
+      return {
+        "BufLeave@file in first showing file",
+        "WinLeave@file in first showing file",
+        "WinEnter@terminal in split showing terminal",
+        "BufEnter@terminal in split showing terminal",
+        "BufWinEnter@terminal in split showing terminal",
+      }
     end
 
-    it("when the buffer it replaces also shows in another window", function()
-      expect_same("")
+    it(
+      "are the plain swap's, in the same order, with one more WinLeave and WinEnter, when the buffer also shows elsewhere",
+      function()
+        local result = logs("", {})
+
+        assert.same({
+          "BufLeave@file in split showing file",
+          "BufEnter@terminal in split showing terminal",
+          "BufWinEnter@terminal in split showing terminal",
+        }, result.plain.log)
+        assert.same(placement_events(), result.helper.log)
+        assert.equal("terminal", result.helper.split_shows)
+        assert.equal("file", result.helper.first_shows)
+        assert.equal("split", result.helper.current)
+      end
+    )
+
+    it("leave BufEnter out when the call ignores it, as a swap that ignores it does", function()
+      local result = logs("", { ignore_bufenter = true })
+
+      assert.same({
+        "BufLeave@file in split showing file",
+        "BufWinEnter@terminal in split showing terminal",
+      }, result.plain.log)
+      assert.same({
+        "BufLeave@file in first showing file",
+        "WinLeave@file in first showing file",
+        "WinEnter@terminal in split showing terminal",
+        "BufWinEnter@terminal in split showing terminal",
+      }, result.helper.log)
     end)
 
-    it("when the buffer it replaces shows in no other window and stays loaded", function()
-      expect_same([[
-        local file, _, _, first = ...
-        vim.api.nvim_win_close(first, true)
-        vim.bo[file].bufhidden = "hide"
-      ]])
-    end)
-
-    it("when the buffer it replaces shows in no other window and 'hidden' is on", function()
-      expect_same([[
-        local _, _, _, first = ...
-        vim.o.hidden = true
-        vim.api.nvim_win_close(first, true)
-      ]])
-    end)
-
-    it("when the buffer it replaces is unloaded by the swap", function()
-      expect_same([[
-        local _, _, _, first = ...
-        vim.o.hidden = false
-        vim.api.nvim_win_close(first, true)
-      ]])
-    end)
-
-    it("when BufEnter autocmds of the user's run for the terminal buffer", function()
-      expect_same([[
+    it("run the BufEnter autocmds of the user's for the terminal buffer once, in the split", function()
+      local result = logs(
+        [[
         local _, terminal, _, _, group = ...
         vim.api.nvim_create_autocmd("BufEnter", {
           group = group,
           buffer = terminal,
           callback = function() end,
         })
-      ]])
+      ]],
+        {}
+      )
+
+      assert.same(placement_events(), result.helper.log)
     end)
 
-    it("without BufEnter, as a swap that ignores BufEnter fires them", function()
-      expect_same("", { ignore_bufenter = true })
-    end)
-
-    it("when an autocmd of the user's saves the file as the cursor leaves it", function()
+    it("run an autosave autocmd once, in the window that shows the file, before the file is left", function()
       local result = logs(
         [[
         local file, _, _, _, group = ...
         vim.api.nvim_buf_set_lines(file, 0, -1, false, { "user edit" })
         vim.api.nvim_buf_set_name(file, _G.dir .. "/saved-" .. file .. ".txt")
+        _G.autosave_runs = _G.autosave_runs or 0
         vim.api.nvim_create_autocmd("BufLeave", {
           group = group,
           buffer = file,
           callback = function()
+            _G.autosave_runs = _G.autosave_runs + 1
             vim.cmd("silent! update")
           end,
         })
       ]],
-        { context = true }
+        {}
       )
 
-      assert.same(result.plain.log, result.helper.log)
+      assert.same(placement_events(), result.helper.log)
+      -- One run for the plain swap, one for the helper.
+      assert.equal(2, call([[return _G.autosave_runs]]))
     end)
 
     for _, case in ipairs({
       { name = "shows in another window", close_first = false },
       { name = "shows in no other window", close_first = true },
     }) do
-      it("and reads no modeline of either buffer when the buffer it replaces " .. case.name, function()
+      it("read no modeline of either buffer when the buffer they replace " .. case.name, function()
         local result = logs(
           [[
           local file, terminal, _, first, _, close_first = ...
@@ -400,7 +405,106 @@ describe("the terminal's placement in its own split", function()
       end)
     end
 
-    it("with the same events, in the same order, when a BufLeave autocmd enters another window", function()
+    describe(
+      "are exactly the plain swap's, with the same current window and buffer, when no other window shows the buffer",
+      function()
+        local function expect_plain(prepare)
+          local result = logs(prepare, { close_first = true })
+
+          assert.equal("terminal", result.plain.split_shows)
+          assert.is_true(#result.plain.log > 0, "the swap must fire events, or the test proves nothing")
+          assert.same(result.plain.log, result.helper.log)
+          assert.same(result.plain.current, result.helper.current)
+        end
+
+        it("and the buffer stays loaded", function()
+          expect_plain([[
+          local file, _, _, first = ...
+          vim.bo[file].bufhidden = "hide"
+          vim.api.nvim_win_close(first, true)
+        ]])
+        end)
+
+        it("and 'hidden' is on", function()
+          expect_plain([[
+          local _, _, _, first = ...
+          vim.o.hidden = true
+          vim.api.nvim_win_close(first, true)
+        ]])
+        end)
+
+        it("and the swap unloads it", function()
+          expect_plain([[
+          local _, _, _, first = ...
+          vim.o.hidden = false
+          vim.api.nvim_win_close(first, true)
+        ]])
+        end)
+      end
+    )
+
+    for _, nested in ipairs({ false, true }) do
+      -- Neovim fires none of its events for what an autocmd does, unless the autocmd is nested. `nvim_exec_autocmds`
+      -- fires them anyway, so the helper fires BufWinEnter only when Neovim ran its own enter events.
+      it(
+        "fire BufWinEnter " .. (nested and "inside" or "not inside") .. " a nested autocmd, as a plain swap does",
+        function()
+          start_child()
+          local result = call(
+            [[
+          local nested = ...
+          local utils = require("claudecode.utils")
+          local function run(use_helper)
+            vim.cmd("tabnew")
+            local file = vim.api.nvim_create_buf(true, false)
+            vim.api.nvim_win_set_buf(0, file)
+            vim.cmd("vsplit")
+            local split = vim.api.nvim_get_current_win()
+            local terminal = vim.api.nvim_create_buf(true, false)
+            local group = vim.api.nvim_create_augroup("nested_events_" .. tostring(use_helper), { clear = true })
+            local seen = {}
+            vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter", "BufLeave", "WinEnter" }, {
+              group = group,
+              callback = function(event)
+                table.insert(seen, event.event)
+              end,
+            })
+            vim.api.nvim_create_autocmd("User", {
+              group = group,
+              pattern = "PlacementRun",
+              nested = nested,
+              callback = function()
+                if use_helper then
+                  utils.win_set_buf_in_split(split, terminal)
+                else
+                  vim.api.nvim_win_set_buf(split, terminal)
+                end
+              end,
+            })
+            vim.api.nvim_exec_autocmds("User", { pattern = "PlacementRun", group = group })
+            vim.api.nvim_clear_autocmds({ group = group })
+            local count = 0
+            for _, name in ipairs(seen) do
+              count = name == "BufWinEnter" and count + 1 or count
+            end
+            return { seen = seen, buf_win_enter = count, split_shows_terminal = vim.api.nvim_win_get_buf(split) == terminal }
+          end
+          return { plain = run(false), helper = run(true) }
+        ]],
+            nested
+          )
+
+          assert.is_true(result.helper.split_shows_terminal)
+          assert.equal(nested and 1 or 0, result.plain.buf_win_enter, "a plain swap sets the reference")
+          assert.equal(result.plain.buf_win_enter, result.helper.buf_win_enter)
+          if not nested then
+            assert.same({}, result.helper.seen)
+          end
+        end
+      )
+    end
+
+    it("are the same when a BufLeave autocmd enters another window, and the terminal lands in the split", function()
       local result = logs(
         [[
         local file, _, _, first, group = ...
@@ -419,7 +523,7 @@ describe("the terminal's placement in its own split", function()
       assert.equal("terminal", result.plain.first_shows, "a plain swap is redirected, or the test proves nothing")
       assert.equal("file", result.helper.first_shows)
       assert.equal("terminal", result.helper.split_shows)
-      assert.same(result.plain.log, result.helper.log)
+      assert.same(placement_events(), result.helper.log)
     end)
   end)
 
@@ -686,86 +790,243 @@ describe("the terminal's placement in its own split", function()
     end)
   end)
 
-  describe("a BufLeave autocmd that also changes the buffer of the window it enters", function()
-    ---A session plugin of the user's: the cursor leaves the file, an autocmd enters the original window, and a WinEnter
-    ---autocmd shows another buffer in it. The file then shows in the split only. `hidden` is the global option.
-    local function arm_session_switch(hidden)
+  describe("a BufLeave autocmd that closes the other window of the file", function()
+    ---A file of the user's with an edit, a hidden terminal, and a BufLeave autocmd of the user's file that closes the
+    ---window that the file shows in. The events of the file's last window then come from Neovim, not from the helper.
+    local function arm_window_close(opts)
       call(
         [[
-        local hidden = ...
-        vim.o.hidden = true
-        _G.original = vim.api.nvim_get_current_win()
-        _G.file = vim.api.nvim_get_current_buf()
-        vim.api.nvim_buf_set_lines(_G.file, 0, -1, false, { "unsaved user edit" })
-        _G.other = vim.api.nvim_create_buf(true, false)
-        vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "other session buffer" })
+        local opts = ...
+        vim.o.hidden = opts.hidden
+        local file = vim.api.nvim_get_current_buf()
+        _G.file, _G.original = file, vim.api.nvim_get_current_win()
+        _G.disk = _G.dir .. "/a.txt"
         local terminal = require("claudecode.terminal")
         terminal.open()
         for _, win in ipairs(vim.fn.win_findbuf(terminal.get_active_terminal_bufnr())) do
           vim.api.nvim_win_close(win, false)
         end
         _G.job = vim.b[terminal.get_active_terminal_bufnr()].terminal_job_id
-        vim.o.hidden = hidden
-        local switching = false
-        vim.api.nvim_create_autocmd("WinEnter", {
-          callback = function()
-            if switching and vim.api.nvim_get_current_win() == _G.original then
-              vim.api.nvim_win_set_buf(_G.original, _G.other)
-            end
-          end,
-        })
+        vim.bo[file].bufhidden = opts.bufhidden
+        if opts.modified then
+          vim.api.nvim_buf_set_lines(file, 0, -1, false, { "unsaved user edit" })
+        end
+        _G.events = {}
+        for _, name in ipairs({ "BufWinLeave", "BufHidden", "BufUnload", "BufDelete", "BufWipeout" }) do
+          vim.api.nvim_create_autocmd(name, {
+            buffer = file,
+            callback = function(event)
+              table.insert(_G.events, name)
+              if name == "BufHidden" then
+                vim.api.nvim_buf_call(event.buf, function()
+                  vim.cmd("silent update")
+                end)
+              end
+            end,
+          })
+        end
         vim.api.nvim_create_autocmd("BufLeave", {
-          buffer = _G.file,
+          buffer = file,
           once = true,
           nested = true,
           callback = function()
-            switching = true
-            vim.api.nvim_set_current_win(_G.original)
-            switching = false
+            _G.closed, _G.close_error = pcall(vim.api.nvim_win_close, _G.original, false)
           end,
         })
       ]],
-        hidden
+        opts
       )
     end
 
-    local function state()
-      return call([[
+    local function window_close_state()
+      local state = call([[
+        local terminal = require("claudecode.terminal")
+        local buf = terminal.get_active_terminal_bufnr()
+        local counts = {}
+        for _, name in ipairs(_G.events) do
+          counts[name] = (counts[name] or 0) + 1
+        end
+        return {
+          counts = counts,
+          closed = _G.closed,
+          disk = vim.fn.readfile(_G.disk),
+          file_loaded = vim.api.nvim_buf_is_valid(_G.file) and vim.api.nvim_buf_is_loaded(_G.file),
+          file_valid = vim.api.nvim_buf_is_valid(_G.file),
+          terminal_windows = #vim.fn.win_findbuf(buf),
+          job_running = vim.fn.jobwait({ _G.job }, 10)[1] == -1,
+        }
+      ]])
+      return state
+    end
+
+    it("lets the autosave of a BufHidden autocmd run, once, when the file stays loaded", function()
+      start_child()
+      arm_window_close({ hidden = true, bufhidden = "", modified = true })
+
+      call([[require("claudecode.terminal").open()]])
+
+      local state = window_close_state()
+      assert.is_true(state.closed)
+      assert.same({ BufWinLeave = 1, BufHidden = 1 }, state.counts)
+      assert.same({ "unsaved user edit" }, state.disk, "the BufHidden autosave must write the edit")
+      assert.is_true(state.file_loaded)
+      assert.equal(1, state.terminal_windows)
+      assert.is_true(state.job_running)
+    end)
+
+    it("fires the events of an unloaded file once each, when 'hidden' is off", function()
+      start_child()
+      arm_window_close({ hidden = false, bufhidden = "", modified = false })
+
+      call([[require("claudecode.terminal").open()]])
+
+      local state = window_close_state()
+      assert.is_true(state.closed)
+      assert.same({ BufWinLeave = 1, BufUnload = 1 }, state.counts)
+      assert.is_false(state.file_loaded)
+      assert.equal(1, state.terminal_windows)
+      assert.is_true(state.job_running)
+    end)
+
+    it("fires the events of a wiped file once each, when its 'bufhidden' is wipe", function()
+      start_child()
+      arm_window_close({ hidden = true, bufhidden = "wipe", modified = false })
+
+      call([[require("claudecode.terminal").open()]])
+
+      local state = window_close_state()
+      assert.is_true(state.closed)
+      assert.same({ BufWinLeave = 1, BufUnload = 1, BufDelete = 1, BufWipeout = 1 }, state.counts)
+      assert.is_false(state.file_valid)
+      assert.equal(1, state.terminal_windows)
+      assert.is_true(state.job_running)
+    end)
+
+    it(
+      "lets Neovim refuse to close the window of an unsaved file when 'hidden' is off, and still shows the terminal",
+      function()
+        start_child()
+        arm_window_close({ hidden = false, bufhidden = "", modified = true })
+
+        call([[require("claudecode.terminal").open()]])
+
+        local state = window_close_state()
+        assert.is_false(state.closed)
+        assert.same({}, state.counts)
+        assert.is_true(state.file_loaded)
+        assert.equal(1, state.terminal_windows)
+      end
+    )
+
+    it("resolves a pending diff whose proposal buffer loses its last window", function()
+      -- The proposal buffer of an openDiff is the buffer in the window, and a diff stays pending until its proposal is
+      -- answered or hidden (#238).
+      start_child()
+      local state = call([[
+        local diff = require("claudecode.diff")
+        local tools = require("claudecode.tools.init")
+        tools.register_all()
+        _G.claude_deferred_responses = {}
+        local terminal = require("claudecode.terminal")
+        terminal.open()
+        for _, win in ipairs(vim.fn.win_findbuf(terminal.get_active_terminal_bufnr())) do
+          vim.api.nvim_win_close(win, false)
+        end
+        local path = _G.dir .. "/a.txt"
+        local tab_name = "placement spec proposal"
+        local answers = {}
+        local call = tools.handle_invoke({ id = "placement_spec_client" }, {
+          name = "openDiff",
+          arguments = { old_file_path = path, new_file_path = path, new_file_contents = "changed\n", tab_name = tab_name },
+        })
+        _G.claude_deferred_responses[tostring(call.coroutine)] = function(response)
+          table.insert(answers, response.content and response.content[1].text or vim.inspect(response))
+        end
+        local proposal = diff._get_active_diffs()[tab_name].new_buffer
+        local proposal_windows = vim.fn.win_findbuf(proposal)
+        vim.api.nvim_set_current_win(proposal_windows[1])
+        -- The user's autocmd: leaving the proposal closes every window that shows it.
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = proposal,
+          once = true,
+          nested = true,
+          callback = function(event)
+            for _, win in ipairs(vim.fn.win_findbuf(event.buf)) do
+              pcall(vim.api.nvim_win_close, win, true)
+            end
+          end,
+        })
+        local ok, err = pcall(function()
+          terminal.open()
+        end)
+        vim.wait(300)
+        local entry = diff._get_active_diffs()[tab_name]
+        local buf = terminal.get_active_terminal_bufnr()
+        return {
+          ok = ok,
+          err = tostring(err),
+          resolved = (entry == nil or entry.status ~= "pending") and #answers > 0,
+          terminal_windows = #vim.fn.win_findbuf(buf),
+        }
+      ]])
+
+      assert.is_true(state.ok, state.err)
+      assert.is_true(state.resolved, "the diff must resolve, as it does when its proposal is hidden by a plain swap")
+      assert.equal(1, state.terminal_windows)
+    end)
+  end)
+
+  describe("a BufLeave autocmd that shows the leaving buffer in another window", function()
+    it("does not run the BufHidden cleanup of a scratch buffer that is still visible", function()
+      -- Another plugin's BufEnter puts a scratch buffer with unsaved text into the new terminal's split. When the swap
+      -- after `termopen` leaves it, its BufLeave autocmd shows it in the user's window, so it never loses its last window.
+      start_child()
+      local state = call([[
+        local original = vim.api.nvim_get_current_win()
+        local scratch, hidden_count
+        vim.api.nvim_create_autocmd("BufEnter", {
+          once = true,
+          callback = function()
+            scratch = vim.api.nvim_create_buf(true, true)
+            vim.api.nvim_buf_set_name(scratch, "USER-SCRATCH")
+            vim.api.nvim_buf_set_lines(scratch, 0, -1, false, { "UNSAVED SCRATCH TEXT" })
+            vim.api.nvim_set_current_buf(scratch)
+            vim.api.nvim_create_autocmd("BufLeave", {
+              buffer = scratch,
+              once = true,
+              nested = true,
+              callback = function()
+                vim.api.nvim_win_set_buf(original, scratch)
+              end,
+            })
+            vim.api.nvim_create_autocmd("BufHidden", {
+              buffer = scratch,
+              callback = function(event)
+                hidden_count = (hidden_count or 0) + 1
+                vim.cmd("bwipeout " .. event.buf)
+              end,
+            })
+          end,
+        })
+        local ok, err = pcall(function()
+          require("claudecode.terminal").open()
+        end)
         local terminal = require("claudecode.terminal")
         local buf = terminal.get_active_terminal_bufnr()
         return {
-          terminal_windows = #vim.fn.win_findbuf(buf),
-          job_running = vim.fn.jobwait({ _G.job }, 10)[1] == -1,
-          file_loaded = vim.api.nvim_buf_is_loaded(_G.file),
-          file_lines = vim.api.nvim_buf_get_lines(_G.file, 0, -1, false),
-          original_shows_other = vim.api.nvim_win_get_buf(_G.original) == _G.other,
-          file_in_a_window = #vim.fn.win_findbuf(_G.file) > 0,
+          ok = ok,
+          err = tostring(err),
+          hidden_count = hidden_count or 0,
+          scratch_text = vim.api.nvim_buf_is_valid(scratch) and table.concat(vim.api.nvim_buf_get_lines(scratch, 0, -1, false), "|") or "GONE",
+          original_shows_scratch = vim.api.nvim_win_get_buf(original) == scratch,
+          terminal_windows = buf and #vim.fn.win_findbuf(buf) or 0,
         }
       ]])
-    end
 
-    for _, case in ipairs({ { hidden = true, name = "on" }, { hidden = false, name = "off" } }) do
-      -- Neovim checks that the swap can leave a modified buffer before it runs BufLeave autocmds, and the autocmd here
-      -- takes away the other window that made it pass. A plain swap then loads the terminal into the original
-      -- window, which is the redirect. The placement makes the swap after the autocmds, so it skips that check and
-      -- shows the terminal in the split. The file stays loaded and hidden with its edits, as after a plain swap.
-      it(
-        "shows the hidden terminal in its split, and keeps the unsaved file loaded, when 'hidden' is " .. case.name,
-        function()
-          start_child()
-          arm_session_switch(case.hidden)
-
-          call([[require("claudecode.terminal").open()]])
-
-          local result = state()
-          assert.equal(1, result.terminal_windows)
-          assert.is_true(result.job_running)
-          assert.is_true(result.file_loaded)
-          assert.same({ "unsaved user edit" }, result.file_lines)
-          assert.is_true(result.original_shows_other)
-          assert.is_false(result.file_in_a_window)
-        end
-      )
-    end
+      assert.is_true(state.ok, state.err)
+      assert.equal(0, state.hidden_count)
+      assert.equal("UNSAVED SCRATCH TEXT", state.scratch_text)
+      assert.is_true(state.original_shows_scratch)
+    end)
   end)
 end)
