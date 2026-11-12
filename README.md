@@ -1139,9 +1139,15 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   [lua/claudecode/diff.lua:M.open_diff_blocking]. Claude's `close_tab` and `closeAllDiffTabs` calls also reject a
   pending diff [lua/claudecode/diff.lua:M.close_diff_by_tab_name]. A diff that resolves before `openDiff` yields, for example from a
   `ClaudeCodeDiffOpened` handler, is answered at once [lua/claudecode/diff.lua:M.open_diff_blocking]. When Neovim exits,
-  it fires `BufUnload` for each loaded buffer before `VimLeavePre`, and the `BufUnload` autocmd of the proposal buffer
-  rejects its pending diff [lua/claudecode/diff.lua:register_diff_autocmds]. So the `VimLeavePre` cleanup of
-  `ClaudeCodeMCPDiff` finds none [lua/claudecode/diff.lua:M.\_cleanup_all_active_diffs].
+  it fires `BufUnload` for each loaded buffer before `VimLeavePre`. The `BufUnload` autocmd of a proposal buffer rejects
+  its pending diff [lua/claudecode/diff.lua:register_diff_autocmds], so with one pending diff the `VimLeavePre` cleanup
+  of `ClaudeCodeMCPDiff` finds none [lua/claudecode/diff.lua:M.\_cleanup_all_active_diffs]. With two or more pending
+  native diffs, one case breaks this. The reject of a new-file diff in the current tab, with
+  `diff_opts.on_new_file_reject = "keep_empty"` (the default), deletes its proposal buffer
+  [lua/claudecode/diff.lua:M.\_resolve_diff_as_rejected] [lua/claudecode/diff.lua:M.\_cleanup_diff_state]. When that
+  reject runs in the exit loop, Neovim stops firing `BufUnload` for the later buffers, and the `VimLeavePre` cleanup
+  removes the diffs that are still pending with no answer to Claude. This holds on Neovim 0.8.0 to 0.12.3. The
+  `"unified"` layout is not affected.
 
 ### Global Side Effects
 
@@ -1162,7 +1168,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   files [lua/claudecode/diff.lua:M.open_diff_blocking]. The `saveDocument` tool writes an open buffer to its file
   [lua/claudecode/tools/save_document.lua:handler].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
-  `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`), `nvim_buf_attach` change
+  `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`, and `snacks_win_<id>`, one per Snacks terminal whose split the plugin re-creates
+  [lua/claudecode/terminal/snacks.lua:register_window_events]), `nvim_buf_attach` change
   listeners on the buffer of a held selection [lua/claudecode/selection.lua:watch_selection_buffer], `User` events
   (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`), the four global `ClaudeCodeInlineDiff*`
   highlight groups for the `"unified"` diff layout [lua/claudecode/diff_inline.lua:setup_highlights], and a wrapped
