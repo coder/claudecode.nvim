@@ -173,8 +173,8 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
         assert.same({}, changed_lines)
       end)
 
-      -- Controls: these gave the text that :w writes before the fix too. A proposal that is not all CRLF reads as unix, so
-      -- it keeps the text it has, CRs included.
+      -- Controls: these gave the text that :w writes before the fix too. A proposal that is not all CRLF reads as
+      -- unix, so it keeps the text it has, CRs included.
       local controls = {
         { name = "an LF proposal", text = "a\nb\n", commands = { "normal! Gox" }, format = "unix" },
         {
@@ -219,14 +219,16 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
   for _, layout in ipairs(all_layouts) do
     for _, old_file in ipairs(old_files) do
       for _, proposal in ipairs(proposals) do
-        it(
-          ("the %s layout accepts a proposal with %s unedited, against %s"):format(layout, proposal.name, old_file.name),
-          function()
-            local state = open_diff(layout, old_file.text, proposal.text)
-
-            assert.equal(vim.inspect(proposal.text), vim.inspect(edit_and_accept(state, {})))
-          end
+        local title = ("the %s layout accepts a proposal with %s unedited, against %s"):format(
+          layout,
+          proposal.name,
+          old_file.name
         )
+        it(title, function()
+          local state = open_diff(layout, old_file.text, proposal.text)
+
+          assert.equal(vim.inspect(proposal.text), vim.inspect(edit_and_accept(state, {})))
+        end)
       end
     end
   end
