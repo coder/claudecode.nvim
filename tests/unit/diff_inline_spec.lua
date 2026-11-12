@@ -365,6 +365,19 @@ describe("Inline diff module", function()
     end)
   end)
 
+  describe("setup_inline_diff", function()
+    it("names the missing diff function, not a Neovim version, when there is none", function()
+      local saved_diff, saved_text = vim.diff, vim.text
+      vim.diff, vim.text = nil, nil
+      local ok, err = pcall(diff_inline.setup_inline_diff, { tab_name = "no-diff-function" }, function() end, {})
+      vim.diff, vim.text = saved_diff, saved_text
+
+      assert.is_false(ok)
+      assert.are.equal(-32000, err.code)
+      assert.are.equal("The unified layout needs vim.text.diff or vim.diff, and this Neovim has neither", err.message)
+    end)
+  end)
+
   describe("config validation", function()
     it("should accept layout = 'unified'", function()
       package.loaded["claudecode.config"] = nil

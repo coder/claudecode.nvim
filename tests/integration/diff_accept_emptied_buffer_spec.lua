@@ -83,11 +83,6 @@ describe("the text a diff accepts after the user empties the proposal", function
   end)
 
   local split_layouts = { "vertical", "horizontal" }
-  if vim.fn.has("nvim-0.9") ~= 1 then
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
 
   local proposals = {
     { name = "two lines and a final line break", text = "a\nb\n" },
@@ -140,15 +135,13 @@ describe("the text a diff accepts after the user empties the proposal", function
 
   -- The unified layout answers with the proposal, not with the buffer, so what the user does to the buffer does not
   -- reach Claude. This is a control: the answer is the proposal.
-  if vim.fn.has("nvim-0.9") == 1 then
-    describe("in the unified layout", function()
-      for _, proposal in ipairs(proposals) do
-        it("accepts the proposal, not the emptied buffer, from " .. proposal.name, function()
-          local state = open_diff("unified", proposal.text)
+  describe("in the unified layout", function()
+    for _, proposal in ipairs(proposals) do
+      it("accepts the proposal, not the emptied buffer, from " .. proposal.name, function()
+        local state = open_diff("unified", proposal.text)
 
-          assert.equal(vim.inspect(proposal.text), vim.inspect(edit_and_accept(state, { "normal! ggdG" })))
-        end)
-      end
-    end)
-  end
+        assert.equal(vim.inspect(proposal.text), vim.inspect(edit_and_accept(state, { "normal! ggdG" })))
+      end)
+    end
+  end)
 end)

@@ -387,9 +387,9 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
     diff_opts = {
       layout = "vertical", -- "vertical" (default), "horizontal", or "unified"
       -- "unified": VS Code-style unified diff in a single buffer with deleted
-      --   (red/strikethrough) and added (green) lines interleaved. Requires
-      --   Neovim >= 0.9.0. Highlight groups are customizable: ClaudeCodeInlineDiffAdd,
-      --   ClaudeCodeInlineDiffDelete, ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
+      --   (red/strikethrough) and added (green) lines interleaved. Highlight groups
+      --   are customizable: ClaudeCodeInlineDiffAdd, ClaudeCodeInlineDiffDelete,
+      --   ClaudeCodeInlineDiffAddSign, ClaudeCodeInlineDiffDeleteSign.
       open_in_new_tab = false,
       keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (a floating terminal then stays on screen)
       hide_terminal_in_new_tab = false,
@@ -1075,7 +1075,7 @@ opts = {
 
 ## Troubleshooting
 
-- **First stop:** Run `:checkhealth claudecode` — it verifies the Claude CLI is installed, the WebSocket server is running, the lock file exists, and whether Claude is connected
+- **First stop:** Run `:checkhealth claudecode` — it verifies the Claude CLI is installed, the WebSocket server is running, the lock file exists and can be read, and whether Claude is connected
 - **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set and not empty)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
@@ -1177,7 +1177,9 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   `ClaudeCodeDiffCleanup`, `ClaudeCodeNativeAdopted`, `ClaudeCodeOpenFileNewFiles`, and `snacks_win_<id>`, one per
   Snacks terminal whose split the plugin re-creates [lua/claudecode/terminal/snacks.lua:register_window_events]),
   `nvim_buf_attach` change listeners on the buffer of a held selection and on every buffer where a visual selection
-  starts, until the first edit after the selection ends [lua/claudecode/selection.lua:watch_selection_buffer], `User`
+  starts, until the first edit after the selection ends [lua/claudecode/selection.lua:watch_selection_buffer], a
+  `vim.on_key` listener (one namespace) that an edit of the buffer in which you select sets, at the latest until the next
+  key [lua/claudecode/selection.lua:note_visual_edit], `User`
   events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`), the four global
   `ClaudeCodeInlineDiff*` highlight groups for the `"unified"` diff layout
   [lua/claudecode/diff_inline.lua:setup_highlights], and a wrapped global `vim.paste` when

@@ -1,8 +1,9 @@
--- A known bug that the model does not cover (fix PR #540): an autocmd edits another line when visual mode starts (a
--- `ModeChanged` handler for `n:v`), and the Esc is already in the typeahead (`ve<Esc>`). The listener counts the edit and
--- schedules the check that would show that visual mode is still on, but no main-loop turn runs before the flush on Esc,
--- so the flush takes the edit for an operator's. Claude gets the cursor, not the selection, although its text is
--- untouched. BUG means the plugin still does that; the probe prints OK once the fix lands. Default delays.
+-- A bug that #540 fixed: an autocmd edits another line when visual mode starts (a `ModeChanged` handler for `n:v`), and
+-- the Esc is already in the typeahead (`ve<Esc>`). The listener counts the edit and schedules the check that shows that
+-- visual mode is still on, but no main-loop turn runs before the flush on Esc, so the flush found an edit that nobody had
+-- checked and took it for an operator's: Claude got the cursor, not the selection, although its text was untouched. Now
+-- the check also runs from a `vim.on_key` listener, which sees the Esc before it is processed. BUG means the flush
+-- takes the edit for an operator's again. Default delays.
 local driver = require("driver")
 driver.run({
   prepare = function()
