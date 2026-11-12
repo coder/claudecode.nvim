@@ -84,14 +84,16 @@ describe("the terminal working directory", function()
         local dir = root .. "/" .. case.folder
         vim.fn.mkdir(dir, "p")
 
-        assert.are.equal(dir, started_in({
-          cwd_provider = function()
-            return dir
-          end,
-        }))
+        assert.are.equal(
+          dir,
+          started_in({
+            cwd_provider = function()
+              return dir
+            end,
+          })
+        )
       end)
     end
-
   end)
 
   describe("with text that names no folder", function()
@@ -113,22 +115,28 @@ describe("the terminal working directory", function()
       vim.fn.mkdir(root .. "/home/sub", "p")
       vim.env.HOME = root .. "/home"
 
-      assert.are.equal(root .. "/home/sub", started_in({
-        cwd_provider = function()
-          return "~/sub"
-        end,
-      }))
+      assert.are.equal(
+        root .. "/home/sub",
+        started_in({
+          cwd_provider = function()
+            return "~/sub"
+          end,
+        })
+      )
     end)
 
     it("expands $VAR in a cwd_provider result", function()
       vim.fn.mkdir(root .. "/base/sub", "p")
       vim.env.CLAUDECODE_CWD_SPEC_BASE = root .. "/base"
 
-      assert.are.equal(root .. "/base/sub", started_in({
-        cwd_provider = function()
-          return "$CLAUDECODE_CWD_SPEC_BASE/sub"
-        end,
-      }))
+      assert.are.equal(
+        root .. "/base/sub",
+        started_in({
+          cwd_provider = function()
+            return "$CLAUDECODE_CWD_SPEC_BASE/sub"
+          end,
+        })
+      )
     end)
   end)
 
@@ -142,34 +150,43 @@ describe("the terminal working directory", function()
     it("takes the cwd_provider result over the static cwd", function()
       local from_static, from_provider = folder("static"), folder("provider")
 
-      assert.are.equal(from_provider, started_in({
-        cwd = from_static,
-        cwd_provider = function()
-          return from_provider
-        end,
-      }))
+      assert.are.equal(
+        from_provider,
+        started_in({
+          cwd = from_static,
+          cwd_provider = function()
+            return from_provider
+          end,
+        })
+      )
     end)
 
     it("takes the static cwd when the cwd_provider returns an empty string", function()
       local from_static = folder("static")
 
-      assert.are.equal(from_static, started_in({
-        cwd = from_static,
-        cwd_provider = function()
-          return ""
-        end,
-      }))
+      assert.are.equal(
+        from_static,
+        started_in({
+          cwd = from_static,
+          cwd_provider = function()
+            return ""
+          end,
+        })
+      )
     end)
 
     it("takes the static cwd when the cwd_provider raises", function()
       local from_static = folder("static")
 
-      assert.are.equal(from_static, started_in({
-        cwd = from_static,
-        cwd_provider = function()
-          error("provider failed")
-        end,
-      }))
+      assert.are.equal(
+        from_static,
+        started_in({
+          cwd = from_static,
+          cwd_provider = function()
+            error("provider failed")
+          end,
+        })
+      )
     end)
   end)
 end)
