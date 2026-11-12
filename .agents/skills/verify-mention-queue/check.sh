@@ -148,11 +148,15 @@ stop_clears_queue() {
 }
 fact[StopClearsQueue]=$(as_bool stop_clears_queue)
 # With disable_broadcast_debouncing set and an empty queue, a send while Claude is connected broadcasts at once only
-# while ms_until_a_client_is_ready() is 0 or nil. Otherwise it goes to the queue, which waits for a ready client.
-fact[ImmediateWaitsForReady]=$(as_bool in_order \
-  '^ *if immediate and #mention_queue\(\) == 0 and \(ms_until_a_client_is_ready\(\) or 0\) == 0 then$' \
-  'M\.state\.server\.broadcast\("at_mentioned"' '^ *queue_mention\(formatted_path, start_line, end_line\)$' \
-  <<<"$broadcast_mention")
+# while ms_until_a_client_is_ready() is 0 or nil. Otherwise it goes to the queue, which waits for a ready client. The
+# guard must come before every broadcast and queue_mention call of the function, so no send gets past it.
+immediate_waits_for_ready() {
+  local guard='^ *if immediate and #mention_queue\(\) == 0 and \(ms_until_a_client_is_ready\(\) or 0\) == 0 then$'
+  grep -E "$guard|\.broadcast\(|queue_mention\(" <<<"$broadcast_mention" | head -1 | grep -qE "$guard" &&
+    in_order "$guard" 'M\.state\.server\.broadcast\("at_mentioned"' \
+      '^ *queue_mention\(formatted_path, start_line, end_line\)$' <<<"$broadcast_mention"
+}
+fact[ImmediateWaitsForReady]=$(as_bool immediate_waits_for_ready)
 
 RULES=(NoSilentDrop SentInOrder AtMostOnce SentWhenReady NothingAfterStop)
 LIVE=(NoStrandedMention ReadyDelivers FlushDelivers)

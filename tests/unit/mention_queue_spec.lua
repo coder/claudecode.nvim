@@ -523,14 +523,14 @@ describe("The @ mention queue", function()
     assert.same({}, errors)
   end)
 
-  it("D: with debouncing off, a send 20 ms before Claude is ready still waits in the queue", function()
+  it("D: with debouncing off, a send 1 ms before Claude is ready still waits in the queue", function()
     claudecode.state.config.disable_broadcast_debouncing = true
     local claude = claude_connects()
     claude.handshake()
-    run(580)
+    run(599)
     send("/project/a.lua")
-    -- 20 ms of connection_wait_delay are left, so the send queues. The 50 ms debounce then sends it 630 ms after the
-    -- handshake, when Claude is ready.
+    -- 1 ms of connection_wait_delay is left, so the send queues. The 50 ms debounce then sends it 649 ms after the
+    -- handshake, when Claude is ready. The fake clock makes the 1 ms exact.
     assert.equals(1, #claudecode.state.mention_queue)
     assert.same({}, claude.received())
     run(40)

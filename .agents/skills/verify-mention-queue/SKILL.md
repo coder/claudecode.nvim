@@ -141,7 +141,7 @@ NVIM=nvim .agents/skills/verify-mention-queue/replays/run.sh order stop-in-wait 
 
 ## Scope and bounds
 
-- The invariants run with 3 mentions, 2 client slots, 2 TCP connects and 1 restart, about 270,000 distinct states. The liveness rules run with 2 mentions: about 58,000 states for `NoStrandedMention` and `ReadyDelivers`, and about 25,000 for `FlushDelivers`.
+- The invariants run with 3 mentions, 2 client slots, 2 TCP connects and 1 restart, about 540,000 distinct states. The liveness rules run with 2 mentions: about 116,000 states for `NoStrandedMention` and `ReadyDelivers`, and about 48,000 for `FlushDelivers`. Each run checks both values of `disable_broadcast_debouncing`, which doubles each count.
 - Two client slots, so two clients can be connected at once. A broadcast reaches both, and the readiness rule counts both. A third client is not modeled: a bug that needs three clients at once, such as a third client's handshake that postpones a flush, is not caught here. The test `D: handshakes of other clients do not postpone a flush that is due for a connected Claude` connects 11 clients.
 - Time is untimed. "`connection_wait_delay` has passed since the accept" and "since the handshake" are steps of each client, and any deadline can pass at any step. So the model does not check the deadline length or a flush that comes late. `tests/unit/mention_queue_spec.lua` checks both, with a fake clock, and the replays check them with real timers.
 - A broadcast's writes all succeed, all fail later, or are all refused at once. When one client's write succeeds and another's fails, the code counts a success, and the model does not explore that mix.
