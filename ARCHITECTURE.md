@@ -57,6 +57,8 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
+The real cleanup runs from `init.lua`: its `VimLeavePre` autocmd calls `stop` when the server runs, `stop` calls `lockfile.remove`, and `stop` only logs a warning when the removal fails, so the lock file stays.
+
 ### 3. MCP Tool System (`tools/`)
 
 Dynamic tool registration with JSON schema validation:
@@ -172,7 +174,7 @@ Automatic cleanup on shutdown:
 ```lua
 vim.api.nvim_create_autocmd("VimLeavePre", {
   callback = function()
-    M.stop()  -- Stop server, remove lock file
+    M.stop()  -- Stop server, try to remove lock file (only logs a warning when it cannot)
   end
 })
 ```
