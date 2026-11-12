@@ -88,10 +88,10 @@ FACTS=(NativeMarkBeforeTermopen OwnedUnstartedIsNotEnded OwnedLiveNeedsMark Owne
   SnacksCloseForgetsFirst SnacksHideKeepsLastWindow SnacksFailCleansUp SnacksStopsNativeClaude
   SnacksAvailabilityCached OwnedStopOtherStops)
 
-# native.lua: the mark goes on the new buffer before the window shows it (nvim_win_set_buf fires BufEnter) and before
+# native.lua: the mark goes on the new buffer before the window shows it (the swap in utils.win_set_buf_in_split fires BufEnter) and before
 # termopen (TermOpen), so an open() from either autocmd adopts the terminal being started.
 fact[NativeMarkBeforeTermopen]=$(as_bool in_order '^  local new_bufnr = vim\.api\.nvim_create_buf\(' \
-  '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' '^  vim\.api\.nvim_win_set_buf\(new_winid, new_bufnr\)$' \
+  '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' '^  utils\.win_set_buf_in_split\(new_winid, new_bufnr\)$' \
   'pcall\(vim\.fn\.termopen, term_cmd_arg, termopen_opts\)' <<<"$open_terminal")
 # owned.lua: a buffer whose job has not started (channel 0) has not ended, so the autocmd's open() can adopt it.
 fact[OwnedUnstartedIsNotEnded]=$(as_bool grep -qE \
@@ -169,7 +169,7 @@ fact[NativeCloseClearsMark]=$(as_bool in_order '^  local closing_bufnr, closing_
 # closes the split) never unloads it: with 'nohidden' that would end the job, or start a second terminal on 0.8. The start
 # sets it again after termopen, because an autocmd of the start can have changed it (to wipe, for example).
 fact[NativeKeepsHiddenJob]=$(as_bool in_order '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' \
-  '^  vim\.bo\[new_bufnr\]\.bufhidden = "hide"$' '^  vim\.api\.nvim_win_set_buf\(new_winid, new_bufnr\)$' \
+  '^  vim\.bo\[new_bufnr\]\.bufhidden = "hide"$' '^  utils\.win_set_buf_in_split\(new_winid, new_bufnr\)$' \
   '^  jobid = termopen_result$' '^  vim\.bo\[bufnr\]\.bufhidden = "hide"$' <<<"$open_terminal")
 # A fix that skips the last window or pcalls the close flips this fact.
 native_hide_keeps_last_window() {
