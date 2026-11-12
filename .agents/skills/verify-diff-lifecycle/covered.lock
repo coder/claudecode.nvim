@@ -123,7 +123,7 @@ site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ fun
 site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ function M.resolve_inline_as_saved(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, @ function M.setup_inline_diff(params, resolution_callback, config)
 == lua/claudecode/health.lua
-file lua/claudecode/health.lua 5ab73bf388f3ac97
+file lua/claudecode/health.lua 715d79c89291f563
 == lua/claudecode/init.lua
 file lua/claudecode/init.lua fc28de832b4056df
 block user_close_all         10e024fd8ada1c16
