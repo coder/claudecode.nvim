@@ -12,6 +12,8 @@ local winid = nil
 local jobid = nil
 -- The auto_close of the config that started (or adopted) the tracked job. Its exit handling uses this one.
 local job_auto_close = nil
+-- When the tracked job started (vim.loop.hrtime, ns). Only a close of a young job looks at its child (see close_terminal).
+local job_started_at = nil
 local tip_shown = false
 -- Whether get_active_bufnr already looked for a terminal to adopt. After a reload, its first call looks. Later calls
 -- need not: this module copy starts every terminal it tracks, and the entry points adopt for themselves.
@@ -27,6 +29,9 @@ local close_after_start = false
 local OWNED_MARK = owned.NATIVE_MARK
 local job_ended = owned.job_ended
 
+-- A close looks at the child of a job that started less than this long ago (10 s).
+local YOUNG_JOB_NS = 10 * 1e9
+
 ---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
 
@@ -35,6 +40,7 @@ local function cleanup_state()
   winid = nil
   jobid = nil
   job_auto_close = nil
+  job_started_at = nil
 end
 
 -- nvim_win_close raises E444 for the only window of the only tab page. Floating windows do not count.
@@ -252,6 +258,7 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   jobid = termopen_result
+  job_started_at = vim.loop.hrtime()
   -- An autocmd of the start can close the split. A focus_toggle from a BufEnter or TermOpen autocmd adopts this
   -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
   -- terminal, and the next toggle shows it.
@@ -332,6 +339,24 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 end
 
+-- The name of a process, or nil when it is gone or its name cannot be read. Linux has it in /proc, a read of a few bytes. Where
+-- /proc is missing (macOS, the BSDs), nvim_get_proc asks `ps`, which takes ~100 ms and raises when `ps` is missing.
+local function process_name(pid)
+  local own = io.open("/proc/self/comm", "r")
+  if own then
+    own:close()
+    local file = io.open("/proc/" .. pid .. "/comm", "r")
+    if not file then
+      return nil
+    end
+    local name = file:read("*l")
+    file:close()
+    return name
+  end
+  local ok, info = pcall(vim.api.nvim_get_proc, pid)
+  return ok and info and info.name or nil
+end
+
 function close_terminal()
   if not is_valid() and not adopt_existing_terminal() then
     -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
@@ -339,6 +364,7 @@ function close_terminal()
     return
   end
   local closing_bufnr, closing_jobid = bufnr, jobid
+  local closing_young = job_started_at ~= nil and vim.loop.hrtime() - job_started_at < YOUNG_JOB_NS
   cleanup_state()
   -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not adopt this one.
   vim.b[closing_bufnr][OWNED_MARK] = nil
@@ -359,15 +385,18 @@ function close_terminal()
     end,
   })
   -- A job that was just started can still be a fork of Neovim: its child has not run exec yet. A jobstop then ends
-  -- Neovim (SIGHUP), or the buffer delete below hangs. After the exec the child has the name of its command, so wait
-  -- for that. A job that already exited has no pid, and a child that is gone returns no process.
-  local has_pid, child_pid = pcall(vim.fn.jobpid, closing_jobid)
-  if has_pid then
-    local own_name = vim.api.nvim_get_proc(vim.fn.getpid()).name
-    vim.wait(1000, function()
-      local child = vim.api.nvim_get_proc(child_pid)
-      return child == nil or child.name ~= own_name
-    end, 5)
+  -- Neovim (SIGHUP), or the buffer delete below hangs. After the exec the child has the name of its command, so a close of
+  -- a young job waits (up to 1 s) for that. A job that already exited has no pid. When the names cannot be read, the close
+  -- goes on to jobstop.
+  if closing_young then
+    local has_pid, child_pid = pcall(vim.fn.jobpid, closing_jobid)
+    local own_name = has_pid and process_name(vim.fn.getpid())
+    if own_name then
+      vim.wait(1000, function()
+        local child_name = process_name(child_pid)
+        return child_name == nil or child_name ~= own_name
+      end, 5)
+    end
   end
   -- jobstop returns 0 for a job that already exited, for example when close runs from a TermClose autocmd.
   -- TermClose has fired then, so waiting for it would block for the full timeout.

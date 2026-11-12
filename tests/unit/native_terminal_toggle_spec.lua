@@ -3,6 +3,35 @@ describe("claudecode.terminal.native toggle behavior", function()
   local mock_vim
   local logger_spy
 
+  -- Neovim reads /proc/<pid>/comm on Linux, and asks nvim_get_proc where /proc is missing (macOS, the BSDs). stub_proc picks
+  -- the path, so a test does not depend on the host: `names` is false for no /proc, or a function(pid) that returns the name
+  -- of a process (pid "self" or "1": Neovim) or nil for a process that is gone. It returns the function that undoes it.
+  local function stub_proc(names, reads)
+    local open = io.open
+    io.open = function(path, mode)
+      local pid = type(path) == "string" and path:match("^/proc/([^/]+)/comm$")
+      if not pid then
+        return open(path, mode)
+      end
+      table.insert(reads, pid)
+      local name = names and names(pid)
+      if not name then
+        return nil
+      end
+      return {
+        read = function()
+          return name
+        end,
+        close = function() end,
+      }
+    end
+    return function()
+      io.open = open
+    end
+  end
+  local restore_proc
+  local proc_reads
+
   before_each(function()
     -- Clean up any loaded modules
     package.loaded["claudecode.terminal.native"] = nil
@@ -23,6 +52,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       exiting_jobs = {},
       autocmds = {},
       waited_ms = 0,
+      now_ns = 0,
     }
 
     local function enter_buf(winid, bufnr)
@@ -85,8 +115,13 @@ describe("claudecode.terminal.native toggle behavior", function()
           return wins
         end,
         -- Neovim is process 1 and has its own name. The child of a job (40000 + the job id) is gone, unless a test sets
-        -- mock_state.processes[pid]: a fork of Neovim has the name nvim until it runs exec.
+        -- mock_state.processes[pid]: a fork of Neovim has the name nvim until it runs exec. Like Neovim, it raises for a pid
+        -- that is no number.
         nvim_get_proc = function(pid)
+          if type(pid) ~= "number" then
+            error("Invalid 'pid': Expected Lua number")
+          end
+          mock_state.proc_lookups = (mock_state.proc_lookups or 0) + 1
           if pid == 1 then
             return { name = "nvim", pid = 1, ppid = 0 }
           end
@@ -324,6 +359,11 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
         end
       end,
+      loop = {
+        hrtime = function()
+          return mock_state.now_ns
+        end,
+      },
       o = {
         columns = 120,
         lines = 40,
@@ -376,10 +416,10 @@ describe("claudecode.terminal.native toggle behavior", function()
           table.insert(mock_state.exiting_jobs, id)
           return 1
         end,
-        -- Neovim raises E900 for a job that exited or that jobstop already stopped.
         getpid = function()
           return 1
         end,
+        -- Neovim raises E900 for a job that exited or that jobstop already stopped.
         jobpid = function(id)
           if not mock_state.running_jobs[id] then
             error("Vim:E900: Invalid channel id")
@@ -458,6 +498,9 @@ describe("claudecode.terminal.native toggle behavior", function()
       }),
     }
     _G.vim = mock_vim
+    -- No /proc by default: a close asks nvim_get_proc, whose mock finds no child.
+    proc_reads = {}
+    restore_proc = stub_proc(false, proc_reads)
 
     -- Mock logger
     logger_spy = {
@@ -481,6 +524,7 @@ describe("claudecode.terminal.native toggle behavior", function()
   end)
 
   after_each(function()
+    restore_proc()
     _G.vim = nil
     package.loaded["claudecode.terminal.native"] = nil
     package.loaded["claudecode.logger"] = nil
@@ -1058,12 +1102,28 @@ describe("claudecode.terminal.native toggle behavior", function()
   end)
 
   -- A job that was just started can still be a fork of Neovim: its child has not run exec yet. A jobstop then ends Neovim
-  -- with SIGHUP, or the buffer delete after it hangs. So a close waits until the child has the name of its command.
-  describe("close of a job whose child has not run exec yet", function()
+  -- with SIGHUP, or the buffer delete after it hangs. So a close of a young job waits until the child has the name of its
+  -- command. The names come from /proc/<pid>/comm, or from nvim_get_proc where /proc is missing, and a close goes on to
+  -- jobstop when they cannot be read.
+  describe("close of a job that was just started", function()
     local config = { split_side = "right", split_width_percentage = 0.3 }
     local mock_state
     local child
     local events
+    local waits
+
+    -- /proc has the names: Neovim is "nvim", and the child is the value of child_name() until it is gone (nil).
+    local function use_proc(child_name)
+      restore_proc()
+      restore_proc = stub_proc(function(pid)
+        if pid == "self" or pid == "1" then
+          return "nvim"
+        end
+        if pid == tostring(child) then
+          return child_name()
+        end
+      end, proc_reads)
+    end
 
     before_each(function()
       mock_state = _G.get_mock_state()
@@ -1072,6 +1132,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       child = 40000 + mock_state.buffers[active].jobid
       mock_state.processes = { [child] = { name = "nvim", pid = child } }
       events = {}
+      waits = {}
       local jobstop = mock_vim.fn.jobstop
       mock_vim.fn.jobstop = function(id)
         table.insert(events, "jobstop")
@@ -1079,22 +1140,47 @@ describe("claudecode.terminal.native toggle behavior", function()
       end
     end)
 
-    it("should stop the job only after the child ran exec", function()
+    -- Replaces vim.wait: the first look at the child runs `condition`, the child runs exec on the third look.
+    local function child_runs_exec_on_the_third_look(set_name_after_exec, looks)
       local wait = mock_vim.wait
-      local looks = {}
       mock_vim.wait = function(timeout, condition, interval)
-        if mock_state.processes[child].name == "nvim" then
-          -- The wait for the exec: the child runs it on the third look.
+        table.insert(waits, timeout)
+        if #waits == 1 then
           for _ = 1, 2 do
             table.insert(looks, condition())
           end
           table.insert(events, "exec")
-          mock_state.processes[child].name = "sh"
+          set_name_after_exec()
           table.insert(looks, condition())
           return looks[#looks]
         end
         return wait(timeout, condition, interval)
       end
+    end
+
+    it("should stop the job only after the child ran exec (names from /proc)", function()
+      local name = "nvim"
+      use_proc(function()
+        return name
+      end)
+      local looks = {}
+      child_runs_exec_on_the_third_look(function()
+        name = "sh"
+      end, looks)
+
+      native_provider.close()
+
+      assert.are.same({ "exec", "jobstop" }, events)
+      assert.are.same({ false, false, true }, looks)
+      assert.are.equal(0, mock_state.proc_lookups or 0, "nvim_get_proc stays unused where /proc exists")
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+
+    it("should stop the job only after the child ran exec (names from nvim_get_proc)", function()
+      local looks = {}
+      child_runs_exec_on_the_third_look(function()
+        mock_state.processes[child].name = "sh"
+      end, looks)
 
       native_provider.close()
 
@@ -1103,12 +1189,14 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.is_nil(next(mock_state.running_jobs))
     end)
 
-    it("should stop the job when the child never runs exec, after the wait ran out", function()
+    it("should wait at most 1 s, and stop the job when the child never runs exec", function()
+      use_proc(function()
+        return "nvim"
+      end)
       local wait = mock_vim.wait
-      local first_wait = true
       mock_vim.wait = function(timeout, condition, interval)
-        if first_wait then
-          first_wait = false
+        table.insert(waits, timeout)
+        if #waits == 1 then
           table.insert(events, "wait ran out")
           return false
         end
@@ -1117,7 +1205,60 @@ describe("claudecode.terminal.native toggle behavior", function()
 
       native_provider.close()
 
+      assert.are.equal(1000, waits[1])
       assert.are.same({ "wait ran out", "jobstop" }, events)
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+
+    it("should stop the job without a wait when no name can be read (no /proc, and ps is missing)", function()
+      mock_vim.api.nvim_get_proc = function()
+        error("Vim:E5108: Error executing lua: 'ps' is not executable")
+      end
+      local wait = mock_vim.wait
+      mock_vim.wait = function(timeout, condition, interval)
+        table.insert(waits, timeout)
+        return wait(timeout, condition, interval)
+      end
+
+      assert.has_no.errors(function()
+        native_provider.close()
+      end)
+
+      assert.are.same({ "jobstop" }, events)
+      assert.are.equal(1, #waits, "only the wait for the exit of the job")
+      assert.is_nil(next(mock_state.running_jobs))
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+
+    it("should look at no process when the job already exited (a close from a TermClose autocmd)", function()
+      local active = native_provider.get_active_bufnr()
+      local jobid = mock_state.buffers[active].jobid
+      local closed
+      mock_vim.api.nvim_create_autocmd("TermClose", {
+        buffer = active,
+        callback = function()
+          closed = pcall(native_provider.close)
+        end,
+      })
+      -- The job exited and TermClose fires, before the cleanup that on_exit schedules has run. jobpid raises for it.
+      mock_state.running_jobs[jobid] = nil
+      mock_state.fire_term_close(active)
+
+      assert.is_true(closed)
+      assert.are.same({}, proc_reads)
+      assert.are.equal(0, mock_state.proc_lookups or 0)
+    end)
+
+    it("should look at no process when the job is older than 10 s", function()
+      use_proc(function()
+        return "nvim"
+      end)
+      mock_state.now_ns = 11 * 1e9
+
+      native_provider.close()
+
+      assert.are.same({}, proc_reads)
+      assert.are.same({ "jobstop" }, events)
       assert.is_nil(next(mock_state.running_jobs))
     end)
   end)

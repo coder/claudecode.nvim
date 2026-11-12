@@ -1266,6 +1266,9 @@ local vim = {
   v = { echospace = 68 },
 
   loop = {
+    hrtime = function()
+      return 0
+    end,
     new_tcp = function()
       return {
         bind = function(self, host, port)

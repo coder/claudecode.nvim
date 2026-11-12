@@ -243,5 +243,39 @@ lib.after_startup(function()
       clean_up()
     end)
   end
+
+  -- A close of a job that just started reads the name of its child from /proc/<pid>/comm, or asks `ps` where /proc is missing.
+  -- When neither works (no /proc, no ps), the close goes on to jobstop. It raised before, after it had cleared its state, and
+  -- Claude kept running with no tracking.
+  lib.attempt("native, a close when no process name can be read (no /proc, no ps)", function()
+    local term = fresh()
+    pcall(term.open)
+    lib.settle()
+    local open = io.open
+    local path = vim.env.PATH
+    io.open = function(file, mode)
+      if type(file) == "string" and file:match("^/proc/") then
+        return nil
+      end
+      return open(file, mode)
+    end
+    vim.env.PATH = "/nonexistent"
+    local closed, close_err = pcall(term.close)
+    vim.env.PATH = path
+    io.open = open
+    lib.wait(300)
+    local running = lib.running()
+    lib.step(
+      string.format(
+        "native, a close when no process name can be read: close %s, %d Claude running, tracked: %s, messages: %s",
+        closed and "ok" or ("RAISED " .. first_line(close_err)),
+        #running,
+        tostring(term.get_active_terminal_bufnr()),
+        #errors > 0 and table.concat(errors, " | ") or "none"
+      ),
+      (not closed) or #running ~= 0 or term.get_active_terminal_bufnr() ~= nil or #errors > 0
+    )
+    clean_up()
+  end)
   lib.finish()
 end)
