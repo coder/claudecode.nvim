@@ -39,6 +39,7 @@ claudecode.nvim/
 │   ├── unit/                # Unit tests
 │   ├── component/           # Component tests
 │   ├── integration/         # Integration tests
+│   ├── bin/                 # Stub claude CLI, first on PATH in every test
 │   └── mocks/               # Test mocks
 ├── README.md                # User documentation
 ├── ARCHITECTURE.md          # Architecture documentation
@@ -105,7 +106,22 @@ mise run check
 mise run format
 ```
 
-Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua` reports each `pairs()` loop that registers a test, in a spec file or another file under `tests/`, in a coroutine that the loop resumes, or in a function that the loop calls. The first test that each loop registers runs and then fails with the report, and busted counts it as a failure. A test that also fails for its own reason keeps that failure, after the report. The rest of the spec still registers and runs. A `describe` or `pending` in such a loop fails the run through a separate error instead. `.busted` in the repository root loads the helper when busted starts there, as `mise run test` does. From another directory, pass `--helper=<repo>/tests/helpers/test_order.lua`.
+Register table-driven tests from an array with `ipairs`, not from `pairs()` over string keys. LuaJIT seeds its string hash in each process, so `pairs()` visits string keys in a different order in each run, and a printed seed would not repeat the test order. `tests/helpers/test_order.lua` reports each `pairs()` loop that registers a test, in a spec file or another file under `tests/`, in a coroutine that the loop resumes, or in a function that the loop calls. The first test that each loop registers runs and then fails with the report, and busted counts it as a failure. A test that also fails for its own reason keeps that failure, after the report. The rest of the spec still registers and runs. A `describe` or `pending` in such a loop fails the run through a separate error instead. `.busted` in the repository root loads `tests/helpers/busted_helper.lua`, which loads that helper, when busted starts there, as `mise run test` does. From another directory, pass `--helper=<repo>/tests/helpers/busted_helper.lua`.
+
+A test never starts the Claude CLI that is installed on the host. `tests/bin/claude` is a stub that idles, and its directory is first on `PATH` in every Neovim that starts with `tests/minimal_init.lua` (the integration runner, `scripts/run_integration_tests_individually.sh`) and in busted (`tests/helpers/busted_helper.lua` sets it). A bare `claude` in a spec, or in the plugin code that a spec reaches, runs the stub. `tests/unit/claude_stub_spec.lua` and `tests/integration/claude_stub_spec.lua` fail when `claude` resolves to anything else. They do not cover a spec that sets a `terminal_cmd` with an absolute path to the real CLI, so use the bare name or a stub of your own.
+
+To check that a change starts no real `claude`, run the integration runner (or `busted tests/unit`, for the unit specs) under `strace`, and count the `execve` calls whose program path ends in `/claude` and is outside `tests/bin`:
+
+```sh
+trace=$(mktemp)
+strace -f -e trace=execve -e status=successful -o "$trace" scripts/run_integration_tests_individually.sh
+awk -v status=$? '/^[0-9]+ +execve\("[^"]*\/claude"/ { if ($0 ~ /^[0-9]+ +execve\("[^"]*\/tests\/bin\/claude"/) stub++; else other++ } END { printf "strace exit status: %d\nclaude starts outside tests/bin: %d\nstub starts: %d\n", status, other, stub; exit (status != 0 || other > 0 || stub < 1) }' "$trace"
+verdict=$?
+rm -f "$trace"
+test "$verdict" -eq 0
+```
+
+The block exits 0 only when all three hold: strace exits 0 (it returns the exit status of the command it runs, so a failing test fails the check), no `claude` starts outside `tests/bin`, and the stub starts at least once. The stub count is the proof that the trace saw the tests: a strace that fails before it traces anything (a version older than 5.2, ptrace not allowed, a wrong working directory) leaves an empty trace, and the count then reads 0 although no test ran. `tests/integration/claude_stub_spec.lua` and `tests/unit/claude_stub_spec.lua` each start the stub once, so a trace of the full runner or of `busted tests/unit` holds at least 1 stub start. The `awk` pattern reads only the program path, the first argument of `execve`, so it does not count the lines that merely contain `claude`: a spec runs `sh -c 'sleep 60' claude`, where `claude` is an argument of the shell that runs it, not a program (the shell paths differ by host, such as `/bin/bash` and `/usr/bin/sh`, and do not change the count). `-e status=successful` (strace 5.2 or later) drops the failed calls of a `PATH` search, and it prints each call on one line, with no `<unfinished ...>` split. The count sees only a program named `claude`, so it misses a `terminal_cmd` that points at the real CLI under another file name. The block deletes the trace when it ends, and its exit status stays the verdict. To keep the trace for a look at the starts, delete the `rm` line and read `$trace`.
 
 A unit test that writes files writes them in a folder from `tests/helpers/temp_dir.lua` (`temp_dir.new()` in `setup`, `temp_dir.remove(dir)` in `teardown`), not at a fixed path under `/tmp`. Every test run on a host shares `/tmp`, so two suites that run at once would overwrite and delete each other's files.
 
@@ -136,7 +152,7 @@ ANTHROPIC_API_KEY=... \
 ## Implementation Guidelines
 
 1. **Error Handling**
-   - All public functions should have error handling
+   - Handle errors where data comes in and where a call can fail (see "Code Shape" in `AGENTS.md`)
    - Return `success, result_or_error` pattern
    - Log meaningful error messages
 

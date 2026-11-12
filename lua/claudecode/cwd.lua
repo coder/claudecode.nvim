@@ -34,11 +34,9 @@ function M.git_root(start_dir)
   -- Prefer running without shell by passing a list
   local result
   if vim.fn.systemlist then
-    local ok, _ = pcall(function()
-      local _ = vim.fn.systemlist({ "git", "-C", start_dir, "rev-parse", "--show-toplevel" })
-    end)
+    local ok, output = pcall(vim.fn.systemlist, { "git", "-C", start_dir, "rev-parse", "--show-toplevel" })
     if ok then
-      result = vim.fn.systemlist({ "git", "-C", start_dir, "rev-parse", "--show-toplevel" })
+      result = output
     else
       -- Fallback to string command if needed
       local cmd = "git -C " .. vim.fn.shellescape(start_dir) .. " rev-parse --show-toplevel"

@@ -34,13 +34,13 @@ local function handler(params, client)
 
   log.debug("close_tab", "close_tab handler called")
 
-  if not params.tab_name then
+  if type(params.tab_name) ~= "string" then
     log.error("close_tab", "Missing required parameter: tab_name")
-    return {
+    error({
       code = -32602, -- Invalid params
       message = "Invalid params",
       data = "Missing required parameter: tab_name",
-    }
+    })
   end
 
   -- Claude passes the tab_name it gave openDiff, such as "✻ [Claude Code] README.md (e18e1e) ⧉". A name that

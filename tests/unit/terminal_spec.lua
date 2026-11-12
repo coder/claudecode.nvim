@@ -1099,6 +1099,146 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         mock_native_provider.open:was_called()
       end)
 
+      -- Snacks is available in these tests. An invalid value must leave the provider as it was, and the warning must
+      -- name that provider: the default, "auto", picks Snacks when it is installed.
+      describe("with Snacks available", function()
+        ---The one warning that `setup` raised about the provider value.
+        local function provider_warning()
+          local warnings = {}
+          for _, call in ipairs(vim.notify.calls) do
+            local message = call.refs[1]
+            if message and message:match("Invalid value for provider") then
+              table.insert(warnings, message)
+            end
+          end
+          assert.are.equal(1, #warnings, "expected one warning about the provider value")
+          return warnings[1]
+        end
+
+        it("keeps the default provider, and the warning names it", function()
+          terminal_wrapper.setup({ provider = "bogus" })
+          terminal_wrapper.open()
+
+          mock_snacks_provider.open:was_called(1) -- "auto" picks Snacks
+          mock_native_provider.open:was_not_called()
+          assert.are.equal(
+            "claudecode.terminal.setup: Invalid value for provider: bogus. Keeping 'auto'.",
+            provider_warning()
+          )
+        end)
+
+        it("raises the warning at WARN level", function()
+          terminal_wrapper.setup({ provider = "bogus" })
+
+          local levels = {}
+          for _, call in ipairs(vim.notify.calls) do
+            if call.refs[1]:match("Invalid value for provider") then
+              table.insert(levels, call.refs[2])
+            end
+          end
+          assert.are.same({ vim.log.levels.WARN }, levels)
+        end)
+
+        it("keeps the provider that an earlier setup chose, and the warning names it", function()
+          local mock_none_provider = {
+            setup = spy.new(function() end),
+            open = spy.new(function() end),
+          }
+          package.loaded["claudecode.terminal.none"] = mock_none_provider
+          finally(function()
+            package.loaded["claudecode.terminal.none"] = nil
+          end)
+
+          terminal_wrapper.setup({ provider = "none" })
+          terminal_wrapper.setup({ provider = "bogus" })
+          terminal_wrapper.open()
+
+          mock_none_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+          mock_native_provider.open:was_not_called()
+          assert.are.equal(
+            "claudecode.terminal.setup: Invalid value for provider: bogus. Keeping 'none'.",
+            provider_warning()
+          )
+        end)
+
+        it("keeps a custom provider table that an earlier setup chose, and the warning says so", function()
+          local custom_provider = {
+            setup = spy.new(function() end),
+            open = spy.new(function() end),
+            close = spy.new(function() end),
+            simple_toggle = spy.new(function() end),
+            focus_toggle = spy.new(function() end),
+            get_active_bufnr = spy.new(function()
+              return nil
+            end),
+            is_available = spy.new(function()
+              return true
+            end),
+          }
+          terminal_wrapper.setup({ provider = custom_provider })
+          terminal_wrapper.setup({ provider = 42 })
+          terminal_wrapper.open()
+
+          custom_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+          assert.are.equal(
+            "claudecode.terminal.setup: Invalid value for provider: 42. Keeping the custom provider table.",
+            provider_warning()
+          )
+        end)
+      end)
+
+      -- `setup` rejects these values, but `terminal.defaults` is public, so a caller can store one. `get_provider` then
+      -- warns that it defaults to the native provider, and it must.
+      describe("when terminal.defaults.provider holds a value that setup rejects", function()
+        ---The warnings raised while `open` picks the provider.
+        local function warnings_from_open()
+          terminal_wrapper.open()
+          local warnings = {}
+          for _, call in ipairs(vim.notify.calls) do
+            table.insert(warnings, call.refs[1])
+          end
+          return warnings
+        end
+
+        it("defaults to the native provider for an unknown name, as the warning says", function()
+          terminal_wrapper.defaults.provider = "bogus"
+
+          assert.are.same({ "Invalid provider configured: bogus. Defaulting to 'native'." }, warnings_from_open())
+          mock_native_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+        end)
+
+        it("defaults to the native provider for a value of another type, as the warning says", function()
+          terminal_wrapper.defaults.provider = 42
+
+          assert.are.same(
+            { "Invalid provider type: number. Must be string or table. Defaulting to 'native'." },
+            warnings_from_open()
+          )
+          mock_native_provider.open:was_called(1)
+          mock_snacks_provider.open:was_not_called()
+        end)
+
+        it("names a stored value that is not a table by that value, when setup rejects a new one", function()
+          terminal_wrapper.defaults.provider = 42
+          terminal_wrapper.setup({ provider = "bogus" })
+
+          local setup_warnings = {}
+          for _, call in ipairs(vim.notify.calls) do
+            if call.refs[1]:match("Invalid value for provider") then
+              table.insert(setup_warnings, call.refs[1])
+            end
+          end
+          assert.are.same(
+            { "claudecode.terminal.setup: Invalid value for provider: bogus. Keeping '42'." },
+            setup_warnings,
+            "no custom provider table is stored, and the code uses native"
+          )
+        end)
+      end)
+
       it("should reject providers missing required functions", function()
         local incomplete_provider = {
           setup = function() end,
@@ -1170,6 +1310,62 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
         local bufnr = terminal_wrapper.get_active_terminal_bufnr()
         custom_provider.get_active_bufnr:was_called()
         assert.are.equal(456, bufnr)
+      end)
+
+      describe("hide_float", function()
+        local function provider_with(overrides)
+          return vim.tbl_extend("force", {
+            setup = spy.new(function() end),
+            open = spy.new(function() end),
+            close = spy.new(function() end),
+            simple_toggle = spy.new(function() end),
+            focus_toggle = spy.new(function() end),
+            get_active_bufnr = spy.new(function()
+              return 456
+            end),
+            is_available = spy.new(function()
+              return true
+            end),
+          }, overrides)
+        end
+
+        it("returns what the provider's hide_float returns", function()
+          local hide_float = spy.new(function()
+            return true
+          end)
+          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
+
+          assert.is_true(terminal_wrapper.hide_float())
+          hide_float:was_called(1)
+        end)
+
+        it("passes the tab to the provider", function()
+          local hide_float = spy.new(function()
+            return true
+          end)
+          terminal_wrapper.setup({ provider = provider_with({ hide_float = hide_float }) })
+
+          assert.is_true(terminal_wrapper.hide_float(3))
+          hide_float:was_called_with(3)
+        end)
+
+        it("returns false when the provider hid nothing", function()
+          terminal_wrapper.setup({
+            provider = provider_with({
+              hide_float = function()
+                return false
+              end,
+            }),
+          })
+
+          assert.is_false(terminal_wrapper.hide_float())
+        end)
+
+        it("returns false for a provider that has no hide_float", function()
+          terminal_wrapper.setup({ provider = provider_with({}) })
+
+          assert.is_false(terminal_wrapper.hide_float())
+        end)
       end)
 
       it("should handle toggle function (legacy) correctly", function()

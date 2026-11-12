@@ -27,6 +27,7 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     windows[id] = {
       buf = buf,
       valid = true,
+      tab = 1,
       config = { relative = (opts and opts.relative) or "", hide = false },
     }
     return id
@@ -146,7 +147,15 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end
         return result
       end,
+      b = setmetatable({}, {
+        __index = function()
+          return {}
+        end,
+      }),
       api = {
+        nvim_list_bufs = function()
+          return {}
+        end,
         nvim_buf_call = function(_, fn)
           return fn()
         end,
@@ -180,6 +189,9 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
         end,
         nvim_win_get_buf = function(w)
           return windows[w] and windows[w].buf
+        end,
+        nvim_win_get_tabpage = function(w)
+          return windows[w] and windows[w].tab
         end,
         nvim_win_set_buf = function(w, b)
           if windows[w] then
@@ -287,6 +299,57 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     -- ...and a focus toggle un-hides rather than treating it as visible.
     snacks_provider.simple_toggle("claude", {}, float_config())
     assert.is_false(windows[term.win].config.hide)
+  end)
+
+  describe("hide_float", function()
+    local function open_float()
+      snacks_provider.open("claude", {}, float_config(), true)
+      return snacks_provider._get_terminal_for_test()
+    end
+
+    it("config-hides a visible float, and a toggle shows it again", function()
+      local term = open_float()
+      local win = term.win
+
+      assert.is_true(snacks_provider.hide_float())
+      assert.is_true(windows[win].valid)
+      assert.is_true(windows[win].config.hide)
+      assert.is_false(snacks_provider.hide_float(), "a float that is already hidden is not hidden again")
+
+      snacks_provider.simple_toggle("claude", {}, float_config())
+      assert.is_false(windows[win].config.hide)
+    end)
+
+    it("hides the float when it is in the tab it is asked about", function()
+      local term = open_float()
+
+      assert.is_true(snacks_provider.hide_float(1))
+      assert.is_true(windows[term.win].config.hide)
+    end)
+
+    it("leaves the float alone when it is in another tab", function()
+      local term = open_float()
+      windows[term.win].tab = 2
+
+      assert.is_false(snacks_provider.hide_float(1))
+      assert.is_false(windows[term.win].config.hide, "a float in tab 2 does not cover a diff in tab 1")
+
+      assert.is_true(snacks_provider.hide_float(2))
+      assert.is_true(windows[term.win].config.hide)
+    end)
+
+    it("leaves a split alone", function()
+      snacks_provider.open("claude", {}, split_config(), true)
+      local term = snacks_provider._get_terminal_for_test()
+
+      assert.is_false(snacks_provider.hide_float())
+      assert.is_true(windows[term.win].valid)
+      assert.is_false(windows[term.win].config.hide)
+    end)
+
+    it("is false before a terminal exists", function()
+      assert.is_false(snacks_provider.hide_float())
+    end)
   end)
 
   it("split close that errors (E444 last window) does not throw and keeps state sane", function()

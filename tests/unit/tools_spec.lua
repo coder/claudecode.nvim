@@ -304,6 +304,32 @@ describe("Tools Module", function()
       expect(result_obj.result).to_be_nil()
     end)
 
+    it("answers -32601 for an empty tool name", function()
+      local result_obj = tools.handle_invoke(nil, { name = "", arguments = {} })
+
+      expect(result_obj.result).to_be_nil()
+      expect(result_obj.error.code).to_be(-32601)
+      expect(result_obj.error.message).to_be("Tool not found: ")
+    end)
+
+    it("runs a tool called without arguments with an empty table", function()
+      local received
+      tools.register({
+        name = "recordsInput",
+        schema = nil,
+        handler = function(input)
+          received = input
+          return { content = {} }
+        end,
+      })
+
+      local result_obj = tools.handle_invoke(nil, { name = "recordsInput" })
+
+      expect(result_obj.error).to_be_nil()
+      expect(received).to_be_table()
+      expect(next(received)).to_be_nil()
+    end)
+
     it("should handle tool execution errors (structured error from handler) with JSON-RPC error", function()
       local erroring_tool_handler = spy.new(function()
         error({ code = -32001, message = "Specific tool error from handler", data = { detail = "some detail" } })

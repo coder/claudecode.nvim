@@ -7,10 +7,11 @@
 ## The one fact behind every report
 
 `:ClaudeCodeSend` (and the file/buffer/tree senders) call `send_at_mention`. When
-Claude is not connected, the mention is **queued** and a `connection_timeout`
-timer (default **10s**, `lua/claudecode/init.lua`) is armed. If Claude has not
-opened a WebSocket back to the plugin's server by then, the queue is cleared with
-the error above (`start_connection_timeout_if_needed`).
+Claude is not connected, the mention is **queued** with a deadline,
+`connection_timeout + connection_wait_delay` after the send (default **10.6s**,
+`lua/claudecode/init.lua`). If no Claude has opened a WebSocket back to the
+plugin's server and taken the mention by then, the mention is cleared with the
+error above (`expire_mentions`).
 
 So the bug is never really "send is broken" — it is always **"the Claude CLI that
 the plugin launched never connected back to the plugin's WebSocket server."** The

@@ -240,6 +240,20 @@ describe("Tool: open_file", function()
     assert_contains(err.data, "Missing filePath parameter")
   end)
 
+  for _, case in ipairs({
+    { label = "a boolean", value = true },
+    { label = "a number", value = 5 },
+    { label = "a table", value = { "a.txt" } },
+  }) do
+    it("should error if filePath is " .. case.label .. " and not a string", function()
+      local success, err = pcall(open_file_handler, { filePath = case.value })
+      expect(success).to_be_false()
+      expect(err).to_be_table()
+      expect(err.code).to_be(-32602)
+      assert_contains(err.data, "Missing filePath parameter")
+    end)
+  end
+
   it("should error if file is not readable", function()
     local params = { filePath = "non_readable_file.txt" }
     local success, err = pcall(open_file_handler, params)

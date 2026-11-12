@@ -28,6 +28,69 @@ function M.map_terminal_suspend(bufnr)
   vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
 end
 
+---Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
+---`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
+---'eventignore' is back to the caller's value afterwards, also when the call raises.
+---@param win number
+---@param buf number
+function M.win_set_buf_without_bufenter(win, buf)
+  local saved = vim.o.eventignore
+  -- A `-BufEnter` entry wins wherever it stands in the list.
+  local ignored = {}
+  for entry in saved:gmatch("[^,]+") do
+    if entry:lower() ~= "-bufenter" then
+      table.insert(ignored, entry)
+    end
+  end
+  table.insert(ignored, "BufEnter")
+  vim.o.eventignore = table.concat(ignored, ",")
+  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  vim.o.eventignore = saved
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local held_for_windows = {}
+
+local function windows_allowed()
+  return pcall(vim.api.nvim_set_current_win, vim.api.nvim_get_current_win())
+end
+
+local function retry_held_for_windows()
+  if not windows_allowed() then
+    vim.defer_fn(retry_held_for_windows, 50)
+    return
+  end
+  local due = held_for_windows
+  held_for_windows = {}
+  for _, fn in ipairs(due) do
+    -- One callback each, so a function that raises does not stop the others.
+    vim.schedule(function()
+      M.when_windows_allowed(fn)
+    end)
+  end
+end
+
+---Run `fn` now when Neovim lets the plugin change windows, else once it does: one timer checks every 50 ms for all
+---held functions. Neovim refuses window changes in the command-line window (E11) and under textlock (E565), and
+---timers and scheduled functions run in both, for example during a `vim.wait` under textlock. Neovim has no flag for
+---textlock, so the gate asks: setting the current window to itself fails in both states and changes nothing
+---otherwise. Not CmdwinLeave: it runs while the window is still open, and textlock has no event. Held functions run
+---in no fixed order, so `fn` reads state when it runs.
+---@param fn fun()
+function M.when_windows_allowed(fn)
+  assert(type(fn) == "function", "when_windows_allowed expects a function")
+  if windows_allowed() then
+    fn()
+    return
+  end
+  table.insert(held_for_windows, fn)
+  if #held_for_windows == 1 then
+    vim.defer_fn(retry_held_for_windows, 50)
+  end
+end
+
 ---Split a command string into an argument vector using POSIX shell word rules.
 ---
 ---Honors single quotes, double quotes, and backslash escapes so terminal

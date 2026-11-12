@@ -18,12 +18,14 @@ M.defaults = {
   focus_after_send = false,
   visual_demotion_delay_ms = 50, -- Milliseconds to wait before demoting a visual selection
   connection_wait_delay = 600, -- Milliseconds to wait after connection before sending queued @ mentions
-  connection_timeout = 10000, -- Maximum time queued @ mentions wait for Claude Code to connect (milliseconds)
+  -- Milliseconds Claude Code has to connect for queued @ mentions. Each one leaves with an error connection_timeout +
+  -- connection_wait_delay ms after its send, unless a ready Claude takes the queue first.
+  connection_timeout = 10000,
   queue_timeout = 5000, -- Unused, kept so that configs that set it stay valid (connection_timeout bounds the wait)
   diff_opts = {
     layout = "vertical",
     open_in_new_tab = false, -- Open diff in a new tab (false = use current tab)
-    keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (including floating terminals)
+    keep_terminal_focus = false, -- If true, moves focus back to terminal after diff opens (a floating terminal stays on screen); false hides a floating terminal when the diff opens
     hide_terminal_in_new_tab = false, -- If true and opening in a new tab, do not show Claude terminal there
     on_new_file_reject = "keep_empty", -- "keep_empty" leaves an empty buffer; "close_window" closes the placeholder split
     auto_resize_terminal = true, -- Let the plugin manage Claude terminal width across the diff lifecycle; false = own it via ClaudeCodeDiffOpened/Closed
