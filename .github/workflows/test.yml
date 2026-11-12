@@ -47,6 +47,9 @@ jobs:
           # another lock could keep a tool that the new lock changed. A change that alters an install without changing
           # mise.lock (a tool option in mise.toml) keeps this key: bump v1 then.
           cache_key: mise-v1-{{platform}}-{{version}}-${{ hashFiles('mise.lock') }}
+          # Only a push to main saves the cache. A pull request only restores it: mise runs the postinstall hooks of the
+          # PR's own mise.toml before the save, and the key above ignores mise.toml.
+          cache_save: ${{ github.event_name == 'push' }}
           # mise is pinned because `--locked` rules change between releases (2026.11.0 started to require a
           # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release.
           version: 2026.11.5
