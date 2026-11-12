@@ -1044,12 +1044,16 @@ end
 ---@return boolean adopted False when this module kept its own diff for the tab name
 function M._adopt_diff_state(tab_name, diff_data)
   local existing = active_diffs[tab_name]
-  if existing then
+  while existing do
     if existing.status ~= "pending" then
       return false
     end
     M._resolve_diff_as_rejected(tab_name)
-    M._cleanup_diff_state(tab_name, "replaced by new diff")
+    if active_diffs[tab_name] == existing then
+      M._cleanup_diff_state(tab_name, "replaced by new diff")
+    end
+    assert(active_diffs[tab_name] ~= existing, "the replaced diff is still registered")
+    existing = active_diffs[tab_name]
   end
   M._register_diff_state(tab_name, diff_data)
   return true
@@ -1821,6 +1825,11 @@ function M._setup_blocking_diff(params, resolution_callback)
       is_new_file = is_new_file,
       client_id = params.client_id,
     })
+
+    -- A diff that the new module could not adopt after a reload was rejected and cleaned up when it registered.
+    if not active_diffs[tab_name] then
+      return
+    end
 
     hide_terminal_float_for_diff(diff_info.new_window)
 
