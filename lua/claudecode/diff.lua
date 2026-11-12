@@ -1057,7 +1057,9 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
-  local final_content = table.concat(content_lines, "\n")
+  -- :w ends each line with the line break of the buffer's 'fileformat': LF, CRLF for dos, CR for mac.
+  local line_break = ({ dos = "\r\n", mac = "\r" })[vim.api.nvim_buf_get_option(buffer_id, "fileformat")] or "\n"
+  local final_content = table.concat(content_lines, line_break)
   -- Add trailing newline if the buffer has one, as :w does. :w writes nothing for an empty buffer, whatever 'eol' is.
   -- Such a buffer has no lines, but nvim_buf_get_lines still returns one empty string for it, so the count of bytes tells
   -- it from a buffer with one empty line.
@@ -1065,7 +1067,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return vim.fn.wordcount().bytes
   end)
   if byte_count > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
-    final_content = final_content .. "\n"
+    final_content = final_content .. line_break
   end
 
   -- Do not modify windows/tabs here; wait for explicit close_tab tool call to clean up UI
@@ -1743,12 +1745,21 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
     vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    local lines = vim.split(params.new_file_contents, "\n")
+    -- A proposal whose every line break is CRLF takes 'fileformat' dos, as the same text read from a file does. The
+    -- buffer then holds the lines without their CRs, as the file's own buffer does, and the save gives a line that the
+    -- user types a CRLF, as :w does. Any other text stays unix with its CRs inside the lines, which :w writes back
+    -- unchanged.
+    local proposal = params.new_file_contents
+    local is_dos = proposal:find("\n", 1, true) ~= nil and not proposal:gsub("\r\n", ""):find("\n", 1, true)
+    local lines = vim.split(proposal, is_dos and "\r\n" or "\n", { plain = true })
     -- Remove trailing empty line if content ended with \n
     if #lines > 0 and lines[#lines] == "" then
       table.remove(lines, #lines)
     end
     vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
+    if is_dos then
+      vim.api.nvim_buf_set_option(new_buffer, "fileformat", "dos")
+    end
     -- A new buffer has 'eol' on, and the saved text ends with a line break exactly when 'eol' is on. So the buffer takes
     -- the ending of the proposal, and a proposal without a final line break is saved without one.
     vim.api.nvim_buf_set_option(new_buffer, "eol", params.new_file_contents:sub(-1) == "\n")
