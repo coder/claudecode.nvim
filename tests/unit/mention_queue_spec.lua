@@ -506,6 +506,23 @@ describe("The @ mention queue", function()
     assert.matches("connection failed while the @ mention /project/src/a%.lua was sent", errors[1])
   end)
 
+  it("D: with disable_broadcast_debouncing, a send right after the handshake waits for connection_wait_delay", function()
+    claudecode.state.config.disable_broadcast_debouncing = true
+    local claude = claude_connects()
+    claude.handshake()
+    run(100)
+    send("/project/a.lua")
+    -- Claude is not ready yet, so the send waits in the queue, as it does with the debounce on.
+    assert.equals(1, #claudecode.state.mention_queue)
+    run(490)
+
+    assert.same({}, claude.received())
+    run(20)
+
+    assert.same({ "a.lua" }, names(claude.received()))
+    assert.same({}, errors)
+  end)
+
   it("D: handshakes of other clients do not postpone a flush that is due for a connected Claude", function()
     local claude = claude_connects()
     claude.handshake()
