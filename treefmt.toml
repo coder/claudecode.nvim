@@ -50,9 +50,12 @@ command = "scripts/treefmt-formatter.sh"
 options = ["shfmt"]
 includes = ["*.sh"]
 
+# treefmt puts the paths after the options, and shellcheck reads a path that starts with a dash (-Pname.sh) as an
+# option, so the options end with `--`. The wrapper does the same for stylua, prettier and shfmt. actionlint and zizmor
+# only get paths under .github/workflows/, and those never start with a dash.
 [formatter.shellcheck]
 command = "shellcheck"
-options = ["--exclude=SC1091,SC2016"]
+options = ["--exclude=SC1091,SC2016", "--"]
 includes = ["*.sh"]
 
 [formatter.actionlint]
