@@ -36,11 +36,13 @@ if not _G.vim then
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
       filereadable = function(path)
-        -- Check if file actually exists
+        -- Vim gives 1 for a file that it can read, and 0 for a missing file, a file that it cannot read and a folder
+        -- (fopen opens a folder, and the first read of it fails).
         local file = io.open(path, "r")
         if file then
+          local _, read_error = file:read(1)
           file:close()
-          return 1
+          return read_error == nil and 1 or 0
         else
           return 0
         end
@@ -271,6 +273,24 @@ do
     return true
   end
 
+  -- Mirror libuv's fs_stat for a path: nil and an error for a missing path, else a table with the type. The shell's
+  -- `test` follows symlinks as stat does, and it does not need read permission on the file, as stat does not.
+  if not loop.fs_stat then
+    loop.fs_stat = function(path)
+      local function test(flag)
+        local ok = os.execute("test " .. flag .. " " .. temp_dir.quote(path))
+        return ok == 0 or ok == true
+      end
+      if test("-d") then
+        return { type = "directory" }
+      end
+      if test("-f") then
+        return { type = "file" }
+      end
+      return nil, "ENOENT: no such file or directory", "ENOENT"
+    end
+  end
+
   -- Record chmod calls so tests can assert the lock dir is tightened to 0700.
   loop.fs_chmod = function(path, mode)
     _G._test_last_fs_chmod = { path = path, mode = mode }
@@ -489,6 +509,91 @@ describe("Lockfile Module", function()
       assert("string" == type(err))
       assert(err:find("Failed to remove lock file", 1, true))
       assert(err:find("Permission denied", 1, true))
+    end)
+
+    -- Deleting a file needs write permission on its folder, not read permission on the file.
+    local function exists(path)
+      local ok = os.execute("test -e " .. temp_dir.quote(path))
+      return ok == 0 or ok == true
+    end
+
+    it("should delete a lock file that exists but cannot be read", function()
+      local port = 12353
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+      os.execute("chmod 000 " .. temp_dir.quote(lock_path))
+
+      local probe = io.open(lock_path, "r")
+      if probe then
+        probe:close()
+        os.remove(lock_path)
+        return pending("this user can read a file with mode 000 (root)")
+      end
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      if still_there then
+        os.execute("chmod 600 " .. temp_dir.quote(lock_path))
+        os.remove(lock_path)
+      end
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(err == nil)
+      assert(not still_there, "the lock file stays")
+    end)
+
+    it("should report that a lock file that is missing does not exist", function()
+      local port = 12354
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      assert(not exists(lock_path))
+
+      local success, err = lockfile.remove(port)
+
+      assert(success == false)
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
+    it("should not delete a folder that is named like a lock file", function()
+      local port = 12355
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      assert(os.execute("mkdir " .. temp_dir.quote(lock_path)))
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      os.execute("rmdir " .. temp_dir.quote(lock_path))
+
+      assert(success == false)
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+      assert(still_there, "the folder is gone")
+    end)
+
+    it("should report the os.remove error and keep the lock file when the folder is read-only", function()
+      local port = 12356
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+      os.execute("chmod 555 " .. temp_dir.quote(lockfile.lock_dir))
+
+      local probe_path = lockfile.lock_dir .. "/probe"
+      local probe = io.open(probe_path, "w")
+      if probe then
+        probe:close()
+        os.remove(probe_path)
+        os.execute("chmod 755 " .. temp_dir.quote(lockfile.lock_dir))
+        os.remove(lock_path)
+        return pending("this user can write into a folder with mode 555 (root)")
+      end
+
+      local success, err = lockfile.remove(port)
+      os.execute("chmod 755 " .. temp_dir.quote(lockfile.lock_dir))
+      local still_there = exists(lock_path)
+      os.remove(lock_path)
+
+      assert(success == false, "remove returned " .. tostring(success))
+      assert("string" == type(err))
+      assert(err:find("Failed to remove lock file", 1, true), err)
+      assert(err:find(lock_path, 1, true), err)
+      assert(err:find("Permission denied", 1, true), err)
+      assert(still_there, "the lock file is gone")
     end)
 
     it("should report a failure when os.remove raises", function()
