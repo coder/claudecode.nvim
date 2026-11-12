@@ -479,8 +479,11 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
       if type(v) == "table" or v == "snacks" or v == "native" or v == "external" or v == "auto" or v == "none" then
         defaults.provider = v
       else
+        -- A rejected value leaves `defaults.provider` as it was: "auto" until a valid value is set. Say so.
+        local kept = type(defaults.provider) == "table" and "the custom provider table"
+          or ("'" .. tostring(defaults.provider) .. "'")
         vim.notify(
-          "claudecode.terminal.setup: Invalid value for provider: " .. tostring(v) .. ". Defaulting to 'native'.",
+          "claudecode.terminal.setup: Invalid value for provider: " .. tostring(v) .. ". Keeping " .. kept .. ".",
           vim.log.levels.WARN
         )
       end
@@ -638,13 +641,14 @@ end
 
 ---Hides the Claude terminal when it is a floating window, so that it does not cover a diff. Only a provider that
 ---implements `hide_float` has a float to hide.
+---@param tab number? Passed to the provider, which hides only a float in this tab (a float in any tab when nil).
 ---@return boolean hidden True when a visible float was hidden
-function M.hide_float()
+function M.hide_float(tab)
   local provider = get_provider()
   if not provider.hide_float then
     return false
   end
-  return provider.hide_float() == true
+  return provider.hide_float(tab) == true
 end
 
 ---Toggles the Claude terminal open or closed (legacy function - use simple_toggle or focus_toggle).

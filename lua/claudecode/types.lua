@@ -59,6 +59,7 @@
 ---@field file_path string The absolute file path to mention
 ---@field start_line number? Optional start line (0-indexed for Claude compatibility)
 ---@field end_line number? Optional end line (0-indexed for Claude compatibility)
+---@field deadline number When the queue clears the mention with an error (vim.loop.now() time)
 
 -- Payload delivered as `data` to a `User ClaudeCodeSendComplete` autocmd. Fired
 -- once per file, synchronously, when a send is accepted while Claude is connected.
@@ -82,7 +83,7 @@
 ---@field get_active_bufnr fun(): number?
 ---@field is_available fun(): boolean
 ---@field ensure_visible? function
----@field hide_float? fun(): boolean Hide the terminal when it is a visible float, so that it does not cover a diff; true when it hid one
+---@field hide_float? fun(tab: number?): boolean Hide the terminal when it is a visible float, so that it does not cover a diff; with `tab`, only a float in that tab. True when it hid one
 ---@field _get_terminal_for_test fun(): table?
 
 -- Terminal configuration
@@ -152,7 +153,7 @@
 ---@field initialized boolean
 ---@field mention_queue ClaudeCodeMention[]
 ---@field mention_timer uv.uv_timer_t?  -- the next flush of the mention queue (compatible with vim.loop timer)
----@field connection_timer uv.uv_timer_t?  -- the timeout of the mentions that wait for Claude to connect
+---@field connection_timer uv.uv_timer_t?  -- the deadline of the oldest queued mention
 
 -- This module only defines types, no runtime functionality
 return {}

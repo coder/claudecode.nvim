@@ -963,7 +963,7 @@ require("claudecode").setup({
 
 The custom provider will automatically fall back to the native provider if validation fails or `is_available()` returns false.
 
-Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float()` hides the terminal when it is a visible floating window and returns `true` when it did. The plugin calls it when a diff opens in the tab of a floating terminal, so the float does not cover the diff. A diff does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes, if a window of the terminal was visible in any tab when the diff opened. `:ClaudeCodeSend`, `:ClaudeCodeAdd` and `:ClaudeCodeTreeAdd` also call `ensure_visible()` after a send to a connected Claude (they call `open` instead with `focus_after_send`, or when Claude is not connected).
+Optional functions: `ensure_visible()` shows the terminal without focusing it. `hide_float(tab)` hides the terminal when it is a visible floating window, and when `tab` is not nil only when that window is in `tab`. It returns `true` when it did. The plugin calls it with the diff's tab when a diff opens in the tab of a floating terminal, so the float does not cover the diff, unless `diff_opts.keep_terminal_focus` is set. A provider that ignores `tab` hides its float in any tab. A diff does not show the float again, except that a diff in its own tab calls `ensure_visible()` in the original tab when it closes (in the current tab when the original tab is gone), if a window of the terminal was visible in any tab when the diff opened. `:ClaudeCodeSend`, `:ClaudeCodeAdd` and `:ClaudeCodeTreeAdd` also call `ensure_visible()` after a send to a connected Claude (they call `open` instead with `focus_after_send`, or when Claude is not connected).
 
 Note: If your command or working directory may contain spaces or special characters, prefer returning a table of args from a function (e.g., `{ "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }`) to avoid shell-quoting issues.
 
@@ -1148,9 +1148,10 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   an error that names both directories [lua/claudecode/diff.lua:create_temp_file]. The `openDiff` tool writes no temp
   files [lua/claudecode/diff.lua:M.open_diff_blocking].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
-  `ClaudeCodeDiffCleanup`), `nvim_buf_attach` change listeners on the buffer of a held selection
-  [lua/claudecode/selection.lua:watch_selection_buffer], `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`,
-  `ClaudeCodeDiffClosed`),
+  `ClaudeCodeDiffCleanup`), `nvim_buf_attach` change listeners on the buffer of a held selection and on every buffer
+  where a visual selection starts, until the first edit after the selection ends
+  [lua/claudecode/selection.lua:watch_selection_buffer], `User` events (`ClaudeCodeSendComplete`,
+  `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
   and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2
   [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install].
 - Release tooling: `scripts/release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and PRs

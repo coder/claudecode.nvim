@@ -813,7 +813,8 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
   vim.cmd("diffthis")
   create_split()
-  vim.cmd("edit " .. vim.fn.fnameescape(tmp_file))
+  -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
+  vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)
@@ -991,7 +992,7 @@ local function terminal_windows()
 end
 
 ---Hide the Claude terminal's float when it covers the tab of the diff window `diff_win`. A float is not a tiled
----window, so the diff cannot make room for it. Nothing shows it again: the user brings it back.
+---window, so the diff cannot make room for it.
 ---@param diff_win number? The diff's proposed window
 local function hide_terminal_float_for_diff(diff_win)
   if config and config.diff_opts and config.diff_opts.keep_terminal_focus then
@@ -1004,7 +1005,7 @@ local function hide_terminal_float_for_diff(diff_win)
     local diff_tab = vim.api.nvim_win_get_tabpage(diff_win)
     for _, win in ipairs(terminal_windows()) do
       if vim.api.nvim_win_get_tabpage(win) == diff_tab and (vim.api.nvim_win_get_config(win).relative or "") ~= "" then
-        require("claudecode.terminal").hide_float()
+        require("claudecode.terminal").hide_float(diff_tab)
         return
       end
     end

@@ -1070,6 +1070,16 @@ describe("Range Selection Tests", function()
       mock_server.last_broadcast = { event = event, data = data }
     end
 
+    -- What Neovim does when the text of a buffer changes: it runs on_lines of each listener that is attached to it.
+    -- An operator (d, c, >...) ends visual mode first, so a test sets the mode before it calls this.
+    local function edit_text(bufnr)
+      for _, listener in ipairs(_G.vim._buf_listeners[bufnr] or {}) do
+        if listener.on_lines then
+          listener.on_lines(nil, bufnr)
+        end
+      end
+    end
+
     before_each(function()
       package.loaded["claudecode.selection"] = nil
       selection = require("claudecode.selection")
@@ -1079,6 +1089,7 @@ describe("Range Selection Tests", function()
       end
       mock_server.last_broadcast = nil
       _G.vim.v.event = {}
+      _G.vim._buf_listeners = {}
     end)
 
     after_each(function()
@@ -1711,14 +1722,13 @@ describe("Range Selection Tests", function()
         _G.vim._visualmode = "v"
         _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
 
-        -- Enter visual mode: records the entry changedtick.
-        _G.vim._changedtick = 7
+        -- Enter visual mode: starts to listen for the buffer's edits.
         _G.vim.v.event = { old_mode = "n", new_mode = "v" }
         selection.on_mode_changed()
 
-        -- An operator (d) mutates the buffer (tick advances) and exits visual mode.
-        _G.vim._changedtick = 8
+        -- An operator (d) ends visual mode, mutates the buffer and exits visual mode.
         _G.vim.test.set_mode("n")
+        edit_text(1)
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         mock_server.last_broadcast = nil
 
@@ -1726,6 +1736,138 @@ describe("Range Selection Tests", function()
 
         assert(mock_server.last_broadcast == nil) -- no phantom post-edit broadcast
         assert(selection.state.latest_selection == nil)
+      end)
+
+      -- The changedtick moves for an operator, for a plugin's edit and for a :write, so the flush cannot read it.
+      -- Neovim ends visual mode before an operator changes any text; a plugin's edit leaves it on, and a :write
+      -- fires no callback.
+      describe("when the buffer's text changes while you select", function()
+        local function enter_visual_mode()
+          _G.vim.test.add_buffer(1, "/path/to/test.lua", { "alpha beta gamma", "second line" })
+          selection.enable(mock_server)
+          _G.vim._visualmode = "v"
+          _G.vim._marks = { ["'<"] = { 0, 1, 1, 0 }, ["'>"] = { 0, 1, 5, 0 } }
+          _G.vim.test.set_mode("v")
+          _G.vim.v.event = { old_mode = "n", new_mode = "v" }
+          selection.on_mode_changed()
+        end
+
+        -- Esc: the flush sees the mode that Neovim reports then.
+        local function leave_visual_mode()
+          _G.vim.test.set_mode("n")
+          _G.vim.v.event = { old_mode = "v", new_mode = "n" }
+          mock_server.last_broadcast = nil
+          selection.on_mode_changed()
+        end
+
+        local function call_listeners(name)
+          for _, listener in ipairs(_G.vim._buf_listeners[1] or {}) do
+            if listener[name] then
+              listener[name](nil, 1)
+            end
+          end
+        end
+
+        it("flushes the selection after a plugin edited the text in visual mode", function()
+          enter_visual_mode()
+          _G.vim._changedtick = 6
+          edit_text(1) -- the mode is still visual
+
+          leave_visual_mode()
+
+          assert(mock_server.last_broadcast ~= nil)
+          assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+        end)
+
+        it("flushes the selection after a :write, which moves the changedtick and fires no callback", function()
+          enter_visual_mode()
+          _G.vim._changedtick = 6
+
+          leave_visual_mode()
+
+          assert(mock_server.last_broadcast ~= nil)
+          assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+        end)
+
+        it("skips the flush for an operator after a plugin edited the text", function()
+          enter_visual_mode()
+          edit_text(1) -- the plugin's edit, in visual mode
+          _G.vim.test.set_mode("n")
+          edit_text(1) -- the operator's
+
+          leave_visual_mode()
+
+          assert.is_nil(mock_server.last_broadcast)
+          assert.is_nil(selection.state.latest_selection)
+        end)
+
+        it("skips the flush when the check of an edit has not run yet, and ignores it later", function()
+          local queued = {}
+          local real_schedule = _G.vim.schedule
+          _G.vim.schedule = function(fn)
+            table.insert(queued, fn)
+          end
+          local ok, err = pcall(function()
+            enter_visual_mode()
+            edit_text(1) -- vim.schedule runs the check after the operator's flush
+
+            leave_visual_mode()
+
+            assert.is_nil(mock_server.last_broadcast)
+            assert.are.equal(1, #queued)
+            queued[1]() -- the flush is over: the check does nothing
+            assert.is_nil(selection.state.visual_entry)
+          end)
+          _G.vim.schedule = real_schedule
+          assert(ok, err)
+        end)
+
+        it("skips the flush after a reload, which replaces the text", function()
+          enter_visual_mode()
+          call_listeners("on_reload")
+
+          leave_visual_mode()
+
+          assert.is_nil(mock_server.last_broadcast)
+        end)
+
+        it("does not carry the operator of one selection into the next", function()
+          enter_visual_mode()
+          _G.vim.test.set_mode("n")
+          edit_text(1)
+          leave_visual_mode()
+          assert.is_nil(mock_server.last_broadcast)
+
+          enter_visual_mode()
+          leave_visual_mode()
+
+          assert(mock_server.last_broadcast ~= nil)
+          assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+          assert.are.equal(1, #_G.vim._buf_listeners[1]) -- one listener for the buffer, not one for each selection
+        end)
+
+        it("detaches the listener once the selection is over and nothing is held", function()
+          enter_visual_mode()
+          _G.vim.test.set_mode("n")
+          edit_text(1)
+          leave_visual_mode()
+          assert.is_nil(selection.state.latest_selection)
+
+          local detach = _G.vim._buf_listeners[1][1].on_lines(nil, 1)
+
+          assert.is_true(detach)
+          assert.is_nil(selection.state.watched_buffers[1])
+        end)
+
+        it("does not listen in the Claude terminal, whose output is a stream of edits", function()
+          terminal_module.get_active_terminal_bufnr = function()
+            return 1
+          end
+
+          enter_visual_mode()
+
+          assert.are.equal(0, #(_G.vim._buf_listeners[1] or {}))
+        end)
       end)
 
       it("does not double-send a selection already broadcast by the in-visual debounce", function()
@@ -2174,10 +2316,11 @@ describe("Range Selection Tests", function()
         assert.is_nil(selection.state.cursor_at_flush)
         assert.is_nil(selection.state.last_active_visual_selection)
 
-        -- d: the changedtick moves, visual mode ends, the cursor lands on column 0 again.
+        -- d: visual mode ends, the text changes, the cursor lands on column 0 again.
         _G.vim._changedtick = 6
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { " beta gamma" })
         _G.vim.test.set_mode("n")
+        edit_text(1)
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()
         fire_autocmd("TextChanged")
@@ -2197,11 +2340,12 @@ describe("Range Selection Tests", function()
         fire_debounce()
         assert.are.equal("alpha", selection.get_latest_selection().text)
 
-        -- d: the flush sees the changedtick move and skips. What it skips is not held any more.
+        -- d: the flush sees the operator's edit and skips. What it skips is not held any more.
         _G.vim._changedtick = 6
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { " beta gamma" })
         _G.vim.test.set_mode("n")
         _G.vim.test.set_cursor(0, 1, 0)
+        edit_text(1)
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()
 
@@ -2226,6 +2370,7 @@ describe("Range Selection Tests", function()
         _G.vim._changedtick = 6
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamm" }) -- d deletes its last character
         _G.vim.test.set_mode("n")
+        edit_text(1)
         _G.vim.test.set_cursor(0, 1, 14)
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()
@@ -2251,6 +2396,7 @@ describe("Range Selection Tests", function()
         _G.vim._changedtick = 6
         _G.vim.test.add_buffer(1, "/path/to/a.txt", { "alpha beta gamm" })
         _G.vim.test.set_mode("n")
+        edit_text(1)
         _G.vim.test.set_cursor(0, 1, 14)
         _G.vim.v.event = { old_mode = "v", new_mode = "n" }
         selection.on_mode_changed()

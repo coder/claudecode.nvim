@@ -978,6 +978,19 @@ local vim = {
     return result
   end,
 
+  -- A table with only number keys is a list. Like Neovim, an empty table is a list too.
+  tbl_islist = function(t)
+    if type(t) ~= "table" then
+      return false
+    end
+    for key in pairs(t) do
+      if type(key) ~= "number" then
+        return false
+      end
+    end
+    return true
+  end,
+
   -- Add tbl_extend function for compatibility
   tbl_extend = function(behavior, ...)
     local tables = { ... }
@@ -1314,6 +1327,7 @@ local vim = {
     now = function()
       return os.time() * 1000
     end,
+    update_time = function() end,
     timer_stop = function(timer)
       return true
     end,

@@ -11,8 +11,30 @@
 #                     forget`, all through the setsid that mise names
 #   no-bare-tools     vcn.sh has no jq or setsid command except through $JQ_BIN and $SETSID_BIN (reads the source, so it
 #                     reaches every call site, which the two cases above do not)
+#   doc-vars          a code block, or the inline code of a doc, that expands PORT, SID, NVIM_PID or NODE_DIR sets it in
+#                     the same block (or the same doc, for inline code), because a fresh shell has none of them. Prose
+#                     that names an assignment sets nothing.
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
-#   load-symlink      a run.env that is a symlink (to a file this user owns) is refused, not sourced
+#   state-resolved    a VCN_STATE with a . or .. part, a symlink in its path, or a symlink as its last part is refused, not
+#                     sourced
+#   state-slash       a VCN_STATE with a trailing /, /. or //, or a .. after a symlink, is refused, not sourced
+#   state-mode        a VCN_STATE that is group-writable is refused, not sourced
+#   state-parent      a VCN_STATE under a dir that others can write without the sticky bit is refused, not sourced
+#   state-names       the same, when the name of that dir ends in a space, a tab or a newline, and a symlink with the
+#                     shorter name sits next to it
+#   state-env         a state_checked in the caller's environment does not skip the check
+#   state-mode-partial  a state dir that only others can write (702), or only the group (720), is refused, not sourced
+#   state-parent-partial  the same for a dir above the state dir
+#   tmp-multihop      TMPDIR is this user's symlink to a second symlink in a dir that others can write, to a dir only this user
+#                     can write: launch accepts it, and after another user repoints the second symlink, `record` still
+#                     writes no byte of theirs into the evidence dir, because no agent-tty call of vcn.sh reads the caller's TMPDIR
+#   tmp-later-tmpdir  a command run with a TMPDIR that does not exist works: agent-tty makes its staging dirs in the state dir
+#   state-count       a stat that answers for one dir fewer than the walk asked for (a shim drops the record of the loose
+#                     dir above the state dir) makes the walk refuse, not pass
+#   state-newline     a state dir whose name ends in a newline is accepted: the check reads its resolved path whole
+#   state-owner       a VCN_STATE that another user owns, with a run.env in it, is refused, not sourced (a bwrap user
+#                     namespace with a read-only overlay stands in for the other user; SKIP where bwrap cannot make it)
+#   state-ancestor    the same when only a dir above the state dir is another user's, and the state dir is this user's
 #   explicit          VCN_AGENT_TTY wins over a broken agent-tty on PATH and a broken one in mise
 #   explicit-broken   VCN_AGENT_TTY fails doctor: launch exits 1 naming it, and does not fall back to PATH
 #   explicit-missing  VCN_AGENT_TTY is not an executable file: launch exits 1 naming it
@@ -57,7 +79,8 @@
 set -euo pipefail
 V="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vcn.sh"
 root=$PWD
-TMP=$(mktemp -d)
+# Resolved, because launch prints the state dir under the resolved path of TMPDIR.
+TMP=$(realpath -- "$(mktemp -d)")
 # Every launch of this proof makes its state dir in priv, which only this user can enter. `vcn.sh cleanup` sources
 # the run.env of a state dir, so find_state and stop_run never look at /tmp/vcn.*, where another user can make or
 # swap dirs.
@@ -171,7 +194,7 @@ mkdir "$TMP/gate-bin" "$TMP/gate-mktemp" "$TMP/gate-cp" "$TMP/slow"
 cat >"$TMP/gate-bin/mkdir" <<MKDIR
 #!/bin/sh
 case "\$*" in
-"-p $priv/vcn."*"/home $priv/vcn."*"/claude $priv/vcn."*"/work")
+"-p $priv/vcn."*"/home $priv/vcn."*"/claude $priv/vcn."*"/work $priv/vcn."*"/tmp")
   if [ ! -f "\$GATE/reached" ]; then
     printf '%s\n' "\$2" | sed 's#/home\$##' >"\$GATE/state"
     : >"\$GATE/reached"
@@ -692,14 +715,94 @@ setsid_resolved_case() {
 }
 
 # jq-resolved and setsid-resolved reach only the calls that a launch makes. This case reads the source: any word jq or
-# setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it. The
-# pattern is checked on a known bare call first, so a pattern that finds nothing cannot pass.
+# setsid in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it.
 bare_tools_case() {
-  local name=no-bare-tools hits word_re='(^|[^[:alnum:]_./$-])(jq|setsid)($|[^[:alnum:]_-])'
-  grep -qE "$word_re" <<<'  x=$(y | jq -r .z)' || fail "$name" "the pattern misses a known bare jq"
-  hits=$(grep -nE "$word_re" "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -vE '=\$\(bin (jq|setsid)\)$' || true)
-  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare jq or setsid: $(tr '\n' ' ' <<<"$hits")"
+  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])' form
+  local strip_re='(JQ_BIN|SETSID_BIN)=\$\(bin (jq|setsid)\)'
+  local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
+  while IFS= read -r site; do
+    for form in "" /usr/bin/ ./; do
+      bare=${site//"$jq_ref"/${form}jq}
+      bare=${bare//"$setsid_ref"/${form}setsid}
+      grep -qE "$word_re" <<<"$bare" || fail "$name" "the pattern misses this call written as a bare or path-qualified call: $bare"
+    done
+    sites=$((sites + 1))
+  done < <(grep -E '"\$(JQ_BIN|SETSID_BIN)"' "$V" | grep -v 'env_line JQ_BIN')
+  ((sites > 0)) || fail "$name" "vcn.sh has no call through \$JQ_BIN or \$SETSID_BIN to check the pattern against"
+  sed -E "s/$strip_re//" <<<'jq --version; JQ_BIN=$(bin jq)' | grep -qE "$word_re" || fail "$name" "a bare jq on a line that ends with the resolution would pass"
+  hits=$(grep -n '' "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | sed -E "s/$strip_re//" | grep -E "$word_re" || true)
+  [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
+  cases=$((cases + 1))
+}
+
+# A caller used to get PORT, SID, NVIM_PID and NODE_DIR from `source run.env`. A recipe that expands one of them must set
+# it with `VAR=$(`, because a fresh shell has none. A recipe is a fenced code block (checked on its own) or an inline code
+# span (all of them in a doc are checked together, because a bullet cites one assignment for the steps below it). Prose
+# outside the backticks is not a recipe: it can name an assignment that no recipe runs.
+# code_units <file>: prints each fenced block, then the inline code spans outside the blocks, each unit ended by a line
+# that holds only %%unit%%. A block or a span that sources a run.env sets every variable of the run by itself, so it is left
+# out: it needs no `VAR=$(`, and it gives none to the other recipes.
+code_units() {
+  awk 'function sources(text) { return text ~ /(^|[^A-Za-z0-9_.-])(source|\.)[ \t]+[^;#]*run\.env/ }
+    /^```/ { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%"; block = "" } fenced = !fenced; next }
+    fenced { block = block $0 "\n"; next }
+    { line = $0
+      while (match(line, /`[^`]+`/)) {
+        span = substr(line, RSTART + 1, RLENGTH - 2)
+        if (!sources(span)) spans = spans span "\n"
+        line = substr(line, RSTART + RLENGTH)
+      } }
+    END { if (fenced) { if (!sources(block)) printf "%s", block; print "%%unit%%" } printf "%s%%%%unit%%%%\n", spans }' "$1"
+}
+
+# units_missing <file> <var>: succeeds when a unit of the file expands <var> and does not set it.
+units_missing() {
+  local line unit="" uses_re='\$\{?'$2'([^A-Za-z0-9_]|$)' sets_re='(^|[^A-Za-z0-9_$])'$2'=\$\('
+  while IFS= read -r line; do
+    if [[ $line != "%%unit%%" ]]; then
+      unit+=$line$'\n'
+      continue
+    fi
+    if grep -qE "$uses_re" <<<"$unit" && ! grep -qE "$sets_re" <<<"$unit"; then
+      return 0
+    fi
+    unit=""
+  done < <(code_units "$1")
+  return 1
+}
+
+doc_vars_case() {
+  local name=doc-vars skill file var uses_re sets_re sample missing=""
+  skill=$(dirname "$V")/..
+  sample=$TMP/doc-vars-sample.md
+  for var in PORT SID NVIM_PID NODE_DIR; do
+    uses_re='\$\{?'$var'([^A-Za-z0-9_]|$)'
+    sets_re='(^|[^A-Za-z0-9_$])'$var'=\$\('
+    grep -qE "$uses_re" <<<"see \"\$$var.lock\" and \${$var}" || fail "$name" "the use pattern misses \$$var"
+    ! grep -qE "$uses_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the use pattern matches a longer name"
+    grep -qE "$sets_re" <<<"$var=\$(basename \"\$L\"/*.lock .lock)" || fail "$name" "the set pattern misses an assignment of $var"
+    ! grep -qE "$sets_re" <<<"echo $var=\$CLAUDE_CODE_SSE_$var" || fail "$name" "the set pattern matches text that sets nothing"
+    # Prose that names the assignment must not satisfy a block that uses the variable, and a block that sets it must.
+    printf 'Set it with %s=$(x) before.\n\n```bash\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a block that expands $var and sets it only in prose passed"
+    printf 'Prose.\n\n```bash\n%s=$(x)\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "a block that sets $var before it expands it was flagged"
+    printf 'Set `%s=$(x)` first, then `echo "$%s"`.\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "inline code that sets $var for inline code that expands it was flagged"
+    printf 'Run `source "$VCN_STATE/run.env"; echo "$%s"`.\n\n```bash\n. "$VCN_STATE/run.env"\necho "$%s"\n```\n' "$var" "$var" >"$sample"
+    ! units_missing "$sample" "$var" || fail "$name" "a recipe that sources a run.env was flagged for $var"
+    printf 'Run `echo "$%s"`, as in `grep run.env x`.\n' "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a recipe that only names a run.env passed for $var"
+    printf 'Run `source "$VCN_STATE/run.env"` first, then `echo "$%s"`.\n' "$var" >"$sample"
+    units_missing "$sample" "$var" || fail "$name" "a source in one inline recipe set $var for another recipe"
+    for file in "$skill"/SKILL.md "$skill"/features/*.md; do
+      ! units_missing "$file" "$var" || missing+=" ${file#"$skill"/}:$var"
+    done
+  done
+  rm -f -- "$sample"
+  [[ -z $missing ]] || fail "$name" "a recipe expands a variable that it does not set:$missing"
+  echo "ok $name: every recipe that expands PORT, SID, NVIM_PID or NODE_DIR sets it"
   cases=$((cases + 1))
 }
 
@@ -717,23 +820,301 @@ jq_old_run_case() {
   cases=$((cases + 1))
 }
 
-# load sources run.env, so it refuses one that is a symlink, here to a file this user owns that would touch a marker.
-load_symlink_case() {
-  local name=load-symlink dir marker=$TMP/load-marker out rc=0
-  dir=$(mktemp -d "$priv/vcn.XXXXXX")
-  printf 'touch %s\n' "$marker" >"$TMP/linked-run.env"
-  ln -s "$TMP/linked-run.env" "$dir/run.env"
-  out=$(env PATH="$base" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
-  [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
-  [[ ! -e $marker ]] || fail "$name" "vcn.sh sourced the symlinked run.env"
-  ((rc == 1)) && [[ $out == *"refusing $dir/run.env: it is a symlink or owned by another user"* ]] ||
-    fail "$name" "cleanup exited $rc, wanted 1 with the refusal: $out"
-  echo "ok $name: a symlinked run.env was refused and not sourced"
+# refuses_state <case> <state dir> <text> [wrapper...]: `vcn.sh cleanup`, run through the wrapper, must exit 1 with <text>
+# and must not source the run.env in <state dir>, which touches $TMP/marker-<case>.
+refuses_state() {
+  local name=$1 dir=$2 want=$3 marker=$TMP/marker-$1 out rc=0
+  shift 3
+  out=$("$@" env PATH="$base" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+  [[ ! -e $marker ]] || fail "$name" "vcn.sh sourced the run.env of $dir"
+  ((rc == 1)) && [[ $out == *"$want"* ]] || fail "$name" "cleanup exited $rc, wanted 1 with '$want': $out"
+}
+
+# marker_state_dir <parent>: a new 0700 state dir under <parent> whose run.env touches the marker of the caller's $name.
+marker_state_dir() {
+  local dir
+  dir=$(mktemp -d "$1/vcn.XXXXXX")
+  printf 'touch %s\n' "$TMP/marker-$name" >"$dir/run.env"
+  printf '%s' "$dir"
+}
+
+state_resolved_case() {
+  local name=state-resolved rdir=$TMP/res-case real dotted linked final
+  mkdir -m 700 "$rdir" "$rdir/y" "$rdir/real"
+  ln -s "$rdir/real" "$rdir/L"
+  ln -s "$rdir/y" "$rdir/lnk"
+  real=$(marker_state_dir "$rdir/y")
+  dotted=$rdir/L/../y/${real##*/}
+  linked=$rdir/lnk/${real##*/}
+  final=$rdir/vcn.Lnk123
+  ln -s "$real" "$final"
+  refuses_state "$name" "$dotted" "refusing state dir $dotted: it is not its own resolved path ($real)"
+  refuses_state "$name" "$linked" "refusing state dir $linked: it is not its own resolved path ($real)"
+  refuses_state "$name" "$final" "refusing state dir $final: it is not its own resolved path ($real)"
+  rm -rf -- "$rdir"
+  echo "ok $name: a state dir named through a . or .. part or a symlink was refused and its run.env not sourced"
   cases=$((cases + 1))
 }
 
-# TMPDIR holds a symlink. agent-tty names its socket directory after the real path of the home, so a signal before
-# `inspect` leaves that directory unless the cleanup hashes the real path too.
+# stat without -L follows a symlink when the path ends in a slash, so a VCN_STATE spelled <link>/, <link>/. or <link>// has
+# no symlink in the chain that the checks walk. Only the test that the path is its own realpath refuses these.
+state_slash_case() {
+  local name=state-slash sdir=$TMP/slash-case real final spelled
+  mkdir -m 700 "$sdir"
+  real=$(marker_state_dir "$sdir")
+  final=$sdir/vcn.Lnk123
+  ln -s "$real" "$final"
+  for spelled in "$final/" "$final/." "$final//" "$final/../${real##*/}" "$real/" "$real/."; do
+    refuses_state "$name" "$spelled" "refusing state dir $spelled: it is not its own resolved path ($real)"
+  done
+  rm -rf -- "$sdir"
+  echo "ok $name: a state dir spelled with a trailing /, /. or //, or with .. after a symlink, was refused and its run.env not sourced"
+  cases=$((cases + 1))
+}
+
+state_mode_case() {
+  local name=state-mode dir
+  dir=$(marker_state_dir "$priv")
+  chmod 770 "$dir"
+  refuses_state "$name" "$dir" "refusing state dir $dir: it is group- or world-writable"
+  [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  echo "ok $name: a group-writable state dir was refused and its run.env not sourced"
+  cases=$((cases + 1))
+}
+
+state_parent_case() {
+  local name=state-parent loose=$TMP/loose dir
+  mkdir -m 777 "$loose"
+  dir=$(marker_state_dir "$loose")
+  refuses_state "$name" "$dir" "refusing state dir $dir: $loose, above the state dir, is writable by others and not sticky"
+  rm -rf -- "$loose"
+  echo "ok $name: a state dir under a dir that others can write was refused and its run.env not sourced"
+  cases=$((cases + 1))
+}
+
+# A twin symlink with the shorter name sits next to each dir: a walk that read the name back from a line of stat output
+# lost a trailing space or tab, split at a newline, tested the twin and passed it.
+state_names_case() {
+  local name=state-names ndir=$TMP/names stem suffix loose dir
+  mkdir -m 700 "$ndir"
+  for stem in a b c; do
+    case $stem in
+    a) suffix=' ' ;;
+    b) suffix=$'\t' ;;
+    c) suffix=$'\n' ;;
+    esac
+    loose=$ndir/$stem$suffix
+    mkdir -m 777 "$loose"
+    ln -s "$ndir" "$ndir/$stem"
+    dir=$(marker_state_dir "$loose")
+    refuses_state "$name" "$dir" "refusing state dir $dir: $loose, above the state dir, is writable by others and not sticky"
+  done
+  rm -rf -- "$ndir"
+  echo "ok $name: a dir above the state dir that others can write was refused when its name ends in a space, a tab or a newline"
+  cases=$((cases + 1))
+}
+
+state_env_case() {
+  local name=state-env dir
+  dir=$(marker_state_dir "$priv")
+  chmod 770 "$dir"
+  refuses_state "$name" "$dir" "refusing state dir $dir: it is group- or world-writable" env state_checked="$dir"
+  [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  echo "ok $name: a state_checked in the environment did not skip the check"
+  cases=$((cases + 1))
+}
+
+# A test of both write bits catches a mode that only the group, or only others, can write. A test of one bit passes the
+# other: 702 is the mode for the group bit, 720 for the others bit.
+state_mode_partial_case() {
+  local name=state-mode-partial dir mode
+  for mode in 702 720; do
+    dir=$(marker_state_dir "$priv")
+    chmod "$mode" "$dir"
+    refuses_state "$name" "$dir" "refusing state dir $dir: it is group- or world-writable"
+    [[ $dir == "$priv"/vcn.?????? ]] && rm -rf -- "$dir"
+  done
+  echo "ok $name: a state dir that only others, or only the group, can write was refused and its run.env not sourced"
+  cases=$((cases + 1))
+}
+
+state_parent_partial_case() {
+  local name=state-parent-partial loose dir mode
+  for mode in 702 720; do
+    loose=$TMP/loose-$mode
+    mkdir -m "$mode" "$loose"
+    dir=$(marker_state_dir "$loose")
+    refuses_state "$name" "$dir" "refusing state dir $dir: $loose, above the state dir, is writable by others and not sticky"
+    rm -rf -- "$loose"
+  done
+  echo "ok $name: a dir above the state dir that only others, or only the group, can write was refused"
+  cases=$((cases + 1))
+}
+
+# unsafe_walk reads one stat record per dir that exists, and refuses when it gets fewer: a missing record would shift the
+# owner and mode of every dir after it. The stat shim drops the loose dir from its arguments, so the one dir that the walk
+# must refuse is the one that gets no record.
+state_count_case() {
+  local name=state-count loose=$TMP/count-loose dir out rc=0
+  mkdir -m 777 "$loose"
+  mkdir "$TMP/stat-drop"
+  printf '#!/bin/bash\nargs=()\nfor a in "$@"; do [[ $a == "$DROP" ]] || args+=("$a"); done\nexec "%s" "${args[@]}"\n' "$(command -v stat)" >"$TMP/stat-drop/stat"
+  chmod +x "$TMP/stat-drop/stat"
+  dir=$(marker_state_dir "$loose")
+  out=$(env PATH="$TMP/stat-drop:$base" DROP="$loose" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+  [[ ! -e $TMP/marker-$name ]] || fail "$name" "vcn.sh sourced the run.env of $dir while stat answered for one dir fewer"
+  ((rc == 1)) && [[ $out == *"refusing state dir $dir: $loose, above the state dir, could not be read in full"* ]] ||
+    fail "$name" "cleanup exited $rc, wanted 1 with 'could not be read in full': $out"
+  rm -rf -- "$loose" "$TMP/stat-drop"
+  echo "ok $name: a walk that got one stat record too few refused the state dir and did not source its run.env"
+  cases=$((cases + 1))
+}
+
+# A command substitution cuts the newlines at the end of a name. The check compares VCN_STATE with its resolved path, which
+# it reads with a NUL end so that the newline stays: a dir named so is the dir it names, and it is accepted.
+state_newline_case() {
+  local name=state-newline dir out rc=0
+  dir=$priv/vcn.Nl$'\n'
+  mkdir -m 700 "$dir"
+  printf 'touch %s\n' "$TMP/marker-$name" >"$dir/run.env"
+  out=$(env PATH="$base" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+  [[ -e $TMP/marker-$name ]] || fail "$name" "vcn.sh refused a state dir whose name ends in a newline: $out"
+  [[ $out != *"refusing state dir"* ]] || fail "$name" "vcn.sh refused a state dir whose name ends in a newline: $out"
+  [[ $dir == "$priv"/vcn.* ]] && rm -rf -- "$dir"
+  echo "ok $name: a state dir whose name ends in a newline was accepted and its run.env sourced"
+  cases=$((cases + 1))
+}
+
+# bwrap makes a user namespace that this user owns (no sudo, no second account). It maps this user to uid 0 and every
+# host-root-owned inode to nobody. Its /tmp is a root-owned sticky tmpfs, like a host /tmp, so every dir in the chain
+# above the planted one belongs to root there, and the walk above passes.
+# foreign_owner_case <case> <planted dir> <state dir> <text> <what passed>: <planted dir> is a read-only overlay. Its top
+# layer is a host-root-owned dir, so its owner shows as nobody, and its lower layer holds <state dir> (the planted dir
+# itself, or a dir this user owns inside it) with a run.env that touches a marker.
+foreign_owner_case() {
+  local name=$1 planted=$2 state=$3 want=$4 passed=$5 top="" cand lower=$TMP/$1-lower rel out skill
+  local args=()
+  command -v bwrap >/dev/null || {
+    echo "SKIP $name: bwrap is not installed"
+    return 0
+  }
+  for cand in /srv /opt /usr /etc; do
+    [[ $(stat -c '%u %a' -- "$cand" 2>/dev/null) == "0 755" ]] && {
+      top=$cand
+      break
+    }
+  done
+  [[ -n $top ]] || {
+    echo "SKIP $name: no host-root-owned 0755 dir for the top layer"
+    return 0
+  }
+  skill=$(cd "$(dirname "$V")/.." && pwd)
+  rel=${state#"$planted"}
+  rel=${rel#/}
+  mkdir "$lower"
+  [[ -z $rel ]] || mkdir -m 700 "$lower/$rel"
+  printf 'touch /tmp/marker-%s\n' "$name" >"$lower/$rel/run.env"
+  args=(--unshare-user --uid 0 --gid 0 --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib
+    --symlink usr/lib64 /lib64 --unshare-pid --dev /dev --proc /proc --perms 01777 --tmpfs /tmp
+    --overlay-src "$lower" --overlay-src "$top" --ro-overlay "$planted" --ro-bind "$skill" /v
+    --setenv PATH /usr/bin:/bin --setenv VCN_STATE "$state")
+  bwrap "${args[@]}" /usr/bin/true 2>/dev/null || {
+    echo "SKIP $name: bwrap cannot make a user namespace with an overlay here"
+    return 0
+  }
+  out=$(bwrap "${args[@]}" /usr/bin/bash -c '
+    [[ $(stat -c %u "$1") != "$EUID" ]] || echo SETUP-PLANTED-IS-MINE
+    [[ $1 == "$2" || $(stat -c %u "$2") == "$EUID" ]] || echo SETUP-STATE-IS-NOT-MINE
+    /v/scripts/vcn.sh cleanup 2>&1
+    echo "rc=$?"
+    [[ ! -e /tmp/marker-$3 ]] || echo MARKER-SOURCED' _ "$planted" "$state" "$name" 2>&1) || true
+  [[ $out != *SETUP-PLANTED-IS-MINE* ]] || fail "$name" "$planted shows this user as its owner, so the case proves nothing: $out"
+  [[ $out != *SETUP-STATE-IS-NOT-MINE* ]] || fail "$name" "$state is not owned by this user, so only the owner test could refuse it: $out"
+  [[ $out != *MARKER-SOURCED* ]] || fail "$name" "vcn.sh sourced the run.env of $state: $out"
+  [[ $out == *"refusing state dir $state: $want"* && $out == *"rc=1"* ]] ||
+    fail "$name" "cleanup did not refuse the dir with '$want' and exit 1: $out"
+  echo "ok $name: $passed was refused and its run.env not sourced"
+  cases=$((cases + 1))
+}
+
+state_owner_case() {
+  foreign_owner_case state-owner /tmp/vcn.Abc123 /tmp/vcn.Abc123 "it is owned by another user" \
+    "a state dir that another user owns, with a run.env,"
+}
+
+# Only the dir above the state dir is foreign: the state dir is this user's 0700 dir, so the owner test passes it.
+state_ancestor_case() {
+  foreign_owner_case state-ancestor /tmp/P /tmp/P/vcn.Abc123 "/tmp/P, above the state dir, is owned by another user" \
+    "a state dir under a dir that another user owns"
+}
+
+# swap_watch <dir> <seconds> plays another user who owns <dir>. When agent-tty's staging dir (agent-tty-webm-*) appears there,
+# it moves it aside and puts a dir of its own in its place, and when a .webm file appears in that dir, it moves the file
+# aside and writes its own bytes under the same name. It polls every 0.05 s and ends once it has planted a file.
+swap_watch() {
+  local d=$1 until=$((SECONDS + $2)) s f swapped="" planted=""
+  while ((SECONDS < until)); do
+    for s in "$d"/agent-tty-webm-*; do
+      [[ -d $s && ! -L $s && $s != *.orig && -z $swapped ]] || continue
+      mv -- "$s" "$s.orig" && mkdir -m 777 -- "$s" && swapped=$s
+    done
+    if [[ -n $swapped && -z $planted ]]; then
+      for f in "$swapped"/*.webm; do
+        [[ -f $f ]] || continue
+        mv -- "$f" "$f.orig" && printf 'FORGED-BY-ANOTHER-USER\n' >"$f" && planted=$f
+      done
+    fi
+    [[ -z $planted ]] || return 0
+    sleep 0.05
+  done
+}
+
+# Before att() gave agent-tty a TMPDIR of its own, agent-tty read TMPDIR as given and followed every symlink in it each time it
+# made a staging dir. TMPDIR is a symlink of this user's (hop1) to a symlink in a dir that others can write (hop2), to the
+# private dir. Both walks of launch pass it: hop1 is this user's, and the resolved dir is private. After launch, hop2 is
+# pointed at a dir of another user, whom swap_watch plays while `record` runs. The evidence dir must not get the planted
+# bytes.
+tmp_multihop_case() {
+  local name=tmp-multihop loose=$TMP/mh-loose own=$TMP/mh-own other r=0 wpid wcmd
+  other=$loose/other
+  mkdir -m 777 "$loose" "$other"
+  mkdir -m 700 "$own"
+  ln -s "$priv" "$loose/hop2"
+  ln -s "$loose/hop2" "$own/hop1"
+  launch "$name" "$good_path" TMPDIR="$own/hop1"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  rm -- "$loose/hop2"
+  ln -s "$other" "$loose/hop2"
+  swap_watch "$other" 120 &
+  wpid=$!
+  wcmd=$(tr '\0' ' ' <"/proc/$wpid/cmdline")
+  env PATH="$good_path" TMPDIR="$own/hop1" VCN_STATE="$state" "$V" record r2 >"$TMP/$name-record.txt" 2>&1 || r=$?
+  if [[ -d /proc/$wpid && $(tr '\0' ' ' <"/proc/$wpid/cmdline") == "$wcmd" ]]; then kill "$wpid"; fi
+  wait "$wpid" 2>/dev/null || true
+  stop "$good_path"
+  ((r == 0)) || fail "$name" "record exited $r: $(tail -n 2 "$TMP/$name-record.txt")"
+  [[ -s $TMP/out-$name/r2.webm ]] || fail "$name" "record wrote no r2.webm"
+  ! grep -q FORGED-BY-ANOTHER-USER "$TMP/out-$name/r2.webm" ||
+    fail "$name" "r2.webm holds the bytes that another user planted through the symlinks of TMPDIR"
+  echo "ok $name: after the second symlink of TMPDIR was repointed, record wrote none of the other user's bytes"
+  cases=$((cases + 1))
+}
+
+# A command that runs with another TMPDIR than launch did must not depend on it: this one names a dir that does not exist.
+tmp_later_case() {
+  local name=tmp-later-tmpdir missing=$TMP/no-such-tmp r=0
+  launch "$name" "$good_path"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  [[ $(stat -c %a -- "$state/tmp") == 700 ]] || fail "$name" "launch made $state/tmp with mode $(stat -c %a -- "$state/tmp"), not 700"
+  env PATH="$good_path" TMPDIR="$missing" VCN_STATE="$state" "$V" record r2 >"$TMP/$name-record.txt" 2>&1 || r=$?
+  stop "$good_path"
+  ((r == 0)) || fail "$name" "record with TMPDIR=$missing exited $r: $(tail -n 2 "$TMP/$name-record.txt")"
+  [[ -s $TMP/out-$name/r2.webm ]] || fail "$name" "record wrote no r2.webm"
+  [[ ! -e $missing ]] || fail "$name" "a command made the dir that the TMPDIR of the caller names"
+  echo "ok $name: record ran with a TMPDIR that does not exist, and agent-tty used a dir of the state dir"
+  cases=$((cases + 1))
+}
+
 signal_symlink_case() {
   local name=signal-symlink gate=$TMP/gate-signal-symlink sockdir
   ln -s "$priv" "$TMP/priv-link"
@@ -779,8 +1160,22 @@ signal_gap_case
 cleanup_no_agent_tty_case
 setsid_resolved_case
 bare_tools_case
+doc_vars_case
 jq_old_run_case
-load_symlink_case
+state_resolved_case
+state_slash_case
+state_mode_case
+state_parent_case
+state_names_case
+state_env_case
+state_mode_partial_case
+state_parent_partial_case
+state_count_case
+state_newline_case
+state_owner_case
+state_ancestor_case
+tmp_multihop_case
+tmp_later_case
 signal_symlink_case
 sigterm_case
 echo "CASES $cases"
