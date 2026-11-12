@@ -318,11 +318,11 @@ TickMoved(s, b) == IF s.entryBuf = b THEN [s EXCEPT !.entryMoved = TRUE] ELSE s
 \* An edit of buffer b reaches the listener (on_lines): note_visual_edit counts it on the visual_entry of b.
 EntryEdited(s, b) == IF s.entryBuf = b /\ ListenerNotesVisualEdit THEN [s EXCEPT !.entryDirty = TRUE] ELSE s
 
-\* A plugin's edit in visual mode: the listener counts it, and the model runs the check that the code schedules in the same
-\* step, which is true when the check comes before the next key. Visual mode is still on then, so the entry is not consumed,
-\* unless the code takes every counted edit for an operator's. A key that comes first is not modeled (a known bug): a
-\* mapping that edits and presses Esc in one typeahead, a key that arrives during the plugin's callback, an autocmd edit at
-\* a mode change. See SKILL.md, "Scope and bounds".
+\* A plugin's edit in visual mode: the listener counts it, and the model runs the check in the same step. The code runs it
+\* from vim.schedule and from a vim.on_key listener, whichever comes first, so it comes before the flush of the next Esc
+\* (before #540 only the schedule ran it, and a key that came first reached the flush with an unchecked edit: a mapping
+\* that edits and presses Esc in one typeahead, a key during a callback, an autocmd edit at a mode change). Visual mode
+\* is still on at the check, so the entry is not consumed, unless the code takes every counted edit for an operator's.
 PluginEditedInVisual(s, b) ==
   TickMoved(IF VisualCheckSparesPluginEdit THEN s ELSE EntryEdited(s, b), b)
 
@@ -440,7 +440,7 @@ YouEditByPlugin ==
 (* A plugin edits another line while you select, and the selection stays on the screen with the *)
 (* text it had: the changedtick moves, and the listener counts the edit. No TextChanged and no   *)
 (* CursorMoved fire in visual mode. An edit whose check has not run when the next key arrives   *)
-(* would reach the flush unchecked: not modeled (a known bug, see SKILL.md).                     *)
+(* would reach the flush unchecked: the code checks it at the next key too (see SKILL.md).       *)
 YouEditByPluginInVisual ==
   /\ buf \in Files /\ mode = "v"
   /\ SetS(PluginEditedInVisual(S, buf))
