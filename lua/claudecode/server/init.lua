@@ -18,12 +18,14 @@ local M = {}
 ---@field auth_token string|nil The authentication token for validating connections
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
+---@field in_flight table<table, boolean> The requests whose handler is running, each as `{ client, id }`
 M.state = {
   server = nil,
   port = nil,
   auth_token = nil,
   handlers = {},
   ping_timer = nil,
+  in_flight = {},
 }
 
 ---Initialize the WebSocket server
@@ -55,14 +57,19 @@ function M.start(config, auth_token)
       M._handle_message(client, message)
     end,
     on_connect = function(client)
-      -- Log connection with auth status
+      -- This runs at the TCP accept, before the handshake, so the token has not been checked yet.
       if M.state.auth_token then
-        logger.debug("server", "Authenticated WebSocket client connected:", client.id)
+        logger.debug("server", "WebSocket client connected, awaiting authentication:", client.id)
       else
         logger.debug("server", "WebSocket client connected (no auth):", client.id)
       end
     end,
     on_open = function(client)
+      -- With a token, the handshake has passed the token check by now, so the client is authenticated.
+      if M.state.auth_token then
+        logger.debug("server", "Authenticated WebSocket client connected:", client.id)
+      end
+
       -- The client completed its WebSocket handshake, so it can take the queued @ mentions now.
       local main_module = require("claudecode")
       if main_module.process_mention_queue then
@@ -136,6 +143,16 @@ function M.stop()
     diff.close_pending_diffs("server stopping")
   end
 
+  -- A request whose handler is still running has no sender yet, so nothing above can answer it.
+  for in_flight in pairs(M.state.in_flight) do
+    M.state.in_flight[in_flight] = nil
+    M.send_response(in_flight.client, in_flight.id, nil, {
+      code = -32603,
+      message = "Internal error",
+      data = "The server stopped before the call finished",
+    })
+  end
+
   tcp_server.stop_server(M.state.server)
 
   -- CRITICAL: Clear global deferred responses to prevent memory leaks and hanging
@@ -198,7 +215,16 @@ function M._handle_request(client, request)
     return
   end
 
+  -- A request has no answer until its handler returns, and a blocking tool has no sender before that. When Neovim
+  -- exits inside the handler (a `nested = true` ClaudeCodeDiffOpened handler that runs :qa!), the handler never
+  -- returns, so `stop` answers the request, and this function sends nothing after it.
+  local in_flight = { client = client, id = id }
+  M.state.in_flight[in_flight] = true
   local success, result, error_data = pcall(handler, client, params)
+  if not M.state.in_flight[in_flight] then
+    return
+  end
+  M.state.in_flight[in_flight] = nil
   if success then
     -- Check if this is a deferred response (blocking tool)
     if result and result._deferred then

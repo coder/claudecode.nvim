@@ -133,6 +133,8 @@ Two PRs that edit the same Lua file, or that add or delete neighbouring Lua file
 
 Releases are managed by Release Please. After feature and fix PRs land on `main`, the `Release Please` workflow opens or updates a single release PR that bumps `VERSION`, updates `.release-please-manifest.json`, and rewrites the next `CHANGELOG.md` entry with Communique-generated notes. Merging that release PR creates the `v<version>` tag and GitHub Release, then dispatches the `Release Notes` workflow to rewrite the GitHub Release body with Communique's GitHub-release format.
 
+The runner refuses a `CHANGELOG.md` that Prettier would rewrite, which is what `mise run format-check` rejects in CI. A bare CR can hide a heading from Communique, so the update does not build on such a file, and the release run fails with an error that names `CHANGELOG.md`. Run `mise run format`, then review its diff of `CHANGELOG.md`. Prettier can change what an entry says (for example around an identifier with underscores), so fix such a line by hand, for example by putting the identifier in backticks. Then run `mise run format` again until it changes nothing, and review its diff again.
+
 Release notes require either `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`; when using OpenAI-compatible credentials, set `COMMUNIQUE_MODEL` so Communique knows which model to call. The pinned Communique Linux binary currently requires a glibc 2.39-compatible environment (for example Ubuntu 24.04 or the GitHub-hosted `ubuntu-latest` runner); on older Linux hosts, run the dry-run in a newer container or runner.
 
 `communique.toml` sets `max_tokens = 16384`. Communique 1.1.3 defaults to 4096 output tokens, and its one `submit_release_notes` call (changelog, title, and body) does not fit in that for a release with about 140 PRs. The model's call is then cut off, Communique makes three attempts in total, and the job passes only when the last attempt still holds a `changelog` or a `release_body`. `npm --prefix scripts run test:release-please-runner` checks that the pinned Communique and this config fit a submission larger than the default.
@@ -152,7 +154,7 @@ ANTHROPIC_API_KEY=... \
 ## Implementation Guidelines
 
 1. **Error Handling**
-   - All public functions should have error handling
+   - Handle errors where data comes in and where a call can fail (see "Code Shape" in `AGENTS.md`)
    - Return `success, result_or_error` pattern
    - Log meaningful error messages
 

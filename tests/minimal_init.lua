@@ -74,33 +74,3 @@ if not vim.g.loaded_claudecode and should_load then
     log_level = "trace", -- More verbose for tests
   })
 end
-
--- Global cleanup function for plenary test harness
-_G.claudecode_test_cleanup = function()
-  -- Clear global deferred responses
-  if _G.claude_deferred_responses then
-    _G.claude_deferred_responses = {}
-  end
-
-  -- Stop claudecode if running
-  local ok, claudecode = pcall(require, "claudecode")
-  if ok and claudecode.state and claudecode.state.server then
-    local selection_ok, selection = pcall(require, "claudecode.selection")
-    if selection_ok and selection.disable then
-      selection.disable()
-    end
-
-    if claudecode.stop then
-      claudecode.stop()
-    end
-  end
-end
-
--- Auto-cleanup when using plenary test harness
-if vim.env.PLENARY_TEST_HARNESS then
-  vim.api.nvim_create_autocmd("VimLeavePre", {
-    callback = function()
-      _G.claudecode_test_cleanup()
-    end,
-  })
-end
