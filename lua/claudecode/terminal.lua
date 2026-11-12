@@ -480,8 +480,8 @@ function M.setup(user_term_config, p_terminal_cmd, p_env)
         defaults.provider = v
       else
         -- A rejected value leaves `defaults.provider` as it was: "auto" until a valid value is set. Say so.
-        local kept = type(defaults.provider) == "string" and ("'" .. defaults.provider .. "'")
-          or "the custom provider table"
+        local kept = type(defaults.provider) == "table" and "the custom provider table"
+          or ("'" .. tostring(defaults.provider) .. "'")
         vim.notify(
           "claudecode.terminal.setup: Invalid value for provider: " .. tostring(v) .. ". Keeping " .. kept .. ".",
           vim.log.levels.WARN

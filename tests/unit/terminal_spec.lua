@@ -1127,6 +1127,18 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
           )
         end)
 
+        it("raises the warning at WARN level", function()
+          terminal_wrapper.setup({ provider = "bogus" })
+
+          local levels = {}
+          for _, call in ipairs(vim.notify.calls) do
+            if call.refs[1]:match("Invalid value for provider") then
+              table.insert(levels, call.refs[2])
+            end
+          end
+          assert.are.same({ vim.log.levels.WARN }, levels)
+        end)
+
         it("keeps the provider that an earlier setup chose, and the warning names it", function()
           local mock_none_provider = {
             setup = spy.new(function() end),
@@ -1207,6 +1219,23 @@ describe("claudecode.terminal (wrapper for Snacks.nvim)", function()
           )
           mock_native_provider.open:was_called(1)
           mock_snacks_provider.open:was_not_called()
+        end)
+
+        it("names a stored value that is not a table by that value, when setup rejects a new one", function()
+          terminal_wrapper.defaults.provider = 42
+          terminal_wrapper.setup({ provider = "bogus" })
+
+          local setup_warnings = {}
+          for _, call in ipairs(vim.notify.calls) do
+            if call.refs[1]:match("Invalid value for provider") then
+              table.insert(setup_warnings, call.refs[1])
+            end
+          end
+          assert.are.same(
+            { "claudecode.terminal.setup: Invalid value for provider: bogus. Keeping '42'." },
+            setup_warnings,
+            "no custom provider table is stored, and the code uses native"
+          )
         end)
       end)
 
