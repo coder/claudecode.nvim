@@ -94,6 +94,16 @@ describe("claudecode.utils.resume_tool_coroutine", function()
     end)
   end
 
+  for _, case in ipairs({ { "no version" }, { "a number as the version", 42 }, { "a table as the version", {} } }) do
+    it("treats " .. case[1] .. " as affected", function()
+      local utils = load_utils(case[2], true)
+
+      assert.same({ true }, { utils.resume_tool_coroutine(create_coroutine()) })
+      assert.same({ "off", "flush", "resume", "on" }, calls)
+      assert.is_false(jit_on_during_resume)
+    end)
+  end
+
   it("flushes the traces but keeps the JIT off when the JIT was off before", function()
     local utils = load_utils("LuaJIT 2.1.0-beta3", false)
 

@@ -277,13 +277,15 @@ function M.valid_utf8(text)
   return table.concat(parts)
 end
 
--- Neovim 0.8 and 0.9 bundle a LuaJIT older than its commit e86990f7f of 2023-09-21 (LuaJIT issue 1066). When a Neovim
--- API call in a coroutine runs a Lua callback and then raises into a pcall of that coroutine, such a LuaJIT keeps
--- pointing at the main Lua thread, and the next exit from a compiled trace corrupts that thread's stack: Neovim aborts
--- (exit 134 or 139). Only compiled traces read the stale pointer, and coroutine.resume sets it right when it returns.
--- Rolling releases are numbered 2.1.<unix time of the commit>. A string that does not read that way counts as
--- affected, which costs only a flush.
-local jit_affected = jit ~= nil and (tonumber(jit.version:match("^LuaJIT 2%.1%.(%d+)$")) or 0) < 1695261248
+-- Neovim 0.8 and 0.9 bundle a LuaJIT older than its commit e86990f7f of 2023-09-21, which fixes LuaJIT issue 1066:
+-- after a C function runs Lua on another thread and then raises into a pcall, `cur_L` still names that thread, and
+-- the next exit from a compiled trace crashes (the issue shows a crash in `lj_trace_exit`). The commit sets `cur_L`
+-- again in `err_unwind` (src/lj_err.c). A Neovim API call in a coroutine that runs a Lua callback and then raises
+-- behaves like that C function, and Neovim aborts (exit 134 or 139). We did not read the LuaJIT source for other code
+-- that uses `cur_L`. Measured: with the JIT off and its traces flushed while the coroutine runs, Neovim survives
+-- (tests/integration/diff_tool_coroutine_jit_spec.lua). Rolling releases are numbered 2.1.<unix time of the commit>.
+-- A version that is no string, or does not read that way, counts as affected, which costs only a flush.
+local jit_affected = jit ~= nil and (tonumber(tostring(jit.version):match("^LuaJIT 2%.1%.(%d+)$")) or 0) < 1695261248
 
 ---Turns the JIT back on when `was_on`, and passes the other arguments on as they are, trailing nils included.
 local function restore_jit(was_on, ...)
@@ -294,7 +296,7 @@ local function restore_jit(was_on, ...)
 end
 
 ---`coroutine.resume` for the coroutine of a tool (`handle_invoke` and the resolution of a blocking diff). On a LuaJIT
----with issue 1066 the JIT is off and its traces are flushed while the coroutine runs. A JIT that was off stays off.
+---with issue 1066 it turns the JIT off and flushes its traces before the resume, and gives the JIT back as it was.
 ---@param co thread
 ---@param ... any Values for the coroutine
 ---@return boolean success
