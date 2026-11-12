@@ -2589,6 +2589,66 @@ describe("Range Selection Tests", function()
         assert.are.equal("alpha", selection.get_latest_selection().text)
       end)
 
+      -- A new terminal has no name and is not registered when its BufEnter fires, so nothing cancels the demotion then.
+      -- With the default delays it fires before the debounce of that BufEnter, while the terminal is the current buffer.
+      -- It must do nothing there, and keep what makes the return to the file keep the selection.
+      it("keeps the selection when its demotion fires in a new Claude terminal and you come back", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce() -- arms the demotion
+        local demotion = selection.state.demotion_timer
+        assert(demotion ~= nil)
+        mock_server.last_broadcast = nil
+
+        _G.vim.test.add_buffer(2, "", { "" })
+        enter_buffer(2)
+        terminal_module.get_active_terminal_bufnr = function()
+          return 2 -- registered right after BufEnter
+        end
+        assert.are.equal(demotion, selection.state.demotion_timer) -- nothing cancelled it
+        demotion:fire()
+
+        assert.is_not_nil(selection.state.last_active_visual_selection)
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+
+        settle() -- the debounce of the terminal's BufEnter
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
+      it("keeps the selection when its demotion fires in a terminal that only its name says is Claude's", function()
+        selection.enable(mock_server)
+        start_selecting(5)
+        release_selection(1, 5, 4)
+        fire_debounce() -- arms the demotion
+        local demotion = selection.state.demotion_timer
+        assert(demotion ~= nil)
+        mock_server.last_broadcast = nil
+
+        _G.vim.test.add_buffer(2, "", { "" })
+        enter_buffer(2)
+        -- terminal.provider = "none": no provider registers the terminal, and its name arrives after BufEnter
+        _G.vim.test.add_buffer(2, "term://~/project//4242:claude", { "claude> hello" })
+        assert.are.equal(demotion, selection.state.demotion_timer) -- nothing cancelled it
+        demotion:fire()
+
+        assert.is_not_nil(selection.state.last_active_visual_selection)
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+
+        settle()
+        go_to_buffer(1, 4)
+        settle()
+
+        assert.are.equal("alpha", selection.get_latest_selection().text)
+        assert.is_nil(mock_server.last_broadcast)
+      end)
+
       it("listens for text changes made in Insert mode too", function()
         selection.enable(mock_server)
 
