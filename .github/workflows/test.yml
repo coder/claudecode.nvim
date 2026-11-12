@@ -116,6 +116,8 @@ jobs:
         env:
           # plenary.nvim's master head since 2026-04-10, which the unpinned clone fetched until now.
           # Pinned so a new plenary commit cannot change or break CI (for example by dropping 0.8).
+          # Whoever bumps the pin must recheck plenary's per-file timeout (50s, test_harness.lua) against FILE_TIMEOUT
+          # in scripts/run_integration_tests_individually.sh: that limit plus its kill grace must stay below it.
           PLENARY_SHA: 74b06c6c75e4eeb3108ec01852001636d85a932b
         run: |
           plenary=~/.local/share/nvim/site/pack/vendor/start/plenary.nvim
@@ -136,8 +138,8 @@ jobs:
           mkdir -p "$odd_tmp"
           TMPDIR="$odd_tmp" ./scripts/run_integration_tests_individually.sh
 
-      # The runner's Neovims open real diffs, whose temp files go under stdpath("cache"). A spec that uses the real
-      # cache folder instead of a temp one shows here.
+      # Only the legacy diff.open_diff writes temp files under stdpath("cache"). diff_legacy_swap_spec.lua points that
+      # at a temp folder, and a spec that uses the real cache folder shows here.
       - name: Check the integration tests left the real cache folder alone
         run: |
           cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvim"
