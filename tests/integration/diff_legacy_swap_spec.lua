@@ -36,8 +36,12 @@ describe("legacy open_diff and a swap file for its proposal", function()
   end)
 
   it("opens the proposal when a killed Neovim left a swap file for '<path> (New)'", function()
-    -- Another Neovim changes a buffer named "<path> (New)", so its swap file records that name, and is killed.
-    vim.fn.system({
+    -- Another Neovim changes a buffer named "<path> (New)", so its swap file records that name, and is killed. SIGKILL
+    -- leaves the socket folder of that Neovim in $TMPDIR (or $XDG_RUNTIME_DIR), so it gets folders of its own inside
+    -- `dir`, which after_each deletes.
+    local child_dir = dir .. "/child"
+    vim.fn.mkdir(child_dir, "p")
+    local job = vim.fn.jobstart({
       vim.v.progpath,
       "--headless",
       "-u",
@@ -54,7 +58,9 @@ describe("legacy open_diff and a swap file for its proposal", function()
       "preserve",
       "-c",
       "lua (vim.uv or vim.loop).kill(vim.fn.getpid(), 9)",
-    })
+    }, { stdin = "null", env = { TMPDIR = child_dir, XDG_RUNTIME_DIR = child_dir } })
+    assert.is_true(job > 0, "the child Neovim started")
+    vim.fn.jobwait({ job }, 30000)
     assert.are.equal(1, #vim.fn.glob(swap_dir .. "/*", false, true), "the killed Neovim left its swap file")
 
     vim.cmd("edit " .. vim.fn.fnameescape(path))

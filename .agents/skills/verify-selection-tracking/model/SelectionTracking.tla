@@ -56,6 +56,8 @@ CONSTANTS
   DemotionWaitsForMove,  \* handle_selection_demotion returns while the cursor is unmoved
   DemotionClearsHeldState, \* handle_selection_demotion clears the original buffer's
                            \* last_active_visual_selection and cursor_at_flush
+  DemotionIgnoresTerminal, \* handle_selection_demotion returns in a Claude terminal and leaves
+                           \* last_active_visual_selection alone (Condition 1)
   DebounceIgnoresStale,  \* the debounce callback returns unless it is M.state.debounce_timer
   DemotionIgnoresStale,  \* the demotion callback returns unless it is M.state.demotion_timer
   ClearsBeforeClose,     \* both cancel functions and both callbacks set the state field to
@@ -139,13 +141,12 @@ VARIABLES
   closedTwice,\* timer:close() ran on a closed handle: Lua error "handle ... is already closing"
   hold,       \* the selection the user released with Esc, until the cursor moves; or None
   holdPos,    \* the cursor when it was released
-  holdLoose,  \* the user came back from the Claude terminal to it: either outcome is allowed
   released    \* the last step was the release itself
 
 nvim == <<buf, mode, cur, vsel, ver>>
 plugin == <<latest, lastVis, cafBuf, cafPos, cafLeft, cafAway, rdBuf, rdVer, entryBuf, entryDirty, entryMoved, db, dbStale, dbLoose, dm,
             dmBuf, dmStale, dmLoose, chk, phantom, closedTwice>>
-spec == <<hold, holdPos, holdLoose, released>>
+spec == <<hold, holdPos, released>>
 vars == <<nvim, plugin, spec>>
 
 TypeOK ==
@@ -161,7 +162,7 @@ TypeOK ==
   /\ dm \in TStates /\ dmBuf \in Bufs \cup {None} /\ (dm = "nil") = (dmBuf = None)
   /\ dmStale \in BOOLEAN /\ dmLoose \subseteq Bufs /\ chk \in BOOLEAN
   /\ phantom \in BOOLEAN /\ closedTwice \in BOOLEAN
-  /\ hold \in VisValues \cup {None} /\ holdPos \in Pos /\ holdLoose \in BOOLEAN /\ released \in BOOLEAN
+  /\ hold \in VisValues \cup {None} /\ holdPos \in Pos /\ released \in BOOLEAN
 
 Init ==
   /\ buf = CHOOSE f \in Files : TRUE
@@ -171,7 +172,7 @@ Init ==
   /\ db = "nil" /\ dbStale = FALSE /\ dbLoose = FALSE
   /\ dm = "nil" /\ dmBuf = None /\ dmStale = FALSE /\ dmLoose = {} /\ chk = FALSE
   /\ phantom = FALSE /\ closedTwice = FALSE
-  /\ hold = None /\ holdPos = P0 /\ holdLoose = FALSE /\ released = FALSE
+  /\ hold = None /\ holdPos = P0 /\ released = FALSE
 
 -----------------------------------------------------------------------------
 (* The plugin's state as a record, so that the code's functions chain as    *)
@@ -274,7 +275,7 @@ Demote(s, e, b) ==
                      THEN [clearVis(x) EXCEPT !.cafBuf = IF @ = b THEN None ELSE @]
                      ELSE x
   IN
-  CASE e.buf = Term -> clearVis(s)                              \* Condition 1
+  CASE e.buf = Term -> IF DemotionIgnoresTerminal THEN s ELSE clearVis(s)  \* Condition 1
     [] e.buf = b /\ e.mode = "v" -> clearVis(s)                 \* Condition 2
     [] e.buf = b /\ DemotionWaitsForMove /\ Unmoved(s, e) -> s  \* Condition 3, cursor unmoved
     [] e.buf = b -> resolved(Publish(s, Cur(b, e.cur)))         \* Condition 3, demote
@@ -364,8 +365,8 @@ ListenerCheck(s, e) ==
 OnCursor(s, e, compareCursor, termKnown) == IF ReconcileOnCursorMoved THEN Reconcile(s, e, compareCursor, termKnown) ELSE s
 OnText(s, e) == IF ReconcileOnTextChanged THEN Reconcile(s, e, TRUE, TRUE) ELSE s
 
-NoSpecChange == UNCHANGED <<hold, holdPos, holdLoose>> /\ released' = FALSE
-DropHold == hold' = None /\ holdPos' = P0 /\ holdLoose' = FALSE /\ released' = FALSE
+NoSpecChange == UNCHANGED <<hold, holdPos>> /\ released' = FALSE
+DropHold == hold' = None /\ holdPos' = P0 /\ released' = FALSE
 
 -----------------------------------------------------------------------------
 (* The user. Each step is one key or command with the autocmds it fires.   *)
@@ -393,7 +394,7 @@ YouReleaseSelection ==
   /\ mode' = "n" /\ vsel' = None
   /\ UNCHANGED <<buf, cur, ver>>
   /\ IF buf \in Files
-     THEN hold' = Vis(buf, vsel, ver[buf]) /\ holdPos' = cur /\ holdLoose' = FALSE /\ released' = TRUE
+     THEN hold' = Vis(buf, vsel, ver[buf]) /\ holdPos' = cur /\ released' = TRUE
      ELSE NoSpecChange
 
 (* d, c, x, > or another operator on the selection: the text changes (the listener sees *)
@@ -473,7 +474,7 @@ YouEditElsewhere ==
 
 (* :b, a window command or a click into buffer b with the cursor at p: BufEnter. *)
 (* In the Claude terminal the held selection stays. Back in its file with the    *)
-(* cursor where it was, Claude may keep it or get the cursor.                    *)
+(* cursor where it was, Claude keeps it.                                         *)
 YouSwitchBuffer(b, p) ==
   /\ mode = "n" /\ b # buf
   /\ b = Term => WithTerminal /\ p = P0
@@ -486,11 +487,9 @@ YouSwitchBuffer(b, p) ==
               entered == OnCursor(S, e2, FALSE, termKnown)
           IN SetS(DebounceUpdate(IF cursorMoved THEN OnCursor(entered, e2, TRUE, TRUE) ELSE entered))
   /\ UNCHANGED <<mode, vsel, ver>>
-  /\ IF b = Term
+  /\ IF b = Term \/ (buf = Term /\ hold # None /\ hold.buf = b /\ p = holdPos)
      THEN NoSpecChange
-     ELSE IF buf = Term /\ hold # None /\ hold.buf = b /\ p = holdPos
-          THEN holdLoose' = TRUE /\ UNCHANGED <<hold, holdPos>> /\ released' = FALSE
-          ELSE DropHold
+     ELSE DropHold
 
 -----------------------------------------------------------------------------
 (* The timers. uv fires a timer; schedule_wrap queues its callback; the    *)
@@ -623,12 +622,12 @@ NoTerminalSelection == latest = None \/ latest.buf # Term
 (* Once events settle in a file, a selection you released stays with Claude while the *)
 (* cursor has not moved and its text is unchanged.                                    *)
 HeldUntilMoved ==
-  (Settled /\ InFile /\ mode = "n" /\ hold # None /\ ~holdLoose /\ hold.ver = ver[hold.buf]) => latest = hold
+  (Settled /\ InFile /\ mode = "n" /\ hold # None /\ hold.ver = ver[hold.buf]) => latest = hold
 
 (* Once events settle in the Claude terminal, Claude still holds the selection you released *)
 (* while its text is unchanged: going there to type the question must not lose it (#246).   *)
 HeldInTerminal ==
-  (Settled /\ buf = Term /\ hold # None /\ ~holdLoose /\ hold.ver = ver[hold.buf]) => latest = hold
+  (Settled /\ buf = Term /\ hold # None /\ hold.ver = ver[hold.buf]) => latest = hold
 
 (* Once events settle in a file, Claude holds a released selection only while the cursor *)
 (* has not moved since you released it.                                                 *)

@@ -55,6 +55,33 @@ function testPrettierResolution() {
   );
 }
 
+/**
+ * The update refuses what `prettier --check` rejects, so the runner must run the Prettier that `mise run format-check`
+ * runs. `mise.toml` pins the one, `scripts/package.json` pins the other, and the runner runs the one that `npm ci`
+ * installs. All three must be the same version, or the runner could refuse a changelog that the gate accepts.
+ */
+function testPrettierMatchesFormatGate() {
+  const gate = /^prettier = "([^"]+)"$/m.exec(
+    readFileSync(join(__dirname, "..", "mise.toml"), "utf8"),
+  );
+  assert.notEqual(gate, null, "mise.toml pins prettier");
+  assert.equal(
+    JSON.parse(readFileSync(join(__dirname, "package.json"), "utf8"))
+      .devDependencies.prettier,
+    gate[1],
+    "scripts/package.json and mise.toml pin one prettier",
+  );
+  assert.equal(
+    execFileSync(
+      join(__dirname, "node_modules", ".bin", "prettier"),
+      ["--version"],
+      { encoding: "utf8" },
+    ).trim(),
+    gate[1],
+    "npm ci installs the prettier that the format gate runs",
+  );
+}
+
 async function testCommuniqueArgs() {
   assert.deepEqual(
     runner.buildCommuniqueArgs({
@@ -659,6 +686,213 @@ function withIdentityFormatter(fn) {
   }
 }
 
+/** The error of `updateContent` for a changelog that the formatter would rewrite. */
+function unformattedRefusal() {
+  return (
+    "CHANGELOG.md is not formatted: Prettier would change it. " +
+    "The update refuses it, because the change can move a heading that Communique and the update read. " +
+    "A bare CR does that: Communique does not end a line at it, but the update does. " +
+    "Run `mise run format`, then review its diff of CHANGELOG.md. " +
+    "Prettier can change what an entry says, for example around an identifier with underscores. " +
+    "Fix such a line by hand, for example by putting the identifier in backticks. " +
+    "Then run `mise run format` again until it changes nothing, and review its diff again."
+  );
+}
+
+/**
+ * `updateContent` refuses a changelog that `prettier --check` rejects, which is what `mise run format-check` runs on
+ * CHANGELOG.md in CI, and it refuses it before it reads the draft. A bare CR can hide a heading from Communique: it
+ * ends a line at LF only, and the update ends one at a bare CR as well. The update then writes the heading on a line of
+ * its own, and Communique reads a heading that it did not read before. Each case here runs with the real prettier and
+ * the real Communique binary.
+ */
+async function testUnreleasedUpdaterNeedsFormattedChangelog() {
+  const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
+  const update = (content, newEntry = entry) =>
+    new runner.UnreleasedAwareChangelog({
+      changelogEntry: newEntry,
+    }).updateContent(content);
+  const title = "# Changelog";
+  const release = "## [0.3.0] - 2025-09-15";
+  const refused = { message: unformattedRefusal() };
+  const releasedSections = readFileSync(
+    join(__dirname, "fixtures", "changelog-released.md"),
+    "utf8",
+  );
+  const realHead = "# Changelog\n\n## [Unreleased]\n";
+
+  // 1. A bare CR hides an Unreleased heading from Communique. The heading is indented by a space, so the update reads
+  // no heading at all, and Communique reads none either: the bare CR is in its line. Without the check the update
+  // accepts the text, and it writes the hidden heading on a line of its own, next to the new Unreleased heading. The
+  // formatter then moves it to the start of the line, and Communique refuses to read a file with two of them.
+  const hiddenAnchor = `${title}\r ## [Unreleased]\n\n${release}\n\n- MK9\n`;
+  assert.throws(
+    () => update(hiddenAnchor),
+    refused,
+    "a hidden Unreleased heading",
+  );
+  const writtenAnchor = withFormatCheckSkipped(() => update(hiddenAnchor));
+  assert.equal(
+    writtenAnchor,
+    `${title}\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n## [Unreleased]\n\n${release}\n\n- MK9\n`,
+    "the text that the update writes without the check",
+  );
+  // The message of the error is in the failure, so that a Communique that cannot start (a mise shim, for example) shows
+  // its own error and not an opaque mismatch.
+  await assert.rejects(
+    readDraftMarkersWithCommunique([writtenAnchor]),
+    (error) => {
+      const message = String(error?.message ?? error);
+      assert.match(
+        message,
+        /multiple Unreleased sections/,
+        `Communique refuses the text that the update writes without the check, but it failed with: ${message}`,
+      );
+      return true;
+    },
+  );
+
+  // 2. A bare CR hides a release heading from Communique. The update ends the draft at the heading, and Communique
+  // reads on to the end of the text, so the older release would show twice, in the new entry and below it. The check
+  // refuses the text before the update compares the two ends (see `testUnreleasedDraftEnd`), which would refuse it too.
+  const hiddenEnd = `${title}\n\n## [Unreleased]\n\n- MK1\r${release}\n\n- MK9\n`;
+  assert.throws(() => update(hiddenEnd), refused, "a hidden release heading");
+  assert.deepEqual(
+    (await readDraftMarkersWithCommunique([hiddenEnd]))[0],
+    ["MK1", "MK9"],
+    "Communique reads the older release as draft",
+  );
+  assert.throws(
+    () => withCheckOnlyFormatter(() => update(hiddenEnd)),
+    { message: endMismatchRefusal({ number: 6, line: release }, null) },
+    "the update refuses the same text when the check is answered",
+  );
+
+  // 3. A formatted changelog is accepted, and Communique reads the draft that the update drops.
+  const formattedAnchor = `${title}\n\n## [Unreleased]\n\n- MK1\n\n${release}\n\n- MK9\n`;
+  assert.equal(
+    runner.formatChangelogMarkdown(formattedAnchor),
+    formattedAnchor,
+    "the control is formatted",
+  );
+  assert.equal(
+    update(formattedAnchor),
+    `${title}\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n${release}\n\n- MK9\n`,
+    "a formatted changelog is accepted",
+  );
+  assert.deepEqual(
+    (await readDraftMarkersWithCommunique([formattedAnchor]))[0],
+    ["MK1"],
+    "Communique reads the draft that the update drops",
+  );
+
+  // 4. Whatever the formatter would rewrite is refused, with one error that names the file: other places for a bare CR,
+  // the other line endings, and text that the formatter rewrites into another heading or block.
+  const unformatted = [
+    [
+      "a bare CR in the middle of a paragraph",
+      `${formattedAnchor.replace("- MK1", "- MK1\rnext")}`,
+    ],
+    ["CR LF line endings", formattedAnchor.replace(/\n/g, "\r\n")],
+    ["CR line endings", formattedAnchor.replace(/\n/g, "\r")],
+    ["no line ending at the end of the text", formattedAnchor.trimEnd()],
+    ["a text that is only a line ending", "\n"],
+    [
+      "spaces at the end of a list item line",
+      formattedAnchor.replace("- MK1", "- MK1  "),
+    ],
+    [
+      "a space at the end of a heading line",
+      formattedAnchor.replace("## [Unreleased]", "## [Unreleased] "),
+    ],
+    [
+      "a run of blank lines",
+      formattedAnchor.replace("\n\n- MK1", "\n\n\n\n- MK1"),
+    ],
+    [
+      "a bullet that prettier writes as a dash",
+      formattedAnchor.replace("- MK1", "* MK1"),
+    ],
+    [
+      "a heading that is indented by a space",
+      formattedAnchor.replace(release, ` ${release}`),
+    ],
+    [
+      "a setext heading after a list item, which prettier moves into the item",
+      `${formattedAnchor}\n0.2.0\n-----\n\n- MK8\n`,
+    ],
+    [
+      "a code fence that never closes, which prettier closes at the end of the text",
+      `${formattedAnchor}\n\`\`\`text\nExample\n`,
+    ],
+    [
+      "a lone surrogate, which the formatter reads as U+FFFD",
+      formattedAnchor.replace("- MK1", "- MK1\ud800"),
+    ],
+    [
+      "the real changelog with CR LF line endings",
+      `${realHead}\n${releasedSections}`.replace(/\n/g, "\r\n"),
+    ],
+    [
+      "the real changelog with CR line endings",
+      `${realHead}\n${releasedSections}`.replace(/\n/g, "\r"),
+    ],
+  ].map(([name, text]) => ({ name, text }));
+  checkCases(unformatted, ({ name, text }) => {
+    assert.notEqual(
+      runner.formatChangelogMarkdown(text),
+      text,
+      `${name}: the formatter changes the text`,
+    );
+    assert.throws(() => update(text), refused, name);
+  });
+
+  // 5. The check does not refuse what the release flow has today. The frozen released changelog, and each of the 20
+  // states of the real changelog from the first commit to the 0.4.0 release, are formatted. What the update writes
+  // from each path (an Unreleased heading, a title only, no title, a missing file, an empty file) is formatted, so the
+  // next release does not refuse it either.
+  const history = readHistoricalChangelogs(releasedSections);
+  assert.equal(history.length, 20, "the states of the real changelog");
+  const states = [
+    ["the frozen released changelog", `${realHead}\n${releasedSections}`],
+    ...history.map(([commit, text]) => [
+      `the real changelog at ${commit}`,
+      text,
+    ]),
+  ];
+  assert.deepEqual(
+    formatDocuments(states.map(([, text]) => text)),
+    states.map(([, text]) => text),
+    "the real changelog is formatted in each state",
+  );
+  const previous = `\n\n${release}\n\n- Previous\n`;
+  const written = [
+    [
+      "an Unreleased heading with a draft",
+      `${realHead}\n### Added\n\n- A draft.\n\n${releasedSections}`,
+    ],
+    ["a title and no Unreleased heading", `${title}${previous}`],
+    ["no title", previous.trimStart()],
+    ["no changelog file", undefined],
+    ["an empty changelog file", ""],
+  ];
+  for (const [name, text] of written) {
+    const updated = update(text);
+    assert.equal(
+      runner.formatChangelogMarkdown(updated),
+      updated,
+      `${name}: what the update writes is formatted`,
+    );
+    // The next release reads what this one wrote, and does not refuse it.
+    const next = update(updated);
+    assert.equal(
+      runner.formatChangelogMarkdown(next),
+      next,
+      `${name}: the next release is formatted`,
+    );
+  }
+}
+
 async function testUnreleasedUpdaterFences() {
   const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
   const released =
@@ -699,19 +933,22 @@ async function testUnreleasedUpdaterFences() {
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\nExisting text\n\nMore text\n",
   ]);
 
-  // A line ends with LF, CR, or CRLF. A bare CR ends a fence line like the others, and the
-  // updated changelog has LF endings only.
+  // A line ends with LF, CR, or CRLF. A bare CR ends a fence line like the others, and the updated changelog has LF
+  // endings only. The real prettier rewrites a CR or a CR LF, so `updateContent` refuses such a changelog before it
+  // reads it (see `assertChangelogIsFormatted`). These cases skip that check, and the refused cases run with a formatter
+  // that answers the check only, as they are not format-clean.
   for (const ending of ["\n", "\r\n", "\r"]) {
     for (const [existing, updated] of cases) {
       assert.equal(
-        update(existing.replace(/\n/g, ending)),
+        withFormatCheckSkipped(() => update(existing.replace(/\n/g, ending))),
         updated,
         `${JSON.stringify(existing)} with ${JSON.stringify(ending)} line endings`,
       );
     }
     for (const [existing, opener] of refused) {
       assert.throws(
-        () => update(existing.replace(/\n/g, ending)),
+        () =>
+          withCheckOnlyFormatter(() => update(existing.replace(/\n/g, ending))),
         { message: refusal(5, opener) },
         `${JSON.stringify(existing)} with ${JSON.stringify(ending)} line endings`,
       );
@@ -726,7 +963,9 @@ async function testUnreleasedUpdaterFences() {
   for (const ending of ["\n", "\r\n", "\r"]) {
     assert.throws(
       () =>
-        withMissingFormatter(() => update(fencedAnchor.replace(/\n/g, ending))),
+        withCheckOnlyFormatter(() =>
+          update(fencedAnchor.replace(/\n/g, ending)),
+        ),
       {
         message: anchorMismatchRefusal(
           { number: 8, line: "## [Unreleased]" },
@@ -738,18 +977,23 @@ async function testUnreleasedUpdaterFences() {
   }
 
   // One bare CR in an LF file: right after a closing fence, and inside an opener line. Each one ends a line, so the
-  // fence opens on line 5 and the draft is refused.
+  // fence opens on line 5 and the draft is refused. The text is not format-clean, so the formatter answers the check
+  // only.
   assert.throws(
     () =>
-      update(
-        "# Changelog\n\n## [Unreleased]\n\n```text\nExample\n```\rText after the fence\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+      withCheckOnlyFormatter(() =>
+        update(
+          "# Changelog\n\n## [Unreleased]\n\n```text\nExample\n```\rText after the fence\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+        ),
       ),
     { message: refusal(5, "```text") },
   );
   assert.throws(
     () =>
-      update(
-        "# Changelog\n\n## [Unreleased]\n\n````\r```\n## Not a release\n````\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+      withCheckOnlyFormatter(() =>
+        update(
+          "# Changelog\n\n## [Unreleased]\n\n````\r```\n## Not a release\n````\n\n## [0.3.0] - 2025-09-15\n\n- Previous\n",
+        ),
       ),
     { message: refusal(5, "````") },
   );
@@ -757,8 +1001,10 @@ async function testUnreleasedUpdaterFences() {
   // Only LF, CR and CR LF end a line. Other line-like characters stay inside the line, so no fence opens here.
   for (const character of ["\u2028", "\u2029", "\u0085", "\f", "\v"]) {
     assert.equal(
-      update(
-        `# Changelog\n\n## [Unreleased]\n\nNote${character}\`\`\`${previous}`,
+      withFormatCheckSkipped(() =>
+        update(
+          `# Changelog\n\n## [Unreleased]\n\nNote${character}\`\`\`${previous}`,
+        ),
       ),
       released,
       `U+${character.codePointAt(0).toString(16).padStart(4, "0")} does not end a line`,
@@ -771,7 +1017,13 @@ async function testUnreleasedUpdaterFences() {
   withIdentityFormatter(() => {
     const noteLines = [];
     for (let code = 0; code <= 0xffff; code += 1) {
-      if (code !== 0x0a && code !== 0x0d) {
+      // A lone surrogate is no UTF-8 text: the formatter reads it as U+FFFD, and the update refuses a text that it
+      // would change (see `assertChangelogIsFormatted`).
+      if (
+        code !== 0x0a &&
+        code !== 0x0d &&
+        !(code >= 0xd800 && code <= 0xdfff)
+      ) {
         noteLines.push(`Note${String.fromCharCode(code)}\`\`\``);
       }
     }
@@ -788,7 +1040,7 @@ async function testUnreleasedUpdaterFences() {
   // A text without a line ending, and a missing changelog file, still work.
   // Without a title or an Unreleased heading, CR CR LF is still two line endings.
   assert.equal(
-    update("```\rx\r\r\ny\r```\r"),
+    withFormatCheckSkipped(() => update("```\rx\r\r\ny\r```\r")),
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n```\nx\n\ny\n```\n",
   );
   assert.equal(runner.normalizeCommuniqueBody("- Added x"), "- Added x");
@@ -814,8 +1066,10 @@ async function testUnreleasedUpdaterFences() {
   // so the fenced block keeps its blank line.
   for (const inside of ["x\n\ry", "x\r\r\ny", "x\n\r\ny"]) {
     assert.equal(
-      update(
-        `# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2025-09-15\n\n\`\`\`\n${inside}\n\`\`\`\n`,
+      withFormatCheckSkipped(() =>
+        update(
+          `# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2025-09-15\n\n\`\`\`\n${inside}\n\`\`\`\n`,
+        ),
       ),
       released.replace("- Previous", "```\nx\n\ny\n```"),
       `${JSON.stringify(inside)} holds two line endings`,
@@ -836,23 +1090,15 @@ function refusal(lineNumber, line) {
 }
 
 /**
- * Runs `fn` with a formatter that does not exist. A refusal must come before the formatter runs, so a test that
- * expects one fails with ENOENT instead if the formatter runs first.
+ * Runs `fn` with a formatter that answers the format check of `updateContent` and fails on any call after it (see
+ * `withFormatterScript`). A refusal must come before the formatter formats the new text, so a test that expects one
+ * fails with a formatter error instead if the formatter runs for the second time.
  */
-function withMissingFormatter(fn) {
-  const directory = mkdtempSync(join(tmpdir(), "missing-formatter-"));
-  const previousFormatter = process.env.PRETTIER_BIN;
-  process.env.PRETTIER_BIN = join(directory, "no-such-prettier");
-  try {
-    return fn();
-  } finally {
-    if (previousFormatter === undefined) {
-      delete process.env.PRETTIER_BIN;
-    } else {
-      process.env.PRETTIER_BIN = previousFormatter;
-    }
-    rmSync(directory, { recursive: true, force: true });
-  }
+function withCheckOnlyFormatter(fn) {
+  return withFormatterScript(
+    'echo "the formatter ran after the format check" >&2\nexit 1',
+    fn,
+  );
 }
 
 async function testUnreleasedDraftFenceGuard() {
@@ -871,11 +1117,11 @@ async function testUnreleasedDraftFenceGuard() {
     "# Changelog\n\n## [Unreleased]\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n";
   // The line of a text, numbered from 1.
   const lineOf = (text, line) => text.split(/\r\n|\r|\n/).indexOf(line) + 1;
-  // `update` refuses before the formatter runs, and the error names the line that opens the fence.
+  // `update` refuses before the formatter formats the new text, and the error names the line that opens the fence.
   const refuses = (text, opener, name, run = update) => {
     assert.ok(lineOf(text, opener) > 0, `${name}: the text holds the opener`);
     assert.throws(
-      () => withMissingFormatter(() => run(text)),
+      () => withCheckOnlyFormatter(() => run(text)),
       { message: refusal(lineOf(text, opener), opener) },
       name,
     );
@@ -1153,13 +1399,17 @@ async function testUnreleasedDraftFenceGuard() {
     ],
     ["an empty draft", `${head}${previous.trimStart()}`, released],
   ]) {
-    assert.equal(updateWith(newEntry, text), expected, name);
+    assert.equal(
+      withFormatCheckSkipped(() => updateWith(newEntry, text)),
+      expected,
+      name,
+    );
   }
   // A section that is not a release ends the draft of the update, and Communique reads past it, so it would show
   // twice (see `testUnreleasedDraftEnd`).
   const notesText = `${head}Draft\n\n## Upgrade notes\n\n- Read this\n${previous}`;
   assert.throws(
-    () => withMissingFormatter(() => update(notesText)),
+    () => withCheckOnlyFormatter(() => update(notesText)),
     {
       message: endMismatchRefusal(
         placeIn(notesText, "## Upgrade notes"),
@@ -1172,7 +1422,7 @@ async function testUnreleasedDraftFenceGuard() {
   // it as one (see `testUnreleasedDraftStructure`).
   assert.throws(
     () =>
-      withMissingFormatter(() =>
+      withCheckOnlyFormatter(() =>
         update(`${head}Example:\n\n    \`\`\`js\n    x\n${previous}`),
       ),
     { message: nodeRefusal(7, "    ```js", "code_block (indented)") },
@@ -1186,12 +1436,14 @@ async function testUnreleasedDraftFenceGuard() {
   );
   // An empty draft: an older release follows the Unreleased heading directly, or the text ends at the heading.
   assert.equal(
-    update(`# Changelog\n\n## [Unreleased]\n${release}\n\n- Previous\n`),
+    withFormatCheckSkipped(() =>
+      update(`# Changelog\n\n## [Unreleased]\n${release}\n\n- Previous\n`),
+    ),
     released,
     "an older release directly under the Unreleased heading",
   );
   assert.equal(
-    update("# Changelog\n\n## [Unreleased]"),
+    withFormatCheckSkipped(() => update("# Changelog\n\n## [Unreleased]")),
     entryOnly,
     "a text that ends at the Unreleased heading",
   );
@@ -1206,7 +1458,7 @@ async function testUnreleasedDraftFenceGuard() {
     ["CR", "\r"],
   ]) {
     assert.equal(
-      update(real.replace(/\n/g, ending)),
+      withFormatCheckSkipped(() => update(real.replace(/\n/g, ending))),
       realUpdated,
       `the real changelog, ${name} endings`,
     );
@@ -1386,13 +1638,32 @@ function topLevelHeadingsOf(text) {
 }
 
 /**
+ * Runs `fn` with the real prettier as the formatter, and an answer of "formatted" to the format check of
+ * `updateContent` (see `assertChangelogIsFormatted`). Most of the tests read a changelog that the real prettier would
+ * rewrite, to see how the update reads it, and the check would refuse the text first. The check is skipped for one call
+ * of `updateContent` only (see `withFormatterScript`).
+ */
+function withFormatCheckSkipped(fn) {
+  return withFormatterScript(
+    `exec "${runner.resolvePrettierBin()}" --stdin-filepath CHANGELOG.md`,
+    fn,
+  );
+}
+
+/**
  * Runs `fn` with a formatter that is the shell script `body`. The runner calls it with the text on its standard input,
- * as it calls prettier.
+ * as it calls prettier. `updateContent` calls the formatter twice: first to check the changelog as it stands (see
+ * `assertChangelogIsFormatted`), then to format the new text. The formatter answers the first call with its input, so
+ * that the check passes whatever the text is, and `body` runs for every call after it.
  */
 function withFormatterScript(body, fn) {
   const directory = mkdtempSync(join(tmpdir(), "stub-formatter-"));
   const formatter = join(directory, "format.sh");
-  writeFileSync(formatter, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  writeFileSync(
+    formatter,
+    `#!/bin/sh\nif [ ! -e "$0.checked" ]; then\n  : > "$0.checked"\n  exec cat\nfi\n${body}\n`,
+    { mode: 0o755 },
+  );
   const previousFormatter = process.env.PRETTIER_BIN;
   process.env.PRETTIER_BIN = formatter;
   try {
@@ -1427,9 +1698,10 @@ function readHistoricalChangelogs(releasedSections) {
 
 /**
  * The structure of the Unreleased draft. `updateContent` reads the changelog with commonmark.js. It drops a draft that
- * holds only paragraphs, lists and H3 headings, it refuses any other node before it formats, and it refuses a formatter
- * that changes the headings of the older releases. A release heading that a reader of lines misses (an H3 or deeper
- * heading is the exception) is a section heading to the parser. Each case that main loses is here, and it fails on main.
+ * holds only paragraphs, lists and H3 headings, it refuses any other node before it formats the new changelog, and it
+ * refuses a formatter that changes the headings of the older releases. A release heading that a reader of lines misses
+ * (an H3 or deeper heading is the exception) is a section heading to the parser. Each case that main loses is here, and
+ * it fails on main.
  */
 async function testUnreleasedDraftStructure() {
   const entry = "## [0.4.0] - 2026-06-15\n\n* Added x";
@@ -1453,9 +1725,9 @@ async function testUnreleasedDraftStructure() {
   const mainText = (text, newEntry = entry) =>
     textThatMainWrites(text, newEntry).written;
 
-  // 1. Refusals, before the formatter runs, raw and after the real prettier. The error names the line and the node.
-  // Each case is { name, draft, error, line, formattedLine }: `error` builds the error from the line number and the
-  // line that starts the node, and `formattedLine` is that line after prettier when prettier changes it.
+  // 1. Refusals, before the formatter formats the new text, raw and after the real prettier. The error names the line
+  // and the node. Each case is { name, draft, error, line, formattedLine }: `error` builds the error from the line
+  // number and the line that starts the node, and `formattedLine` is that line after prettier when prettier changes it.
   const node = (kind) => (number, line) => nodeRefusal(number, line, kind);
   const refusedCases = [
     ...["####", "#####", "######"].map((marks) => ({
@@ -1594,7 +1866,7 @@ async function testUnreleasedDraftStructure() {
       const number = lineNumberOf(text, line);
       assert.ok(number > 0, `${label}: the text holds ${JSON.stringify(line)}`);
       assert.throws(
-        () => withMissingFormatter(() => update(text)),
+        () => withCheckOnlyFormatter(() => update(text)),
         { message: testCase.error(number, line) },
         label,
       );
@@ -1623,7 +1895,7 @@ async function testUnreleasedDraftStructure() {
     ],
   ]) {
     assert.throws(
-      () => withMissingFormatter(() => update(text)),
+      () => withCheckOnlyFormatter(() => update(text)),
       { message: uncoveredRefusal(number, line) },
       name,
     );
@@ -1664,7 +1936,11 @@ async function testUnreleasedDraftStructure() {
   const keptFormatted = formatDocuments(keptCases.map(({ raw }) => raw));
   checkCases(keptCases, (testCase) => {
     const formatted = keptFormatted[keptCases.indexOf(testCase)];
-    assert.equal(update(testCase.raw), released, "raw");
+    assert.equal(
+      withFormatCheckSkipped(() => update(testCase.raw)),
+      released,
+      "raw",
+    );
     assert.equal(update(formatted), released, "after prettier");
   });
   // 2b. Communique ends its draft only at a `## <version>` line, so it reads the text below an empty or a setext
@@ -1732,7 +2008,7 @@ async function testUnreleasedDraftStructure() {
     endMismatchRefusal(placeIn(text, line), placeIn(text, release));
   checkCases(endCases, (testCase) => {
     assert.throws(
-      () => withMissingFormatter(() => update(testCase.text)),
+      () => withCheckOnlyFormatter(() => update(testCase.text)),
       { message: endRefused(testCase.text, testCase.line) },
       "raw",
     );
@@ -1740,7 +2016,7 @@ async function testUnreleasedDraftStructure() {
     const formattedNumber = lineNumberOf(formatted, testCase.formattedLine);
     assert.ok(formattedNumber > 0, "the formatted text holds the heading");
     assert.throws(
-      () => withMissingFormatter(() => update(formatted)),
+      () => withCheckOnlyFormatter(() => update(formatted)),
       {
         message:
           testCase.formattedError?.(formattedNumber, testCase.formattedLine) ??
@@ -1817,7 +2093,7 @@ async function testUnreleasedDraftStructure() {
       assert.ok(number > 0, `${label}: the text holds the line`);
       // Communique ends its draft at the line, and the update ends it at the older release.
       assert.throws(
-        () => withMissingFormatter(() => update(text)),
+        () => withCheckOnlyFormatter(() => update(text)),
         {
           message: endMismatchRefusal(placeIn(text, release), {
             number,
@@ -1845,7 +2121,7 @@ async function testUnreleasedDraftStructure() {
     ],
   ]) {
     assert.throws(
-      () => withMissingFormatter(() => update(text)),
+      () => withCheckOnlyFormatter(() => update(text)),
       {
         message: endMismatchRefusal(placeIn(text, older), {
           number,
@@ -1884,12 +2160,13 @@ async function testUnreleasedDraftStructure() {
     );
   });
 
-  // 3. A setext heading is a heading. After a list item, prettier moves it into the item and writes a thematic
-  // break, so the update refuses the text before the formatter (when it is already formatted) or after it (when it is
-  // raw). Nothing is written, and the older release is not lost.
+  // 3. A setext heading is a heading. After a list item, prettier moves it into the item and writes a thematic break,
+  // so the update refuses the text before it formats the new changelog (the setext heading ends the draft, or the
+  // formatted text has no release heading) or after it (a raw setext release further down). Nothing is written, and the
+  // older release is not lost.
   const setext = "- Draft\n\n0.3.0\n-----\n\n- Previous\n";
   assert.throws(
-    () => withMissingFormatter(() => update(`${head}${setext}`)),
+    () => withCheckOnlyFormatter(() => update(`${head}${setext}`)),
     // Communique reads the draft to the end of the text.
     { message: endMismatchRefusal({ number: 7, line: "0.3.0" }, null) },
     "a raw setext heading that ends the draft",
@@ -1897,7 +2174,10 @@ async function testUnreleasedDraftStructure() {
   // A raw setext older release further down is kept text. Prettier moves it into the list item above it, so the
   // update refuses the formatted text.
   assert.throws(
-    () => update(`${head}- Draft${previous}\n0.2.0\n-----\n\n- Older\n`),
+    () =>
+      withFormatCheckSkipped(() =>
+        update(`${head}- Draft${previous}\n0.2.0\n-----\n\n- Older\n`),
+      ),
     { message: changedRefusal("2 [0.4.0] - 2026-06-15", "2 [Unreleased]") },
     "a raw setext older release below the list of an older release",
   );
@@ -1908,7 +2188,7 @@ async function testUnreleasedDraftStructure() {
     "prettier moves the setext heading into the list item",
   );
   assert.throws(
-    () => withMissingFormatter(() => update(formattedSetext)),
+    () => withCheckOnlyFormatter(() => update(formattedSetext)),
     { message: nodeRefusal(9, "---", "thematic_break") },
     "the formatted text holds a thematic break and no release heading",
   );
@@ -1936,7 +2216,7 @@ async function testUnreleasedDraftStructure() {
     } else {
       // An H1 does not end the draft of Communique, which reads the text below it as draft.
       assert.throws(
-        () => withMissingFormatter(() => update(formatted)),
+        () => withCheckOnlyFormatter(() => update(formatted)),
         { message: endMismatchRefusal(placeIn(formatted, atx), null) },
         `the setext ${underline} release after prettier`,
       );
@@ -1987,7 +2267,7 @@ async function testUnreleasedDraftStructure() {
       "main's text",
     );
     assert.deepEqual(
-      topLevelHeadingsOf(update(text)),
+      topLevelHeadingsOf(withFormatCheckSkipped(() => update(text))),
       [
         "1 Changelog",
         "2 [Unreleased]",
@@ -2012,7 +2292,7 @@ async function testUnreleasedDraftStructure() {
     ],
   ].map(([name, code, message]) => [name, code, message])) {
     assert.throws(
-      () => withMissingFormatter(() => update(`${head}${code}${previous}`)),
+      () => withCheckOnlyFormatter(() => update(`${head}${code}${previous}`)),
       { message: error },
       name,
     );
@@ -2090,7 +2370,7 @@ async function testUnreleasedDraftStructure() {
           );
         } else {
           assert.throws(
-            () => withMissingFormatter(() => update(bareCr)),
+            () => withCheckOnlyFormatter(() => update(bareCr)),
             {
               message: anchorMismatchRefusal(
                 { number: 3, line: "## [Unreleased]" },
@@ -2109,7 +2389,9 @@ async function testUnreleasedDraftStructure() {
     "a draft at the end of the text",
   );
   assert.equal(
-    update("# Changelog\n\n## [Unreleased]\n### Added\n\n- Added x"),
+    withFormatCheckSkipped(() =>
+      update("# Changelog\n\n## [Unreleased]\n### Added\n\n- Added x"),
+    ),
     entryOnly,
     "a draft right after the heading",
   );
@@ -2403,7 +2685,7 @@ async function testUnreleasedAnchor() {
   // draft of the update at a heading that is no version (see `testUnreleasedDraftEnd`), so the update refuses it too.
   const twoHeadings = `${title}\n\n## [Unreleased]\n\n- First\n\n## Unreleased\n\n- Second\n\n${older}`;
   assert.throws(
-    () => withMissingFormatter(() => update(twoHeadings)),
+    () => withCheckOnlyFormatter(() => update(twoHeadings)),
     {
       message: endMismatchRefusal(
         placeIn(twoHeadings, "## Unreleased"),
@@ -2461,7 +2743,7 @@ async function testUnreleasedAnchor() {
       const number = lineNumberOf(text, testCase.first);
       assert.ok(number > 0, `${label}: the text holds the draft`);
       assert.throws(
-        () => withMissingFormatter(() => update(text)),
+        () => withCheckOnlyFormatter(() => update(text)),
         { message: levelRefusal(3, number, testCase.first) },
         label,
       );
@@ -2473,15 +2755,17 @@ async function testUnreleasedAnchor() {
       ["blank lines", "\n\n\n"],
     ]) {
       assert.equal(
-        update(
-          `${title}\n\n${anchor}\n${blanks}\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
+        withFormatCheckSkipped(() =>
+          update(
+            `${title}\n\n${anchor}\n${blanks}\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
+          ),
         ),
         `${title}\n\n${anchor}\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n\n### [0.3.0] - 2025-09-15\n\n- Previous\n\n## [0.2.0] - 2025-06-18\n\n- Older\n`,
         `${anchor} with ${name}: the releases stay`,
       );
     }
     assert.equal(
-      update(`${title}\n\n${anchor}`),
+      withFormatCheckSkipped(() => update(`${title}\n\n${anchor}`)),
       `${title}\n\n${anchor}\n\n## [0.4.0] - 2026-06-15\n\n- Added x\n`,
       `${anchor} at the end of the text`,
     );
@@ -2917,7 +3201,7 @@ async function testUnreleasedDraftEnd() {
     const communiqueLine = anchor
       .split("\n")
       .find((line) => /Unreleased/.test(line));
-    assert.throws(() => withMissingFormatter(() => update(text)), {
+    assert.throws(() => withCheckOnlyFormatter(() => update(text)), {
       message: anchorMismatchRefusal(null, placeIn(text, communiqueLine)),
     });
   });
@@ -2948,7 +3232,7 @@ async function testUnreleasedDraftEnd() {
   // A text with bare CR line breaks: the update reads three lines, and Communique one with no heading. The update
   // refuses the draft, as it would drop text that Communique never read.
   assert.throws(
-    () => withMissingFormatter(() => update(bareCr)),
+    () => withCheckOnlyFormatter(() => update(bareCr)),
     {
       message: anchorMismatchRefusal(
         { number: 3, line: "## [Unreleased]" },
@@ -2960,7 +3244,7 @@ async function testUnreleasedDraftEnd() {
   // Two anchors for Communique (it refuses such a changelog before this update runs): the update compares with the first.
   const twoAnchors = `${title}\n\n ## [Unreleased]\n\nMK1.\n\n## [Unreleased]\n\nMK2.\n\n${release}\n\n- MK9\n`;
   assert.throws(
-    () => withMissingFormatter(() => update(twoAnchors)),
+    () => withCheckOnlyFormatter(() => update(twoAnchors)),
     {
       message: anchorMismatchRefusal(
         placeIn(twoAnchors, "## [Unreleased]"),
@@ -2972,7 +3256,7 @@ async function testUnreleasedDraftEnd() {
   // An H3 anchor with an empty draft is fine only when Communique reads no draft anywhere in the text.
   const h3AndLink = `${title}\n\n### [Unreleased]\n\n## [Unreleased](https://e.x)\n\nMK1.\n\n${release}\n\n- MK9\n`;
   assert.throws(
-    () => withMissingFormatter(() => update(h3AndLink)),
+    () => withCheckOnlyFormatter(() => update(h3AndLink)),
     {
       message: anchorMismatchRefusal(
         placeIn(h3AndLink, "### [Unreleased]"),
@@ -2985,7 +3269,7 @@ async function testUnreleasedDraftEnd() {
   // the parser reads as text.
   const lazyToEnd = `${title}\n\n## [Unreleased]\n\nMK1.\n    ## [0.2.0] MK2\n\nMK3.\n`;
   assert.throws(
-    () => withMissingFormatter(() => update(lazyToEnd)),
+    () => withCheckOnlyFormatter(() => update(lazyToEnd)),
     {
       message: endMismatchRefusal(
         null,
@@ -2999,7 +3283,7 @@ async function testUnreleasedDraftEnd() {
   // ends its draft at the H2 on line 4 and Communique at the release on line 4.
   const crAnchor = `${title}\r## [Unreleased]\n ## [Unreleased]\n\nMK1.\n\n${release}\n\n- MK9\n`;
   assert.throws(
-    () => withMissingFormatter(() => update(crAnchor)),
+    () => withCheckOnlyFormatter(() => update(crAnchor)),
     {
       message: anchorMismatchRefusal(
         { number: 2, line: "## [Unreleased]" },
@@ -3010,7 +3294,7 @@ async function testUnreleasedDraftEnd() {
   );
   const crEnd = `${title}\n## [Unreleased]\nMK1.\r## Notes MK2\n${release}\n\n- MK9\n`;
   assert.throws(
-    () => withMissingFormatter(() => update(crEnd)),
+    () => withCheckOnlyFormatter(() => update(crEnd)),
     {
       message: endMismatchRefusal(
         { number: 4, line: "## Notes MK2" },
@@ -3024,7 +3308,7 @@ async function testUnreleasedDraftEnd() {
   // their text and differ by their place.
   const crSameText = `${title}\n\n## [Unreleased]\n\n- MK1\r${release}\n- MK2\n\n${release}\n\n- MK9\n`;
   assert.throws(
-    () => withMissingFormatter(() => update(crSameText)),
+    () => withCheckOnlyFormatter(() => update(crSameText)),
     {
       message: endMismatchRefusal(
         { number: 6, line: release },
@@ -3676,8 +3960,13 @@ async function testUnreleasedUpdaterProperty() {
       fragments,
       lineCoverage,
     );
-    // commonmark.js opens a backtick fence that the spec does not (see `hitsCommonmarkJsBug`).
-    if (!text.split(/\r\n|\r|\n/).some(hitsCommonmarkJsBug)) {
+    // commonmark.js opens a backtick fence that the spec does not (see `hitsCommonmarkJsBug`). A lone surrogate is no
+    // UTF-8 text: the formatter reads it as U+FFFD, and the update refuses a text that the formatter would change (see
+    // `assertChangelogIsFormatted`).
+    if (
+      !text.split(/\r\n|\r|\n/).some(hitsCommonmarkJsBug) &&
+      !/[\ud800-\udfff]/.test(text)
+    ) {
       documents.push([text, plain]);
     }
   }
@@ -3727,11 +4016,13 @@ async function testUnreleasedUpdaterProperty() {
 
   // The real prettier on the first documents, raw. A refusal is a result, and so is a text that prettier changes.
   texts.slice(0, UPDATER_PRETTIER_DOCUMENTS).forEach((text, index) => {
-    checkUpdaterDocument(
-      text,
-      documents[index][1],
-      `real prettier, document ${index} of seed ${UPDATER_SEED}: ${describeDocument(text)}`,
-      runner.formatChangelogMarkdown,
+    withFormatCheckSkipped(() =>
+      checkUpdaterDocument(
+        text,
+        documents[index][1],
+        `real prettier, document ${index} of seed ${UPDATER_SEED}: ${describeDocument(text)}`,
+        runner.formatChangelogMarkdown,
+      ),
     );
   });
 }
@@ -3998,9 +4289,11 @@ async function testCommuniqueConfigFitsReleaseNotes() {
 
 async function main() {
   testPrettierResolution();
+  testPrettierMatchesFormatGate();
   await testCommuniqueArgs();
   await testHeadingNormalization();
   await testUnreleasedUpdater();
+  await testUnreleasedUpdaterNeedsFormattedChangelog();
   await testFenceTracking();
   await testUnreleasedUpdaterFences();
   await testUnreleasedDraftFenceGuard();
