@@ -285,6 +285,7 @@ describe("the terminal's placement in its own split", function()
           vim.api.nvim_clear_autocmds({ group = group })
           return {
             log = log,
+            tabstop = vim.bo[file].tabstop,
             split_shows = role(vim.api.nvim_win_get_buf(split)),
             first_shows = vim.api.nvim_win_is_valid(first) and role(vim.api.nvim_win_get_buf(first)) or "closed",
             current = index(vim.api.nvim_get_current_win()),
@@ -372,6 +373,21 @@ describe("the terminal's placement in its own split", function()
       )
 
       assert.same(result.plain.log, result.helper.log)
+    end)
+
+    it("and reads no modeline of the buffer it replaces", function()
+      local result = logs(
+        [[
+        local file = ...
+        vim.o.modeline = true
+        -- Set after the buffer was loaded, so only a call that processes modelines reads it.
+        vim.api.nvim_buf_set_lines(file, 0, -1, false, { "vim: ts=5" })
+      ]],
+        {}
+      )
+
+      assert.equal(8, result.plain.tabstop)
+      assert.equal(result.plain.tabstop, result.helper.tabstop)
     end)
 
     it("with the same events, in the same order, when a BufLeave autocmd enters another window", function()

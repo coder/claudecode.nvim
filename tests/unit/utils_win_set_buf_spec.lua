@@ -152,6 +152,18 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     assert.same({ "BufLeave@7 eventignore=" }, log)
   end)
 
+  it("fires no BufWinLeave or BufHidden when the split was the last window and an autocmd closed it", function()
+    -- The close fired them already.
+    state.shown[OLD] = { SPLIT }
+    state.on.BufLeave = function()
+      state.invalid[SPLIT] = true
+    end
+
+    utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+    assert.same({ "BufLeave@7 eventignore=" }, log)
+  end)
+
   describe("does what a plain swap does", function()
     it("when the split already shows the buffer", function()
       state.win_bufs[SPLIT] = TERMINAL
