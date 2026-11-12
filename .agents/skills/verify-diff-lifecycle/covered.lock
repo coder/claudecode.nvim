@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua ac01bc69a313e411
+file lua/claudecode/diff.lua a1c57f34e79b17ce
 block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -20,6 +20,7 @@ block put_in_buffer          c5dedfca8261379b
 block held_for_other         3d1e2911d5310cc2
 block close_active           446fbed632748300
 block cleanup_all            43e7b595cf106229
+block exit_cleanup           8bc9fbded77d818f
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
 block register_state         8cf78b6711a9ecc6
@@ -28,7 +29,7 @@ block diff_autocmds          01fff2946c5a2149
 block write_proposal         9baeff1cd3273193
 block reject_when_hidden     dd45932e5cd7090d
 block deny_current           94385d781b70d50c
-site lua/claudecode/diff.lua: M._cleanup_all_active_diffs("shutdown") @ vim.api.nvim_create_autocmd("VimLeavePre", {
+site lua/claudecode/diff.lua: M._cleanup_all_active_diffs("shutdown") @ local function cleanup_at_exit()
 site lua/claudecode/diff.lua: M._cleanup_diff_state(tab_name, "diff rejected (keep_empty)") @ function M._resolve_diff_as_rejected(tab_name)
 site lua/claudecode/diff.lua: M._cleanup_diff_state(tab_name, "diff tab closed after reject") @ function M.close_diff_by_tab_name(tab_name, client_id)
 site lua/claudecode/diff.lua: M._cleanup_diff_state(tab_name, "diff tab closed after reject") @ function M.close_diff_by_tab_name(tab_name, client_id)
@@ -62,6 +63,7 @@ site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ funct
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, other in pairs(active_diffs) do @ local function save_window_sizes(tab)
 site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
+site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function cleanup_at_exit()
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function close_active_diffs(filter_fn, reason, client_id)
 site lua/claudecode/diff.lua: function M._cleanup_all_active_diffs(reason) @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: function M._cleanup_diff_state(tab_name, reason) @ function M._cleanup_diff_state(tab_name, reason)
@@ -96,6 +98,7 @@ site lua/claudecode/diff.lua: local diff_data = active_diffs[tab_name] @ local f
 site lua/claudecode/diff.lua: local entry = active_diffs[tab_name] @ function M._register_reject_when_hidden(tab_name, new_buffer, autocmd_ids)
 site lua/claudecode/diff.lua: local existing_diff = active_diffs[tab_name] @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: local function close_active_diffs(filter_fn, reason, client_id) @ local function close_active_diffs(filter_fn, reason, client_id)
+site lua/claudecode/diff.lua: local ok, err = pcall(M._resolve_diff_as_rejected, entry.tab_name) @ local function cleanup_at_exit()
 site lua/claudecode/diff.lua: local state = active_diffs[tab_name] @ function M._setup_blocking_diff(params, resolution_callback)
 site lua/claudecode/diff.lua: resolution_callback = resolution_callback, @ function M._setup_blocking_diff(params, resolution_callback)
 site lua/claudecode/diff.lua: return active_diffs @ function M._get_active_diffs()
@@ -146,10 +149,10 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua 8da8851fff781946
-block server_stop            4dae0bf675cf2cc1
+file lua/claudecode/server/init.lua dbc9b57cf9a7142b
+block server_stop            506e2e53358dc947
 block on_disconnect          a0ce86cede4af786
-block handle_request         b74ff7dc2e55a2b8
+block handle_request         3de5ff2f22d24871
 block setup_deferred         f9381caaae0fe517
 site lua/claudecode/server/init.lua: _G.claude_deferred_responses = {} @ function M._setup_deferred_response(deferred_info)
 site lua/claudecode/server/init.lua: _G.claude_deferred_responses = {} @ function M.stop()
