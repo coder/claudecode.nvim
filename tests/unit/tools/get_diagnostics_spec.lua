@@ -271,6 +271,16 @@ describe("Tool: get_diagnostics", function()
       return filled
     end
 
+    before_each(function()
+      -- vim.uri_from_fname exists on Neovim 0.8 and later. It percent-encodes a path as RFC 3986 says.
+      _G.vim.uri_from_fname = function(path)
+        return "file://"
+          .. path:gsub("[^%w/._~:@!$&'()*+,;=-]", function(char)
+            return string.format("%%%02X", char:byte())
+          end)
+      end
+    end)
+
     local function files_for(diagnostics, params)
       _G.vim.diagnostic.get = spy.new(function()
         return diagnostics
@@ -348,6 +358,16 @@ describe("Tool: get_diagnostics", function()
       expect(#files).to_be(1)
       expect(files[1].uri).to_be("file:///test/file.lua")
       expect(#files[1].diagnostics).to_be(1)
+    end)
+
+    it("writes the URI of a file name with a space and a hash percent-encoded", function()
+      _G.vim.api.nvim_buf_get_name = spy.new(function()
+        return "/path/to/a b#c.lua"
+      end)
+
+      local files = files_for({ diagnostic({ message = "encoded" }) })
+
+      expect(files[1].uri).to_be("file:///path/to/a%20b%23c.lua")
     end)
 
     it("takes a URI without a file scheme as the path", function()
