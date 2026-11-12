@@ -95,14 +95,7 @@ describe("closing and saving a proposed diff", function()
     _G.claude_deferred_responses = nil
   end)
 
-  local layouts = { "vertical" }
-  if vim.fn.has("nvim-0.9") == 1 then
-    layouts[#layouts + 1] = "unified"
-  else
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
+  local layouts = { "vertical", "unified" }
 
   for _, layout in ipairs(layouts) do
     local files = {

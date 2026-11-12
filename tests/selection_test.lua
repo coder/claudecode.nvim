@@ -63,6 +63,14 @@ if not _G.vim then
     schedule = function(fn)
       fn()
     end,
+    -- vim.on_key: ns -> the callback that Neovim calls for the next key, before it is processed. A second callback for
+    -- the same namespace replaces the first, and nil removes it.
+    _on_key = {},
+    on_key = function(fn, ns)
+      _G.vim._on_key[ns] = fn
+    end,
+    _namespaces = {},
+    _next_namespace = 0,
     _buffers = {},
     _windows = {},
     _buf_listeners = {}, -- nvim_buf_attach: bufnr -> { callbacks }
@@ -127,6 +135,18 @@ if not _G.vim then
 
       nvim_buf_is_loaded = function(bufnr)
         return _G.vim._buffers[bufnr] ~= nil
+      end,
+
+      -- As in Neovim: one id for each name, and a new one for each call with the empty name.
+      nvim_create_namespace = function(name)
+        if name ~= "" and _G.vim._namespaces[name] then
+          return _G.vim._namespaces[name]
+        end
+        _G.vim._next_namespace = _G.vim._next_namespace + 1
+        if name ~= "" then
+          _G.vim._namespaces[name] = _G.vim._next_namespace
+        end
+        return _G.vim._next_namespace
       end,
 
       nvim_buf_attach = function(bufnr, _send_buffer, callbacks)
@@ -1090,6 +1110,7 @@ describe("Range Selection Tests", function()
       mock_server.last_broadcast = nil
       _G.vim.v.event = {}
       _G.vim._buf_listeners = {}
+      _G.vim._on_key = {}
     end)
 
     after_each(function()
@@ -1822,6 +1843,184 @@ describe("Range Selection Tests", function()
           assert(ok, err)
         end)
 
+        -- What Neovim does with the next key of a mapping: vim.on_key calls the listener before the key is processed,
+        -- with no main-loop turn between it and the edit, so vim.schedule has not run yet.
+        local function key_listeners()
+          local listeners = {}
+          for _, listener in pairs(_G.vim._on_key) do
+            table.insert(listeners, listener)
+          end
+          return listeners
+        end
+
+        local function press_next_key()
+          local listeners = key_listeners()
+          assert.are.equal(1, #listeners, "the edit set one key listener")
+          listeners[1]("\27")
+        end
+
+        -- vim.schedule runs its callbacks later, after a mapping's keys: collect them.
+        local function with_queued_schedule(body)
+          local queued = {}
+          local real_schedule = _G.vim.schedule
+          _G.vim.schedule = function(fn)
+            table.insert(queued, fn)
+          end
+          local ok, err = pcall(body, queued)
+          _G.vim.schedule = real_schedule
+          assert(ok, err)
+        end
+
+        it("flushes the selection of a mapping that edits and presses Esc before vim.schedule runs", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            _G.vim._changedtick = 6
+            edit_text(1) -- the mode is still visual, the check is queued
+            press_next_key() -- the Esc of the mapping: visual mode is on, so it was a plugin's edit
+
+            leave_visual_mode()
+
+            assert(mock_server.last_broadcast ~= nil)
+            assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+            assert.are.equal(1, #queued)
+            queued[1]() -- the flush is over: the check does nothing
+          end)
+        end)
+
+        -- Another ModeChanged handler that runs before the plugin's can turn the main loop (vim.wait), so a queued check
+        -- runs after Neovim ended visual mode and before the flush. The key listener already checked the edit at the
+        -- key, so that check must find nothing to judge: judging it again, with visual mode over, takes the plugin's
+        -- edit for an operator's.
+        it("does not judge an edit again in a check that runs after visual mode ended and before the flush", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            edit_text(1) -- a plugin's edit of another line, in a mapping
+            press_next_key() -- the Esc: visual mode is still on, so the edit is spared
+            _G.vim.test.set_mode("n") -- Neovim ended visual mode, and the ModeChanged handler of the plugin has not run
+            queued[1]() -- the vim.wait of another handler runs the queued check now
+            assert.is_false(selection.state.visual_entry.consumed)
+
+            leave_visual_mode()
+
+            assert(mock_server.last_broadcast ~= nil)
+            assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+          end)
+        end)
+
+        it("judges several edits that come before the next key together", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            edit_text(1)
+            edit_text(1)
+            assert.are.equal(2, selection.state.visual_entry.unchecked_edits)
+            press_next_key()
+
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+            assert.is_false(selection.state.visual_entry.consumed)
+            for _, check in ipairs(queued) do
+              check() -- the queued checks find nothing
+            end
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+            assert.is_false(selection.state.visual_entry.consumed)
+          end)
+        end)
+
+        it("does not take the edit of a mapping for the operator that comes next", function()
+          with_queued_schedule(function()
+            enter_visual_mode()
+            edit_text(1) -- a mapping's edit, visual mode is on
+            press_next_key() -- the key that is d: checked before it runs
+            _G.vim.test.set_mode("n")
+            edit_text(1) -- d: the text changes, visual mode is over
+
+            leave_visual_mode()
+
+            assert.is_nil(mock_server.last_broadcast)
+            assert.is_nil(selection.state.latest_selection)
+          end)
+        end)
+
+        it("clears the key listener when the schedule runs before the next key", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            edit_text(1) -- a plugin's edit: the check is queued, the key listener is set
+            assert.are.equal(1, #key_listeners())
+
+            queued[1]() -- a main-loop turn came first
+
+            assert.are.equal(0, #key_listeners())
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+            assert.is_false(selection.state.visual_entry.consumed)
+          end)
+        end)
+
+        -- A typeahead can start the next selection and edit it before the schedule of the operator's edit runs.
+        it("does not let the stale check of an operator clear the listener of the next selection", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            _G.vim.test.set_mode("n")
+            edit_text(1) -- an operator's edit: the flush comes first, and its check is queued
+            leave_visual_mode()
+
+            enter_visual_mode() -- the next selection, in the same typeahead
+            edit_text(1) -- a plugin's edit of it sets the listener
+            assert.are.equal(1, #key_listeners())
+
+            queued[1]() -- the stale check of the operator runs now
+
+            assert.are.equal(1, #key_listeners())
+            press_next_key() -- the Esc: visual mode is on, so the edit of the plugin does not consume
+            assert.is_false(selection.state.visual_entry.consumed)
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+          end)
+        end)
+
+        it("keeps one key listener for several edits and clears it at the next key", function()
+          with_queued_schedule(function()
+            enter_visual_mode()
+            edit_text(1)
+            edit_text(1)
+            edit_text(1)
+            assert.are.equal(1, #key_listeners()) -- each edit replaces the listener of the one before
+
+            press_next_key()
+
+            assert.are.equal(0, #key_listeners())
+          end)
+        end)
+
+        it("keeps the operator's edit when the next key comes after the flush", function()
+          with_queued_schedule(function()
+            enter_visual_mode()
+            _G.vim.test.set_mode("n")
+            edit_text(1) -- an operator's edit, then the flush for it
+            leave_visual_mode()
+            assert.is_nil(mock_server.last_broadcast)
+
+            enter_visual_mode() -- the next selection starts before the stale listener has run
+            press_next_key() -- the stale listener finds another entry
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+            assert.is_false(selection.state.visual_entry.consumed)
+            assert.are.equal(0, #key_listeners()) -- and clears itself
+          end)
+        end)
+
+        it("skips the flush when an operator's key listener has not run and no other key came", function()
+          with_queued_schedule(function()
+            enter_visual_mode()
+            _G.vim.test.set_mode("n")
+            edit_text(1)
+
+            leave_visual_mode()
+
+            assert.is_nil(mock_server.last_broadcast)
+            assert.are.equal(1, #key_listeners()) -- waits for the next key
+            press_next_key()
+            assert.are.equal(0, #key_listeners()) -- the entry is gone: it does nothing and clears itself
+            assert.is_nil(selection.state.visual_entry)
+          end)
+        end)
+
         it("skips the flush after a reload, which replaces the text", function()
           enter_visual_mode()
           call_listeners("on_reload")
@@ -1829,6 +2028,33 @@ describe("Range Selection Tests", function()
           leave_visual_mode()
 
           assert.is_nil(mock_server.last_broadcast)
+        end)
+
+        -- `:edit!` unloads the text of the buffer and reads it again: the listener is detached, and the marks point at text
+        -- that you never selected. The detach counts as an operator, as a reload does.
+        it("skips the flush after the listener is detached, which replaces the text", function()
+          enter_visual_mode()
+          call_listeners("on_detach")
+          assert.is_true(selection.state.visual_entry.consumed)
+
+          leave_visual_mode()
+
+          assert.is_nil(mock_server.last_broadcast)
+        end)
+
+        it("does not take the detach of another buffer for an operator of this selection", function()
+          enter_visual_mode()
+          for _, listener in ipairs(_G.vim._buf_listeners[1] or {}) do
+            if listener.on_detach then
+              listener.on_detach(nil, 2) -- a buffer that you do not select in
+            end
+          end
+          assert.is_false(selection.state.visual_entry.consumed)
+
+          leave_visual_mode()
+
+          assert(mock_server.last_broadcast ~= nil)
+          assert.are.equal("alpha", mock_server.last_broadcast.data.text)
         end)
 
         it("does not carry the operator of one selection into the next", function()
