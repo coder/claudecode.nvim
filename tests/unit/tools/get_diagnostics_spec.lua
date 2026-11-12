@@ -306,7 +306,8 @@ describe("Tool: get_diagnostics", function()
     end)
 
     it("names severities 1 to 4 and calls any other number Info", function()
-      -- Neovim 0.12 keeps a severity of 9. Neovim 0.8 refuses it.
+      -- Neovim 0.12 keeps a severity of 9. On Neovim 0.8 the default signs handler raises E155 for it, and with
+      -- `signs = false` 0.8 keeps it too (`evidence/p2r2/probe-p2r2-*.txt`, F2a and F2b).
       local files = files_for({
         diagnostic({ severity = 1 }),
         diagnostic({ severity = 2 }),
