@@ -57,9 +57,13 @@ export const state = (v: any) => {
   return [claude(v), ...extra].join(", ");
 };
 
+// AtMostOneClaude exempts the Claude that a close is stopping.
+const notStopping = (v: any) =>
+  running(v).filter((t) => !(v.pc.op === "waiting" && v.pc.t === t));
+
 export const group = (v: any) => {
   if (v.bad.length > 0) return "broken";
-  if (running(v).length > 1) return "broken";
+  if (notStopping(v).length > 1) return "broken";
   if (v.pc.op !== "idle") return "busy";
   return running(v).length === 1 ? "running" : "idle";
 };
@@ -86,14 +90,18 @@ export const step = (action: string, from: any, to: any) => {
       if (t && from.win[t] && !to.win[t]) return "you toggle Claude away";
       return "you open or toggle Claude";
     }
-    case "AutocmdOpens":
-      return "an autocmd calls open during the start";
+    case "AutocmdCalls":
+      return flagged(from, to, "hideError")
+        ? "an autocmd calls a toggle during the start (it hides the new window)"
+        : "an autocmd calls open or a toggle during the start";
     case "TermopenRuns":
       return to.pc.op === "started"
         ? "termopen starts Claude"
         : "termopen fails";
     case "StartReturns":
-      return "the start returns";
+      return flagged(from, to, "hideError")
+        ? "the start returns and raises Invalid window id (its split is gone)"
+        : "the start returns";
     case "YouClose":
       return to.pc.op === "waiting"
         ? "you run :ClaudeCodeClose (it waits)"

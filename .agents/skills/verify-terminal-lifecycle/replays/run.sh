@@ -32,6 +32,14 @@ home=$(mktemp -d "${TMPDIR:-/tmp}/verify-terminal-lifecycle-replay.XXXXXX")
 trap 'rm -rf "$home"' EXIT
 mkdir -p "$home"/{config,data,state,cache,claude,work}
 cd "$home/work"
+# lib.finish quits with 0 or 1. A replay that raises before it gets there runs on to `cquit 2`, a setup error, and one
+# that hangs is stopped by timeout (124), which is a setup error too.
+code=0
 XDG_CONFIG_HOME=$home/config XDG_DATA_HOME=$home/data XDG_STATE_HOME=$home/state XDG_CACHE_HOME=$home/cache \
   CLAUDE_CONFIG_DIR=$home/claude REPLAY_LIB=$here/lib.lua timeout 60 "$nvim" --headless -u NONE -i NONE \
-  --cmd "set rtp^=$rtp" -c "luafile $here/$replay" 2>&1
+  --cmd "set rtp^=$rtp" -c "luafile $here/$replay" -c "cquit 2" 2>&1 || code=$?
+if [[ $code -eq 124 ]]; then
+  echo "ERROR: $replay did not finish within 60 s" >&2
+  exit 2
+fi
+exit "$code"

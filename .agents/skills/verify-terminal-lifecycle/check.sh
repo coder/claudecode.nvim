@@ -10,6 +10,12 @@ SKILL=verify-terminal-lifecycle MODEL=TerminalLifecycle
 source "$here/../../../scripts/tla/check-lib.sh"
 tla_init "$@"
 
+# followed_by FIRST SECOND: a line that matches FIRST is directly followed by a line that matches SECOND. in_order
+# lets lines come between, so a guard whose `return` was deleted can still match a later `return`.
+followed_by() {
+  A=$1 B=$2 awk 'prev && $0 ~ ENVIRON["B"] { ok = 1 } { prev = ($0 ~ ENVIRON["A"]) } END { exit !ok }'
+}
+
 TERM_LUA=lua/claudecode/terminal.lua
 NATIVE=lua/claudecode/terminal/native.lua
 SNACKS=lua/claudecode/terminal/snacks.lua
@@ -76,7 +82,7 @@ FACTS=(NativeMarkBeforeTermopen OwnedUnstartedIsNotEnded OwnedLiveNeedsMark Owne
   NativeAdoptsHiddenTerminal NativeShowsAdoptedHidden NativeExitClearsMark NativeAdoptedExitHandled
   NativeExitForgetsOwnJobOnly NativeExitKeepsLastWindow NativeExitChecksWindowBuffer NativeEntriesForgetEndedJob
   NativeRescansSwappedWindow NativeCloseAdopts NativeCloseForgetsFirst NativeCloseClearsMark NativeKeepsHiddenJob
-  NativeHideKeepsLastWindow NativeFailCleansUp NativeStopsSnacksClaude SnacksOpenSkipsDuringStart
+  NativeHideKeepsLastWindow NativeFailCleansUp NativeStartSurvivesClosedSplit NativeStopsSnacksClaude SnacksOpenSkipsDuringStart
   SnacksMarksStartedTerminal SnacksEntriesAdopt SnacksEntriesForgetEndedJob SnacksCloseAdopts SnacksExitForgets
   SnacksForgetChecksInstance
   SnacksCloseForgetsFirst SnacksHideKeepsLastWindow SnacksFailCleansUp SnacksStopsNativeClaude
@@ -105,7 +111,9 @@ grep -qE 'and not M\.job_ended\(buf\)( and| or|$)' <<<"$owned_is_live" || fact[O
 # one (focus_adopted).
 native_adopts_hidden() {
   in_order '^  local buf = owned\.find\(OWNED_MARK\)$' '^  bufnr, winid, jobid = buf, win, vim\.bo\[buf\]\.channel$' \
-    <<<"$adopt" && ! grep -qE '^  if not win then$' <<<"$adopt"
+    <<<"$adopt" &&
+    # The only return before the adoption is the one for a missing buffer. A return for a missing window would stop it.
+    [[ $(awk '/^  local buf = owned\.find\(OWNED_MARK\)$/ { on = 1 } /^  bufnr, winid, jobid = buf/ { on = 0 } on && /return/' <<<"$adopt" | wc -l) -eq 1 ]]
 }
 fact[NativeAdoptsHiddenTerminal]=$(as_bool native_adopts_hidden)
 native_shows_adopted_hidden() {
@@ -130,8 +138,8 @@ fact[NativeExitForgetsOwnJobOnly]=$(as_bool in_order '^  if job_id ~= jobid then
 native_exit_keeps_last_window() {
   in_order '^    and not is_last_window\(current_winid_for_job\)$' '^  then$' \
     'vim\.api\.nvim_win_close\(current_winid_for_job, true\)' <<<"$forget_exited" &&
-    grep -qE '^  if #vim\.api\.nvim_list_tabpages\(\) > 1 then$' <<<"$is_last_window" &&
-    grep -qE 'vim\.api\.nvim_win_get_config\(other\)\.relative == ""' <<<"$is_last_window"
+    in_order '^  if #vim\.api\.nvim_list_tabpages\(\) > 1 then$' '^    return false$' \
+      'vim\.api\.nvim_win_get_config\(other\)\.relative == ""' '^      return false$' '^  return true$' <<<"$is_last_window"
 }
 fact[NativeExitKeepsLastWindow]=$(as_bool native_exit_keeps_last_window)
 fact[NativeExitChecksWindowBuffer]=$(as_bool in_order \
@@ -140,11 +148,12 @@ fact[NativeExitChecksWindowBuffer]=$(as_bool in_order \
   '^        vim\.api\.nvim_win_close\(current_winid_for_job, true\)$' <<<"$forget_exited")
 # open, simple_toggle and focus_toggle run the exit cleanup of a terminal whose job ended, before they look at it.
 native_entries_forget_ended() {
-  in_order '^  if bufnr and vim\.api\.nvim_buf_is_valid\(bufnr\) and job_ended\(bufnr\) then$' \
-    '^    forget_exited_job\(jobid, job_auto_close\)$' <<<"$forget_ended" &&
-    grep -qE '^  forget_ended_terminal\(\)$' <<<"$native_open" &&
-    grep -qE '^  forget_ended_terminal\(\)$' <<<"$native_simple_toggle" &&
-    grep -qE '^  forget_ended_terminal\(\)$' <<<"$native_focus_toggle"
+  grep -qxE 'local job_ended = owned\.job_ended' "$NATIVE" &&
+    in_order '^  if bufnr and vim\.api\.nvim_buf_is_valid\(bufnr\) and job_ended\(bufnr\) then$' \
+      '^    forget_exited_job\(jobid, job_auto_close\)$' <<<"$forget_ended" &&
+    in_order '^  forget_ended_terminal\(\)$' '^  if is_valid\(\) then$' <<<"$native_open" &&
+    in_order '^  forget_ended_terminal\(\)$' '^  local has_buffer = ' <<<"$native_simple_toggle" &&
+    in_order '^  forget_ended_terminal\(\)$' '^  local has_buffer = ' <<<"$native_focus_toggle"
 }
 fact[NativeEntriesForgetEndedJob]=$(as_bool native_entries_forget_ended)
 # is_valid scans the windows again when the tracked window shows another buffer, and clears it when none shows Claude.
@@ -156,13 +165,29 @@ fact[NativeCloseForgetsFirst]=$(as_bool in_order '^  local closing_bufnr, closin
   '^  cleanup_state\(\)$' 'vim\.wait\(' <<<"$close_terminal")
 fact[NativeCloseClearsMark]=$(as_bool in_order '^  local closing_bufnr, closing_jobid = bufnr, jobid$' \
   '^  vim\.b\[closing_bufnr\]\[OWNED_MARK\] = nil$' 'vim\.wait\(' <<<"$close_terminal")
-fact[NativeKeepsHiddenJob]=$(as_bool in_order '^  jobid = termopen_result$' '^  vim\.bo\[bufnr\]\.bufhidden = "hide"$' \
-  <<<"$open_terminal")
+# The buffer is bufhidden=hide before it has a window, so a window that closes (a hide, or an autocmd of the start that
+# closes the split) never unloads it: with 'nohidden' that would end the job, or start a second terminal on 0.8. The start
+# sets it again after termopen, because an autocmd of the start can have changed it (to wipe, for example).
+fact[NativeKeepsHiddenJob]=$(as_bool in_order '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' \
+  '^  vim\.bo\[new_bufnr\]\.bufhidden = "hide"$' '^  vim\.api\.nvim_win_set_buf\(new_winid, new_bufnr\)$' \
+  '^  jobid = termopen_result$' '^  vim\.bo\[bufnr\]\.bufhidden = "hide"$' <<<"$open_terminal")
 # A fix that skips the last window or pcalls the close flips this fact.
 native_hide_keeps_last_window() {
-  grep -qE 'is_last_window\(winid\)|pcall\(vim\.api\.nvim_win_close, winid, false\)' <<<"$hide_terminal"
+  { in_order '^    if is_last_window\(winid\) then$' '^      return$' '^    vim\.api\.nvim_win_close\(winid, false\)$' <<<"$hide_terminal" &&
+    followed_by 'Terminal window is the last window, not hiding it' '^      return$' <<<"$hide_terminal"; } ||
+    grep -qE 'pcall\(vim\.api\.nvim_win_close, winid, false\)' <<<"$hide_terminal"
 }
 fact[NativeHideKeepsLastWindow]=$(as_bool native_hide_keeps_last_window)
+# open_terminal reads its split again after termopen. An autocmd of the start (a BufEnter or TermOpen autocmd that calls
+# focus_toggle, which adopts the half-started terminal and hides its window) can have closed it. The code then looks at
+# the split only while it exists, tracks the window that shows Claude now (none when it is hidden), and focuses only
+# when there is one.
+native_start_survives_closed_split() {
+  in_order '^  jobid = termopen_result$' \
+    '^  if vim\.api\.nvim_win_is_valid\(new_winid\) and vim\.api\.nvim_win_get_buf\(new_winid\) ~= new_bufnr then$' \
+    '^  winid = new_winid$' '^  bufnr = new_bufnr$' '^  is_valid\(\)$' '^  if focus and winid then$' <<<"$open_terminal"
+}
+fact[NativeStartSurvivesClosedSplit]=$(as_bool native_start_survives_closed_split)
 fact[NativeFailCleansUp]=$(as_bool in_order '^  if failure then$' '^      vim\.api\.nvim_win_close\(new_winid, true\)$' \
   '^      vim\.api\.nvim_buf_delete\(new_bufnr, \{ force = true \}\)$' '^    cleanup_state\(\)$' '^    return$' \
   '^  jobid = termopen_result$' <<<"$open_terminal")
@@ -190,7 +215,8 @@ fact[OwnedStopOtherStops]=$(as_bool owned_stop_other_stops)
 # snacks.lua
 snacks_open_skips_during_start() {
   grep -qxE 'local starting = false' "$SNACKS" &&
-    in_order '^  if starting then$' '^    return$' '^  starting = true$' \
+    followed_by '^  if starting then$' '^    return$' <<<"$snacks_open" &&
+    in_order '^  if starting then$' '^  starting = true$' \
       '^  local opened, open_result = pcall\(Snacks\.terminal\.open, cmd, opts\)$' '^  starting = false$' <<<"$snacks_open"
 }
 fact[SnacksOpenSkipsDuringStart]=$(as_bool snacks_open_skips_during_start)
@@ -274,6 +300,7 @@ EXPECT=(
   [NativeKeepsHiddenJob]=HideKeepsClaude
   [NativeHideKeepsLastWindow]=HideNoError
   [NativeFailCleansUp]=FailedStartLeavesNoWindow
+  [NativeStartSurvivesClosedSplit]=HideNoError
   [NativeStopsSnacksClaude]=AtMostOneClaude
   [SnacksOpenSkipsDuringStart]=AtMostOneClaude
   [SnacksMarksStartedTerminal]=AtMostOneClaude

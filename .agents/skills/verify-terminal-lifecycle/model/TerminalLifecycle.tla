@@ -29,7 +29,7 @@ CONSTANTS
   \* Environment switches, not code facts. check.sh turns all of them on for the main run.
   Reloads,           \* the plugin's modules reload once (package.loaded cleared, setup runs again)
   ProviderChanges,   \* that setup can pick another provider (a config edit, or auto resolving differently)
-  AutocmdReenters,   \* a BufEnter or TermOpen autocmd calls open while a start runs
+  AutocmdReenters,   \* a BufEnter or TermOpen autocmd calls open or a toggle while a start runs
   OpenBeforeCleanup, \* an open can run while plugin callbacks are queued (FALSE: the queue drains first)
   Swaps,             \* you show another buffer in Claude's window (:e file, :b other)
   Wipes,             \* you wipe Claude's buffer (:bwipeout!)
@@ -55,6 +55,7 @@ CONSTANTS
   NativeKeepsHiddenJob,          \* native.lua open_terminal sets bufhidden=hide
   NativeHideKeepsLastWindow,     \* native.lua hide_terminal skips (or pcalls) closing the last window
   NativeFailCleansUp,            \* native.lua open_terminal closes the split, deletes the buffer, clears state
+  NativeStartSurvivesClosedSplit, \* native.lua open_terminal goes on, with Claude hidden, when an autocmd of the start closed its split
   NativeStopsSnacksClaude,       \* native.lua stops the snacks provider's Claude before a start and in close
   SnacksOpenSkipsDuringStart,    \* snacks.lua M.open returns while its own Snacks.terminal.open runs
   SnacksMarksStartedTerminal,    \* snacks.lua M.open marks the buffer of a started terminal
@@ -212,7 +213,7 @@ Adoptable(w) ==
 Adopt(w, b) ==
   [w EXCEPT !.ntrack = b, !.swapped[b] = FALSE, !.adoptedBy[b] = IF NativeAdoptedExitHandled THEN "cur" ELSE @]
 
-(* snacks.lua adopt_existing_terminal: a live marked instance that Snacks.terminal.list() holds. *)
+(* snacks.lua adopt_existing_terminal: a live marked buffer (the mark and a job that has not ended). *)
 SnacksAdoptable(w) ==
   {b \in Terms : w.by[b] = "snacks" /\ w.buf[b] /\ IsLive(w, b, "snacks")}
 
@@ -306,10 +307,17 @@ Split(w, p, t) ==
 Started(w, t) == [w EXCEPT !.job[t] = "running"]
 
 (* The start returns: native sets bufnr/jobid/winid (and the mark, in a    *)
-(* model where it comes after termopen); snacks sets `terminal`.           *)
+(* model where it comes after termopen); snacks sets `terminal`. A toggle  *)
+(* of an autocmd of the start can have hidden native's new split (the only *)
+(* step that closes it while a start runs). open_terminal then reads a     *)
+(* window that is gone, which raises, unless NativeStartSurvivesClosedSplit. *)
+(* With it, Claude runs hidden and tracked.                                 *)
 Finish(w, p, t) ==
-  Shown(IF p = "native" THEN [w EXCEPT !.ntrack = t, !.swapped[t] = FALSE, !.mark[t] = TRUE]
-        ELSE [w EXCEPT !.strack = t, !.mark[t] = SnacksMarksStartedTerminal], t)
+  LET n == [w EXCEPT !.ntrack = t, !.swapped[t] = FALSE, !.mark[t] = TRUE]
+  IN IF p = "native"
+     THEN IF w.win[t] THEN Shown(n, t)
+          ELSE IF NativeStartSurvivesClosedSplit THEN n ELSE Flag(n, "hideError")
+     ELSE Shown([w EXCEPT !.strack = t, !.mark[t] = SnacksMarksStartedTerminal], t)
 
 (* termopen raised. native: close the split, delete the buffer,           *)
 (* cleanup_state. snacks: terminal = nil, then close the shown instance.  *)
@@ -328,10 +336,12 @@ AtomicStart(w, p) ==
       s == Split(w, p, t)
   IN {Finish(Started(s, t), p, t), Failed(s, p, t)}
 
-(* A whole open from an autocmd or a scheduled callback. *)
-AtomicOpen(w) ==
+(* A whole open or toggle from an autocmd or a scheduled callback. *)
+AtomicEntry(w, kind) ==
   UNION {IF o.start THEN IF HasFresh(o.w) THEN AtomicStart(o.w, Prov) ELSE {} ELSE {o.w}
-         : o \in Entry(w, Prov, "open")}
+         : o \in Entry(w, Prov, kind)}
+
+AtomicOpen(w) == AtomicEntry(w, "open")
 
 (* native.lua close_terminal / snacks.lua M.close up to vim.wait. Both adopt a terminal first, and stop the other   *)
 (* provider's Claude when they find none of their own.                                                              *)
@@ -426,10 +436,11 @@ YouOpen(kind) ==
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
 (* A BufEnter autocmd (before termopen) or a TermOpen autocmd (after it)   *)
-(* calls open while a start runs. The model allows one per start.          *)
-AutocmdOpens ==
+(* calls open or a toggle while a start runs. The model allows one per     *)
+(* start.                                                                   *)
+AutocmdCalls ==
   /\ AutocmdReenters /\ pc.op \in {"split", "started"} /\ ~pc.re
-  /\ \E v \in AtomicOpen(W) : SetW(v)
+  /\ \E kind \in {"open", "toggle"} : \E v \in AtomicEntry(W, kind) : SetW(v)
   /\ pc' = [pc EXCEPT !.re = TRUE]
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
@@ -538,7 +549,7 @@ PluginReloads ==
 
 Next ==
   \/ \E kind \in {"open", "toggle"} : YouOpen(kind)
-  \/ AutocmdOpens
+  \/ AutocmdCalls
   \/ TermopenRuns
   \/ StartReturns
   \/ YouClose
