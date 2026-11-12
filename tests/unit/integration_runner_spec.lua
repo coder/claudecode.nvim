@@ -132,12 +132,14 @@ end
 local tee_pipe = assert(io.popen("command -v tee 2> /dev/null"))
 local real_tee = assert(tee_pipe:read("*l"), "needs tee")
 tee_pipe:close()
--- Copies its input like tee, then exits with the status in $STUB_DIR/tee.exit when that file exists.
+-- Copies its input like tee, then exits with the status in $STUB_DIR/tee.exit when that file exists, after a second
+-- when $STUB_DIR/tee.delay exists.
 local STUB_TEE = {
   "#!/bin/sh",
   quote(real_tee) .. ' "$@"',
   "status=$?",
   'if [ -f "$STUB_DIR/tee.exit" ]; then status=$(cat "$STUB_DIR/tee.exit"); fi',
+  'if [ -f "$STUB_DIR/tee.delay" ]; then sleep 1; fi',
   'exit "$status"',
 }
 
@@ -452,6 +454,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field window boolean|nil Send the signal when timeout has started but has not made its process group yet
   ---@field deaf_to_term boolean|nil The file's Neovim ignores SIGTERM
   ---@field caller_loop boolean|nil Run the runner twice in a calling shell and send the signal to their process group
+  ---@field late_tee boolean|nil The file's tee ends a second after the signal, long after the runner cleaned up
 
   ---@param signal string The signal to send
   ---@param run SignalRun
@@ -468,6 +471,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     if run.deaf_to_term then
       write(dir .. "/slow_spec.lua.deaf_to_term", {})
+    end
+    if run.late_tee then
+      write(dir .. "/tee.delay", {})
     end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
@@ -550,6 +556,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("143", result.status)
     assert.are.equal("", result.left, "a Neovim that ignores SIGTERM ran on after the runner died")
     assert.is_false(result.ended)
+  end)
+
+  it("leaves no exit status file when the file's subshell ends after the runner cleaned up", function()
+    local result = signal_runner("TERM", { late_tee = true })
+
+    assert.are.equal("143", result.status)
+    assert.are.equal("", result.left, "the file's subshell wrote its exit statuses after the runner deleted its items")
+    assert.is_nil(result.runner_output:find("No such file", 1, true), result.runner_output)
   end)
 
   it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()

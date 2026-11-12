@@ -66,8 +66,8 @@ run_test_file() {
   group_file=$(mktemp)
   state_dir=$(mktemp -d)
   config_dir=$(mktemp -d)
-  status_file=$temp_output.status
-  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir" "$status_file")
+  status_file=$state_dir/exit_statuses
+  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir")
   CURRENT_GROUP_FILE=$group_file
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
@@ -80,8 +80,9 @@ run_test_file() {
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
   # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
   # subshell has no pipefail, because with it bash prints a job report ("Killed", two lines) when the cleanup above
-  # kills `timeout`. It writes the exit statuses of nvim and of `tee` to the status file, so that the reason line can
-  # name the stage that failed, and exits with the status of nvim, or with that of `tee` when nvim exited 0.
+  # kills `timeout`. It writes the exit statuses of nvim and of `tee` to a file in the state folder, so that the reason
+  # line can name the stage that failed, and exits with the status of nvim, or with that of `tee` when nvim exited 0.
+  # A subshell that ends after the cleanup above finds the folder gone, and its write fails.
   (
     set +o pipefail
     set +e
@@ -93,7 +94,7 @@ run_test_file() {
       -c "lua require('plenary.test_harness').test_file('$test_file')" \
       2>&1 | tee "$temp_output"
     pipe_status=("${PIPESTATUS[@]}")
-    echo "${pipe_status[0]} ${pipe_status[1]}" >"$status_file"
+    echo "${pipe_status[0]} ${pipe_status[1]}" 2>/dev/null >"$status_file"
     exit $((pipe_status[0] != 0 ? pipe_status[0] : pipe_status[1]))
   ) &
   if wait $!; then
@@ -169,7 +170,7 @@ run_test_file() {
   fi
 
   # Cleanup
-  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir" "$status_file"
+  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir"
   CURRENT_TEMP=()
 }
 
