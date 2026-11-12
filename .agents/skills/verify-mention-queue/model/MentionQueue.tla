@@ -157,8 +157,9 @@ Expire(k, ft) ==
 (* This is the default config only. With disable_broadcast_debouncing     *)
 (* set, _broadcast_at_mention broadcasts at once while the queue is empty *)
 (* and checks no readiness, so a Claude whose handshake just completed    *)
-(* gets the mention early. That path is not modeled, and a PASS of        *)
-(* SentWhenReady does not cover it (SKILL.md, "Scope and bounds").        *)
+(* gets the mention early: a known bug, which a follow-up PR fixes. That  *)
+(* path is not modeled, and a PASS of SentWhenReady does not cover it     *)
+(* (SKILL.md, "Scope and bounds").                                        *)
 YouSend ==
   \E m \in M :
     /\ ~sent[m]
