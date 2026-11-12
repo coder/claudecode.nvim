@@ -126,7 +126,7 @@ Pushes a `selection_changed` notification when the selection Claude should see d
 - **Entering another file** waits for the debounce.
 - **Claude terminal buffers** are skipped.
 
-A selection released with Esc stays with Claude (issue #246) until the cursor moves away, you start another selection, an operator consumes it, its text changes, or you go to another file. Going to the Claude terminal keeps it. When a released selection has been left but the plugin has not replaced it yet, a demotion timer of `visual_demotion_delay_ms` (default 50 ms) replaces it with the cursor. The timer does nothing in the Claude terminal, in visual mode, or while the cursor is still where you released the selection.
+A selection released with Esc stays with Claude (issue #246) until the cursor moves away, you start another selection, an operator consumes it, its text changes, or you go to another file. Going to the Claude terminal keeps it, and so does coming back to the file with the cursor where you released the selection. When a released selection has been left but the plugin has not replaced it yet, a demotion timer of `visual_demotion_delay_ms` (default 50 ms) replaces it with the cursor. The timer does nothing in the Claude terminal, in visual mode, or while the cursor is still where you released the selection.
 
 ### 6. Terminal Integration (`terminal.lua`)
 

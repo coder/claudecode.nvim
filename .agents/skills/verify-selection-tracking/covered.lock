@@ -5,7 +5,7 @@ block stop                   d754def6d5865650
 site lua/claudecode/init.lua: selection.disable() @ function M.stop()
 site lua/claudecode/init.lua: selection.enable(M.state.server, M.state.config.visual_demotion_delay_ms) @ function M.start(show_startup_notification)
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua 349b9bb73c6f64c5
+file lua/claudecode/selection.lua dc738a7609a99b09
 block unmoved                f1a214d2c667190d
 block clear_held             d64cb396d2cab01b
 block text_there             1b8ae5bb0f3cf2bc
@@ -27,7 +27,7 @@ block on_mode_changed        57750d820b55e948
 block on_text_changed        3cb267a861b8736a
 block debounce_update        7749d9d18b3de96c
 block update_selection       534fe77bf7eaafab
-block demotion               9688100d85cb04c4
+block demotion               cad81aae69194a4a
 block from_marks             0a6ab596f29cc854
 block flush                  38f80398900e8afd
 block changed                c5a25cb2e7e9c27f
@@ -64,13 +64,11 @@ site lua/claudecode/selection.lua: M.state.demotion_timer = timer @ function M.u
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ function M.disable()
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
-site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ function M.update_selection()
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ function M.update_selection()
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = nil @ local function clear_held_state()
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = { @ function M.flush_visual_selection()
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection = { @ function M.update_selection()
-site lua/claudecode/selection.lua: M.state.last_active_visual_selection @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: M.state.last_active_visual_selection @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: M.state.latest_selection = current_selection @ function M.update_selection()
@@ -92,7 +90,6 @@ site lua/claudecode/selection.lua: M.update_selection() @ function M.flush_visua
 site lua/claudecode/selection.lua: M.update_selection() @ function M.send_current_selection()
 site lua/claudecode/selection.lua: M.update_selection() @ local function demote_if_selection_text_changed()
 site lua/claudecode/selection.lua: M.update_selection() @ local function reconcile_held_selection(compare_cursor)
-site lua/claudecode/selection.lua: and M.state.last_active_visual_selection.bufnr == original_bufnr_when_scheduled @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: and M.state.last_active_visual_selection.bufnr == original_bufnr_when_scheduled @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: and M.state.last_active_visual_selection.bufnr == original_bufnr_when_scheduled @ function M.handle_selection_demotion(original_bufnr_when_scheduled)
 site lua/claudecode/selection.lua: clear_held_state() @ function M.flush_visual_selection()
