@@ -3,7 +3,8 @@
 # Run via `mise run format` (treefmt) or `mise run format-check` (`treefmt --ci` with FORMAT_CHECK=1, which writes
 # nothing to the tree). The three formatters that write files (stylua, prettier, shfmt) run through
 # scripts/treefmt-formatter.sh, which holds their write flags and their check flags. Their includes and excludes stay
-# here, so both modes format the same files.
+# here, so both modes format the same files. treefmt keys its cache on that wrapper, not on the tool, so mise.toml sets
+# TREEFMT_NO_CACHE (a version bump of a tool must make treefmt format the files again).
 # Every formatter/linter referenced here is provisioned by mise (see mise.toml).
 # The tree root is the folder of this file. By default it is the root of the git repository, so a checkout without its
 # own .git (a vendored copy inside another repository) would get the outer repository as its tree root. Then treefmt
