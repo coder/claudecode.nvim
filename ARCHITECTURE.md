@@ -209,7 +209,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
-SIGKILL, a crash, and a quit from inside an autocmd that is not `nested` run neither autocmd. So does a quit or a signal that Neovim handles while such an autocmd is still running, for example one that waits in `vim.wait`. What Claude receives for each kind of call, in each kind of exit, is in the root [README.md](./README.md), under Global Invariants.
+SIGKILL, a crash, `:noautocmd qa!`, a Lua `os.exit()` and a quit from inside an autocmd that is not `nested` run neither autocmd. A quit or a signal that Neovim handles while such an autocmd is still running can skip them too, for example when it waits in `vim.wait`. What Claude receives for each kind of call, in each kind of exit, is in the root [README.md](./README.md), under Global Invariants.
 
 ## Module Structure
 

@@ -2110,9 +2110,9 @@ end
 ---The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
 ---its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
 ---buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
----pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre, and neither
----does a quit or a signal that Neovim handles while such an autocmd is still running (for example one that waits in
----`vim.wait`).
+---pending. SIGKILL, a crash, `:noautocmd qa!`, `os.exit()` and a quit from inside an autocmd that is not `nested` run
+---no VimLeavePre, and a quit or a signal that Neovim handles while such an autocmd is still running can skip it too
+---(for example one that waits in `vim.wait`).
 ---The reject pass runs first. It resolves each diff whose status is `pending` as rejected, oldest first, each under
 ---`pcall`, so one diff that fails to reject cannot leave the others waiting. A diff with another status is skipped. A
 ---reject can remove its own diff (`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a
