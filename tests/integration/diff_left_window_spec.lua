@@ -75,7 +75,7 @@ describe("diff mode in a window that left a split diff", function()
     vim.fn.writefile({ "other" }, dir .. "/other.txt")
     vim.fn.writefile({ "third" }, dir .. "/third.txt")
     vim.fn.writefile({ "fourth" }, dir .. "/fourth.txt")
-    tools.register_all()
+    tools.setup()
     _G.claude_deferred_responses = {}
     answers = {}
     vim.cmd("edit " .. vim.fn.fnameescape(file))
@@ -90,22 +90,163 @@ describe("diff mode in a window that left a split diff", function()
     _G.claude_deferred_responses = nil
   end)
 
+  describe("the proposal window that :edit switched to another file", function()
+    -- The plugin splits the window before it runs `diffthis`, so the options that Neovim saves for the file when the
+    -- split shows the proposal have no diff mode.
+    it("stays out of diff mode when :edit brings the file back", function()
+      local state = open_diff()
+      run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      wait_for_answers(1)
+      assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
+      assert.is_false(option(state.new_window, "diff"), "the switch ended diff mode there")
+
+      run_in(state.new_window, "edit " .. vim.fn.fnameescape(file))
+
+      assert.is_false(option(state.new_window, "diff"), "Neovim saved no diff mode for the file in this window")
+      assert.equal(0, diff_windows())
+    end)
+
+    it("stays out of diff mode in the proposal window of the legacy diff when :edit brings the file back", function()
+      -- The legacy diff.open_diff writes its proposal under stdpath("cache"); keep that out of the real cache folder.
+      local saved_cache_home = vim.env.XDG_CACHE_HOME
+      vim.env.XDG_CACHE_HOME = dir .. "/cache"
+      diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
+      diff.open_diff(file, file, "one\nTWO\n", "legacy")
+      local proposal = vim.api.nvim_get_current_win()
+      assert.equal(2, diff_windows(), "the legacy diff compares two windows")
+
+      run_in(proposal, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
+      run_in(proposal, "edit " .. vim.fn.fnameescape(file))
+      vim.env.XDG_CACHE_HOME = saved_cache_home
+      local diff_mode = option(proposal, "diff")
+      vim.cmd("silent! diffoff!")
+
+      assert.is_false(diff_mode, "Neovim saved no diff mode for the file in this window")
+    end)
+  end)
+
+  describe("a window of another tab page that opens while the diff is open", function()
+    -- A window that shows the file takes the set that another window saved when the file left it. The proposal window
+    -- saved diff mode for the file when `diffthis` ran before the split, and the new tab took it from there.
+    local commands = {
+      {
+        name = ":tabnew <file>",
+        run = function()
+          vim.cmd("tabnew " .. vim.fn.fnameescape(file))
+        end,
+      },
+      {
+        name = ":tabnew and :buffer <file>",
+        run = function()
+          vim.cmd("tabnew")
+          vim.cmd("buffer " .. vim.fn.bufnr(file))
+        end,
+      },
+      {
+        name = ":tab sbuffer <file>",
+        run = function()
+          vim.cmd("tab sbuffer " .. vim.fn.bufnr(file))
+        end,
+      },
+    }
+
+    for _, command in ipairs(commands) do
+      it("gets no diff mode from " .. command.name, function()
+        open_diff()
+        local first_tab = vim.api.nvim_get_current_tabpage()
+        command.run()
+        local other_tab_window = vim.api.nvim_get_current_win()
+        local in_diff_mode = option(other_tab_window, "diff")
+        vim.api.nvim_set_current_tabpage(first_tab)
+
+        close_tab()
+        local next_diff = open_diff()
+
+        assert.is_false(in_diff_mode, "no window saved diff mode for the file")
+        assert.is_false(option(other_tab_window, "diff"))
+        assert.is_falsy(next_diff.created_new_tab, "the next diff opens in the tab where it was asked for")
+      end)
+    end
+  end)
+
+  describe("a handler of the user that moves the focus while the diff opens", function()
+    -- The original window gets its `diffthis` without a window switch, so a BufEnter handler runs no more often than
+    -- on main, and the `diffthis` does not land in the window that the handler moved the focus to.
+    it("leaves diff mode off in the window that the handler moved the focus to", function()
+      local original = vim.api.nvim_get_current_win()
+      vim.cmd("botright split")
+      local user_win = vim.api.nvim_get_current_win()
+      vim.cmd("enew")
+      vim.api.nvim_set_current_win(original)
+      local moved = false
+      local group = vim.api.nvim_create_augroup("left_window_spec_focus", { clear = true })
+      vim.api.nvim_create_autocmd("BufEnter", {
+        group = group,
+        callback = function(args)
+          if
+            not moved
+            and vim.api.nvim_buf_get_name(args.buf) == file
+            and vim.api.nvim_get_current_win() ~= user_win
+          then
+            moved = true
+            vim.api.nvim_set_current_win(user_win)
+          end
+        end,
+      })
+
+      local ok, state = pcall(open_diff)
+      vim.api.nvim_del_augroup_by_id(group)
+
+      assert.is_true(ok, "openDiff waits for the user: " .. tostring(state))
+      assert.is_false(option(user_win, "diff"), "the user's other window is not in diff mode")
+      assert.is_true(option(state.target_window, "diff"), "the original window is in diff mode")
+      assert.is_true(option(state.new_window, "diff"), "the proposal window is in diff mode")
+      assert.equal(2, diff_windows())
+    end)
+
+    local function entries_of(win, open)
+      local entered = 0
+      local group = vim.api.nvim_create_augroup("left_window_spec_entries", { clear = true })
+      vim.api.nvim_create_autocmd("WinEnter", {
+        group = group,
+        callback = function()
+          if vim.api.nvim_get_current_win() == win then
+            entered = entered + 1
+          end
+        end,
+      })
+      local ok, err = pcall(open)
+      vim.api.nvim_del_augroup_by_id(group)
+      assert.is_true(ok, tostring(err))
+      return entered
+    end
+
+    it("runs no WinEnter handler for the original window while the diff opens", function()
+      local original = vim.api.nvim_get_current_win()
+
+      local entered = entries_of(original, open_diff)
+
+      assert.equal(0, entered, "the original window is not entered again, as on main")
+    end)
+
+    it("runs no WinEnter handler for the original window while the legacy diff opens", function()
+      local original = vim.api.nvim_get_current_win()
+      -- The legacy diff.open_diff writes its proposal under stdpath("cache"); keep that out of the real cache folder.
+      local saved_cache_home = vim.env.XDG_CACHE_HOME
+      vim.env.XDG_CACHE_HOME = dir .. "/cache"
+      diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
+
+      local entered = entries_of(original, function()
+        diff.open_diff(file, file, "one\nTWO\n", "legacy")
+      end)
+
+      vim.env.XDG_CACHE_HOME = saved_cache_home
+      vim.cmd("silent! diffoff!")
+      assert.equal(0, entered, "the original window is not entered again, as on main")
+    end)
+  end)
+
   describe("a file that comes back after the cleanup, which the cleanup does not look at (as on main)", function()
-    it(
-      "turns diff mode on again in the proposal window that :edit switched, when :edit brings the file back",
-      function()
-        local state = open_diff()
-        run_in(state.new_window, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
-        wait_for_answers(1)
-        assert.equal("TAB_CLOSED", close_tab().result.content[1].text)
-        assert.is_false(option(state.new_window, "diff"), "the switch ended diff mode there")
-
-        run_in(state.new_window, "edit " .. vim.fn.fnameescape(file))
-
-        assert.is_true(option(state.new_window, "diff"), "Neovim sets the options that it saved for the file")
-      end
-    )
-
     it(
       "turns diff mode on again in the original window that :edit switched, when :edit # brings the file back",
       function()

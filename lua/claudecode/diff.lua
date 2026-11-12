@@ -724,9 +724,11 @@ local function setup_new_buffer(
   terminal_win_in_new_tab,
   target_win_for_meta
 )
+  -- Split first: a split copies the window's options, and a copy made after `diffthis` would hand diff mode to the
+  -- proposal window for the original buffer, so that `:edit` of the file back there turns it on again after the diff.
+  -- The original window gets its `diffthis` in `nvim_win_call`, which fires no WinEnter or BufEnter for a handler to
+  -- move the focus.
   vim.api.nvim_set_current_win(original_win)
-  vim.cmd("diffthis")
-
   create_split()
   local new_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(new_win, new_buf)
@@ -736,6 +738,9 @@ local function setup_new_buffer(
     vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buf })
   end
   vim.cmd("diffthis")
+  vim.api.nvim_win_call(original_win, function()
+    vim.cmd("diffthis")
+  end)
 
   vim.cmd("wincmd =")
 
@@ -846,7 +851,7 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file)
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  vim.cmd("diffthis")
+  local original_win = vim.api.nvim_get_current_win()
   create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
@@ -867,6 +872,9 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file)
   vim.api.nvim_set_option_value("swapfile", false, { buf = new_buf })
 
   vim.cmd("diffthis")
+  vim.api.nvim_win_call(original_win, function()
+    vim.cmd("diffthis")
+  end)
 
   local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
   local cleaned_up = false
