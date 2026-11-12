@@ -12,17 +12,23 @@ set -o pipefail
 # selection_held_spec.lua sleeps 21.6s in 77 vim.wait calls, so 30s left each of them 0.1s of slack under load.
 FILE_TIMEOUT=40s
 
-# The temp files and folders of the file that runs, and the file that holds its process group id while it runs. Bash
-# runs the EXIT trap when the runner gets SIGTERM too, just before it dies with 143 as it did without the trap. The trap
-# stops the file's Neovims first, because one that ends later writes ShaDa and makes its state folder again.
+# The temp files and folders of the file that runs, and the file that holds the process id of its `timeout` while it
+# runs. SIGTERM and SIGHUP kill bash, which runs the EXIT trap first. SIGINT runs the INT trap, which exits 130 at once
+# while `wait` below runs: a Ctrl-C reaches the runner's own process group, and timeout leaves that group. The trap
+# stops the file's Neovims before it removes the folders, because one that ends later writes ShaDa and makes its state
+# folder again. It kills timeout itself first: until timeout has made its own group, no Neovim runs yet.
 CURRENT_TEMP=()
 CURRENT_GROUP_FILE=""
+timeout_pid=""
 trap '
   if [[ -s $CURRENT_GROUP_FILE ]]; then
-    kill -KILL -- "-$(cat "$CURRENT_GROUP_FILE")" 2> /dev/null || true
+    timeout_pid=$(cat "$CURRENT_GROUP_FILE")
+    kill -KILL "$timeout_pid" 2> /dev/null || true
+    kill -KILL -- "-$timeout_pid" 2> /dev/null || true
   fi
   rm -rf "${CURRENT_TEMP[@]}"
 ' EXIT
+trap 'exit 130' INT
 
 echo "=== Running Integration Tests Individually ==="
 
@@ -57,13 +63,17 @@ run_test_file() {
   # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
   # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
-  if VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
-    CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
-    XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
-    bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
-    nvim --headless -i NONE -u tests/minimal_init.lua \
-    -c "lua require('plenary.test_harness').test_file('$test_file')" \
-    2>&1 | tee "$temp_output"; then
+  # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs.
+  (
+    VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
+      CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
+      XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
+      bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
+      nvim --headless -i NONE -u tests/minimal_init.lua \
+      -c "lua require('plenary.test_harness').test_file('$test_file')" \
+      2>&1 | tee "$temp_output"
+  ) &
+  if wait $!; then
     EXIT_CODE=0
   else
     EXIT_CODE=$?

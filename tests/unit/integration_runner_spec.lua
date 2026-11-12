@@ -37,6 +37,7 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
   '    set -- -k 1s "$@"',
   "  fi",
   "fi",
+  'if [ -f "$STUB_DIR/$name.window" ]; then : > "$STUB_DIR/$name.timeout_started"; sleep 1; fi',
   'echo "$1 $2 $3" >> "$STUB_DIR/timeout_args"',
   'exec "$REAL_TIMEOUT" "$@"',
 })
@@ -45,8 +46,8 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$*" >> "$STUB_DIR/nvim_args"',
   'if [ -f "$STUB_DIR/$name.sleep" ]; then',
   '  : > "$STUB_DIR/$name.started"',
-  "  sleep 2",
-  '  mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada"',
+  '  (sleep 2; mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada") &',
+  "  wait",
   "fi",
   "folders=missing",
   'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
@@ -395,19 +396,38 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local log = assert(io.open(dir .. "/nvim_args"))
     local args = log:read("*a")
     log:close()
-    assert.is_truthy(args:find("--headless -i NONE -u tests/minimal_init.lua", 1, true), args)
+    local tokens = {}
+    for token in args:gmatch("%S+") do
+      table.insert(tokens, token)
+    end
+    local has_no_shada = false
+    for index, token in ipairs(tokens) do
+      if token == "-i" and tokens[index + 1] == "NONE" then
+        has_no_shada = true
+      end
+    end
+    assert.is_true(has_no_shada, args)
   end)
 
-  it("stops the running file and removes its temp files and folders when it gets SIGTERM, and exits 143", function()
+  ---@param signal string The signal to send to the runner
+  ---@param window boolean Send it when timeout has started but has not made its process group yet
+  ---@return string status The status of the runner
+  ---@return string left What the runner left in its TMPDIR, after its Neovim's grandchild would have written
+  ---@return integer seconds How long the runner took to exit after the signal (its file runs 2 seconds)
+  local function signal_runner(signal, window)
     write(dir .. "/tests/integration/slow_spec.lua", {})
     write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
     write(dir .. "/slow_spec.lua.exit", { "0" })
     write(dir .. "/slow_spec.lua.sleep", {})
+    if window then
+      write(dir .. "/slow_spec.lua.window", {})
+    end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
-    local command = "cd "
+    -- `set -m` gives the background job its own process group and leaves SIGINT unignored, as a runner has at a prompt.
+    local inner = "cd "
       .. quote(dir)
-      .. " && TMPDIR="
+      .. " && export TMPDIR="
       .. quote(temp)
       .. " PATH="
       .. quote(dir .. "/bin")
@@ -415,20 +435,40 @@ describe("scripts/run_integration_tests_individually.sh", function()
       .. quote(dir)
       .. " REAL_TIMEOUT="
       .. quote(real_timeout)
-      .. " "
+      .. "; set -m; "
       .. quote(script)
       .. " > /dev/null 2>&1 & pid=$!; for _ in $(seq 100); do [ -e "
-      .. quote(dir .. "/slow_spec.lua.started")
-      .. " ] && break; sleep 0.1; done; kill -TERM $pid; wait $pid; echo status=$?; sleep 3"
-    local pipe = assert(io.popen(command))
+      .. quote(dir .. (window and "/slow_spec.lua.timeout_started" or "/slow_spec.lua.started"))
+      .. " ] && break; sleep 0.1; done; t0=$(date +%s); kill -"
+      .. signal
+      .. " $pid; wait $pid; echo status=$?; echo took=$(($(date +%s) - t0)); sleep 3"
+    local pipe = assert(io.popen("bash -c " .. quote(inner)))
     local output = pipe:read("*a")
     pipe:close()
+    local listing = assert(io.popen("ls -A " .. quote(temp)))
+    local left = listing:read("*a")
+    listing:close()
+    return output:match("status=(%d+)") or output, left, tonumber(output:match("took=(%d+)"))
+  end
 
-    assert.are.equal("143", output:match("status=(%d+)"), output)
-    local left = assert(io.popen("ls -A " .. quote(temp)))
-    local names = left:read("*a")
-    left:close()
-    assert.are.equal("", names, "the runner left temp files or folders behind")
+  for _, case in ipairs({ { "SIGTERM", "TERM", "143" }, { "SIGINT", "INT", "130" } }) do
+    local name, signal, expected_status = case[1], case[2], case[3]
+    local description = "stops the running file and removes its temp files and folders on "
+    it(description .. name .. " at once, and exits " .. expected_status, function()
+      local status, left, seconds = signal_runner(signal, false)
+
+      assert.are.equal(expected_status, status)
+      assert.are.equal("", left, "the runner left temp files or folders behind, or its Neovim's grandchild ran on")
+      assert.is_true(seconds <= 1, "the runner took " .. seconds .. "s to exit, not at once")
+    end)
+  end
+
+  it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()
+    local status, left = signal_runner("TERM", true)
+
+    assert.are.equal("143", status)
+    assert.are.equal("", left, "the runner left temp files or folders behind")
+    assert.is_nil(io.open(dir .. "/slow_spec.lua.started"), "the file's Neovim started after the runner died")
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
