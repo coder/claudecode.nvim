@@ -98,8 +98,8 @@ site lua/claudecode/server/client.lua: if not client.handshake_complete then @ f
 site lua/claudecode/server/client.lua: if on_open then @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 site lua/claudecode/server/client.lua: on_open(client) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua a9c0d153b61e3078
-block on_open                2e5ab22c94d78ab2
+file lua/claudecode/server/init.lua 8da8851fff781946
+block on_open                605dc737a2bfdad0
 block server_broadcast       fc69234ae8ed7cf0
 block server_status          e2759841ce0f1b90
 site lua/claudecode/server/init.lua: function M.broadcast(method, params, on_written) @ function M.broadcast(method, params, on_written)
@@ -109,7 +109,7 @@ site lua/claudecode/server/init.lua: main_module.process_mention_queue(true) @ f
 site lua/claudecode/server/init.lua: on_open = function(client) @ function M.start(config, auth_token)
 site lua/claudecode/server/init.lua: return tcp_server.broadcast(M.state.server, json_message, on_written) > 0 @ function M.broadcast(method, params, on_written)
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 0cfb4b3ed4c138a1
+file lua/claudecode/server/tcp.lua 8be1dd96671223ea
 block new_connection         e1daff4237326df4
 block tcp_broadcast          2b207928d69c9dbd
 block clients_info           b2d757e5dc9d2c2f
