@@ -64,6 +64,17 @@ describe("a visual selection released after the buffer changed, with the real pl
     return last and last.params and last.params.text
   end
 
+  -- Nothing that Claude was sent may carry the text that the marks point at after the operator.
+  local function sent_no_selection()
+    for _, message in ipairs(sent) do
+      local params = message.params
+      if params and params.selection and not params.selection.isEmpty then
+        return false, params.text
+      end
+    end
+    return true
+  end
+
   -- A plugin edits the second line, without moving the selection on the first.
   local function plugin_edits_line_two()
     vim.api.nvim_buf_set_lines(0, 1, 2, false, { "second line changed" })
@@ -147,17 +158,6 @@ describe("a visual selection released after the buffer changed, with the real pl
 
   -- What the guard exists for: an operator consumes the selection, and the marks point at text you never selected.
   describe("when an operator consumes the selection", function()
-    -- Nothing that Claude was sent may carry the text that the marks point at after the operator.
-    local function sent_no_selection()
-      for _, message in ipairs(sent) do
-        local params = message.params
-        if params and params.selection and not params.selection.isEmpty then
-          return false, params.text
-        end
-      end
-      return true
-    end
-
     it("sends no selection for d (ved)", function()
       start()
       open_file({ "alpha beta gamma", "second line" })
@@ -229,6 +229,101 @@ describe("a visual selection released after the buffer changed, with the real pl
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
+  end)
+
+  -- A mapping runs its keys with no main-loop turn between them, so the check that the listener schedules for an edit
+  -- has not run when the flush on Esc comes. The edit must be told apart from an operator's without waiting for it.
+  describe("when the edit and the next key come in one typeahead", function()
+    it("holds the selection after a mapping edits another line and presses Esc", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("ve")
+      wait(20)
+      press("<Cmd>lua vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'second line changed' })<CR><Esc>")
+      wait(400)
+
+      assert.are.equal("second line changed", vim.api.nvim_buf_get_lines(0, 1, 2, false)[1])
+      assert.are.equal("alpha", held_text())
+      assert.are.equal("alpha", last_sent_text())
+      assert.is_false(selection.get_latest_selection().selection.isEmpty)
+    end)
+
+    it("holds the selection after a mapping appends lines and presses Esc", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("ve")
+      wait(20)
+      press("<Cmd>lua vim.api.nvim_buf_set_lines(0, 2, 2, false, { 'appended', 'lines' })<CR><Esc>")
+      wait(400)
+
+      assert.are.equal("alpha", held_text())
+      assert.are.equal("alpha", last_sent_text())
+    end)
+
+    it("holds the selection after a mapping edits another line twice and presses Esc", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("ve")
+      wait(20)
+      press(
+        "<Cmd>lua vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'one' })<CR>"
+          .. "<Cmd>lua vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'two' })<CR><Esc>"
+      )
+      wait(400)
+
+      assert.are.equal("alpha", held_text())
+      assert.are.equal("alpha", last_sent_text())
+    end)
+
+    it("holds the selection after a mapping writes the file and presses Esc", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      vim.api.nvim_buf_set_lines(0, 1, 2, false, { "second line, modified" })
+      wait(50)
+
+      press("ve")
+      wait(20)
+      press("<Cmd>silent write<CR><Esc>")
+      wait(400)
+
+      assert.are.equal("alpha", held_text())
+      assert.are.equal("alpha", last_sent_text())
+    end)
+
+    -- The edit of a mapping is not the operator's: d after it still consumes the selection.
+    it("sends no selection for d after a mapping edited another line", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("ve")
+      wait(20)
+      press("<Cmd>lua vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'second line changed' })<CR>d")
+      wait(400)
+
+      assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
+      assert.are.same({ true }, { sent_no_selection() })
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+    end)
+
+    -- One typeahead for an operator and the next selection: the edit of the first must not count for the second.
+    it("does not carry an operator's edit into the next selection", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("vedwwve<Esc>")
+      wait(400)
+
+      assert.are.equal("gamma", held_text())
+      assert.are.equal("gamma", last_sent_text())
     end)
   end)
 

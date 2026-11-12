@@ -175,6 +175,31 @@ local function visual_entry_of(bufnr)
   return entry and entry.bufnr == bufnr and entry or nil
 end
 
+---The namespace of the key listener that note_visual_edit sets (see there), made when the first edit is noted. There
+---is one listener: the one of the edit that was noted last replaces an earlier one, and a check clears it.
+local visual_edit_keys
+
+local function clear_visual_edit_keys()
+  if visual_edit_keys then
+    vim.on_key(nil, visual_edit_keys)
+  end
+end
+
+---Checks the edits of the visual selection that nobody checked yet: visual mode is still on when a plugin edited a line
+---and the selection stays on the screen, and it is off when an operator consumed the selection. Edits that came before
+---this check are all judged at once, by the mode that they left. It is safe to run twice (the second finds nothing).
+---@param entry table The visual selection, from visual_entry_of.
+local function check_visual_edits(entry)
+  if M.state.visual_entry ~= entry or entry.unchecked_edits == 0 then
+    return -- The flush came first and skipped the selection, or this check came earlier: nothing to check.
+  end
+  entry.unchecked_edits = 0
+  clear_visual_edit_keys()
+  if not is_visual_mode(vim.api.nvim_get_mode().mode) then
+    entry.consumed = true
+  end
+end
+
 ---Notes an edit of the text in the buffer in which you select. Three things move the buffer's changedtick: a
 ---consuming operator (d, c, >, gU, J, r, p...), a plugin's edit and a `:write`. The changedtick cannot tell them
 ---apart, and the flush must skip only the operator.
@@ -183,20 +208,24 @@ end
 ---2. A plugin's edit runs in visual mode and leaves the selection on the screen.
 ---3. A `:write` fires no callback, so it is not an edit here.
 ---Neovim 0.8 and 0.9 end visual mode for the length of an `nvim_buf_set_lines` or `nvim_buf_set_text` call, and the
----callback runs in that state. `vim.schedule` runs after the call, so the mode that it sees is the one the edit left.
----The operator's flush comes before the check runs, so the flush skips a selection that has an unchecked edit.
+---callback runs in that state. So the mode that tells the two apart is the one after the call, and the check runs in
+---`vim.schedule` or before the next key, whichever comes first. A mapping or a macro runs its next key with no
+---main-loop turn in between: `<Cmd>lua edit()<CR><Esc>` reaches the flush before the schedule, and `vim.on_key`
+---sees that key while visual mode is still on.
+---The operator's flush comes before either check runs, so the flush skips a selection that has an unchecked edit.
 ---@param entry table The visual selection, from visual_entry_of.
 local function note_visual_edit(entry)
   entry.unchecked_edits = entry.unchecked_edits + 1
   vim.schedule(function()
-    if M.state.visual_entry ~= entry then
-      return -- The flush came first and skipped the selection: the edit was not checked.
-    end
-    entry.unchecked_edits = entry.unchecked_edits - 1
-    if not is_visual_mode(vim.api.nvim_get_mode().mode) then
-      entry.consumed = true
-    end
+    check_visual_edits(entry)
   end)
+  -- Replaces the listener of an earlier edit of this selection. One of a flushed selection is a stale one: its check
+  -- finds another entry, does nothing, and clears the listener.
+  visual_edit_keys = visual_edit_keys or vim.api.nvim_create_namespace("claudecode_visual_edit")
+  vim.on_key(function()
+    clear_visual_edit_keys()
+    check_visual_edits(entry)
+  end, visual_edit_keys)
 end
 
 ---Listens for changes to the buffer of the selection that Claude holds, for as long as it holds one, and to the buffer
