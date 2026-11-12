@@ -162,6 +162,10 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       tabs = vim.fn.tabpagenr("$"),
       start_win_shows_file = vim.api.nvim_win_get_buf(start_win) == file_buf,
       terminal_bufenter_runs = terminal_bufenter_runs,
+      -- The diff gives the terminal buffer a BufEnter autocmd that enters terminal mode, when it shows the terminal.
+      auto_enter_autocmds = #vim.tbl_filter(function(autocmd)
+        return (autocmd.desc or ""):find("Auto-enter terminal mode", 1, true) ~= nil
+      end, vim.api.nvim_get_autocmds({ buffer = terminal_buf, event = "BufEnter" })),
       terminal_in_new_tab = vim.tbl_contains(
         vim.tbl_map(vim.api.nvim_win_get_buf, vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2])),
         terminal_buf
@@ -273,6 +277,7 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     assert.equal(2, result.tabs)
     assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
     assert.is_true(result.terminal_in_new_tab, "the terminal must be in a window of the new tab")
+    assert.equal(1, result.auto_enter_autocmds)
   end)
 
   -- Without the autocmd above, Neovim fires BufEnter for the terminal buffer when the cursor enters the split, and a
@@ -287,6 +292,11 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     assert.equal(2, result.tabs)
     assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
     assert.is_false(result.terminal_in_new_tab, "the terminal's split is closed, so the new tab has no terminal window")
+    assert.equal(
+      0,
+      result.auto_enter_autocmds,
+      "no BufEnter autocmd may be left for a window that never showed the terminal"
+    )
   end)
 
   it("opens a diff in a new tab without running a BufEnter autocmd of the terminal buffer", function()
