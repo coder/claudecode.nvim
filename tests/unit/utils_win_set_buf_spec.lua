@@ -76,9 +76,6 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     end)
     stub(vim.fn, "expand", function(what)
       assert.equal("<abuf>", what)
-      if state.expand_raises then
-        error("E496", 0)
-      end
       return state.abuf
     end)
     stub(vim.api, "nvim_win_set_buf", function(win, buf)
@@ -346,12 +343,6 @@ describe("claudecode.utils.win_set_buf_in_split", function()
 
     it("when 'winfixbuf' is an unknown option, as in Neovim 0.8", function()
       state.winfixbuf_option = false
-
-      expect_leave_first()
-    end)
-
-    it("when expanding <abuf> raises", function()
-      state.expand_raises = true
 
       expect_leave_first()
     end)

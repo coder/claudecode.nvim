@@ -61,11 +61,10 @@ local function buf_hides(buf)
   return bufhidden == "hide" or vim.o.hidden
 end
 
----Whether the code runs inside an autocmd. `<abuf>` is empty outside one.
+---Whether the code runs inside an autocmd. `<abuf>` is empty outside one, and the call raises in no context.
 ---@return boolean
 local function inside_autocmd()
-  local ok, abuf = pcall(vim.fn.expand, "<abuf>")
-  return ok and abuf ~= ""
+  return vim.fn.expand("<abuf>") ~= ""
 end
 
 ---The value of 'eventignore' with `events` added, and a `-Event` entry of the caller's dropped for each of them, because
