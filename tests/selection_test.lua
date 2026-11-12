@@ -2010,6 +2010,33 @@ describe("Range Selection Tests", function()
           assert.is_nil(mock_server.last_broadcast)
         end)
 
+        -- `:edit!` unloads the text of the buffer and reads it again: the listener is detached, and the marks point at text
+        -- that you never selected. The detach counts as an operator, as a reload does.
+        it("skips the flush after the listener is detached, which replaces the text", function()
+          enter_visual_mode()
+          call_listeners("on_detach")
+          assert.is_true(selection.state.visual_entry.consumed)
+
+          leave_visual_mode()
+
+          assert.is_nil(mock_server.last_broadcast)
+        end)
+
+        it("does not take the detach of another buffer for an operator of this selection", function()
+          enter_visual_mode()
+          for _, listener in ipairs(_G.vim._buf_listeners[1] or {}) do
+            if listener.on_detach then
+              listener.on_detach(nil, 2) -- a buffer that you do not select in
+            end
+          end
+          assert.is_false(selection.state.visual_entry.consumed)
+
+          leave_visual_mode()
+
+          assert(mock_server.last_broadcast ~= nil)
+          assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+        end)
+
         it("does not carry the operator of one selection into the next", function()
           enter_visual_mode()
           _G.vim.test.set_mode("n")
