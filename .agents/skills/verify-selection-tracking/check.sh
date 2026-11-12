@@ -54,7 +54,7 @@ covered_block current_tool "$CURRENT_TOOL" '^local function handler\('
 covered_block latest_tool "$LATEST_TOOL" '^local function handler\('
 
 FACTS=(FlushOnVisualExit FlushSkipsOperator FlushSkipsTerminal FlushRecordsCursor UpdateSkipsTerminal
-  PendingKeepsHeld ElseClearsHeldState DemotionWaitsForMove DemotionClearsHeldState DebounceIgnoresStale
+  PendingKeepsHeld ElseClearsHeldState DemotionWaitsForMove DemotionClearsHeldState DemotionIgnoresTerminal DebounceIgnoresStale
   DemotionIgnoresStale ClearsBeforeClose EntryClearsHeld FlushSkipReports PendingClearsHeld ReconcileOnCursorMoved
   ReconcileOnTextChanged TextChangeReports MoveReports LeaveNoted ReadRecordsTick ListensToSelectionBuffer
   TerminalReportsHeldBuffer UpdateChecksHeldText ListenerNotesVisualEdit VisualCheckSparesPluginEdit FlushIgnoresTick)
@@ -114,6 +114,15 @@ fact[DemotionClearsHeldState]=$(as_bool in_order 'M\.send_selection_update\(M\.s
   '^    M\.state\.last_active_visual_selection = nil$' \
   '^  if M\.state\.cursor_at_flush and M\.state\.cursor_at_flush\.bufnr == original_bufnr_when_scheduled then$' \
   '^    M\.state\.cursor_at_flush = nil$' <<<"$demotion")
+# Condition 1: the demotion does nothing in a Claude terminal. It returns at once, and it does not clear
+# last_active_visual_selection (it used to), so the return to the file keeps the selection. The `if` and the `return` must
+# be the whole body, so a statement that comes back reads FALSE.
+demotion_ignores_terminal() {
+  local condition
+  condition=$(sed -n '/^  if M\.is_claude_terminal_buffer(current_buf) then$/,/^  end$/p' <<<"$demotion")
+  [[ $condition == $'  if M.is_claude_terminal_buffer(current_buf) then\n    return\n  end' ]]
+}
+fact[DemotionIgnoresTerminal]=$(as_bool demotion_ignores_terminal)
 # Each timer callback returns unless its timer is still the one in M.state.
 fact[DebounceIgnoresStale]=$(as_bool in_order 'vim\.schedule_wrap\(function\(\)' \
   '^      if M\.state\.debounce_timer ~= timer then$' '^        return$' 'timer:close\(\)' \
@@ -281,6 +290,7 @@ EXPECT=(
   [FlushOnVisualExit]=ReleaseSent [FlushSkipsOperator]=NoPhantomSelection
   [FlushSkipsTerminal]=NoTerminalSelection [UpdateSkipsTerminal]=NoTerminalSelection
   [FlushRecordsCursor]=HeldUntilMoved [PendingKeepsHeld]=HeldUntilMoved [DemotionWaitsForMove]=HeldUntilMoved
+  [DemotionIgnoresTerminal]=HeldUntilMoved
   [DebounceIgnoresStale]=TimerClosedOnce [DemotionIgnoresStale]=TimerClosedOnce [ClearsBeforeClose]=TimerClosedOnce
   [ReadRecordsTick]=NoDeletedText [TextChangeReports]=NoDeletedText
   [ListensToSelectionBuffer]=NoDeletedText [TerminalReportsHeldBuffer]=NoDeletedText
