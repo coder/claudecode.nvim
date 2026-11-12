@@ -21,7 +21,7 @@ M.defaults = {
   -- Milliseconds Claude Code has to connect for queued @ mentions. Each one leaves with an error connection_timeout +
   -- connection_wait_delay ms after its send, unless a ready Claude takes the queue first.
   connection_timeout = 10000,
-  queue_timeout = 5000, -- Unused, kept so that configs that set it stay valid (connection_timeout bounds the wait)
+  queue_timeout = 5000, -- Unused, kept so that configs that set it stay valid (see connection_timeout)
   diff_opts = {
     layout = "vertical",
     open_in_new_tab = false, -- Open diff in a new tab (false = use current tab)
