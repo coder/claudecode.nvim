@@ -1422,6 +1422,41 @@ function M._close_proposal_window(diff_data)
   end
 end
 
+---A diff needs a partner window. A window that is the only one in diff mode in its tab page has nothing to compare, so
+---the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. Neovim refuses
+---`:diffoff` in some states (E11 in the command-line window), and then the window keeps its diff mode.
+---@param win number
+local function end_diff_mode_if_alone(win)
+  if not vim.api.nvim_get_option_value("diff", { win = win }) then
+    return
+  end
+  for _, other in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(win))) do
+    if other ~= win and vim.api.nvim_get_option_value("diff", { win = other }) then
+      return
+    end
+  end
+  pcall(vim.api.nvim_win_call, win, function()
+    vim.cmd("diffoff")
+  end)
+end
+
+---Neovim saves a window's options, 'diff' included, for a buffer that leaves the window and sets them again when the
+---buffer enters it. When the cleanup has closed its windows and deleted its buffers, a window of the original side's tab
+---page that shows the file, and is the only window of that tab page in diff mode, has the leftover of the ended diff.
+---@param diff_data table
+local function end_diff_mode_in_windows_that_show_the_file(diff_data)
+  local buffer = diff_data.original_buffer
+  local target = diff_data.target_window
+  if not (buffer and target and vim.api.nvim_buf_is_valid(buffer) and vim.api.nvim_win_is_valid(target)) then
+    return
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_win_get_tabpage(target))) do
+    if window_shows(win, buffer) then
+      end_diff_mode_if_alone(win)
+    end
+  end
+end
+
 ---Clean up diff state and resources
 ---@param tab_name string The diff identifier
 ---@param reason string Reason for cleanup
@@ -1485,8 +1520,9 @@ function M._cleanup_diff_state(tab_name, reason)
     local cursor_window = vim.api.nvim_get_current_win()
     -- Close new diff window if still open (only if not in a new tab)
     M._close_proposal_window(diff_data)
-    -- `:edit` clears 'diff' only when the new buffer is in no other diff window, so a kept window that went back to the
-    -- file's own buffer (`:edit #`) is still in diff mode. A window that shows another buffer has left it.
+    -- Neovim sets the options it saved for the file in a window when the file comes back there (`:edit #`), diff mode
+    -- included, so a kept window that went back to the file's own buffer is still in diff mode. A window that shows
+    -- another buffer has left it.
     if window_shows(diff_data.new_window, diff_data.original_buffer) then
       pcall(vim.api.nvim_win_call, diff_data.new_window, function()
         vim.cmd("diffoff")
@@ -1539,6 +1575,9 @@ function M._cleanup_diff_state(tab_name, reason)
   then
     pcall(vim.api.nvim_buf_delete, diff_data.original_buffer, { force = true })
   end
+
+  -- After the deletes, and before the event, so that nothing a handler of it starts is looked at.
+  end_diff_mode_in_windows_that_show_the_file(diff_data)
 
   -- Remove from active diffs
   active_diffs[tab_name] = nil

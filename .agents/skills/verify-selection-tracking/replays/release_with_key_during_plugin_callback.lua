@@ -1,9 +1,10 @@
--- A known bug that the model does not cover (fix PR #540): a plugin edits another line from a timer callback while you
--- are in visual mode, and your Esc arrives while that callback still runs (`nvim_input`, the way a UI sends a key). The
--- schedule that would check the edit runs after the callback, and the key was read first, so the flush on Esc takes the
--- edit for an operator's. Claude gets the cursor, not the selection, although its text is untouched. A plugin edit
--- whose callback ends before the next key is not like this (`release_after_plugin_edit_in_visual.lua`). BUG means the
--- plugin still does that; the probe prints OK once the fix lands. Default delays.
+-- A bug that #540 fixed: a plugin edits another line from a timer callback while you are in visual mode, and your Esc
+-- arrives (`nvim_input`, the way a UI sends a key) while that callback, or another callback that was queued before the
+-- listener's check, still runs. The schedule that checks the edit runs after those callbacks, and the key was read
+-- first, so the flush on Esc found an edit that nobody had checked and took it for an operator's: Claude got the
+-- cursor, not the selection, although its text was untouched. Now the check also runs from a `vim.on_key` listener,
+-- which sees the Esc before it is processed. This probe sends the key during the plugin's own callback. BUG means the
+-- flush takes the edit for an operator's again. Default delays.
 local driver = require("driver")
 driver.run({
   prepare = function()

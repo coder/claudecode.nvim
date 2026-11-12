@@ -22,7 +22,9 @@ vim.g.maplocalleader = "\\"
 -- XDG_CONFIG_HOME is set to the `fixtures/` dir by the `vv` launcher, so the
 -- repository root is its parent. This makes the fixture load the local plugin
 -- copy (including git worktrees) without relying on lazy's default dev path.
-local repo_root = vim.fn.fnamemodify(vim.env.XDG_CONFIG_HOME or vim.fn.getcwd(), ":h")
+-- scripts/repro_issue_218.sh runs a copy of this config in a temp dir (so lazy never
+-- rewrites the tracked lazy-lock.json) and sets CLAUDECODE_DEV_DIR to the checkout.
+local repo_root = vim.env.CLAUDECODE_DEV_DIR or vim.fn.fnamemodify(vim.env.XDG_CONFIG_HOME or vim.fn.getcwd(), ":h")
 vim.g.claudecode_dev_dir = repo_root
 
 require("lazy").setup({
