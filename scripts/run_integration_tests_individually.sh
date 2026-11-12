@@ -61,12 +61,13 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  local temp_output group_file state_dir config_dir
+  local temp_output group_file state_dir config_dir status_file
   temp_output=$(mktemp)
   group_file=$(mktemp)
   state_dir=$(mktemp -d)
   config_dir=$(mktemp -d)
-  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir")
+  status_file=$temp_output.status
+  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir" "$status_file")
   CURRENT_GROUP_FILE=$group_file
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
@@ -79,10 +80,11 @@ run_test_file() {
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
   # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
   # subshell has no pipefail, because with it bash prints a job report ("Killed", two lines) when the cleanup above
-  # kills `timeout`. It exits with the status of the first command. When `tee` fails, set -e ends the subshell with
-  # the status of `tee`, as pipefail did.
+  # kills `timeout`. It writes the exit statuses of nvim and of `tee` to the status file, so that the reason line can
+  # name the stage that failed, and exits with the status of nvim, or with that of `tee` when nvim exited 0.
   (
     set +o pipefail
+    set +e
     VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
       CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
       XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
@@ -90,7 +92,9 @@ run_test_file() {
       nvim --headless -i NONE -u tests/minimal_init.lua \
       -c "lua require('plenary.test_harness').test_file('$test_file')" \
       2>&1 | tee "$temp_output"
-    exit "${PIPESTATUS[0]}"
+    pipe_status=("${PIPESTATUS[@]}")
+    echo "${pipe_status[0]} ${pipe_status[1]}" >"$status_file"
+    exit $((pipe_status[0] != 0 ? pipe_status[0] : pipe_status[1]))
   ) &
   if wait $!; then
     EXIT_CODE=0
@@ -98,6 +102,11 @@ run_test_file() {
     EXIT_CODE=$?
   fi
   CURRENT_GROUP_FILE=""
+  local tee_status=0 status_line
+  if status_line=$(cat "$status_file" 2>/dev/null) && [[ $status_line =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
+    EXIT_CODE=${BASH_REMATCH[1]}
+    tee_status=${BASH_REMATCH[2]}
+  fi
 
   # Parse results from output
   local clean_output
@@ -126,31 +135,41 @@ run_test_file() {
   TOTAL_ERRORS=$((TOTAL_ERRORS + error_count))
 
   # Exit 124 is timeout's, 137 is its SIGKILL after 5 more seconds, and 143 is SIGTERM.
+  # An outside SIGTERM that reaches timeout gives 124 (uutils) or 143 (GNU), and the out-of-memory killer gives 137 like
+  # timeout's own KILL, so these lines do not claim that the limit was hit.
   if [[ $EXIT_CODE -eq 124 ]] || [[ $EXIT_CODE -eq 137 ]] || [[ $EXIT_CODE -eq 143 ]]; then
     if [[ $EXIT_CODE -eq 137 ]]; then
-      # The out-of-memory killer gives 137 too, so this line does not claim that the limit was hit.
       echo "TIMEOUT: $basename was stopped (exit 137, SIGKILL): nvim did not exit within $FILE_TIMEOUT," \
         "or another process killed it"
     else
-      echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within $FILE_TIMEOUT"
+      echo "TIMEOUT: $basename was stopped (exit $EXIT_CODE): nvim did not exit within $FILE_TIMEOUT," \
+        "or an outside signal stopped it"
     fi
     reason_printed=true
-    # nvim busy in a Lua loop ignores SIGTERM and outlives timeout.
+  fi
+
+  # nvim busy in a Lua loop ignores SIGTERM and outlives timeout, and when the nvim started here died, the one that
+  # plenary started for the spec runs on.
+  if [[ $EXIT_CODE -ne 0 ]]; then
     kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
   fi
 
-  # A file that failed with a non-zero exit status always gets one line with a reason: the one above, or this one.
+  # A file whose nvim exited non-zero gets a line with a reason: the no-summary line, the TIMEOUT line, or this one. A
+  # file with no summary that a timeout or a signal stopped gets the first two, as on main.
   if [[ $EXIT_CODE -ne 0 ]] && [[ $reason_printed == false ]]; then
     echo "FAILED: $basename: nvim exit $EXIT_CODE$(signal_note "$EXIT_CODE")"
   fi
+  if [[ $tee_status -ne 0 ]]; then
+    echo "FAILED: $basename: tee exit $tee_status$(signal_note "$tee_status")"
+  fi
 
   # Check if test failed
-  if [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || [[ $EXIT_CODE -ne 0 ]]; then
+  if [[ $failed_count -gt 0 ]] || [[ $error_count -gt 0 ]] || [[ $EXIT_CODE -ne 0 ]] || [[ $tee_status -ne 0 ]]; then
     FAILED_FILES+=("$basename")
   fi
 
   # Cleanup
-  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir"
+  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir" "$status_file"
   CURRENT_TEMP=()
 }
 

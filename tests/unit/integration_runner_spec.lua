@@ -25,14 +25,14 @@ local function concat(...)
 end
 
 local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
-  'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
+  'if [ -f "$STUB_DIR/$name.ignore_term" ] || [ -f "$STUB_DIR/$name.outside_term" ]; then',
   "  pid=$$",
   '  (while kill -0 "$pid"; do',
   '    if [ -f "$STUB_DIR/$name.ready" ]; then kill -TERM "$pid"; break; fi',
   "    sleep 0.05",
   "  done) > /dev/null 2>&1 &",
   '  echo $! > "$STUB_DIR/$name.helper.pid"',
-  '  if [ "$1" = -k ]; then',
+  '  if [ -f "$STUB_DIR/$name.ignore_term" ] && [ "$1" = -k ]; then',
   "    shift 2",
   '    set -- -k 1s "$@"',
   "  fi",
@@ -55,8 +55,8 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
   'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
   '  "${XDG_STATE_HOME-unset}" "${XDG_CONFIG_HOME-unset}" "$folders" "${XDG_DATA_HOME-unset}" >> "$STUB_DIR/env_seen"',
-  'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
-  "  trap '' TERM",
+  'if [ -f "$STUB_DIR/$name.ignore_term" ] || [ -f "$STUB_DIR/$name.outside_term" ]; then',
+  '  if [ -f "$STUB_DIR/$name.ignore_term" ]; then trap "" TERM; fi',
   '  : > "$STUB_DIR/$name.ready"',
   "  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do sleep 1; done",
   "fi",
@@ -129,6 +129,18 @@ local function find_wide_digit_locale()
   end
 end
 
+local tee_pipe = assert(io.popen("command -v tee 2> /dev/null"))
+local real_tee = assert(tee_pipe:read("*l"), "needs tee")
+tee_pipe:close()
+-- Copies its input like tee, then exits with the status in $STUB_DIR/tee.exit when that file exists.
+local STUB_TEE = {
+  "#!/bin/sh",
+  quote(real_tee) .. ' "$@"',
+  "status=$?",
+  'if [ -f "$STUB_DIR/tee.exit" ]; then status=$(cat "$STUB_DIR/tee.exit"); fi',
+  'exit "$status"',
+}
+
 local timeout_pipe = assert(io.popen("command -v timeout 2> /dev/null"))
 local real_timeout = timeout_pipe:read("*l")
 timeout_pipe:close()
@@ -182,6 +194,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
     write(dir .. "/bin/nvim", STUB_NVIM, true)
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
+    write(dir .. "/bin/tee", STUB_TEE, true)
   end)
 
   after_each(function()
@@ -202,14 +215,16 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field output string[]
   ---@field orphan boolean|nil
   ---@field ignore_term boolean|nil
+  ---@field outside_term boolean|nil An outside SIGTERM reaches timeout while the stub nvim sleeps, and nvim dies of it
   ---@field die_by string|nil A signal the stub nvim sends itself after its output, as `kill -<die_by>` takes it
 
   ---@param specs ScriptSpec[]
   ---@param locale string|nil The LC_ALL to run the script under
+  ---@param tmp string|nil The TMPDIR to run the script under, a folder that exists
   ---@return string status
   ---@return string output
   ---@return string[] ran
-  local function run_script(specs, locale)
+  local function run_script(specs, locale, tmp)
     for _, spec in ipairs(specs) do
       write(dir .. "/tests/integration/" .. spec.name, {})
       write(dir .. "/" .. spec.name .. ".out", spec.output)
@@ -220,6 +235,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
       if spec.ignore_term then
         write(dir .. "/" .. spec.name .. ".ignore_term", {})
       end
+      if spec.outside_term then
+        write(dir .. "/" .. spec.name .. ".outside_term", {})
+      end
       if spec.die_by then
         write(dir .. "/" .. spec.name .. ".die_by", { spec.die_by })
       end
@@ -227,7 +245,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local command = "cd "
       .. quote(dir)
       .. " && TMPDIR="
-      .. quote(dir:match("^(.*)/[^/]+$"))
+      .. quote(tmp or dir:match("^(.*)/[^/]+$"))
       .. " PATH="
       .. quote(dir .. "/bin")
       .. ':"$PATH" STUB_DIR='
@@ -239,7 +257,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local output = pipe:read("*a")
     pipe:close()
     for _, spec in ipairs(specs) do
-      local pid_file = spec.ignore_term and io.open(dir .. "/" .. spec.name .. ".helper.pid")
+      local pid_file = (spec.ignore_term or spec.outside_term) and io.open(dir .. "/" .. spec.name .. ".helper.pid")
       if pid_file then
         table.insert(helper_pids, pid_file:read("*l"))
         pid_file:close()
@@ -655,6 +673,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   for _, case in ipairs({
     { 139, ", SIGSEGV" },
     { 134, ", SIGABRT" },
+    { 130, ", SIGINT" },
+    { 129, ", SIGHUP" },
     { 1, "" },
   }) do
     local exit_status, note = case[1], case[2]
@@ -717,6 +737,75 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     assert.is_truthy(output:find("TIMEOUT: oom_after_spec.lua was stopped (exit 137, SIGKILL)", 1, true), output)
     assert.is_nil(output:find("FAILED:", 1, true), output)
+  end)
+
+  it("names tee, not nvim, when tee fails after a clean summary", function()
+    write(dir .. "/tee.exit", { "3" })
+    local status, output = run_script({
+      { name = "tee_spec.lua", exit = 0, output = summary(2, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: tee_spec.lua: tee exit 3\n", 1, true), output)
+    assert.is_nil(output:find("nvim exit", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - tee_spec.lua", 1, true), output)
+  end)
+
+  it("names both stages when nvim and tee fail", function()
+    write(dir .. "/tee.exit", { "141" })
+    local status, output = run_script({
+      { name = "both_spec.lua", exit = 1, output = summary(2, 0, 0) },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: both_spec.lua: nvim exit 1\n", 1, true), output)
+    assert.is_truthy(output:find("FAILED: both_spec.lua: tee exit 141, SIGPIPE\n", 1, true), output)
+    assert.are.equal(2, occurrences(output, "FAILED:"), output)
+  end)
+
+  it("words the TIMEOUT line so that it holds when an outside SIGTERM reached timeout", function()
+    local status, output = run_script({
+      { name = "outside_spec.lua", exit = 0, output = hung_output("outside_spec.lua"), outside_term = true },
+    })
+
+    local _, limit = timeout_limits()
+    assert.are.equal("1", status, output)
+    -- uutils timeout answers an outside SIGTERM with 124, GNU timeout with 143.
+    local code, text = output:match("TIMEOUT: outside_spec.lua was stopped %(exit (%d+)%): ([^\n]*)\n")
+    assert.is_truthy(code == "124" or code == "143", output)
+    assert.is_truthy(text, output)
+    assert.are.equal("nvim did not exit within " .. limit .. "s, or an outside signal stopped it", text)
+    assert.are.equal(1, occurrences(output, "TIMEOUT:"), output)
+  end)
+
+  it("leaves no temp item behind after a file that failed, the exit status file included", function()
+    write(dir .. "/tee.exit", { "3" })
+    shell("mkdir -p " .. quote(dir .. "/tmp"))
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+      { name = "b_spec.lua", exit = 139, output = summary(1, 0, 0) },
+    }, nil, dir .. "/tmp")
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: b_spec.lua: nvim exit 139, SIGSEGV\n", 1, true), output)
+    local listing = assert(io.popen("ls -A " .. quote(dir .. "/tmp")))
+    local left = listing:read("*a")
+    listing:close()
+    assert.are.equal("", left, "the runner left temp items behind")
+  end)
+
+  it("kills what the file left running when its nvim died by a signal before any summary", function()
+    local status, output = run_script({
+      { name = "segv_orphan_spec.lua", exit = 139, output = hung_output("segv_orphan_spec.lua"), orphan = true },
+    })
+    local pid_file = assert(io.open(dir .. "/segv_orphan_spec.lua.orphan.pid"))
+    orphan_pid = pid_file:read("*l")
+    pid_file:close()
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("no plenary summary (nvim exit 139, SIGSEGV)", 1, true), output)
+    wait_until_stopped(orphan_pid)
+    assert.is_false(is_running(orphan_pid), "the process the file left running was killed")
   end)
 
   it("fails a file whose nvim exited 0 after passing tests without printing a summary", function()
