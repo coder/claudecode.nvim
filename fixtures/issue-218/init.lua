@@ -3,14 +3,16 @@
 --    installed"
 --   https://github.com/coder/claudecode.nvim/issues/218
 --
--- Symptom: Neovim abnormally terminates (SIGSEGV / exit 139 for the reporter)
--- when a NEW-file diff opened in a NEW TAB (open_in_new_tab = true) and whose
--- proposed buffer is markdown is accepted with `:w`, but only when
--- render-markdown.nvim is installed (attached to that markdown buffer) and the
--- Claude terminal is open. Existing-file diffs are fine; the crash is specific
+-- Reported symptom: Neovim abnormally terminated (SIGSEGV / exit 139 for the
+-- reporter) when a NEW-file diff opened in a NEW TAB (open_in_new_tab = true) and
+-- whose proposed buffer is markdown was accepted with `:w`, but only when
+-- render-markdown.nvim was installed (attached to that markdown buffer) and the
+-- Claude terminal was open. Existing-file diffs were fine; the crash was specific
 -- to new files (the original side is an empty buffer, so every proposed line is
 -- a diff "add"). See lua/plugins/dev-claudecode.lua and the README for the
--- verified root cause (the teardown's `:tabclose` over still-in-diff windows).
+-- root cause found for the report (the teardown's `:tabclose` over still-in-diff
+-- windows). This fixture sets up that state. Whether a given build still
+-- crashes is what it checks.
 --
 -- This fixture mirrors the reporter's minimal repro.lua (snacks.nvim +
 -- claudecode.nvim + render-markdown.nvim) but loads the LOCAL claudecode.nvim
@@ -20,7 +22,8 @@
 -- Usage (from repo root):
 --   source fixtures/nvim-aliases.sh && vv issue-218
 -- then run `:Repro218` and, once it reports "Repro218 ready", type `:w` with the
--- cursor in the proposed (right) pane. Neovim disappears on accept.
+-- cursor in the proposed (right) pane. On a build that still crashes, Neovim
+-- disappears on accept.
 --
 -- A faithful, scripted driver lives in scripts/repro_issue_218.sh (agent-tty).
 
