@@ -272,11 +272,12 @@ describe("Tool: get_diagnostics", function()
     end
 
     before_each(function()
-      -- vim.uri_from_fname exists on Neovim 0.8 and later. It percent-encodes a path as RFC 3986 says.
+      -- vim.uri_from_fname exists on Neovim 0.8 and later. It percent-encodes a path as RFC 3986 says, with lowercase
+      -- hex digits (`evidence/p2r2/probe-p2r2-*.txt`, F3).
       _G.vim.uri_from_fname = function(path)
         return "file://"
           .. path:gsub("[^%w/._~:@!$&'()*+,;=-]", function(char)
-            return string.format("%%%02X", char:byte())
+            return string.format("%%%02x", char:byte())
           end)
       end
     end)
