@@ -151,23 +151,20 @@ mkdir -m 700 "$TMP/lnk-safe"
 ln -s "$TMP/lnk-safe" "$TMP/lnk-loose/t"
 refused tmp-link-loose "refusing TMPDIR: $TMP/lnk-loose, above the state dir, is writable by others and not sticky" \
   TMPDIR="$TMP/lnk-loose/t" VERIFY_OUT="$TMP/tmp-out"
-# bwrap makes a user namespace that this user owns (no sudo, no second account). Root's inodes show as another user there:
-# /var/run is a root-owned symlink to /run, and `--dir /run` makes the target this user's, so only the owner of the symlink
-# can refuse it. The tools that launch resolves before the TMPDIR check are bound read-only under their own paths.
-tmp_link_foreign_case() {
-  local name=tmp-link-foreign tool exe root repo out rc=0 paths="" binds=()
+# bwrap makes a user namespace that this user owns (no sudo, no second account). Root's inodes show as another user there.
+# sandbox_base <case> sets sb to the bwrap arguments that the sandboxed launches below share, or prints SKIP and fails. The tools
+# that launch resolves before its checks are bound read-only under their own paths, the repo is at /w, and /tmp is a tmpfs of
+# its own, so no case touches the host's /tmp.
+sandbox_base() {
+  local name=$1 tool exe root repo paths="" binds=()
   command -v bwrap >/dev/null || {
     echo "SKIP $name: bwrap is not installed"
-    return 0
-  }
-  [[ -L /var/run && $(stat -c %u /var/run) == 0 && $(realpath /var/run) == /run ]] || {
-    echo "SKIP $name: /var/run is not a root-owned symlink to /run"
-    return 0
+    return 1
   }
   for tool in nvim node jq; do
     exe=$(mise which "$tool" 2>/dev/null || command -v "$tool") || {
       echo "SKIP $name: $tool not found"
-      return 0
+      return 1
     }
     exe=$(realpath -- "$exe")
     # nvim needs the runtime beside its bin dir.
@@ -176,14 +173,25 @@ tmp_link_foreign_case() {
     paths+=$(dirname -- "$exe"):
   done
   repo=$(cd "$(dirname "$V")/../../../.." && pwd)
-  local args=(--unshare-user --uid 0 --gid 0 --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib
+  sb=(--unshare-user --uid 0 --gid 0 --ro-bind /usr /usr --symlink usr/bin /bin --symlink usr/lib /lib
     --symlink usr/lib64 /lib64 --unshare-pid --dev /dev --proc /proc --perms 01777 --tmpfs /tmp "${binds[@]}"
-    --ro-bind /var /var --dir /run --ro-bind "$repo" /w --setenv PATH "$paths/usr/bin:/bin" --setenv HOME /tmp
-    --setenv VCN_AGENT_TTY /usr/bin/true --setenv VERIFY_OUT /tmp/out --setenv TMPDIR /var/run)
-  bwrap "${args[@]}" /usr/bin/true 2>/dev/null || {
+    --ro-bind "$repo" /w --setenv PATH "$paths/usr/bin:/bin" --setenv HOME /tmp --setenv VERIFY_OUT /tmp/out)
+  bwrap "${sb[@]}" /usr/bin/true 2>/dev/null || {
     echo "SKIP $name: bwrap cannot make a user namespace here"
+    return 1
+  }
+}
+
+# /var/run is a root-owned symlink to /run, and `--dir /run` makes the target this user's, so only the owner of the symlink
+# can refuse it.
+tmp_link_foreign_case() {
+  local name=tmp-link-foreign out rc=0
+  [[ -L /var/run && $(stat -c %u /var/run) == 0 && $(realpath /var/run) == /run ]] || {
+    echo "SKIP $name: /var/run is not a root-owned symlink to /run"
     return 0
   }
+  sandbox_base "$name" || return 0
+  local args=("${sb[@]}" --ro-bind /var /var --dir /run --setenv VCN_AGENT_TTY /usr/bin/true --setenv TMPDIR /var/run)
   out=$(bwrap "${args[@]}" /usr/bin/bash -c '[[ $(stat -c %u /var/run) != "$EUID" && $(stat -c %u /run) == "$EUID" ]] || echo SETUP-WRONG-OWNERS
     /w/.agents/skills/verify-claudecode-nvim/scripts/vcn.sh launch; echo "rc=$?"' 2>&1) || rc=$?
   [[ $out != *SETUP-WRONG-OWNERS* ]] || fail "$name: the symlink is not another user's or its target is not this user's, so the case proves nothing: $out"
@@ -192,6 +200,48 @@ tmp_link_foreign_case() {
   echo "PASS $name: TMPDIR=/var/run, a symlink that another user owns, was refused before launch made anything"
 }
 tmp_link_foreign_case
+
+# agent-tty keeps every socket under the fixed dir /tmp/agent-tty and never checks who owns it. Another user who owns it, or who
+# can rename entries in it, could swap the socket dir of a run and answer every command. Launch makes the dir 0700 when it is
+# missing and refuses one that is not this user's alone.
+# att_root_case <case> <planting shell> <want> <mode> [bwrap args]: launch in a sandbox after the planting shell ran. <want> is
+# the text of a refusal, which must leave nothing behind, or empty when launch must get past the check (it stops later,
+# because no agent-tty passes doctor) and leave /tmp/agent-tty with <mode> and this user as its owner.
+att_root_case() {
+  local name=$1 plant=$2 want=$3 mode=$4 out rc=0
+  shift 4
+  sandbox_base "$name" || return 0
+  local args=("${sb[@]}" "$@" --setenv VCN_AGENT_TTY /usr/bin/false)
+  out=$(bwrap "${args[@]}" /usr/bin/bash -c "$plant"'
+    /w/.agents/skills/verify-claudecode-nvim/scripts/vcn.sh launch; echo "rc=$?"
+    [[ ! -e /tmp/out && -z $(ls -d /tmp/vcn.* 2>/dev/null) ]] || echo LEFT-BEHIND
+    stat -c "ROOT %a %u" /tmp/agent-tty 2>&1' 2>&1) || rc=$?
+  if [[ -n $want ]]; then
+    [[ $out == *"refusing the agent-tty socket dir: $want"* && $out == *"rc=1"* && $out != *VCN_STATE=* && $out != *LEFT-BEHIND* ]] ||
+      fail "$name: launch did not refuse /tmp/agent-tty with '$want', exit 1 and nothing left behind: $out"
+    echo "PASS $name: $want, and launch refused it before it made anything"
+  else
+    [[ $out != *"refusing the agent-tty socket dir"* && $out == *"rc=1"* && $out == *"ROOT $mode 0"* ]] ||
+      fail "$name: launch refused /tmp/agent-tty or did not leave it with mode $mode and this user as owner: $out"
+    echo "PASS $name: launch accepted /tmp/agent-tty and left it with mode $mode"
+  fi
+}
+host_root_dir=""
+for cand in /srv /opt /usr /etc; do
+  [[ $(stat -c '%u %a' -- "$cand" 2>/dev/null) == "0 755" ]] && {
+    host_root_dir=$cand
+    break
+  }
+done
+if [[ -n $host_root_dir ]]; then
+  att_root_case att-root-foreign : "/tmp/agent-tty is owned by another user" "" --ro-bind "$host_root_dir" /tmp/agent-tty
+else
+  echo "SKIP att-root-foreign: no host-root-owned 0755 dir to bind"
+fi
+att_root_case att-root-loose 'mkdir -m 777 /tmp/agent-tty' "/tmp/agent-tty is group- or world-writable" ""
+att_root_case att-root-link 'ln -s /tmp /tmp/agent-tty' "/tmp/agent-tty is a symlink" ""
+att_root_case att-root-made : "" 700
+att_root_case att-root-own-755 'mkdir -m 755 /tmp/agent-tty' "" 755
 # A newline at the end of a name is cut by a command substitution. The resolved TMPDIR is a dir with a newline at the end of its
 # name and mode 777, and a twin symlink without the newline leads to a safe dir: a launch that cuts the newline would take the twin.
 mkdir -m 700 "$TMP/nl" "$TMP/nl/safe"

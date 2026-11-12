@@ -385,6 +385,17 @@ unsafe_above() {
   [[ -z $why ]] || echo "$why"
 }
 
+# agent-tty keeps every socket under the fixed dir /tmp/agent-tty, whatever TMPDIR says, and never checks who owns it. Another
+# user who owns that dir, or who can rename entries in it, could swap the socket dir of a run and answer every command.
+# Make it 0700 when it is missing, and refuse one that is not this user's alone.
+ensure_att_root() {
+  local why
+  [[ -e /tmp/agent-tty || -L /tmp/agent-tty ]] || mkdir -m 700 -- /tmp/agent-tty 2>/dev/null || true
+  why=$(unsafe_dir /tmp/agent-tty)
+  [[ -z $why ]] || die "refusing the agent-tty socket dir: $why; agent-tty keeps its sockets in /tmp/agent-tty and does not check who owns it"
+  [[ -d /tmp/agent-tty ]] || die "cannot make /tmp/agent-tty, where agent-tty keeps its sockets"
+}
+
 # stat prints one record per dir, mode, owner and type and no name, so no path is ever read back from a line of text:
 # a name with a trailing space, a tab or a newline would be cut, and a twin symlink with the shorter name tested in its
 # place. The type is the raw mode in hex (%f): GNU stat translates the label that %F prints.
@@ -528,6 +539,7 @@ cmd_launch() {
   # symlinks of that path after launch has resolved them (agent-tty gets $VCN_STATE/tmp), so it no longer guards a later call.
   why=$(unsafe_walk "$given" "the state dir")
   [[ -z $why ]] || die "refusing TMPDIR: $why; set TMPDIR to a dir only you can write"
+  ensure_att_root
   # Short /tmp path: the nvim RPC socket path must stay under 108 bytes.
   # A signal while mktemp runs is recorded and acted on once the state dir exists. mktemp ignores signals, so it cannot
   # die between making the dir and printing its name.
