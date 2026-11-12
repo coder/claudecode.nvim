@@ -506,7 +506,7 @@ describe("The @ mention queue", function()
     assert.matches("connection failed while the @ mention /project/src/a%.lua was sent", errors[1])
   end)
 
-  it("D: with disable_broadcast_debouncing, a send right after the handshake waits for connection_wait_delay", function()
+  it("D: with debouncing off, a send right after the handshake still waits for connection_wait_delay", function()
     claudecode.state.config.disable_broadcast_debouncing = true
     local claude = claude_connects()
     claude.handshake()

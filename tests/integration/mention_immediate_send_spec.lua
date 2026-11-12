@@ -95,7 +95,10 @@ describe("disable_broadcast_debouncing and a Claude that just connected", functi
       return mentions_received() == 1
     end)
     local got = ms_since_handshake()
-    assert.is_true(got >= wait, string.format("Claude got the mention %d ms after its handshake, before %d ms", got, wait))
+    assert.is_true(
+      got >= wait,
+      string.format("Claude got the mention %d ms after its handshake, before %d ms", got, wait)
+    )
   end)
 
   it("a send once Claude is ready still goes out at once, with nothing queued", function()
