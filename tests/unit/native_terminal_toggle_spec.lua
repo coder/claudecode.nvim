@@ -8,7 +8,7 @@ describe("claudecode.terminal.native toggle behavior", function()
   -- of a process (pid "self" or "1": Neovim) or nil for a process that is gone. It returns the function that undoes it.
   local function stub_proc(names, reads)
     local open = io.open
-    io.open = function(path, mode)
+    rawset(io, "open", function(path, mode)
       local pid = type(path) == "string" and path:match("^/proc/([^/]+)/comm$")
       if not pid then
         return open(path, mode)
@@ -24,9 +24,9 @@ describe("claudecode.terminal.native toggle behavior", function()
         end,
         close = function() end,
       }
-    end
+    end)
     return function()
-      io.open = open
+      rawset(io, "open", open)
     end
   end
   local restore_proc
