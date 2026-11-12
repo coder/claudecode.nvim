@@ -32,6 +32,10 @@
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
+#   tool-nvim      the nvim that launch finds cannot run (a mise shim in a checkout that mise does not trust): launch names it
+#                  and the fix, where it once went on and blamed agent-tty
+#   tool-vcn-nvim  the nvim that VCN_NVIM names cannot run
+#   tool-jq        the jq that launch finds cannot run, with VCN_NVIM set: launch names jq
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 #   race           another launch makes the missing dir above VERIFY_OUT first, group-writable: launch uses it,
 #                  refuses it in the check after mkdir, and leaves it in place
@@ -238,6 +242,22 @@ refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-pro
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
 refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCRATCH_DIR=/proc
+# A tool that is found but cannot run, as a mise shim cannot in a checkout that mise does not trust, stops launch at once and
+# is named. The stand-in mise names only the real node and agent-tty, so `mise which` fails for the other tools, as it does
+# there, and only the stand-in under test cannot run.
+real_node=$(mise which node 2>/dev/null || command -v node) || fail "tool: no node to use"
+real_att=$(command -v agent-tty || mise which agent-tty) || fail "tool: no agent-tty to use"
+real_nvim=$(mise which nvim 2>/dev/null || command -v nvim) || fail "tool: no nvim to use"
+for dead in nvim jq; do
+  mkdir "$TMP/dead-$dead"
+  printf '#!/bin/sh\ncase "$*" in\n"which node") echo "%s" ;;\n"which agent-tty") echo "%s" ;;\n*) exit 1 ;;\nesac\n' \
+    "$real_node" "$real_att" >"$TMP/dead-$dead/mise"
+  printf '#!/bin/sh\necho "mise ERROR stand-in %s cannot run" >&2\nexit 1\n' "$dead" >"$TMP/dead-$dead/$dead"
+  chmod +x "$TMP/dead-$dead/mise" "$TMP/dead-$dead/$dead"
+done
+refused tool-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" PATH="$TMP/dead-nvim:$PATH"
+refused tool-vcn-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" VCN_NVIM="$TMP/dead-nvim/nvim"
+refused tool-jq "jq at $TMP/dead-jq/jq does not run: mise ERROR stand-in jq cannot run" PATH="$TMP/dead-jq:$PATH" VCN_NVIM="$real_nvim"
 # Two first launches can both find the default parent dir missing. The mkdir shim plays the launch that makes
 # $TMP/race/mid first, and makes it unsafe, so only the check after mkdir can refuse it.
 mkdir "$TMP/race" "$TMP/race-bin"

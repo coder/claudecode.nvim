@@ -42,8 +42,22 @@ die() {
   exit 1
 }
 
+# A tool that is found but cannot run, such as a mise shim in a checkout that mise does not trust, stops here and is named.
+# Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes doctor").
+runs_or_die() {
+  local why first
+  why=$("$2" --version 2>&1 >/dev/null </dev/null) || {
+    first=${why%%$'\n'*}
+    die "$1 at $2 does not run: ${first:-it printed no error}
+If it is a mise shim, mise may not trust this checkout: export MISE_TRUSTED_CONFIG_PATHS=$REPO, or run \`mise trust\` in it. Otherwise put a working $1 on PATH."
+  }
+}
+
 bin() {
-  mise which "$1" 2>/dev/null || command -v "$1" || die "$1 not found on PATH"
+  local exe
+  exe=$(mise which "$1" 2>/dev/null || command -v "$1") || die "$1 not found on PATH"
+  runs_or_die "$1" "$exe"
+  printf '%s\n' "$exe"
 }
 
 env_line() { printf '%s=%q\n' "$1" "$2"; }
@@ -482,6 +496,7 @@ cmd_launch() {
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
     [[ -f $nvim_exe && -x $nvim_exe ]] || die "VCN_NVIM=$VCN_NVIM is not an executable file"
+    runs_or_die nvim "$nvim_exe"
   else
     nvim_exe=$(bin nvim)
   fi
