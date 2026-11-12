@@ -455,7 +455,7 @@ describe("Tools Module", function()
         for _, tool in ipairs(tools.get_tool_list()) do
           table.insert(names, tool.name)
           expect(tool.description).to_be(tools.tools[tool.name].schema.description)
-          expect(tool.inputSchema).to_be(tools.tools[tool.name].schema.inputSchema)
+          assert.are.same(tools.tools[tool.name].schema.inputSchema, tool.inputSchema)
         end
         table.sort(names)
 
