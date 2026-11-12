@@ -56,6 +56,7 @@ CONSTANTS
   NativeHideKeepsLastWindow,     \* native.lua hide_terminal skips (or pcalls) closing the last window
   NativeFailCleansUp,            \* native.lua open_terminal closes the split, deletes the buffer, clears state
   NativeStartSurvivesClosedSplit, \* native.lua open_terminal goes on, with Claude hidden, when an autocmd of the start closed its split
+  NativeOpenSkipsDuringStart,    \* native.lua open_terminal returns while a start runs: an entry that an autocmd of the start calls starts none
   NativeStopsSnacksClaude,       \* native.lua stops the snacks provider's Claude before a start and in close
   SnacksOpenSkipsDuringStart,    \* snacks.lua M.open returns while its own Snacks.terminal.open runs
   SnacksMarksStartedTerminal,    \* snacks.lua M.open marks the buffer of a started terminal
@@ -81,7 +82,7 @@ VARIABLES
   loadable,  \* require("snacks") succeeds now
   seen,      \* what snacks.lua read from require("snacks") when the current module copy loaded it
   reloaded,  \* the one modeled reload happened
-  pc,        \* the Lua call in progress: idle, a start ("split", "started"), or a close in vim.wait
+  pc,        \* the Lua call in progress: idle, a start ("begin", "split", "started"), or a close in vim.wait
   asked,     \* ghost: the Claudes that ran when the :ClaudeCodeClose in progress began
   closed,    \* ghost: terminals a close began on
   job,       \* per terminal: "none" (before termopen), "running", "exited", "failed"
@@ -240,6 +241,10 @@ StopAll(w, S) == IF S = {} THEN w ELSE LET u == CHOOSE x \in S : TRUE IN StopAll
 (* when you are not; it covers M.simple_toggle). start = TRUE: the entry   *)
 (* calls open_terminal next.                                                *)
 
+(* A start of native is in progress: open_terminal runs start_terminal. Its vsplit and the creation of its buffer ("begin") *)
+(* run the autocmds of the user's before the buffer has a mark, and nothing is tracked until the start returns.            *)
+NativeStarting == pc.op \in {"begin", "split", "started"} /\ pc.p = "native"
+
 (* A tracked terminal with a valid buffer. is_valid scans the windows when the tracked one shows another buffer. *)
 NativeTracked(w, t, kind) ==
   IF kind = "open"
@@ -271,7 +276,8 @@ NativeEntry(w0, kind) ==
      ELSE LET wn == [w EXCEPT !.ntrack = None]                        \* is_valid() forgets an invalid buffer
               ad == Adoptable(wn)
           IN IF ad = {}
-             THEN {Out(IF NativeStopsSnacksClaude /\ OwnedStopOtherStops THEN StopAll(wn, Foreign(wn, "snacks")) ELSE wn, TRUE)}
+             THEN IF NativeOpenSkipsDuringStart /\ NativeStarting THEN {Out(wn, FALSE)}
+                  ELSE {Out(IF NativeStopsSnacksClaude /\ OwnedStopOtherStops THEN StopAll(wn, Foreign(wn, "snacks")) ELSE wn, TRUE)}
              ELSE UNION {NativeAdopted(wn, b, kind) : b \in ad}
 
 (* A start of snacks is in progress: Snacks.terminal.open runs and `terminal` is not set yet. *)
@@ -388,7 +394,7 @@ Calm == OpenBeforeCleanup \/ queue = {}
 TypeOK ==
   /\ cfg \in [provider : Providers, autoClose : BOOLEAN, hidden : BOOLEAN]
   /\ loadable \in BOOLEAN /\ seen \in BOOLEAN /\ reloaded \in BOOLEAN
-  /\ pc \in [op : {"idle", "split", "started", "waiting"}, t : Terms \cup {None},
+  /\ pc \in [op : {"idle", "begin", "split", "started", "waiting"}, t : Terms \cup {None},
              p : {None, "native", "snacks"}, re : BOOLEAN]
   /\ asked \subseteq Terms /\ closed \subseteq Terms
   /\ job \in [Terms -> {"none", "running", "exited", "failed"}]
@@ -431,17 +437,30 @@ YouOpen(kind) ==
   /\ \E o \in Entry(W, Prov, kind) :
        IF ~o.start THEN SetW(o.w) /\ UNCHANGED pc
        ELSE /\ HasFresh(o.w)
-            /\ SetW(Split(o.w, Prov, FreshT(o.w)))
-            /\ pc' = [op |-> "split", t |-> FreshT(o.w), p |-> Prov, re |-> FALSE]
+            /\ IF Prov = "native"
+               THEN /\ SetW(o.w)        \* the vsplit and the new buffer come in SplitRuns; autocmds can run before
+                    /\ pc' = [op |-> "begin", t |-> None, p |-> Prov, re |-> FALSE]
+               ELSE /\ SetW(Split(o.w, Prov, FreshT(o.w)))
+                    /\ pc' = [op |-> "split", t |-> FreshT(o.w), p |-> Prov, re |-> FALSE]
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
-(* A BufEnter autocmd (before termopen) or a TermOpen autocmd (after it)   *)
-(* calls open or a toggle while a start runs. The model allows one per     *)
-(* start.                                                                   *)
+(* An autocmd calls open or a toggle while a start runs: WinLeave, WinNew,  *)
+(* WinEnter or BufNew before the buffer has a mark ("begin"), BufEnter      *)
+(* before termopen, or TermOpen after it. The model allows one per start.   *)
+(* In "begin" a second start needs a second fresh terminal.                 *)
 AutocmdCalls ==
-  /\ AutocmdReenters /\ pc.op \in {"split", "started"} /\ ~pc.re
+  /\ AutocmdReenters /\ pc.op \in {"begin", "split", "started"} /\ ~pc.re
+  /\ pc.op = "begin" => Cardinality({t \in Terms : by[t] = None}) >= 2
   /\ \E kind \in {"open", "toggle"} : \E v \in AtomicEntry(W, kind) : SetW(v)
   /\ pc' = [pc EXCEPT !.re = TRUE]
+  /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
+
+(* native.lua start_terminal: the vsplit has run, nvim_create_buf made the  *)
+(* buffer, and the mark is set (NativeMarkBeforeTermopen).                  *)
+SplitRuns ==
+  /\ pc.op = "begin" /\ HasFresh(W)
+  /\ SetW(Split(W, "native", FreshT(W)))
+  /\ pc' = [op |-> "split", t |-> FreshT(W), p |-> "native", re |-> pc.re]
   /\ UNCHANGED <<cfg, loadable, seen, reloaded, asked, closed>>
 
 (* native.lua open_terminal pcall(vim.fn.termopen); in snacks, termopen in  *)
@@ -550,6 +569,7 @@ PluginReloads ==
 Next ==
   \/ \E kind \in {"open", "toggle"} : YouOpen(kind)
   \/ AutocmdCalls
+  \/ SplitRuns
   \/ TermopenRuns
   \/ StartReturns
   \/ YouClose
