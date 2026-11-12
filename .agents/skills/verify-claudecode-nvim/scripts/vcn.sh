@@ -56,10 +56,11 @@ bin() {
 # doctor"). The message takes the tool's name from its path, so no code line of this function holds the word jq or setsid.
 # The no-bare-tools case of proof-static.sh fails on a code line that names either as a bare call or as the default of a
 # parameter expansion, except the two resolutions, and it skips a line that is only a comment.
+# The error line is the first line that the tool prints on stdout or on stderr: a wrapper can print its failure to stdout.
 # The message gives no remedy: the fix that works depends on whether mise or PATH supplied the tool (bin() asks mise first).
 runs_or_die() {
   local why first tool=${1##*/}
-  why=$("$1" --version 2>&1 >/dev/null </dev/null) || {
+  why=$("$1" --version 2>&1 </dev/null) || {
     first=${why%%$'\n'*}
     die "$tool at $1 does not run: ${first:-it printed no error}
 If it is a mise shim, mise may not trust this checkout."

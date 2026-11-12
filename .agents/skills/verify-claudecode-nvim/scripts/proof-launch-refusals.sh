@@ -37,6 +37,8 @@
 #   tool-nvim      the nvim that launch finds cannot run (a mise shim in a checkout that mise does not trust): launch names it,
 #                  its path and its own error line, and gives no remedy, where it once went on and blamed agent-tty
 #   tool-vcn-nvim  the nvim that VCN_NVIM names cannot run: the same message
+#   tool-stdout-error  the nvim that VCN_NVIM names prints its error line to stdout only: the message shows that line, not
+#                  "it printed no error"
 #   tool-jq        the jq that launch finds cannot run, with VCN_NVIM set: launch names jq
 #   tool-node      the node that launch finds cannot run, with VCN_NVIM set: launch names node
 #   tool-setsid    the setsid that launch finds cannot run, with VCN_NVIM set: launch names setsid
@@ -344,6 +346,12 @@ refused tool-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in
 [[ $err == "vcn: $dead_nvim_msg" ]] || fail "tool-nvim: the message is not the tool, its path, its own error line and the possible cause alone (a remedy sentence is not allowed): $err"
 refused tool-vcn-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" VCN_NVIM="$TMP/dead-nvim/nvim"
 [[ $err == "vcn: $dead_nvim_msg" ]] || fail "tool-vcn-nvim: the message is not the tool, its path, its own error line and the possible cause alone (a remedy sentence is not allowed): $err"
+mkdir "$TMP/stdout-error"
+printf '#!/bin/sh\necho "stand-in nvim prints this error to stdout only"\nexit 1\n' >"$TMP/stdout-error/nvim"
+chmod +x "$TMP/stdout-error/nvim"
+refused tool-stdout-error "nvim at $TMP/stdout-error/nvim does not run: stand-in nvim prints this error to stdout only" VCN_NVIM="$TMP/stdout-error/nvim"
+[[ $err == "vcn: nvim at $TMP/stdout-error/nvim does not run: stand-in nvim prints this error to stdout only"$'\n'"If it is a mise shim, mise may not trust this checkout." ]] ||
+  fail "tool-stdout-error: the message is not the tool, its path, the error line from stdout and the possible cause alone: $err"
 refused tool-jq "jq at $TMP/dead-jq/jq does not run: mise ERROR stand-in jq cannot run" PATH="$TMP/dead-jq:$PATH" VCN_NVIM="$real_nvim"
 refused tool-node "node at $TMP/dead-node/node does not run: mise ERROR stand-in node cannot run" PATH="$TMP/dead-node:$PATH" VCN_NVIM="$real_nvim"
 refused tool-setsid "setsid at $TMP/dead-setsid/setsid does not run: mise ERROR stand-in setsid cannot run" \
