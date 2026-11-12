@@ -2,23 +2,29 @@ require("tests.busted_setup")
 
 -- actionlint and zizmor check the syntax of .github/workflows/test.yml, not what its cache settings mean, so an edit
 -- that loosens one of them keeps CI green. This spec reads the file as text, with no YAML parser, and checks each
--- setting where it sits in its step.
+-- setting where it sits in its step. A step that it cannot read, such as one in flow style, makes it fail.
 describe(".github/workflows/test.yml cache settings", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
-  local steps
+  local push_only = "${{ github.event_name == 'push' }}"
+  local steps, lines
 
   ---Every step is a `- ` item at six spaces. A step ends at the next step or at a line with less indent, and a comment
   ---line is not part of it.
   ---@return string[][] steps the lines of each step
-  local function read_steps()
+  ---@return string[] lines every line of the file that is not a comment, without its trailing comment
+  local function read_workflow()
     local path = root .. "/.github/workflows/test.yml"
     local file = assert(
       io.open(path, "r"),
       "cannot read " .. path .. " (a `git archive` tree has no .github folder: .gitattributes export-ignores it)"
     )
     local found = {}
+    local code = {}
     local current
     for line in file:lines() do
+      if not line:match("^%s*#") then
+        table.insert(code, (line:gsub("%s+#.*$", "")))
+      end
       if line:match("^      %- ") then
         current = {}
         table.insert(found, current)
@@ -31,39 +37,59 @@ describe(".github/workflows/test.yml cache settings", function()
     end
     file:close()
     assert(#found > 0, "no steps found in " .. path)
-    return found
+    return found, code
+  end
+
+  ---@param value string
+  ---@return string unquoted the value without one pair of YAML quotes around it
+  local function unquote(value)
+    local inner = value:match('^"(.*)"$')
+    if inner then
+      return inner
+    end
+    inner = value:match("^'(.*)'$")
+    if inner then
+      return (inner:gsub("''", "'"))
+    end
+    return value
   end
 
   ---Finds a setting by its place in the step: a key of the step itself sits at eight spaces (the `- name:` line
   ---counts), and an entry of its `with:` or `env:` block sits at ten.
   ---@param step string[]
-  ---@param key string
+  ---@param key string the key, which the file may write with a quote around it
   ---@param block string|nil `"with"` or `"env"`, the step key whose block holds `key`. nil for a key of the step
-  ---@return string|nil value the text after `key:`, without a trailing YAML comment
+  ---@return string|nil value the text after `key:`, without a trailing YAML comment and without quotes around it
   local function field(step, key, block)
     local current
     for _, text in ipairs(step) do
       local line = text:gsub("^      %- ", "        ", 1)
       local indent = #line:match("^ *")
-      local name, value = line:match("^ *([%w_%-]+):%s*(.-)%s*$")
+      local name, value = line:match("^ *[\"']?([%w_%-]+)[\"']?:%s*(.-)%s*$")
       if name and indent == 8 then
         current = name
       end
       local in_place = (indent == 8 and block == nil) or (indent == 10 and block ~= nil and current == block)
       if name == key and in_place then
-        return (value:gsub("%s+#.*$", ""))
+        return unquote((value:gsub("%s+#.*$", "")))
       end
     end
     return nil
   end
 
   ---@param step string[]
-  ---@return boolean caches_rocks whether the step uses actions/cache (plain, restore or save, with or without a quote
-  ---before the name) and one of its lines contains the text `.luarocks`: as `.luarocks`, `./.luarocks`, `~/.luarocks`,
-  ---an absolute path, or a line of a multi-line `path`. A path without that text (a glob such as `.luaroc*`, or a
-  ---parent folder) is not seen.
+  ---@param action string an action name without a version, such as `actions/cache`
+  ---@return boolean uses_it whether the step's `uses:` names the action
+  local function uses_action(step, action)
+    return (field(step, "uses") or ""):find(action, 1, true) == 1
+  end
+
+  ---@param step string[]
+  ---@return boolean caches_rocks whether the step uses actions/cache (plain, restore or save) and one of its lines
+  ---contains the text `.luarocks`: as `.luarocks`, `./.luarocks`, `~/.luarocks`, an absolute path, or a line of a
+  ---multi-line `path`. A path without that text (a glob such as `.luaroc*`, or a parent folder) is not seen.
   local function caches_rock_tree(step)
-    if not (field(step, "uses") or ""):gsub("^[\"']", ""):match("^actions/cache[/@]") then
+    if not uses_action(step, "actions/cache") then
       return false
     end
     for _, line in ipairs(step) do
@@ -88,7 +114,51 @@ describe(".github/workflows/test.yml cache settings", function()
   end
 
   before_each(function()
-    steps = read_steps()
+    steps, lines = read_workflow()
+  end)
+
+  describe("the workflow text", function()
+    -- field() reads block style only. A step or a list of steps in flow style (`- { uses: actions/cache@..., with: {
+    -- ... } }`) hides its settings, so the spec fails when an action name sits anywhere but in the `uses:` of a step it
+    -- reads. A name in another spelling of the case also fails: the match here ignores the case, the one in
+    -- uses_action() does not.
+    it("names actions/cache and jdx/mise-action only in steps it can read", function()
+      for _, action in ipairs({ "actions/cache", "jdx/mise-action" }) do
+        local named, read = 0, 0
+        for _, line in ipairs(lines) do
+          if line:lower():find(action, 1, true) then
+            named = named + 1
+          end
+        end
+        for _, step in ipairs(steps) do
+          if uses_action(step, action) then
+            read = read + 1
+          end
+        end
+        assert.are.equal(
+          named,
+          read,
+          action .. " is named on " .. named .. " lines, but only " .. read .. " steps have it as their uses:"
+        )
+      end
+    end)
+
+    it("keeps the cache of every jdx/mise-action step off a pull request", function()
+      -- The default of cache_save is true, so a step that sets neither would save the tool cache on a pull request.
+      local checked = 0
+      for _, step in ipairs(steps) do
+        if uses_action(step, "jdx/mise-action") then
+          checked = checked + 1
+          local cache_save = field(step, "cache_save", "with")
+          local safe = field(step, "cache", "with") == "false" or cache_save == "false" or cache_save == push_only
+          assert.is_true(
+            safe,
+            "this jdx/mise-action step saves its cache on a pull request: " .. tostring(field(step, "name"))
+          )
+        end
+      end
+      assert.is_true(checked >= 1, "no jdx/mise-action step found")
+    end)
   end)
 
   describe("the Set up mise step", function()
@@ -118,15 +188,14 @@ describe(".github/workflows/test.yml cache settings", function()
     end)
 
     it("saves the cache only on a push", function()
-      assert.are.equal("${{ github.event_name == 'push' }}", field(step, "cache_save", "with"))
+      assert.are.equal(push_only, field(step, "cache_save", "with"))
     end)
 
     it("retries a failed download at least 6 times", function()
       local retries = field(step, "MISE_HTTP_RETRIES", "env")
       assert.is_string(retries, "the step sets no MISE_HTTP_RETRIES under env:")
-      local digits = retries:match("^[\"']?(%d+)[\"']?$")
-      assert.is_truthy(digits, "MISE_HTTP_RETRIES must be an integer: " .. retries)
-      assert.is_true(tonumber(digits) >= 6, "MISE_HTTP_RETRIES is below 6: " .. retries)
+      assert.is_truthy(retries:match("^%d+$"), "MISE_HTTP_RETRIES must be an integer: " .. retries)
+      assert.is_true(tonumber(retries) >= 6, "MISE_HTTP_RETRIES is below 6: " .. retries)
     end)
   end)
 
@@ -168,7 +237,12 @@ describe(".github/workflows/test.yml cache settings", function()
     it("restores the key that the rock list in mise.toml decides", function()
       local key = field(restore, "key", "with")
       assert.is_string(key, "the restore step has no key under with:")
-      assert.is_truthy(key:find("hashFiles('mise.toml')", 1, true), key)
+      -- A version after the prefix (`luarocks-v2-`) is allowed, as `v1` is in the mise key: bump it to drop a tree.
+      local bare = key:gsub("^luarocks%-v%d+%-", "luarocks-")
+      assert.is_truthy(
+        bare:match("^luarocks%-%${{ runner%.os }}%-%${{ hashFiles%('mise%.toml'%) }}$"),
+        "the restore key must be luarocks-${{ runner.os }}-${{ hashFiles('mise.toml') }}: " .. key
+      )
     end)
 
     it("restores from the exact key only", function()
