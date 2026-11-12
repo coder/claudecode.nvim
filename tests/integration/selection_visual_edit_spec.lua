@@ -29,6 +29,18 @@ describe("a visual selection released after the buffer changed, with the real pl
     end, 5)
   end
 
+  -- After an operator the plugin reports the cursor once its flush has run, and a busy host can delay that past any fixed
+  -- wait (get_latest_selection() is nil until then). So wait until it holds a cursor, then let the debounce and the
+  -- demotion run, so that a selection sent late would show.
+  local function wait_for_cursor()
+    local held = vim.wait(5000, function()
+      local latest = selection.get_latest_selection()
+      return latest ~= nil and latest.selection.isEmpty
+    end, 5)
+    assert.is_true(held, "the plugin holds a cursor after the operator")
+    wait(200)
+  end
+
   local function start()
     claudecode.setup({
       auto_start = false,
@@ -64,15 +76,39 @@ describe("a visual selection released after the buffer changed, with the real pl
     return last and last.params and last.params.text
   end
 
-  -- Nothing that Claude was sent may carry the text that the marks point at after the operator.
-  local function sent_no_selection()
-    for _, message in ipairs(sent) do
-      local params = message.params
+  -- Nothing that Claude was sent after the operator (the messages from number `from` + 1 on) may carry the text that
+  -- the marks point at after it. What was sent before is not the operator's doing: when something delays the keys
+  -- past the debounce (a slow :write, a busy host), the debounce sends the selection that you are still making, and
+  -- that is right. assert_is_the_selection checks that it is that selection, with its text and its range.
+  local function sent_no_selection(from)
+    for index = (from or 0) + 1, #sent do
+      local params = sent[index].params
       if params and params.selection and not params.selection.isEmpty then
         return false, params.text
       end
     end
     return true
+  end
+
+  -- What Claude was told last must be a cursor: whatever the debounce sent before the operator, the plugin must have sent
+  -- something after it that clears it, and not only forgotten it in its own state.
+  local function assert_last_sent_is_a_cursor()
+    local last = sent[#sent]
+    assert.is_truthy(last, "something was sent")
+    assert.is_true(last.params.selection.isEmpty, "the last selection_changed is a cursor")
+  end
+
+  -- Every selection (not a cursor) among the first `count` messages is `alpha` of the first line, which the tests select
+  -- with `ve`: the text and the range, so a right text at a wrong range fails too.
+  local function assert_is_the_selection(count)
+    for index = 1, count do
+      local params = sent[index].params
+      if params and params.selection and not params.selection.isEmpty then
+        assert.are.equal("alpha", params.text)
+        assert.are.same({ line = 0, character = 0 }, params.selection.start)
+        assert.are.same({ line = 0, character = 5 }, params.selection["end"])
+      end
+    end
   end
 
   -- A plugin edits the second line, without moving the selection on the first.
@@ -164,11 +200,12 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(50)
 
       press("ved")
-      wait(400)
+      wait_for_cursor()
 
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for c (vec)", function()
@@ -177,11 +214,12 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(50)
 
       press("vecfoo<Esc>")
-      wait(400)
+      wait_for_cursor()
 
       assert.are.equal("foo beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for a linewise > (Vj>)", function()
@@ -190,10 +228,11 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(50)
 
       press("Vj>")
-      wait(400)
+      wait_for_cursor()
 
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for d after a plugin edited another line in visual mode", function()
@@ -205,12 +244,15 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(20)
       plugin_edits_line_two()
       wait(20)
+      local before_operator = #sent
       press("d")
-      wait(400)
+      wait_for_cursor()
 
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
-      assert.are.same({ true }, { sent_no_selection() })
+      assert.are.same({ true }, { sent_no_selection(before_operator) })
+      assert_is_the_selection(before_operator)
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for d after a :write in visual mode", function()
@@ -223,12 +265,15 @@ describe("a visual selection released after the buffer changed, with the real pl
       wait(20)
       vim.cmd("silent write")
       wait(20)
+      local before_operator = #sent
       press("d")
-      wait(400)
+      wait_for_cursor()
 
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
-      assert.are.same({ true }, { sent_no_selection() })
+      assert.are.same({ true }, { sent_no_selection(before_operator) })
+      assert_is_the_selection(before_operator)
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
   end)
 
@@ -305,12 +350,15 @@ describe("a visual selection released after the buffer changed, with the real pl
 
       press("ve")
       wait(20)
+      local before_operator = #sent
       press("<Cmd>lua vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'second line changed' })<CR>d")
-      wait(400)
+      wait_for_cursor()
 
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
-      assert.are.same({ true }, { sent_no_selection() })
+      assert.are.same({ true }, { sent_no_selection(before_operator) })
+      assert_is_the_selection(before_operator)
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     -- One typeahead for an operator and the next selection: the edit of the first must not count for the second.
@@ -324,6 +372,34 @@ describe("a visual selection released after the buffer changed, with the real pl
 
       assert.are.equal("gamma", held_text())
       assert.are.equal("gamma", last_sent_text())
+    end)
+  end)
+
+  -- The schedule that checks an edit runs after the command or callback that made it. A key that is read first, with no
+  -- main-loop turn before it, reaches the flush on Esc with an edit that nobody checked. (A key that a UI sends while a
+  -- callback runs is another way to get there, but vim.wait gives it a main-loop turn first, so replays/ has it.)
+  describe("when a key is read before the check of an edit", function()
+    it("holds the selection when an autocmd edits another line as visual mode starts and Esc follows", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      local group = vim.api.nvim_create_augroup("ClaudeCodeSelectionVisualEditSpec", { clear = true })
+      vim.api.nvim_create_autocmd("ModeChanged", {
+        group = group,
+        pattern = "n:v",
+        once = true,
+        callback = function()
+          vim.api.nvim_buf_set_text(0, 1, 0, 1, 6, { "SECOND" })
+        end,
+      })
+      wait(50)
+
+      press("ve<Esc>")
+      wait(400)
+      vim.api.nvim_del_augroup_by_id(group)
+
+      assert.are.equal("SECOND line", vim.api.nvim_buf_get_lines(0, 1, 2, false)[1])
+      assert.are.equal("alpha", held_text())
+      assert.are.equal("alpha", last_sent_text())
     end)
   end)
 
