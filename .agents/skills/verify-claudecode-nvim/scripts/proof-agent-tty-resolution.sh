@@ -29,6 +29,7 @@
 #                     can write: launch accepts it, and after another user repoints the second symlink, `record` still
 #                     writes no byte of theirs into the evidence dir, because no agent-tty call of vcn.sh reads the caller's TMPDIR
 #   tmp-later-tmpdir  a command run with a TMPDIR that does not exist works: agent-tty makes its staging dirs in the state dir
+#   tmp-removed       a run without $VCN_STATE/tmp, as an older vcn.sh left it, works: `record` makes the dir (0700) and writes a WebM
 #   state-count       a stat that answers for one dir fewer than the walk asked for (a shim drops the record of the loose
 #                     dir above the state dir) makes the walk refuse, not pass
 #   state-newline     a state dir whose name ends in a newline is accepted: the check reads its resolved path whole
@@ -1115,6 +1116,24 @@ tmp_later_case() {
   cases=$((cases + 1))
 }
 
+# A run that an older vcn.sh started has no $VCN_STATE/tmp. att() must make it, mode 0700, before it gives agent-tty that TMPDIR,
+# or the WebM export of record fails. The case removes the dir that launch made to look like such a run.
+tmp_removed_case() {
+  local name=tmp-removed r=0 mode
+  launch "$name" "$good_path"
+  ((rc == 0)) || fail "$name" "launch exited $rc: $out"
+  [[ $state == "$priv"/vcn.?????? ]] || fail "$name" "launch printed a state dir outside the proof's private dir: $state"
+  rm -rf -- "$state/tmp"
+  env PATH="$good_path" VCN_STATE="$state" "$V" record r2 >"$TMP/$name-record.txt" 2>&1 || r=$?
+  mode=$(stat -c %a -- "$state/tmp" 2>/dev/null || echo missing)
+  stop "$good_path"
+  ((r == 0)) || fail "$name" "record without $state/tmp exited $r: $(tail -n 2 "$TMP/$name-record.txt")"
+  [[ -s $TMP/out-$name/r2.webm ]] || fail "$name" "record wrote no r2.webm"
+  [[ $mode == 700 ]] || fail "$name" "record left $state/tmp with mode $mode, not 700"
+  echo "ok $name: record made $state/tmp again with mode 0700 and wrote a WebM"
+  cases=$((cases + 1))
+}
+
 signal_symlink_case() {
   local name=signal-symlink gate=$TMP/gate-signal-symlink sockdir
   ln -s "$priv" "$TMP/priv-link"
@@ -1176,6 +1195,7 @@ state_owner_case
 state_ancestor_case
 tmp_multihop_case
 tmp_later_case
+tmp_removed_case
 signal_symlink_case
 sigterm_case
 echo "CASES $cases"
