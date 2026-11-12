@@ -18,7 +18,7 @@ Layers, top to bottom:
 
 ### Lifecycle and messaging (`init.lua`)
 
-- `M.state`: `{ server, port, auth_token, handlers, ping_timer }` [server/init.lua:M.state]
+- `M.state`: `{ server, port, auth_token, handlers, ping_timer, in_flight }`, where `in_flight` holds the requests whose handler is running [server/init.lua:M.state]
 - `M.start(config, auth_token) -> ok, port|err`: registers handlers, calls `tools.setup(M)`, creates the TCP server, and starts the ping timer. It returns "Unknown server creation error" when `create_server` fails without a message [server/init.lua:M.start]
 - `M.stop() -> ok, err?`: stops the ping timer, closes pending diffs, answers each request whose handler is still running, stops the TCP server, and clears deferred responses [server/init.lua:M.stop]
 - `M.register_handlers()`: handles `initialize`, `notifications/initialized`, `prompts/list`, `tools/list`, and `tools/call` [server/init.lua:M.register_handlers]

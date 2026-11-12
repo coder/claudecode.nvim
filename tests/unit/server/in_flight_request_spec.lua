@@ -103,3 +103,39 @@ describe("a request whose handler is still running when the server stops", funct
     assert.same({}, replies)
   end)
 end)
+
+-- The answer must leave before the TCP server stops. After `tcp_server.stop_server` the clients are closing, and after
+-- `M.state.server = nil` `send_response` sends nothing, so an answer moved there never reaches Claude. The describe
+-- above replaces `send_response` and `stop_server`, so it cannot see the order. This one records what reaches the socket.
+describe("server.stop with a request in flight, as the socket sees it", function()
+  local server, tcp, saved, order
+
+  before_each(function()
+    package.loaded["claudecode.server.init"] = nil
+    server = require("claudecode.server.init")
+    tcp = require("claudecode.server.tcp")
+    saved = { send_to_client = tcp.send_to_client, stop_server = tcp.stop_server }
+    order = {}
+    tcp.send_to_client = function(_, client_id, message)
+      local answered = message:find("-32603", 1, true) and message:find('"id":9', 1, true)
+      order[#order + 1] = client_id .. (answered and " answered 9 with -32603" or (" sent " .. message))
+    end
+    tcp.stop_server = function()
+      order[#order + 1] = "stop_server"
+    end
+    server.state.server = {} -- a running server, as far as stop can tell
+    server.state.handlers.slow = function()
+      server.stop()
+    end
+  end)
+
+  after_each(function()
+    tcp.send_to_client, tcp.stop_server = saved.send_to_client, saved.stop_server
+  end)
+
+  it("sends the -32603 answer before it stops the TCP server", function()
+    server._handle_request({ id = "c1" }, { jsonrpc = "2.0", id = 9, method = "slow", params = {} })
+
+    assert.same({ "c1 answered 9 with -32603", "stop_server" }, order)
+  end)
+end)

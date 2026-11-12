@@ -150,10 +150,10 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua 7a2c6c65948073e5
+file lua/claudecode/server/init.lua 8a3d1b16b91dd5a7
 block server_stop            506e2e53358dc947
 block on_disconnect          a0ce86cede4af786
-block handle_request         dcc066af67f9f88e
+block handle_request         9cdbba664a85319f
 block setup_deferred         f9381caaae0fe517
 site lua/claudecode/server/init.lua: _G.claude_deferred_responses = {} @ function M._setup_deferred_response(deferred_info)
 site lua/claudecode/server/init.lua: _G.claude_deferred_responses = {} @ function M.stop()
