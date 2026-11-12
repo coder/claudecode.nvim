@@ -1,7 +1,7 @@
 == lua/claudecode/config.lua
 file lua/claudecode/config.lua 787fa0432d1d77d7
 == lua/claudecode/cwd.lua
-file lua/claudecode/cwd.lua 1bc1e1cafb346847
+file lua/claudecode/cwd.lua eea1bfab1f40eb51
 == lua/claudecode/diff.lua
 file lua/claudecode/diff.lua eea6b4bcdd655787
 block resolve_saved          46d5f3f732711fe1

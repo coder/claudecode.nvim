@@ -176,9 +176,28 @@ describe("the git root of a folder whose name holds unusual characters", functio
       assert.equals(realpath(repo), from_dot and realpath(from_dot), "from .")
       assert.equals(realpath(repo), from_child and realpath(from_child), "from a folder inside the current one")
     end)
+    it("goes up from a start folder that ends in .., when git cannot run", function()
+      local outer = repo_in("dotdot", "outer", function(path)
+        vim.fn.mkdir(path .. "/.git", "p")
+      end)
+      vim.fn.mkdir(outer .. "/a/b/.git", "p")
+      local saved_cwd = vim.fn.getcwd()
+      vim.cmd("cd " .. vim.fn.fnameescape(outer .. "/a/b"))
+
+      local from_parent = without_git(function()
+        return cwd.git_root("..")
+      end)
+      vim.cmd("cd " .. vim.fn.fnameescape(saved_cwd))
+
+      -- ".." is outer/a, which has no .git folder: its repository is outer, not outer/a/b below it.
+      assert.equals(realpath(outer), from_parent and realpath(from_parent))
+    end)
   end)
 
-  describe("resolve with git_repo_cwd", function()
+  -- The next two blocks test `cwd.resolve`, not the terminal. `terminal.lua:build_config` does not call it: it expands
+  -- a static `cwd` and a `cwd_provider` result with `vim.fn.expand` itself, so these cases say nothing about what the
+  -- terminal does with a folder name that holds `$` or a backslash.
+  describe("cwd.resolve with git_repo_cwd", function()
     it("returns the repository of a file folder whose name has a space and a bracket, when git cannot run", function()
       local repo = repo_in("resolve", "my [repo]", function(path)
         vim.fn.mkdir(path .. "/.git", "p")
@@ -192,7 +211,7 @@ describe("the git root of a folder whose name holds unusual characters", functio
     end)
   end)
 
-  describe("a folder given as a setting", function()
+  describe("cwd.resolve with a folder given as a setting", function()
     it("still expands ~ and $VAR when the text is not a folder", function()
       local repo = repo_in("setting", "proj", function(path)
         vim.fn.mkdir(path .. "/.git", "p")

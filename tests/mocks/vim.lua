@@ -698,6 +698,10 @@ local vim = {
       return "/home/user/project"
     end,
 
+    simplify = function(path)
+      return path
+    end,
+
     fnamemodify = function(path, modifier)
       if modifier == ":t" then
         return path:match("([^/]+)$") or path

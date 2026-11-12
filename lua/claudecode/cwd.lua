@@ -62,7 +62,8 @@ function M.git_root(start_dir)
   -- Fallback: search for .git directory upward. The walk tests each folder as written. `vim.fn.finddir` reads its path
   -- as a list ('path' option syntax), so a space or a comma in the path split it, and a `;` ended it. It starts from the
   -- full path, so a relative `start_dir` also reaches the folders above the current one.
-  local dir = vim.fn.fnamemodify(start_dir, ":p:h")
+  -- Before Neovim 0.11, `:p` keeps a last `..`, and `:h` of `a/b/..` is `a/b`: simplify first.
+  local dir = vim.fn.fnamemodify(vim.fn.simplify(vim.fn.fnamemodify(start_dir, ":p")), ":h")
   while true do
     if vim.fn.isdirectory(dir .. "/.git") == 1 then
       return dir
