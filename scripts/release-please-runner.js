@@ -46,6 +46,10 @@ const LOCAL_PRETTIER_BIN = join(
 
 const execFileAsync = promisify(execFile);
 
+// The changelog that the update reads and writes. The formatter takes it as the name of the text on its standard input,
+// and the refusal of an unformatted changelog names it.
+const CHANGELOG_FILE = "CHANGELOG.md";
+
 // The lines that the update anchors on, and no others: an H2 or H3 at the start of a line, one space after the marks,
 // the text `[Unreleased]` or `Unreleased`, and nothing but blanks after it. These are the lines that the runner anchored
 // on before it used a parser, and `## [Unreleased]` and `## Unreleased` are the lines that Communique 1.1.3 reads a
@@ -596,13 +600,13 @@ function assertCommuniqueReadsTheSameDraft(content, lines, endings, draft) {
  * thematic break or a heading of another level is refused, and so is a line that no paragraph or heading holds (a link
  * reference definition leaves no node). An empty list item is a marker alone, and it is read. Each of the refused
  * shapes can end a section where a reader of lines sees none, hide the lines after it, or hold an older release. The
- * error names the line and the node type, and it comes before anything is formatted. A code fence keeps the error of
- * the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique reads a
- * draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An empty
- * draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it
- * read. Where the draft starts and ends is not checked here (see `assertCommuniqueReadsTheSameDraft`). The cost: a
- * draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a maintainer
- * edits it.
+ * error names the line and the node type, and it comes before the new changelog is formatted. A code fence keeps the
+ * error of the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique
+ * reads a draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An
+ * empty draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the
+ * text it read. Where the draft starts and ends is not checked here (see `assertCommuniqueReadsTheSameDraft`). The
+ * cost: a draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a
+ * maintainer edits it.
  */
 function assertDraftIsPlain(lines, draft) {
   assert.ok(Array.isArray(lines), "lines must be an array");
@@ -695,13 +699,38 @@ function formatChangelogMarkdown(content) {
   assert.equal(typeof content, "string", "content must be a string");
   return execFileSync(
     resolvePrettierBin(),
-    ["--stdin-filepath", "CHANGELOG.md"],
+    ["--stdin-filepath", CHANGELOG_FILE],
     {
       encoding: "utf8",
       input: content,
       maxBuffer: 16 * 1024 * 1024,
     },
   );
+}
+
+/**
+ * Throws unless the formatter keeps `content` as it is. That is what `prettier --check` asks, and what `mise run
+ * format-check` runs on CHANGELOG.md in CI. A changelog that the formatter would rewrite is not read the same way
+ * before and after the rewrite. A bare CR is no line break to Communique, and the update ends a line there. So a
+ * heading after a bare CR is hidden from Communique, and the update writes it on a line of its own: the file that
+ * Communique reads next has an Unreleased heading or a release heading that it did not read before. The update
+ * refuses before it reads the draft, so it never builds on a text that the two read differently, and it writes
+ * nothing. The check runs the formatter that the update runs on its output, so the changelog that the update writes
+ * passes it, as long as the formatter keeps its own output as it is.
+ */
+function assertChangelogIsFormatted(content) {
+  assert.equal(typeof content, "string", "content must be a string");
+  if (formatChangelogMarkdown(content) !== content) {
+    throw new Error(
+      `${CHANGELOG_FILE} is not formatted: Prettier would change it. ` +
+        "The update refuses it, because the change can move a heading that Communique and the update read. " +
+        "A bare CR does that: Communique does not end a line at it, but the update does. " +
+        `Run \`mise run format\`, then review its diff of ${CHANGELOG_FILE}. ` +
+        "Prettier can change what an entry says, for example around an identifier with underscores. " +
+        "Fix such a line by hand, for example by putting the identifier in backticks. " +
+        "Then run `mise run format` again until it changes nothing, and review its diff again.",
+    );
+  }
 }
 
 /**
@@ -743,15 +772,17 @@ function formatKeepingHeadings(markdown, entry, kept) {
  * at the top, clears its draft body after Communique reconciles it into the
  * release entry, and inserts the new release directly below the anchor.
  *
- * The draft is read with commonmark.js. The anchor is a heading line that Communique reads a draft under (see
- * `UNRELEASED_LINE_PATTERN`). The draft is the blocks from the anchor to the next top-level heading of the same level or
- * a higher one, or to the end of the text. It can hold only paragraphs, lists and H3 headings (see
- * `assertDraftIsPlain`), and the update refuses anything else before it formats. A draft under an H3 anchor is
- * refused, because Communique reads none. An H3 heading directly under `## [Unreleased]` is a subsection of the draft
- * whatever it says, so `### [0.3.0]` there is dropped with the draft. The update and Communique must read the draft
- * between the same two lines, or the update refuses (see `assertCommuniqueReadsTheSameDraft`): the draft ends at the
- * heading `## <version>` where Communique ends it, or at the end of the text. After the formatter runs, the headings of
- * the new entry and the older releases must be unchanged (see `formatKeepingHeadings`).
+ * The update refuses a changelog that the formatter would change, before it reads anything (see
+ * `assertChangelogIsFormatted`). The draft is read with commonmark.js. The anchor is a heading line that Communique
+ * reads a draft under (see `UNRELEASED_LINE_PATTERN`). The draft is the blocks from the anchor to the next top-level
+ * heading of the same level or a higher one, or to the end of the text. It can hold only paragraphs, lists and H3
+ * headings (see `assertDraftIsPlain`), and the update refuses anything else before it formats the new changelog. A
+ * draft under an H3 anchor is refused, because Communique reads none. An H3 heading directly under `## [Unreleased]` is
+ * a subsection of the draft whatever it says, so `### [0.3.0]` there is dropped with the draft. The update and
+ * Communique must read the draft between the same two lines, or the update refuses (see
+ * `assertCommuniqueReadsTheSameDraft`): the draft ends at the heading `## <version>` where Communique ends it, or at
+ * the end of the text. After the formatter runs, the headings of the new entry and the older releases must be unchanged
+ * (see `formatKeepingHeadings`).
  */
 class UnreleasedAwareChangelog {
   constructor(options) {
@@ -770,7 +801,9 @@ class UnreleasedAwareChangelog {
   }
 
   updateContent(content) {
-    // Every line ending becomes LF, as CRLF already did.
+    assertChangelogIsFormatted(content ?? "");
+    // Prettier writes LF, so the check refuses a CR and a CR LF. A formatter that keeps them (a test's) still gets every
+    // line ending as LF, as CRLF already did.
     const { lines, endings } = splitLines(content ?? "");
     const existing = lines.join("\n");
     const entry = this.changelogEntry.trim();
