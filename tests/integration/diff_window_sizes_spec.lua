@@ -364,11 +364,6 @@ describe("openDiff window sizes", function()
     assert.equal(user_win, vim.api.nvim_get_current_win())
   end)
 
-  if vim.fn.has("nvim-0.9") ~= 1 then
-    pending("the unified layout needs Neovim 0.9")
-    return
-  end
-
   it("gives the windows of the user's own diff back their sizes after a unified diff", function()
     use_layout("unified")
     vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/b.txt"))
@@ -433,6 +428,11 @@ describe("openDiff window sizes", function()
     local call = call_open_diff("a.txt")
 
     assert.is_truthy(call.error, "the setup failed")
+    assert.equal("Diff setup failed", call.error.message)
+    assert.is_truthy(
+      tostring(call.error.data):find("a user's autocmd failed", 1, true),
+      "the setup failed because of the user's autocmd: " .. vim.inspect(call.error.data)
+    )
     assert.are.same(before, window_sizes())
     assert.equal(user_win, vim.api.nvim_get_current_win(), "the cursor is back in the user's window")
   end)
