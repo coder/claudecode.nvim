@@ -3,11 +3,11 @@ file lua/claudecode/config.lua 787fa0432d1d77d7
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 35b7af3572d13018
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 8585b5e799d506cc
+file lua/claudecode/diff.lua 2dafd67f00f45cde
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
-block setup_blocking         257189386f7b6147
+block setup_blocking         b96c84e0961817fc
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
