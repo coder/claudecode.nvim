@@ -1377,10 +1377,11 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
   }
 
   -- For tests or when explicitly configured, broadcast immediately without queuing, unless older mentions still wait
-  -- in the queue: this one must not overtake them.
+  -- in the queue (this one must not overtake them), or every connected Claude completed its handshake less than
+  -- connection_wait_delay ms ago and still starts up: the queue then sends it once one of them is ready.
   local immediate = (M.state.config and M.state.config.disable_broadcast_debouncing)
     or (package.loaded["busted"] and not (M.state.config and M.state.config.enable_broadcast_debouncing_in_tests))
-  if immediate and #mention_queue() == 0 then
+  if immediate and #mention_queue() == 0 and (ms_until_a_client_is_ready() or 0) == 0 then
     local broadcast_success =
       M.state.server.broadcast("at_mentioned", params, report_unwritten("command", formatted_path))
     if broadcast_success then
