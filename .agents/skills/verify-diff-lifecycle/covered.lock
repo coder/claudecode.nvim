@@ -1,13 +1,13 @@
 == lua/claudecode/config.lua
-file lua/claudecode/config.lua 787fa0432d1d77d7
+file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
-file lua/claudecode/cwd.lua 55d26ea362173afa
+file lua/claudecode/cwd.lua 35b7af3572d13018
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua a21129cdc802e417
+file lua/claudecode/diff.lua eea6b4bcdd655787
 block resolve_saved          46d5f3f732711fe1
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
-block setup_blocking         5873be8346fa1b52
+block setup_blocking         b96c84e0961817fc
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
@@ -146,7 +146,7 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua a9c0d153b61e3078
+file lua/claudecode/server/init.lua 8da8851fff781946
 block server_stop            4dae0bf675cf2cc1
 block on_disconnect          a0ce86cede4af786
 block handle_request         b74ff7dc2e55a2b8
@@ -161,7 +161,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 0cfb4b3ed4c138a1
+file lua/claudecode/server/tcp.lua 8be1dd96671223ea
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
@@ -169,7 +169,7 @@ file lua/claudecode/terminal.lua 4fed625dd5199b09
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 3c6a45dc04eb59ce
+file lua/claudecode/terminal/native.lua 0e9b890a642c84f7
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/owned.lua
@@ -211,7 +211,7 @@ file lua/claudecode/tools/open_file.lua b277cbe8b86ac7c8
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua dbd0dcb8b70c8107
+file lua/claudecode/types.lua 69e2907853403759
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua c4a21fe74858afe2
 == lua/claudecode/visual_commands.lua
