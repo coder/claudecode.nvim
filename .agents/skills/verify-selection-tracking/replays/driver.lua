@@ -61,10 +61,14 @@ function M.run(opts, steps, verdict)
     return true
   end
   local selection = require("claudecode.selection")
+  local version = vim.version()
   say(
     string.format(
-      "nvim %s, debounce_ms=%d, visual_demotion_delay_ms=%d",
-      tostring(vim.version()),
+      "nvim %d.%d.%d%s, debounce_ms=%d, visual_demotion_delay_ms=%d",
+      version.major,
+      version.minor,
+      version.patch,
+      version.prerelease and "-dev" or "",
       selection.state.debounce_ms,
       selection.state.visual_demotion_delay_ms
     )
