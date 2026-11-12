@@ -15,22 +15,34 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
     return vim.rpcrequest(chan, "nvim_exec_lua", code, { ... })
   end
 
+  -- One child Neovim serves the whole file, and each case starts from a clean editor in it.
   before_each(function()
-    chan = vim.fn.jobstart({
-      vim.v.progpath,
-      "--embed",
-      "--headless",
-      "-u",
-      "NONE",
-      "-i",
-      "NONE",
-      "--cmd",
-      "set rtp^=" .. vim.fn.getcwd(),
-    }, { rpc = true })
-    assert.is_true(chan > 0, "could not start a child Neovim")
+    if not chan then
+      chan = vim.fn.jobstart({
+        vim.v.progpath,
+        "--embed",
+        "--headless",
+        "-u",
+        "NONE",
+        "-i",
+        "NONE",
+        "--cmd",
+        "set rtp^=" .. vim.fn.getcwd(),
+      }, { rpc = true })
+      assert.is_true(chan > 0, "could not start a child Neovim")
+    end
     call([[
       vim.o.swapfile = false
       vim.o.columns, vim.o.lines = 160, 40
+      local diff = require("claudecode.diff")
+      local tools = require("claudecode.tools.init")
+      pcall(diff._cleanup_all_active_diffs, "spec reset")
+      vim.cmd("silent! tabonly!")
+      vim.cmd("silent! only!")
+      vim.cmd("silent! %bwipeout!")
+      vim.api.nvim_create_augroup("events_spec", { clear = true })
+      vim.o.eventignore = ""
+      _G.armed, _G.fired, _G.target = nil, nil, nil
       _G.dir = vim.fn.tempname()
       vim.fn.mkdir(_G.dir, "p")
       _G.file = _G.dir .. "/existing.txt"
@@ -38,8 +50,6 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
       vim.fn.writefile({ "one", "two" }, _G.file)
       vim.fn.writefile({ "other" }, _G.other)
       vim.cmd("edit " .. vim.fn.fnameescape(_G.file))
-      local diff = require("claudecode.diff")
-      local tools = require("claudecode.tools.init")
       tools.setup()
       diff.setup({ terminal = { provider = "none" }, diff_opts = { layout = "vertical" } })
       _G.claude_deferred_responses = {}
@@ -70,10 +80,6 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
         return count
       end
     ]])
-  end)
-
-  after_each(function()
-    pcall(vim.fn.jobstop, chan)
   end)
 
   describe("a window that gets diff mode from a command while the diff is open", function()
@@ -213,6 +219,7 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
         local seen = {}
         for _, event in ipairs({ "BufLeave", "BufWinLeave", "BufUnload", "BufWipeout", "BufEnter", "BufWinEnter" }) do
           vim.api.nvim_create_autocmd(event, {
+            group = "events_spec",
             callback = function(args)
               if _G.armed then
                 local name = vim.api.nvim_buf_get_name(args.buf)
@@ -278,6 +285,7 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
         local function register()
           _G.armed = false
           vim.api.nvim_create_autocmd(event, {
+            group = "events_spec",
             callback = function()
               if _G.armed and vim.api.nvim_get_current_win() == _G.target and vim.api.nvim_buf_get_name(0) == _G.file then
                 _G.armed = false
@@ -348,6 +356,7 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
                 [[
               local event, handler = ...
               vim.api.nvim_create_autocmd(event, {
+            group = "events_spec",
                 callback = function()
                   if _G.armed and vim.api.nvim_get_current_win() == _G.target and vim.api.nvim_buf_get_name(0) == _G.file then
                     _G.armed = false
@@ -387,6 +396,7 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
           vim.cmd("split")
           local seen = {}
           vim.api.nvim_create_autocmd(event, {
+            group = "events_spec",
             callback = function()
               if _G.armed then
                 seen[#seen + 1] = vim.api.nvim_buf_get_name(0):match("[^/]*$") .. "@" .. (vim.api.nvim_get_current_win() == state.target_window and "target" or "other")
@@ -421,6 +431,7 @@ describe("the cleanup of a split diff and the user's own diff mode and handlers"
           vim.api.nvim_set_current_win(state.target_window)
           local seen = {}
           vim.api.nvim_create_autocmd(event, {
+            group = "events_spec",
             callback = function()
               if _G.armed then
                 seen[#seen + 1] = vim.api.nvim_buf_get_name(0):match("[^/]*$")
