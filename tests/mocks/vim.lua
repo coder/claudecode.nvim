@@ -569,9 +569,6 @@ local vim = {
   },
 
   fn = {
-    win_findbuf = function()
-      return {}
-    end,
     getpid = function()
       return 12345
     end,
