@@ -38,8 +38,9 @@ covered_block forget_exited "$NATIVE" '^local function forget_exited_job\('
 covered_block forget_ended "$NATIVE" '^local function forget_ended_terminal\('
 covered_block adopt "$NATIVE" '^local function adopt_existing_terminal\(\)'
 covered_block stop_snacks "$NATIVE" '^local function stop_snacks_terminal\('
+covered_block start_terminal "$NATIVE" '^local function start_terminal\('
 covered_block open_terminal "$NATIVE" '^local function open_terminal\('
-covered_block close_terminal "$NATIVE" '^local function close_terminal\(\)'
+covered_block close_terminal "$NATIVE" '^function close_terminal\(\)'
 covered_block native_visible "$NATIVE" '^local function is_terminal_visible\(\)'
 covered_block hide_terminal "$NATIVE" '^local function hide_terminal\(\)'
 covered_block show_hidden "$NATIVE" '^function show_hidden_terminal\('
@@ -82,7 +83,8 @@ FACTS=(NativeMarkBeforeTermopen OwnedUnstartedIsNotEnded OwnedLiveNeedsMark Owne
   NativeAdoptsHiddenTerminal NativeShowsAdoptedHidden NativeExitClearsMark NativeAdoptedExitHandled
   NativeExitForgetsOwnJobOnly NativeExitKeepsLastWindow NativeExitChecksWindowBuffer NativeEntriesForgetEndedJob
   NativeRescansSwappedWindow NativeCloseAdopts NativeCloseForgetsFirst NativeCloseClearsMark NativeKeepsHiddenJob
-  NativeHideKeepsLastWindow NativeFailCleansUp NativeStartSurvivesClosedSplit NativeStopsSnacksClaude SnacksOpenSkipsDuringStart
+  NativeHideKeepsLastWindow NativeFailCleansUp NativeStartSurvivesClosedSplit NativeOpenSkipsDuringStart NativeRunsDeferredClose NativeStopsSnacksClaude
+  SnacksOpenSkipsDuringStart
   SnacksMarksStartedTerminal SnacksEntriesAdopt SnacksEntriesForgetEndedJob SnacksCloseAdopts SnacksExitForgets
   SnacksForgetChecksInstance
   SnacksCloseForgetsFirst SnacksHideKeepsLastWindow SnacksFailCleansUp SnacksStopsNativeClaude
@@ -92,7 +94,7 @@ FACTS=(NativeMarkBeforeTermopen OwnedUnstartedIsNotEnded OwnedLiveNeedsMark Owne
 # termopen (TermOpen), so an open() from either autocmd adopts the terminal being started.
 fact[NativeMarkBeforeTermopen]=$(as_bool in_order '^  local new_bufnr = vim\.api\.nvim_create_buf\(' \
   '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' '^  vim\.api\.nvim_win_set_buf\(new_winid, new_bufnr\)$' \
-  'pcall\(vim\.fn\.termopen, term_cmd_arg, termopen_opts\)' <<<"$open_terminal")
+  'pcall\(vim\.fn\.termopen, term_cmd_arg, termopen_opts\)' <<<"$start_terminal")
 # owned.lua: a buffer whose job has not started (channel 0) has not ended, so the autocmd's open() can adopt it.
 fact[OwnedUnstartedIsNotEnded]=$(as_bool grep -qE \
   '^  return channel ~= 0 and not pcall\(vim\.fn\.jobpid, channel\)$' <<<"$owned_job_ended")
@@ -127,7 +129,7 @@ fact[NativeShowsAdoptedHidden]=$(as_bool native_shows_adopted_hidden)
 # on_exit schedules the mark clear and forget_exited_job.
 fact[NativeExitClearsMark]=$(as_bool in_order '^    on_exit = function\(job_id, _, _\)$' '^      vim\.schedule\(function\(\)$' \
   '^        if vim\.api\.nvim_buf_is_valid\(new_bufnr\) then$' '^          vim\.b\[new_bufnr\]\[OWNED_MARK\] = nil$' \
-  '^        forget_exited_job\(job_id, effective_config\.auto_close\)$' <<<"$open_terminal")
+  '^        forget_exited_job\(job_id, effective_config\.auto_close\)$' <<<"$start_terminal")
 fact[NativeAdoptedExitHandled]=$(as_bool in_order '^  bufnr, winid, jobid = buf, win, vim\.bo\[buf\]\.channel$' \
   'vim\.api\.nvim_create_autocmd\("TermClose", \{' '^    buffer = buf,$' '^      vim\.schedule\(function\(\)$' \
   '^        forget_exited_job\(adopted_jobid, config\.auto_close\)$' <<<"$adopt")
@@ -170,7 +172,7 @@ fact[NativeCloseClearsMark]=$(as_bool in_order '^  local closing_bufnr, closing_
 # sets it again after termopen, because an autocmd of the start can have changed it (to wipe, for example).
 fact[NativeKeepsHiddenJob]=$(as_bool in_order '^  vim\.b\[new_bufnr\]\[OWNED_MARK\] = true$' \
   '^  vim\.bo\[new_bufnr\]\.bufhidden = "hide"$' '^  vim\.api\.nvim_win_set_buf\(new_winid, new_bufnr\)$' \
-  '^  jobid = termopen_result$' '^  vim\.bo\[bufnr\]\.bufhidden = "hide"$' <<<"$open_terminal")
+  '^  jobid = termopen_result$' '^  vim\.bo\[bufnr\]\.bufhidden = "hide"$' <<<"$start_terminal")
 # A fix that skips the last window or pcalls the close flips this fact.
 native_hide_keeps_last_window() {
   { in_order '^    if is_last_window\(winid\) then$' '^      return$' '^    vim\.api\.nvim_win_close\(winid, false\)$' <<<"$hide_terminal" &&
@@ -185,12 +187,29 @@ fact[NativeHideKeepsLastWindow]=$(as_bool native_hide_keeps_last_window)
 native_start_survives_closed_split() {
   in_order '^  jobid = termopen_result$' \
     '^  if vim\.api\.nvim_win_is_valid\(new_winid\) and vim\.api\.nvim_win_get_buf\(new_winid\) ~= new_bufnr then$' \
-    '^  winid = new_winid$' '^  bufnr = new_bufnr$' '^  is_valid\(\)$' '^  if focus and winid then$' <<<"$open_terminal"
+    '^  winid = new_winid$' '^  bufnr = new_bufnr$' '^  is_valid\(\)$' '^  if focus and winid then$' <<<"$start_terminal"
 }
 fact[NativeStartSurvivesClosedSplit]=$(as_bool native_start_survives_closed_split)
+# A start runs from `starting = true` to `starting = false`, and open_terminal returns first when it finds the flag set. An
+# entry that an autocmd of the start calls (WinLeave, WinNew, WinEnter of the vsplit, BufNew, BufAdd of the new buffer) finds no
+# buffer with a mark yet and reaches open_terminal, so without the guard it starts a second Claude. The pcall keeps an error
+# of the start from leaving the flag set.
+native_open_skips_during_start() {
+  followed_by '^  if starting then$' '^    return$' <<<"$open_terminal" &&
+    in_order '^  if starting then$' '^  starting = true$' 'pcall\(start_terminal, ' '^  starting = false$' <<<"$open_terminal"
+}
+fact[NativeOpenSkipsDuringStart]=$(as_bool native_open_skips_during_start)
+# A close that an autocmd of the start asked for sets close_after_start (M.close, not read here: without it the close would wait
+# inside termopen, and the model has no nested wait). open_terminal reads the request after the start returns, clears it, and
+# runs close_terminal, also when the start raised.
+native_runs_deferred_close() {
+  in_order '^  starting = false$' '^  local close_requested = close_after_start$' '^  close_after_start = false$' \
+    '^  if close_requested then$' 'pcall\(close_terminal\)' <<<"$open_terminal"
+}
+fact[NativeRunsDeferredClose]=$(as_bool native_runs_deferred_close)
 fact[NativeFailCleansUp]=$(as_bool in_order '^  if failure then$' '^      vim\.api\.nvim_win_close\(new_winid, true\)$' \
   '^      vim\.api\.nvim_buf_delete\(new_bufnr, \{ force = true \}\)$' '^    cleanup_state\(\)$' '^    return$' \
-  '^  jobid = termopen_result$' <<<"$open_terminal")
+  '^  jobid = termopen_result$' <<<"$start_terminal")
 # Before it starts Claude, and in close when it finds none to adopt, the native provider stops the snacks Claude.
 native_stops_snacks() {
   in_order '^  stop_snacks_terminal\(\)$' '^  if is_valid\(\) then' <<<"$open_terminal" &&
@@ -281,8 +300,8 @@ RULES=(AtMostOneClaude CloseStopsClaude CloseNeverReuses OpenShowsLiveClaude Hid
   FailedStartLeavesNoWindow ExitClosesOnlyOwnWindow)
 LIVE=()
 EXPECT=(
-  [NativeMarkBeforeTermopen]=AtMostOneClaude
-  [OwnedUnstartedIsNotEnded]=AtMostOneClaude
+  ["NativeMarkBeforeTermopen+NativeOpenSkipsDuringStart"]=AtMostOneClaude
+  ["OwnedUnstartedIsNotEnded+NativeOpenSkipsDuringStart"]=AtMostOneClaude
   [OwnedLiveSkipsEndedJob]=CloseNeverReuses
   ["OwnedLiveNeedsMark+OwnedLiveSkipsEndedJob"]=CloseNeverReuses
   [NativeAdoptsHiddenTerminal]=AtMostOneClaude
@@ -301,6 +320,8 @@ EXPECT=(
   [NativeHideKeepsLastWindow]=HideNoError
   [NativeFailCleansUp]=FailedStartLeavesNoWindow
   [NativeStartSurvivesClosedSplit]=HideNoError
+  [NativeOpenSkipsDuringStart]=AtMostOneClaude
+  [NativeRunsDeferredClose]=CloseStopsClaude
   [NativeStopsSnacksClaude]=AtMostOneClaude
   [SnacksOpenSkipsDuringStart]=AtMostOneClaude
   [SnacksMarksStartedTerminal]=AtMostOneClaude

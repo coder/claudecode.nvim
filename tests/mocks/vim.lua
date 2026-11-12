@@ -1270,6 +1270,9 @@ local vim = {
   v = { echospace = 68 },
 
   loop = {
+    hrtime = function()
+      return 0
+    end,
     new_tcp = function()
       return {
         bind = function(self, host, port)
@@ -1460,7 +1463,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "", fileformats = "unix,dos" }, {
   __index = function(_, k)
     return vim._options[k]
   end,

@@ -1110,7 +1110,9 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
-  local final_content = table.concat(content_lines, "\n")
+  -- :w ends each line with the line break of the buffer's 'fileformat': LF, CRLF for dos, CR for mac.
+  local line_break = ({ dos = "\r\n", mac = "\r" })[vim.api.nvim_buf_get_option(buffer_id, "fileformat")] or "\n"
+  local final_content = table.concat(content_lines, line_break)
   -- Add trailing newline if the buffer has one, as :w does. :w writes nothing for an empty buffer, whatever 'eol' is.
   -- Such a buffer has no lines, but nvim_buf_get_lines still returns one empty string for it, so the count of bytes tells
   -- it from a buffer with one empty line.
@@ -1118,7 +1120,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return vim.fn.wordcount().bytes
   end)
   if byte_count > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
-    final_content = final_content .. "\n"
+    final_content = final_content .. line_break
   end
 
   -- Do not modify windows/tabs here; wait for explicit close_tab tool call to clean up UI
@@ -1835,12 +1837,22 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
     vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    local lines = vim.split(params.new_file_contents, "\n")
+    -- A proposal that has a line break, and only CRLF line breaks, takes 'fileformat' dos, as the same text read from
+    -- a file does, when the user's 'fileformats' includes dos. The buffer then holds the lines without their CRs, as
+    -- the file's own buffer does, and the save gives a line that the user types a CRLF, as :w does. Any other text is
+    -- unix, with its CRs inside the lines, which :w writes back unchanged. 'fileformat' is set in both cases, because
+    -- a new buffer takes the first entry of 'fileformats', and that entry can be dos.
+    local proposal = params.new_file_contents
+    local is_dos = vim.o.fileformats:find("dos", 1, true) ~= nil
+      and proposal:find("\n", 1, true) ~= nil
+      and not proposal:gsub("\r\n", ""):find("\n", 1, true)
+    local lines = vim.split(proposal, is_dos and "\r\n" or "\n", { plain = true })
     -- Remove trailing empty line if content ended with \n
     if #lines > 0 and lines[#lines] == "" then
       table.remove(lines, #lines)
     end
     vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(new_buffer, "fileformat", is_dos and "dos" or "unix")
     -- A new buffer has 'eol' on, and the saved text ends with a line break exactly when 'eol' is on. So the buffer takes
     -- the ending of the proposal, and a proposal without a final line break is saved without one.
     vim.api.nvim_buf_set_option(new_buffer, "eol", params.new_file_contents:sub(-1) == "\n")
@@ -1964,13 +1976,6 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    -- A raising handler of the user (autocmd callback) makes the cleanup above fail inside Neovim API calls. A LuaJIT
-    -- older than September 2023 (bundled by Neovim 0.8 and 0.9) then keeps pointing at the main Lua thread, while this
-    -- code runs in the coroutine of tools.handle_invoke. The next JIT trace exit corrupts the stack of the main thread
-    -- and Neovim aborts or crashes, exit 134 or 139 (LuaJIT issue #1066). An API call that returns normally points
-    -- LuaJIT at the running coroutine again. Make one before the error leaves the coroutine.
-    vim.api.nvim_get_current_tabpage()
-
     -- Re-throw the error for MCP compliance
     error({
       code = -32000,
@@ -2049,7 +2054,7 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
       return
     end
     -- Resume the coroutine with the result
-    local resume_success, resume_result, resume_err = coroutine.resume(co, result)
+    local resume_success, resume_result, resume_err = utils.resume_tool_coroutine(co, result)
     if not resume_success then
       logger.error("diff", "Coroutine failed:", tostring(resume_result))
     end
