@@ -125,7 +125,7 @@ site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, 
 == lua/claudecode/health.lua
 file lua/claudecode/health.lua 5ab73bf388f3ac97
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua fc28de832b4056df
+file lua/claudecode/init.lua db4b58226c39fd20
 block user_close_all         10e024fd8ada1c16
 site lua/claudecode/init.lua: local pending = diff.close_pending_diffs("user command") @ function M._create_commands()
 site lua/claudecode/init.lua: local rejected = diff.close_rejected_diffs("user command") @ function M._create_commands()
