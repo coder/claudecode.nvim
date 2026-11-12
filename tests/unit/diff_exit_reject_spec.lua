@@ -1,8 +1,8 @@
 -- Neovim stops firing BufUnload at exit once an autocmd deletes the buffer it fired for (main.c, exit_loop in
--- getout), and a new-file reject with `on_new_file_reject = "keep_empty"` deletes its proposal buffer. So the
--- diffs behind that buffer get no BufUnload, reach VimLeavePre pending, and used to be removed unanswered. These
--- tests run the VimLeavePre autocmd of diff.lua over the states that exit can leave. The real exit, with real
--- buffers, is tests/integration/diff_exit_reject_spec.lua.
+-- getout). A new-file reject with `on_new_file_reject = "keep_empty"`, in a tab the diff did not open, deletes its
+-- proposal buffer, and SIGTERM runs VimLeavePre without the loop. So diffs can reach VimLeavePre pending, and they
+-- used to be removed unanswered. These tests run the VimLeavePre autocmd of diff.lua over the states exit can leave.
+-- The real exit, with real buffers, is tests/integration/diff_exit_reject_spec.lua.
 require("tests.busted_setup")
 
 describe("diffs still pending when Neovim exits", function()
@@ -87,9 +87,10 @@ describe("diffs still pending when Neovim exits", function()
   end)
 
   it("answers the oldest pending diff first", function()
-    open_pending("first.txt")
-    open_pending("second.txt")
-    open_pending("third.txt")
+    -- Open order differs from name order, so a sort by tab name answers in another order.
+    open_pending("c.txt")
+    open_pending("a.txt")
+    open_pending("b.txt")
 
     leave()
 
@@ -97,7 +98,7 @@ describe("diffs still pending when Neovim exits", function()
     for _, answer in ipairs(answers) do
       names[#names + 1] = answer.name
     end
-    assert.same({ "first.txt", "second.txt", "third.txt" }, names)
+    assert.same({ "c.txt", "a.txt", "b.txt" }, names)
   end)
 
   it("sends no second answer for a diff that its BufUnload already rejected", function()

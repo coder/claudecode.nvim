@@ -150,6 +150,16 @@ exit_rejects_pending() {
     in_order '^vim\.api\.nvim_create_autocmd\("VimLeavePre", \{$' '^  callback = cleanup_at_exit,$' <"$DIFF"
 }
 fact[ExitRejectsPending]=$(as_bool exit_rejects_pending)
+# A request has no answer until its handler returns, and a blocking tool has no sender before that. When Neovim exits
+# inside the handler, M.stop answers the request, and _handle_request sends nothing after a stop that answered it.
+FACTS+=(ExitAnswersInFlight)
+exit_answers_in_flight() {
+  in_order '^  M\.state\.in_flight\[in_flight\] = true$' 'pcall\(handler, client, params\)' \
+    '^  if not M\.state\.in_flight\[in_flight\] then$' '^    return$' <<<"$handle_request" &&
+    in_order '^  for in_flight in pairs\(M\.state\.in_flight\) do$' 'M\.send_response\(in_flight\.client, in_flight\.id' \
+      'tcp_server\.stop_server\(' <<<"$server_stop"
+}
+fact[ExitAnswersInFlight]=$(as_bool exit_answers_in_flight)
 fact[DisconnectRejects]=$(as_bool in_order 'vim\.schedule\(function\(\)' 'diff\.close_diffs_for_client\(client_id' \
   <<<"$on_disconnect")
 fact[DisconnectPendingOnly]=$(as_bool grep -qE \
@@ -212,7 +222,7 @@ fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 mapfile -t COVERED < <(find lua plugin \( -name '*.lua' -o -name '*.vim' \) | sort)
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 
-RULES=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover)
+RULES=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover ExitedCallsAnswered)
 LIVE=(DisconnectedCallsAnswered)
 CONSTRAINT=AnswerBound
 
@@ -221,7 +231,7 @@ CONSTRAINT=AnswerBound
 # it. SetupAnswerReturned=FALSE is caught only through that step, so its row also shows that the step is reachable.
 EXPECT=(
   [GuardSaved]=AnswerMatchesDiff [GuardRejected]=AnswerMatchesDiff
-  [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall [ExitRejectsPending]=NoStrandedCall
+  [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall [ExitRejectsPending]=NoStrandedCall [ExitAnswersInFlight]=ExitedCallsAnswered
   [SetupAnswerReturned]=NoStrandedCall
   [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
   [UserCloseKeepsAcceptedText]=SavedDiffKept

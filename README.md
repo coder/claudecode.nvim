@@ -1140,14 +1140,16 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   pending diff [lua/claudecode/diff.lua:M.close_diff_by_tab_name]. A diff that resolves before `openDiff` yields, for example from a
   `ClaudeCodeDiffOpened` handler, is answered at once [lua/claudecode/diff.lua:M.open_diff_blocking]. When Neovim exits,
   it fires `BufUnload` for each loaded buffer before `VimLeavePre`. The `BufUnload` autocmd of a proposal buffer rejects
-  its pending diff [lua/claudecode/diff.lua:register_diff_autocmds], so with one pending diff the `VimLeavePre` cleanup
-  of `ClaudeCodeMCPDiff` finds none [lua/claudecode/diff.lua:M.\_cleanup_all_active_diffs]. With two or more pending
-  native diffs, one case breaks this. The reject of a new-file diff in the current tab, with
-  `diff_opts.on_new_file_reject = "keep_empty"` (the default), deletes its proposal buffer
-  [lua/claudecode/diff.lua:M.\_resolve_diff_as_rejected] [lua/claudecode/diff.lua:M.\_cleanup_diff_state]. When that
-  reject runs in the exit loop, Neovim stops firing `BufUnload` for the later buffers, and the `VimLeavePre` cleanup
-  removes the diffs that are still pending with no answer to Claude. This holds on Neovim 0.8.0 to 0.12.3. The
-  `"unified"` layout is not affected.
+  its pending diff [lua/claudecode/diff.lua:register_diff_autocmds]. That loop stops as soon as an autocmd deletes the
+  buffer it fired for. The reject of a new-file diff in a tab it did not open, with `diff_opts.on_new_file_reject =
+"keep_empty"` (the default), deletes its proposal buffer [lua/claudecode/diff.lua:M.\_resolve_diff_as_rejected]
+  [lua/claudecode/diff.lua:M.\_cleanup_diff_state], so the later diffs get no `BufUnload`. SIGTERM and SIGHUP run
+  `VimLeavePre` without that loop, and SIGKILL or a crash runs no `VimLeavePre`. The `VimLeavePre` autocmd of
+  `ClaudeCodeMCPDiff` therefore rejects every diff that is still pending, oldest first, before it removes any
+  [lua/claudecode/diff.lua:cleanup_at_exit], so each pending diff gets one `DIFF_REJECTED` in every exit that runs
+  `VimLeavePre`. A call whose setup has not finished when Neovim exits has no response sender yet. This happens when a
+  `nested = true` `ClaudeCodeDiffOpened` handler runs `:qa!`. The server stop answers that call with a -32603 error
+  [lua/claudecode/server/init.lua:M.stop].
 
 ### Global Side Effects
 

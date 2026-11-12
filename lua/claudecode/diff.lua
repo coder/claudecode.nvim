@@ -2014,9 +2014,11 @@ function M._reject_pending_diffs()
 end
 
 ---Runs at VimLeavePre. At exit Neovim fires BufUnload for each loaded buffer before VimLeavePre, and a proposal
----buffer's BufUnload autocmd rejects its diff. That loop stops as soon as an autocmd deletes the buffer it fired for,
----and the reject of a new-file diff with `on_new_file_reject = "keep_empty"` deletes its proposal buffer. The diffs
----behind that buffer then reach this point pending, so they are answered before the cleanup removes them.
+---buffer's BufUnload autocmd rejects its diff. That loop stops as soon as an autocmd deletes the buffer it fired for.
+---The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
+---its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
+---buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
+---pending. SIGKILL or a crash runs no VimLeavePre. The pending diffs are answered before the cleanup removes them.
 local function cleanup_at_exit()
   M._reject_pending_diffs()
   M._cleanup_all_active_diffs("shutdown")

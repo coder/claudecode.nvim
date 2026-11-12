@@ -18,12 +18,14 @@ local M = {}
 ---@field auth_token string|nil The authentication token for validating connections
 ---@field handlers table Message handlers by method name
 ---@field ping_timer table|nil Timer for sending pings
+---@field in_flight table<table, boolean> The requests whose handler is running, each as `{ client, id }`
 M.state = {
   server = nil,
   port = nil,
   auth_token = nil,
   handlers = {},
   ping_timer = nil,
+  in_flight = {},
 }
 
 ---Initialize the WebSocket server
@@ -136,6 +138,16 @@ function M.stop()
     diff.close_pending_diffs("server stopping")
   end
 
+  -- A request whose handler is still running has no sender yet, so nothing above can answer it.
+  for in_flight in pairs(M.state.in_flight) do
+    M.state.in_flight[in_flight] = nil
+    M.send_response(in_flight.client, in_flight.id, nil, {
+      code = -32603,
+      message = "Internal error",
+      data = "The server stopped before the call finished",
+    })
+  end
+
   tcp_server.stop_server(M.state.server)
 
   -- CRITICAL: Clear global deferred responses to prevent memory leaks and hanging
@@ -198,7 +210,16 @@ function M._handle_request(client, request)
     return
   end
 
+  -- A request has no answer until its handler returns, and a blocking tool has no sender before that. When Neovim
+  -- exits inside the handler (a ClaudeCodeDiffOpened handler that runs :qa!), the handler never returns, so `stop`
+  -- answers the request, and this function sends nothing after it.
+  local in_flight = { client = client, id = id }
+  M.state.in_flight[in_flight] = true
   local success, result, error_data = pcall(handler, client, params)
+  if not M.state.in_flight[in_flight] then
+    return
+  end
+  M.state.in_flight[in_flight] = nil
   if success then
     -- Check if this is a deferred response (blocking tool)
     if result and result._deferred then

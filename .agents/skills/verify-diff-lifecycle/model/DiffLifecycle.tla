@@ -34,6 +34,8 @@ CONSTANTS
   StopRejectsPending,      \* server/init.lua M.stop closes pending diffs before clearing senders
   StopPendingOnly,         \* diff.lua close_pending_diffs filters status == "pending"
   ExitRejectsPending,      \* diff.lua VimLeavePre autocmd rejects each pending diff before it cleans every diff up
+  ExitAnswersInFlight,     \* server/init.lua M.stop answers a request whose handler is still running, and
+                           \* _handle_request sends nothing after that
   DisconnectRejects,       \* server/init.lua on_disconnect schedules close_diffs_for_client
   DisconnectPendingOnly,   \* diff.lua close_diffs_for_client filters status == "pending"
   UserCloseAllPendingOnly, \* init.lua :ClaudeCodeCloseAllDiffs calls close_pending_diffs
@@ -57,7 +59,8 @@ Answer(status) ==
     [] OTHER -> None
 
 VARIABLES
-  phase,      \* per call: "unsent", "setup" (coroutine running), "waiting" (yielded), "done"
+  phase,      \* per call: "unsent", "setup" (coroutine running), "waiting" (yielded), "done", "gone" (Neovim\
+              \* exited during its setup, and nothing answered it)
   reqTab,     \* per call: its tab_name
   reqClient,  \* per call: the client that sent it
   active,     \* diff.lua active_diffs: per tab_name, the call it answers and its status
@@ -192,7 +195,7 @@ Idle == \A r \in Reqs : phase[r] # "setup"
 Open(t) == active[t] # NoDiff
 
 TypeOK ==
-  /\ phase \in [Reqs -> {"unsent", "setup", "waiting", "done"}]
+  /\ phase \in [Reqs -> {"unsent", "setup", "waiting", "done", "gone"}]
   /\ reqTab \in [Reqs -> Tabs \cup {None}]
   /\ reqClient \in [Reqs -> Clients \cup {None}]
   /\ active \in [Tabs -> {NoDiff} \cup [req : Reqs, status : {"pending"} \cup Outcomes]]
@@ -360,6 +363,23 @@ DiffCleanupAtExit ==
      IN SetW([rejected EXCEPT !.active = [t \in Tabs |-> NoDiff]])
   /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
 
+(* Neovim exits inside a `nested = true` ClaudeCodeDiffOpened handler (it runs :qa!), during the setup of call r. *)
+(* Both VimLeavePre autocmds run on top of the setup: the diff cleanup, then the server stop. Call r has no     *)
+(* sender yet, and its setup never returns its early answer, because the process ends. Only the server stop can  *)
+(* answer it, with an error. The model runs the two autocmds in this one order: the other order gives the same  *)
+(* result, because the stop's close_pending_diffs and the diff cleanup both find only what the other left.       *)
+ExitInSetup(r) ==
+  /\ OpenedEventInSetup /\ phase[r] = "setup" /\ serverUp
+  /\ LET rejected == IF ExitRejectsPending THEN RejectEach(W, Tabs) ELSE W
+         stopped == [rejected EXCEPT !.active = [t \in Tabs |-> NoDiff], !.sender = [q \in Reqs |-> FALSE]]
+         answered == IF ExitAnswersInFlight
+                     THEN [stopped EXCEPT !.phase[r] = "done", !.answers[r] = Append(@, "ERROR")]
+                     ELSE [stopped EXCEPT !.phase[r] = "gone"]
+     IN SetW(answered)
+  /\ serverUp' = FALSE
+  /\ clientUp' = [c \in Clients |-> FALSE]
+  /\ UNCHANGED <<reqTab, reqClient, scheduled, staleOwner>>
+
 Next ==
   \/ \E r \in Reqs, c \in Clients, t \in Tabs : ClaudeOpensDiff(r, c, t)
   \/ \E r \in Reqs, o \in Outcomes : UserHandlerResolves(r, o)
@@ -374,6 +394,7 @@ Next ==
   \/ \E c \in Clients : DisconnectCleanupRuns(c)
   \/ ServerStops
   \/ DiffCleanupAtExit
+  \/ \E r \in Reqs : ExitInSetup(r)
 
 (* Setup is synchronous and the scheduled cleanup runs on a later tick. *)
 Spec ==
@@ -395,6 +416,10 @@ AtMostOneAnswer == \A r \in Reqs : Len(answers[r]) <= 1
 AnswerMatchesDiff ==
   \A t \in Tabs : Open(t) /\ answers[active[t].req] # <<>> =>
     answers[active[t].req][1] = Answer(active[t].status)
+
+(* A call that Neovim's exit cut off during its setup has been answered, by *)
+(* the server stop: no later step of its own can send anything.            *)
+ExitedCallsAnswered == \A r \in Reqs : phase[r] = "gone" => answers[r] # <<>>
 
 (* A call that waits for the user still has a pending diff and a response *)
 (* sender, so a user action or a teardown can answer it.                  *)
