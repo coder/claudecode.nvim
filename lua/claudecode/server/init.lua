@@ -63,7 +63,7 @@ function M.start(config, auth_token)
       end
     end,
     on_open = function(client)
-      -- The handshake passed the token check, so the client is authenticated now.
+      -- With a token, the handshake has passed the token check by now, so the client is authenticated.
       if M.state.auth_token then
         logger.debug("server", "Authenticated WebSocket client connected:", client.id)
       end

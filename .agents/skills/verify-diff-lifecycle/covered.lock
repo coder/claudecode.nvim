@@ -146,7 +146,7 @@ file lua/claudecode/server/frame.lua 3c50766875878d56
 == lua/claudecode/server/handshake.lua
 file lua/claudecode/server/handshake.lua 3eca35d572094a55
 == lua/claudecode/server/init.lua
-file lua/claudecode/server/init.lua 9d745b4c6be20057
+file lua/claudecode/server/init.lua 8da8851fff781946
 block server_stop            4dae0bf675cf2cc1
 block on_disconnect          a0ce86cede4af786
 block handle_request         b74ff7dc2e55a2b8
