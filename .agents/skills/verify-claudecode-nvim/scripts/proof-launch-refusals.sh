@@ -24,6 +24,7 @@
 #   tmp-load-refused  mktemp answers with a path that is not its own resolved path (a // in it): load refuses the new state dir,
 #                  and launch leaves no state dir and no evidence dir
 #   node-relative  node is found through a relative PATH entry (no mise): its dir would go on PATH in every agent-tty call
+#   att-root-nosticky  /tmp/agent-tty is this user's 0700 dir, and /tmp is world-writable without the sticky bit
 #   tmp-root       TMPDIR is /: launch gives mktemp /vcn.XXXXXX, not //vcn.XXXXXX (a mktemp shim stops launch and prints it)
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
 #   out-space      the same above VERIFY_OUT
@@ -219,8 +220,10 @@ tmp_link_foreign_case
 # can rename entries in it, could swap the socket dir of a run and answer every command. Launch makes the dir 0700 when it is
 # missing and refuses one that is not this user's alone.
 # att_root_case <case> <planting shell> <want> <mode> [bwrap args]: launch in a sandbox after the planting shell ran. <want> is
-# the text of a refusal, which must leave nothing behind, or empty when launch must get past the check (it stops later,
-# because no agent-tty passes doctor) and leave /tmp/agent-tty with <mode> and this user as its owner.
+# the text of a refusal, which must leave nothing behind, or empty when launch must get past the check and leave
+# /tmp/agent-tty with <mode> and this user as its owner. The agent-tty here is `false`, so a launch that got past the check stops
+# at the next step, `agent-tty doctor`, and says so: that text, not only the absence of one refusal, is what shows the launch went
+# on, so a guard that refuses a safe dir with any other message fails the case.
 att_root_case() {
   local name=$1 plant=$2 want=$3 mode=$4 out rc=0
   shift 4
@@ -228,16 +231,16 @@ att_root_case() {
   local args=("${sb[@]}" "$@" --setenv VCN_AGENT_TTY /usr/bin/false)
   out=$(bwrap "${args[@]}" /usr/bin/bash -c "$plant"'
     /w/.agents/skills/verify-claudecode-nvim/scripts/vcn.sh launch; echo "rc=$?"
-    [[ ! -e /tmp/out && -z $(ls -d /tmp/vcn.* 2>/dev/null) ]] || echo LEFT-BEHIND
+    [[ ! -e /tmp/out && ! -e /run/o && -z $(ls -d /tmp/vcn.* /run/t/vcn.* 2>/dev/null) ]] || echo LEFT-BEHIND
     stat -c "ROOT %a %u" /tmp/agent-tty 2>&1' 2>&1) || rc=$?
   if [[ -n $want ]]; then
     [[ $out == *"refusing the agent-tty socket dir: $want"* && $out == *"rc=1"* && $out != *VCN_STATE=* && $out != *LEFT-BEHIND* ]] ||
       fail "$name: launch did not refuse /tmp/agent-tty with '$want', exit 1 and nothing left behind: $out"
     echo "PASS $name: $want, and launch refused it before it made anything"
   else
-    [[ $out != *"refusing the agent-tty socket dir"* && $out == *"rc=1"* && $out == *"ROOT $mode 0"* ]] ||
-      fail "$name: launch refused /tmp/agent-tty or did not leave it with mode $mode and this user as owner: $out"
-    echo "PASS $name: launch accepted /tmp/agent-tty and left it with mode $mode"
+    [[ $out != *"refusing the agent-tty socket dir"* && $out == *'no agent-tty passes `agent-tty doctor`'* && $out == *"rc=1"* && $out == *"ROOT $mode 0"* ]] ||
+      fail "$name: launch did not go on to agent-tty doctor after /tmp/agent-tty, or left it with a mode other than $mode or another owner: $out"
+    echo "PASS $name: launch accepted /tmp/agent-tty, went on to agent-tty doctor and left the dir with mode $mode"
   fi
 }
 host_root_dir=""
@@ -255,7 +258,12 @@ fi
 att_root_case att-root-loose 'mkdir -m 777 /tmp/agent-tty' "/tmp/agent-tty is group- or world-writable" ""
 att_root_case att-root-link 'ln -s /tmp /tmp/agent-tty' "/tmp/agent-tty is a symlink" ""
 att_root_case att-root-made : "" 700
+att_root_case att-root-own-700 'mkdir -m 700 /tmp/agent-tty' "" 700
 att_root_case att-root-own-755 'mkdir -m 755 /tmp/agent-tty' "" 755
+# The dir is safe, but /tmp is not sticky, so another user could rename it. TMPDIR and VERIFY_OUT sit in a dir of their own, so
+# only the check of the dirs above /tmp/agent-tty can refuse.
+att_root_case att-root-nosticky 'mkdir -m 700 /tmp/agent-tty' "/tmp, above the agent-tty socket dir, is writable by others and not sticky" "" \
+  --perms 0777 --tmpfs /tmp --dir /run/t --setenv TMPDIR /run/t --setenv VERIFY_OUT /run/o
 # A newline at the end of a name is cut by a command substitution. The resolved TMPDIR is a dir with a newline at the end of its
 # name and mode 777, and a twin symlink without the newline leads to a safe dir: a launch that cuts the newline would take the twin.
 mkdir -m 700 "$TMP/nl" "$TMP/nl/safe"

@@ -10,8 +10,9 @@
 #                     fails by itself still saves its failure screen and the final evidence, and runs `agent-tty home
 #                     forget`, all through the setsid that mise names
 #   jq-old-run        a run.env without JQ_BIN, as an older vcn.sh wrote it: a command resolves jq again
-#   node-dir          a run.env whose NODE_DIR is empty, relative or has a colon is refused (att() would put the current dir, or
-#                     a second dir, on PATH), and one whose NODE_DIR is an absolute dir without a node is not
+#   node-dir          a run.env whose NODE_DIR is empty, relative or has a colon is refused, by cleanup too, which names the
+#                     rm -rf for the state dir (att() would put the current dir, or a second dir, on PATH), and one whose NODE_DIR
+#                     is an absolute dir without a node is not
 #   state-resolved    a VCN_STATE with a . or .. part, a symlink in its path, or a symlink as its last part is refused, not
 #                     sourced
 #   state-slash       a VCN_STATE with a trailing /, /. or //, or a .. after a symlink, is refused, not sourced
@@ -745,6 +746,12 @@ node_dir_case() {
     out=$(env PATH="$base" VCN_STATE="$dir" "$V" doctor 2>&1) || rc=$?
     ((rc == 1)) && [[ $out == *"NODE_DIR=$val in $dir/run.env is not usable: $want"* ]] ||
       fail "$name" "doctor with NODE_DIR='$val' exited $rc, wanted 1 with '$want': $out"
+    # cleanup refuses too, because it would run agent-tty with that PATH. It must say how to stop the run by hand, and it must
+    # leave the state dir for that.
+    rc=0
+    out=$(env PATH="$base" VCN_STATE="$dir" "$V" cleanup 2>&1) || rc=$?
+    ((rc == 1)) && [[ $out == *"To stop this run by hand, stop its nvim and agent-tty processes, then remove its state dir: rm -rf $(printf %q "$dir")"* && -d $dir ]] ||
+      fail "$name" "cleanup with NODE_DIR='$val' exited $rc without the hand-cleanup hint for $dir, or removed it: $out"
     rm -rf -- "$dir"
   done
   mkdir "$TMP/no-node"
@@ -776,7 +783,7 @@ get_values_case() {
   [[ $got == "$weird_out" ]] || fail "$name" "get -z OUT printed '$got', not the whole OUT"
   got=$(env PATH="$good_path" VCN_STATE="$dir" "$V" get OUT)
   [[ $got == "${weird_out%$'\n'}" ]] || fail "$name" "get OUT in a command substitution printed '$got'"
-  for got in PATH SID "a b" "" "OUT; touch $TMP/marker-$name"; do
+  for got in PATH SID "a b" "" "O.T" "OUT; touch $TMP/marker-$name"; do
     rc=0
     out=$(env PATH="$good_path" VCN_STATE="$dir" "$V" get "$got" 2>&1) || rc=$?
     ((rc == 1)) && [[ $out == "vcn: get: "* ]] || fail "$name" "get '$got' exited $rc with '$out', wanted 1 and a get: refusal"

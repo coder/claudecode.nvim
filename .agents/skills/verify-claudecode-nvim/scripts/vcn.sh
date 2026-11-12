@@ -103,7 +103,7 @@ load() {
   # A run.env that has no NODE_DIR yet (launch stopped while it wrote the file) is left to cleanup: nothing runs agent-tty for it.
   if [[ -n ${NODE_DIR+x} ]]; then
     why=$(bad_node_dir "$NODE_DIR")
-    [[ -z $why ]] || die "NODE_DIR=$NODE_DIR in $VCN_STATE/run.env is not usable: $why"
+    [[ -z $why ]] || die "NODE_DIR=$NODE_DIR in $VCN_STATE/run.env is not usable: $why. No command, cleanup included, runs agent-tty with it. To stop this run by hand, stop its nvim and agent-tty processes, then remove its state dir: rm -rf $(printf %q "$VCN_STATE")"
   fi
   # A run that an older vcn.sh started has no JQ_BIN.
   [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
