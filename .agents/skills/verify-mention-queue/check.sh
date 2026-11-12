@@ -44,7 +44,7 @@ covered_block client_info "$CLIENT" '^function M\.get_client_info\('
 FACTS=(EnqueueArmsDeadline DeadlineReportsError DeadlineRearms DeadlineSparesReady SparedQueueFlushes FlushExpiresOverdue
   QueueKeepsDeadline HandshakeFlushes ConnectedSchedulesFlush FlushWaitsForReady WaitRearmsFlush ReadyNeedsConnected
   ReadyFromHandshake FlushSendsHead FlushChecksDelivery FlushRemovesHead FailedWriteReported RefusedWriteReported
-  StopClearsQueue)
+  StopClearsQueue ImmediateWaitsForReady)
 
 # queue_mention appends the mention, starts connection_timer for its deadline when none runs, then schedules a flush.
 fact[EnqueueArmsDeadline]=$(as_bool in_order '^ *table\.insert\(queue, \{.*deadline = deadline' \
@@ -125,6 +125,8 @@ fact[FlushRemovesHead]=$(as_bool in_order 'server\.broadcast\("at_mentioned"' '^
 # last one, and the flush passes report_unwritten, which logs an error when none succeeded.
 failed_write_reported() {
   grep -q 'report_unwritten("queue", mention\.file_path)' <<<"$flush" &&
+    grep -q 'M\.state\.server\.broadcast("at_mentioned", params, report_unwritten("command", formatted_path))' \
+      <<<"$broadcast_mention" &&
     in_order '^ *if written == 0 then$' '^ *logger\.error\(component, ' <<<"$unwritten" &&
     in_order 'if dispatched and not reported and pending == 0 and sent > 0 then$' 'on_written\(written\)' \
       '^ *pending = pending \+ 1$' 'client_manager\.send_message\(client, message, function\(err\)$' \
@@ -145,6 +147,12 @@ stop_clears_queue() {
       '^ *stop_timer\("connection_timer"\)$' <<<"$clear_queue"
 }
 fact[StopClearsQueue]=$(as_bool stop_clears_queue)
+# With disable_broadcast_debouncing set and an empty queue, a send while Claude is connected broadcasts at once only
+# while ms_until_a_client_is_ready() is 0 or nil. Otherwise it goes to the queue, which waits for a ready client.
+fact[ImmediateWaitsForReady]=$(as_bool in_order \
+  '^ *if immediate and #mention_queue\(\) == 0 and \(ms_until_a_client_is_ready\(\) or 0\) == 0 then$' \
+  'M\.state\.server\.broadcast\("at_mentioned"' '^ *queue_mention\(formatted_path, start_line, end_line\)$' \
+  <<<"$broadcast_mention")
 
 RULES=(NoSilentDrop SentInOrder AtMostOnce SentWhenReady NothingAfterStop)
 LIVE=(NoStrandedMention ReadyDelivers FlushDelivers)
@@ -168,6 +176,7 @@ EXPECT=(
   [FailedWriteReported]=NoSilentDrop
   [RefusedWriteReported]=NoSilentDrop
   [StopClearsQueue]=NothingAfterStop
+  [ImmediateWaitsForReady]=SentWhenReady
 )
 # Invariants run with 3 mentions, liveness with 2. FlushDelivers runs with no deadline that passes: in this untimed
 # model a deadline can pass at any step, and a spared deadline schedules a flush, so it would hide a flush path that
