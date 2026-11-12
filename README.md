@@ -1148,9 +1148,10 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   an error that names both directories [lua/claudecode/diff.lua:create_temp_file]. The `openDiff` tool writes no temp
   files [lua/claudecode/diff.lua:M.open_diff_blocking].
 - Editor state: autocmd groups (`ClaudeCodeShutdown`, `ClaudeCodeSelection`, `ClaudeCodeMCPDiff`,
-  `ClaudeCodeDiffCleanup`), `nvim_buf_attach` change listeners on the buffer of a held selection
-  [lua/claudecode/selection.lua:watch_selection_buffer], `User` events (`ClaudeCodeSendComplete`, `ClaudeCodeDiffOpened`,
-  `ClaudeCodeDiffClosed`),
+  `ClaudeCodeDiffCleanup`), `nvim_buf_attach` change listeners on the buffer of a held selection and on every buffer
+  where a visual selection starts, until the first edit after the selection ends
+  [lua/claudecode/selection.lua:watch_selection_buffer], `User` events (`ClaudeCodeSendComplete`,
+  `ClaudeCodeDiffOpened`, `ClaudeCodeDiffClosed`),
   and a wrapped global `vim.paste` when `terminal.fix_streamed_paste` is `true`, or `"auto"` on Neovim < 0.12.2
   [lua/claudecode/terminal/paste_fix.lua:M.apply] [lua/claudecode/terminal/paste_fix.lua:M.install].
 - Release tooling: `scripts/release-please-runner.js` without `--dry-run` creates GitHub tags, releases, and PRs
