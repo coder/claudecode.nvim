@@ -55,14 +55,19 @@ function M.start(config, auth_token)
       M._handle_message(client, message)
     end,
     on_connect = function(client)
-      -- Log connection with auth status
+      -- This runs at the TCP accept, before the handshake, so the token has not been checked yet.
       if M.state.auth_token then
-        logger.debug("server", "Authenticated WebSocket client connected:", client.id)
+        logger.debug("server", "WebSocket client connected, awaiting authentication:", client.id)
       else
         logger.debug("server", "WebSocket client connected (no auth):", client.id)
       end
     end,
     on_open = function(client)
+      -- With a token, the handshake has passed the token check by now, so the client is authenticated.
+      if M.state.auth_token then
+        logger.debug("server", "Authenticated WebSocket client connected:", client.id)
+      end
+
       -- The client completed its WebSocket handshake, so it can take the queued @ mentions now.
       local main_module = require("claudecode")
       if main_module.process_mention_queue then
