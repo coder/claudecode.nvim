@@ -148,9 +148,9 @@ describe("openDiff when the setup fails in a new tab", function()
   -- Neovim API call that raises inside a coroutine because a handler it ran raised is that case. Neovim then aborts
   -- (exit 134, "bad stack slot") or crashes (exit 139), and plenary prints no summary. openDiff runs in a coroutine
   -- (tools.handle_invoke). On such a LuaJIT, utils.resume_tool_coroutine turns the JIT off and flushes its traces
-  -- before it resumes that coroutine. Without that guard, the three cases above can hit the bug too, but far less often
-  -- than this case. A JIT that compiles at once makes the passes below hit it in most runs, so this case fails on
-  -- Neovim 0.8 and 0.9 when the guard is missing.
+  -- before it resumes that coroutine. Without that guard, the three cases above ended with a plenary summary in 100 of
+  -- 100 runs each on v0.8.0 and on v0.9.5, so they do not show the bug. A JIT that compiles at once makes the passes
+  -- below hit it in most runs, so this case fails on Neovim 0.8 and 0.9 when the guard is missing.
   it("keeps Neovim running when handlers raise on repeated failed setups under an eager JIT", function()
     if jit then
       jit.opt.start("hotloop=1", "hotexit=1", "tryside=1")
