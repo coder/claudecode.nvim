@@ -144,16 +144,18 @@ refused tmp-dot "TMPDIR=$TMP/dd/./y has a . or .. part" TMPDIR="$TMP/dd/./y" VER
 mkdir "$TMP/mktemp-bin"
 printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-bin/mktemp"
 chmod +x "$TMP/mktemp-bin/mktemp"
-# launch resolves node itself. Without mise, `command -v node` prints a relative path for a relative PATH entry, and the dir of that
-# path would go in front of PATH in every agent-tty call. Launch refuses before it makes anything.
-mkdir -m 700 "$TMP/relnode" "$TMP/relnode/nb" "$TMP/relnode/t"
+# launch resolves node itself. Without mise (a shim that fails stands in, whatever /usr/bin holds), `command -v node` prints a
+# relative path for a relative PATH entry, and the dir of that path would go in front of PATH in every agent-tty call. Launch
+# refuses before it makes anything.
+mkdir -m 700 "$TMP/relnode" "$TMP/relnode/nb" "$TMP/relnode/t" "$TMP/relnode/nomise"
 printf '#!/bin/sh\nexit 0\n' >"$TMP/relnode/nb/node"
-chmod +x "$TMP/relnode/nb/node"
+printf '#!/bin/sh\nexit 1\n' >"$TMP/relnode/nomise/mise"
+chmod +x "$TMP/relnode/nb/node" "$TMP/relnode/nomise/mise"
 nvim_dir=$(dirname -- "$(mise which nvim 2>/dev/null || command -v nvim)")
 (
   cd "$TMP/relnode"
   refused node-relative "node is at ./nb/node, and its dir is not usable: it is not an absolute path" \
-    PATH="./nb:$nvim_dir:/usr/bin:/bin" VCN_AGENT_TTY=/usr/bin/true TMPDIR="$TMP/relnode/t" VERIFY_OUT="$TMP/relnode/o"
+    PATH="./nb:$TMP/relnode/nomise:$nvim_dir:/usr/bin:/bin" VCN_AGENT_TTY=/usr/bin/true TMPDIR="$TMP/relnode/t" VERIFY_OUT="$TMP/relnode/o"
 )
 refused tmp-root "mktemp shim: template=/vcn.XXXXXX" PATH="$TMP/mktemp-bin:$PATH" TMPDIR=/ VERIFY_OUT="$TMP/tmp-out"
 # mktemp gets the resolved path. The path as given must pass the same walk, which is main's rule: the symlink itself, its

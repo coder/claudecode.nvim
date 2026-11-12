@@ -100,8 +100,11 @@ load() {
   [[ -z ${VCN_CLIENT-} || $VCN_CLIENT =~ ^[a-z0-9]+$ ]] || die "VCN_CLIENT must match [a-z0-9]+"
   # shellcheck source=/dev/null
   source "$VCN_STATE/run.env"
-  why=$(bad_node_dir "${NODE_DIR-}")
-  [[ -z $why ]] || die "NODE_DIR=${NODE_DIR-} in $VCN_STATE/run.env is not usable: $why"
+  # A run.env that has no NODE_DIR yet (launch stopped while it wrote the file) is left to cleanup: nothing runs agent-tty for it.
+  if [[ -n ${NODE_DIR+x} ]]; then
+    why=$(bad_node_dir "$NODE_DIR")
+    [[ -z $why ]] || die "NODE_DIR=$NODE_DIR in $VCN_STATE/run.env is not usable: $why"
+  fi
   # A run that an older vcn.sh started has no JQ_BIN.
   [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
 }
@@ -384,7 +387,7 @@ unsafe_dir() {
   elif [[ -e $1 ]] && (((8#$(stat -c %a "$1") & 8#022) != 0)); then
     echo "$1 is group- or world-writable"
   else
-    unsafe_above "$1"
+    unsafe_above "$1" "${2-the evidence dir}"
   fi
 }
 
@@ -406,8 +409,8 @@ unsafe_above() {
 ensure_att_root() {
   local why
   [[ -e /tmp/agent-tty || -L /tmp/agent-tty ]] || mkdir -m 700 -- /tmp/agent-tty 2>/dev/null || true
-  why=$(unsafe_dir /tmp/agent-tty)
-  [[ -z $why ]] || die "refusing the agent-tty socket dir: $why; agent-tty keeps its sockets in /tmp/agent-tty and does not check who owns it"
+  why=$(unsafe_dir /tmp/agent-tty "the agent-tty socket dir")
+  [[ -z $why ]] || die "refusing the agent-tty socket dir: $why; agent-tty keeps its sockets in /tmp/agent-tty and does not check who owns it. If the dir is yours and only its mode is wrong, run: chmod go-w /tmp/agent-tty"
   [[ -d /tmp/agent-tty ]] || die "cannot make /tmp/agent-tty, where agent-tty keeps its sockets"
 }
 

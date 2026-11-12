@@ -24,10 +24,18 @@ fail() {
 # in a code line, except the two resolutions (`=$(bin jq)`, `=$(bin setsid)`), is a bare call and fails it. A default in a
 # parameter expansion (`${JQ_BIN:-jq}`) names the tool as bare as a call does, and the word pattern skips it on purpose, because
 # a name with a hyphen before it (`mise-jq`) is not a call.
+word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])'
+default_re='\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=+?](jq|setsid)\}'
+strip_re='(JQ_BIN|SETSID_BIN)=\$\(bin (jq|setsid)\)'
+
+# bare_hits <file>: the numbered code lines of the file that name jq or setsid as a bare call or as a default, except the two
+# resolutions.
+bare_hits() {
+  grep -n '' "$1" | grep -vE '^[0-9]+:[[:space:]]*#' | sed -E "s/$strip_re//" | grep -E "$word_re|$default_re" || true
+}
+
 bare_tools_case() {
-  local name=no-bare-tools hits site bare sites=0 word_re='(^|[^[:alnum:]_$-])(jq|setsid)($|[^[:alnum:]_-])' form
-  local default_re='\$\{[A-Za-z_][A-Za-z0-9_]*:?[-=+?](jq|setsid)\}'
-  local strip_re='(JQ_BIN|SETSID_BIN)=\$\(bin (jq|setsid)\)'
+  local name=no-bare-tools hits site bare sites=0 form
   local jq_ref='"$JQ_BIN"' setsid_ref='"$SETSID_BIN"'
   while IFS= read -r site; do
     for form in "" /usr/bin/ ./; do
@@ -43,7 +51,11 @@ bare_tools_case() {
     grep -qE "$default_re" <<<"$bare" || fail "$name" "the default pattern misses $bare"
   done
   ! grep -qE "$default_re" <<<'"$JQ_BIN" -n "${JQ_BIN:-x}"' || fail "$name" "the default pattern matches a call through \$JQ_BIN"
-  hits=$(grep -n '' "$V" | grep -vE '^[0-9]+:[[:space:]]*#' | sed -E "s/$strip_re//" | grep -E "$word_re|$default_re" || true)
+  printf 'f() {\n  # jq here is a comment\n  x=$("${JQ_BIN:-jq}" -n 1)\n}\n' >"$TMP/bare-sample"
+  [[ $(bare_hits "$TMP/bare-sample") == "3:"* ]] || fail "$name" "the scan of a file missed a default in a parameter expansion: $(bare_hits "$TMP/bare-sample")"
+  printf 'f() {\n  x=$("$JQ_BIN" -n 1)\n  JQ_BIN=$(bin jq)\n}\n' >"$TMP/bare-sample"
+  [[ -z $(bare_hits "$TMP/bare-sample") ]] || fail "$name" "the scan of a file took a call through \$JQ_BIN or the resolution for a bare call"
+  hits=$(bare_hits "$V")
   [[ -z $hits ]] || fail "$name" "vcn.sh runs a bare or path-qualified jq or setsid: $(tr '\n' ' ' <<<"$hits")"
   echo "ok $name: vcn.sh runs jq and setsid only through \$JQ_BIN and \$SETSID_BIN"
   cases=$((cases + 1))
@@ -176,7 +188,16 @@ sourcing_units() { code_units "$1" 1 | grep -v '^%%unit%%$' || true; }
 # The callers of a run moved to `vcn.sh get` and `vcn.sh dashboard`. A source of run.env in the skill's own scripts runs every
 # line of the file with no check of the state dir, and one in a doc teaches a caller to do it. Only `load` in vcn.sh sources it.
 no_source_case() {
-  local name=no-source-run-env skill file hits sample=$TMP/no-source.md src_re='(^|[;&|({])[[:space:]]*(source|\.)[[:space:]]+[^;#`]*run\.env' n
+  local name=no-source-run-env skill file hits sample=$TMP/no-source.md n line
+  # A source is a command: at the start of a line or after ; & | ( { ! or a keyword. The words in an echo are not.
+  local src_re='(^|[;&|({!]|(^|[[:space:]])(if|then|do|else|elif|while|until)[[:space:]])[[:space:]]*(source|\.)[[:space:]]+[^;#`]*run\.env'
+  for line in 'source "$VCN_STATE/run.env"' '  . "$OUT/run.env"' 'if source "$S/run.env"; then' 'x && source run.env' 'then source "$S/run.env"' \
+    '! source "$S/run.env"' 'while . ./run.env; do' 'f() { . "$S/run.env"; }'; do
+    grep -qE "$src_re" <<<"$line" || fail "$name" "the script pattern misses: $line"
+  done
+  for line in 'echo "a state dir was refused and its run.env not sourced"' 'echo "named through a . or .. part, its run.env"' 'echo "did not source its run.env"'; do
+    ! grep -qE "$src_re" <<<"$line" || fail "$name" "the script pattern takes words of an echo for a source: $line"
+  done
   skill=$(dirname "$V")/..
   printf 'Run:\n\n```bash\nsource "$VCN_STATE/run.env"\n```\n' >"$sample"
   [[ -n $(sourcing_units "$sample") ]] || fail "$name" "a fenced block that sources a run.env was not found"
@@ -192,7 +213,8 @@ no_source_case() {
     [[ -z $hits ]] || fail "$name" "${file#"$skill"/} has a recipe that sources a run.env: $(tr '\n' ' ' <<<"$hits")"
   done
   for file in "$skill"/scripts/*.sh; do
-    [[ ${file##*/} != vcn.sh ]] || continue
+    # vcn.sh is the one place that sources it, and this script holds the samples of the patterns.
+    [[ ${file##*/} != vcn.sh && ${file##*/} != proof-static.sh ]] || continue
     hits=$(grep -nE "$src_re" "$file" | grep -vE '^[0-9]+:[[:space:]]*#' || true)
     [[ -z $hits ]] || fail "$name" "${file#"$skill"/} sources a run.env: $(tr '\n' ' ' <<<"$hits")"
   done
