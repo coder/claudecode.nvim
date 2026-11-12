@@ -74,6 +74,7 @@ describe("Tool: get_current_selection", function()
     expect(parsed_result.success).to_be_true() -- New success field
     expect(parsed_result.text).to_be("")
     expect(parsed_result.filePath).to_be("/current/file.lua")
+    expect(parsed_result.fileUrl).to_be("file:///current/file.lua")
     expect(parsed_result.selection.isEmpty).to_be_true()
     expect(parsed_result.selection.start.line).to_be(4)
     expect(parsed_result.selection.start.character).to_be(2)

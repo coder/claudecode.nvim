@@ -11,7 +11,7 @@ site lua/claudecode/init.lua: terminal.open({}, cmd_args) @ function M._create_c
 site lua/claudecode/init.lua: terminal.simple_toggle() @ function M._ensure_terminal_visible_if_connected()
 site lua/claudecode/init.lua: terminal.simple_toggle({}, cmd_args) @ function M._create_commands()
 == lua/claudecode/terminal.lua
-file lua/claudecode/terminal.lua 4fed625dd5199b09
+file lua/claudecode/terminal.lua 2cb4a5721335543c
 block load_provider          6054d44a8928401c
 block get_provider           f04cd4256840da00
 block ensure_visible         14c1de4d02f650ed
