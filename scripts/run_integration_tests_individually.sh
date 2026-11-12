@@ -12,6 +12,30 @@ set -o pipefail
 # selection_held_spec.lua sleeps 21.6s in 77 vim.wait calls, so 30s left each of them 0.1s of slack under load.
 FILE_TIMEOUT=40s
 
+# The temp files and folders of the file that runs, and the file that holds the process id of its `timeout` while it
+# runs. The cleanup stops the file's Neovims before it removes the folders, because one that ends later writes ShaDa and
+# makes its state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs
+# yet. It uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM
+# would run on. SIGTERM and SIGHUP kill bash, which runs the EXIT trap first.
+CURRENT_TEMP=()
+CURRENT_GROUP_FILE=""
+# shellcheck disable=SC2329 # The two traps below run it.
+cleanup_current_file() {
+  local timeout_pid
+  if [[ -s $CURRENT_GROUP_FILE ]]; then
+    timeout_pid=$(cat "$CURRENT_GROUP_FILE")
+    kill -KILL "$timeout_pid" 2>/dev/null || true
+    kill -KILL -- "-$timeout_pid" 2>/dev/null || true
+  fi
+  rm -rf "${CURRENT_TEMP[@]}"
+}
+trap cleanup_current_file EXIT
+# A Ctrl-C reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
+# `wait` below returns at once when this trap runs. The trap cleans up, then kills the runner with SIGINT, not with
+# `exit 130`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one that exited
+# 130.
+trap 'cleanup_current_file; trap - EXIT INT; kill -INT $$; exit 130' INT
+
 echo "=== Running Integration Tests Individually ==="
 
 # Track overall results
@@ -29,19 +53,42 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  local temp_output group_file
+  local temp_output group_file state_dir config_dir
   temp_output=$(mktemp)
   group_file=$(mktemp)
+  state_dir=$(mktemp -d)
+  config_dir=$(mktemp -d)
+  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir")
+  CURRENT_GROUP_FILE=$group_file
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
-  if bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
-    nvim --headless -u tests/minimal_init.lua \
-    -c "lua require('plenary.test_harness').test_file('$test_file', {minimal_init = 'tests/minimal_init.lua'})" \
-    2>&1 | tee "$temp_output"; then
+  # plenary's test_file takes no options, so the Neovim it starts for a spec gets no -u and would read the developer's
+  # init file. Without -u, Neovim runs $VIMINIT instead, so VIMINIT runs tests/minimal_init.lua, by an absolute path
+  # in a variable so a path with a space or % needs no escaping. VIMINIT and the variable reach every process the spec
+  # starts, and a Neovim there without -u runs minimal_init.lua too. The Neovim started here has -u.
+  # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
+  # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
+  # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
+  # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
+  # subshell has no pipefail and exits with the status of the first command itself: with pipefail, bash prints a job
+  # report ("Killed", two lines) in the subshell when the cleanup above kills `timeout`.
+  (
+    set +o pipefail
+    VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
+      CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
+      XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
+      bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
+      nvim --headless -i NONE -u tests/minimal_init.lua \
+      -c "lua require('plenary.test_harness').test_file('$test_file')" \
+      2>&1 | tee "$temp_output"
+    exit "${PIPESTATUS[0]}"
+  ) &
+  if wait $!; then
     EXIT_CODE=0
   else
     EXIT_CODE=$?
   fi
+  CURRENT_GROUP_FILE=""
 
   # Parse results from output
   local clean_output
@@ -80,7 +127,8 @@ run_test_file() {
   fi
 
   # Cleanup
-  rm -f "$temp_output" "$group_file"
+  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir"
+  CURRENT_TEMP=()
 }
 
 for test_file in tests/integration/*_spec.lua; do

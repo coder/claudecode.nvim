@@ -37,11 +37,24 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
   '    set -- -k 1s "$@"',
   "  fi",
   "fi",
+  'if [ -f "$STUB_DIR/$name.window" ]; then : > "$STUB_DIR/$name.timeout_started"; sleep 1; fi',
   'echo "$1 $2 $3" >> "$STUB_DIR/timeout_args"',
   'exec "$REAL_TIMEOUT" "$@"',
 })
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
+  'echo "$*" >> "$STUB_DIR/nvim_args"',
+  'if [ -f "$STUB_DIR/$name.sleep" ]; then',
+  '  if [ -f "$STUB_DIR/$name.deaf_to_term" ]; then trap "" TERM; fi',
+  '  : > "$STUB_DIR/$name.started"',
+  '  (sleep 2; mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada") &',
+  "  wait",
+  '  : > "$STUB_DIR/$name.ended"',
+  "fi",
+  "folders=missing",
+  'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
+  'printf "%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n" "${VIMINIT-unset}" "${CLAUDECODE_MINIMAL_INIT-unset}" \\',
+  '  "${XDG_STATE_HOME-unset}" "${XDG_CONFIG_HOME-unset}" "$folders" "${XDG_DATA_HOME-unset}" >> "$STUB_DIR/env_seen"',
   'if [ -f "$STUB_DIR/$name.ignore_term" ]; then',
   "  trap '' TERM",
   '  : > "$STUB_DIR/$name.ready"',
@@ -286,6 +299,237 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("1", status, output)
     local _, limit = timeout_limits()
     assert.is_truthy(output:find("nvim did not exit within " .. limit .. "s", 1, true), output)
+  end)
+
+  ---@return table[] seen One entry for each file the stub nvim ran, with the strings viminit, minimal_init, state_home,
+  ---config_home, folders and data_home
+  local function env_seen()
+    local seen = {}
+    local log = assert(io.open(dir .. "/env_seen"))
+    for line in log:lines() do
+      local viminit, minimal_init, state_home, config_home, folders, data_home =
+        line:match("^([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)\t([^\t]*)$")
+      assert(viminit, line)
+      table.insert(seen, {
+        viminit = viminit,
+        minimal_init = minimal_init,
+        state_home = state_home,
+        config_home = config_home,
+        folders = folders,
+        data_home = data_home,
+      })
+    end
+    log:close()
+    return seen
+  end
+
+  -- A Neovim without -u runs VIMINIT. This runs it with `vim.env` and `dofile` stood in for.
+  ---@param viminit string
+  ---@param variable string|nil The value of CLAUDECODE_MINIMAL_INIT
+  ---@return string[] loaded What the command passed to dofile
+  local function files_loaded_by(viminit, variable)
+    local command = assert(viminit:match("^lua (.+)$"), "VIMINIT is a lua command, not " .. viminit)
+    local loaded = {}
+    local chunk = assert(loadstring(command))
+    setfenv(chunk, {
+      vim = { env = { CLAUDECODE_MINIMAL_INIT = variable } },
+      dofile = function(path)
+        table.insert(loaded, tostring(path))
+      end,
+    })
+    chunk()
+    return loaded
+  end
+
+  it("makes the Neovim that plenary starts for a spec run tests/minimal_init.lua by its absolute path", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()[1]
+    assert.are.same({ dir .. "/tests/minimal_init.lua" }, files_loaded_by(seen.viminit, seen.minimal_init))
+  end)
+
+  it("loads no file when CLAUDECODE_MINIMAL_INIT is missing, as dofile(nil) would read standard input", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.are.same({}, files_loaded_by(env_seen()[1].viminit, nil))
+  end)
+
+  it("leaves XDG_DATA_HOME alone, because plenary lives there", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.are.equal(os.getenv("XDG_DATA_HOME") or "unset", env_seen()[1].data_home)
+  end)
+
+  it("gives the Neovim of each file its own state and config folders and removes them afterwards", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+      { name = "b_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()
+    assert.are.equal(2, #seen)
+    assert.are_not.equal(seen[1].state_home, seen[2].state_home)
+    assert.are_not.equal(seen[1].config_home, seen[2].config_home)
+    for _, entry in ipairs(seen) do
+      assert.are_not.equal("unset", entry.state_home)
+      assert.are_not.equal("unset", entry.config_home)
+      assert.are_not.equal(entry.state_home, entry.config_home)
+      assert.are.equal("present", entry.folders, "both folders exist while the Neovim runs")
+      shell("test ! -e " .. quote(entry.state_home) .. " && test ! -e " .. quote(entry.config_home))
+    end
+  end)
+
+  it("starts its own Neovim without a ShaDa file, because the Neovim of plenary shares its folders", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    local log = assert(io.open(dir .. "/nvim_args"))
+    local args = log:read("*a")
+    log:close()
+    local tokens = {}
+    for token in args:gmatch("%S+") do
+      table.insert(tokens, token)
+    end
+    local has_no_shada = false
+    for index, token in ipairs(tokens) do
+      if token == "-i" and tokens[index + 1] == "NONE" then
+        has_no_shada = true
+      end
+    end
+    assert.is_true(has_no_shada, args)
+  end)
+
+  ---@class SignalRun
+  ---@field window boolean|nil Send the signal when timeout has started but has not made its process group yet
+  ---@field deaf_to_term boolean|nil The file's Neovim ignores SIGTERM
+  ---@field caller_loop boolean|nil Run the runner twice in a calling shell and send the signal to their process group
+
+  ---@param signal string The signal to send
+  ---@param run SignalRun
+  ---@return table result `status` of the runner (of the calling shell with `caller_loop`), `left` in its TMPDIR once
+  --- its Neovim's grandchild would have written, `ended` when the file's Neovim got to the end of its 2 second run,
+  --- `runner_output` (stdout and stderr of the runner), and `caller_output` of the calling shell
+  local function signal_runner(signal, run)
+    write(dir .. "/tests/integration/slow_spec.lua", {})
+    write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
+    write(dir .. "/slow_spec.lua.exit", { "0" })
+    write(dir .. "/slow_spec.lua.sleep", {})
+    if run.window then
+      write(dir .. "/slow_spec.lua.window", {})
+    end
+    if run.deaf_to_term then
+      write(dir .. "/slow_spec.lua.deaf_to_term", {})
+    end
+    local temp = dir .. "/tmp"
+    shell("mkdir -p " .. quote(temp))
+    local runner_out = " > " .. quote(dir .. "/runner.out") .. " 2>&1"
+    local job = quote(script) .. runner_out
+    local target = "$pid"
+    if run.caller_loop then
+      job = "bash -c " .. quote('for i in 1 2; do "$0" > ' .. quote(dir .. "/runner.out") .. " 2>&1; echo ran=$i; done")
+      job = job .. " " .. quote(script) .. " > " .. quote(dir .. "/caller.out") .. " 2>&1"
+      target = "-- -$pid"
+    end
+    -- `set -m` gives the background job its own process group and leaves SIGINT unignored, as a runner has at a prompt.
+    local inner = "cd "
+      .. quote(dir)
+      .. " && export TMPDIR="
+      .. quote(temp)
+      .. " PATH="
+      .. quote(dir .. "/bin")
+      .. ':"$PATH" STUB_DIR='
+      .. quote(dir)
+      .. " REAL_TIMEOUT="
+      .. quote(real_timeout)
+      .. "; set -m; "
+      .. job
+      .. " & pid=$!; for _ in $(seq 100); do [ -e "
+      .. quote(dir .. (run.window and "/slow_spec.lua.timeout_started" or "/slow_spec.lua.started"))
+      .. " ] && break; sleep 0.1; done; kill -"
+      .. signal
+      .. " "
+      .. target
+      .. "; wait $pid; echo status=$?; sleep 3"
+    local pipe = assert(io.popen("bash -c " .. quote(inner)))
+    local output = pipe:read("*a")
+    pipe:close()
+    local listing = assert(io.popen("ls -A " .. quote(temp)))
+    local left = listing:read("*a")
+    listing:close()
+    local caller = io.open(dir .. "/caller.out")
+    local caller_output = caller and caller:read("*a") or ""
+    if caller then
+      caller:close()
+    end
+    local runner = io.open(dir .. "/runner.out")
+    local runner_output = runner and runner:read("*a") or ""
+    if runner then
+      runner:close()
+    end
+    local ended = io.open(dir .. "/slow_spec.lua.ended")
+    if ended then
+      ended:close()
+    end
+    return {
+      status = output:match("status=(%d+)") or output,
+      left = left,
+      ended = ended ~= nil,
+      caller_output = caller_output,
+      runner_output = runner_output,
+    }
+  end
+
+  for _, case in ipairs({ { "SIGTERM", "TERM", "143" }, { "SIGINT", "INT", "130" } }) do
+    local name, signal, expected_status = case[1], case[2], case[3]
+    local description = "stops the running file and removes its temp files and folders on "
+    it(description .. name .. " at once, and exits " .. expected_status, function()
+      local result = signal_runner(signal, {})
+
+      assert.are.equal(expected_status, result.status)
+      assert.are.equal("", result.left, "the runner left temp files behind, or its Neovim's grandchild ran on")
+      assert.is_false(result.ended, "the runner waited for the file to end, it did not stop it")
+      assert.is_nil(
+        result.runner_output:find("line %d+:"),
+        "bash printed a report of the killed job: " .. result.runner_output
+      )
+    end)
+  end
+
+  it("stops a file whose Neovim ignores SIGTERM when the runner gets SIGTERM", function()
+    local result = signal_runner("TERM", { deaf_to_term = true })
+
+    assert.are.equal("143", result.status)
+    assert.are.equal("", result.left, "a Neovim that ignores SIGTERM ran on after the runner died")
+    assert.is_false(result.ended)
+  end)
+
+  it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()
+    local result = signal_runner("TERM", { window = true })
+
+    assert.are.equal("143", result.status)
+    assert.are.equal("", result.left, "the runner left temp files or folders behind")
+    assert.is_nil(io.open(dir .. "/slow_spec.lua.started"), "the file's Neovim started after the runner died")
+  end)
+
+  it("dies by SIGINT on Ctrl-C, so a shell that calls it in a loop stops the loop", function()
+    local result = signal_runner("INT", { caller_loop = true })
+
+    assert.are.equal("130", result.status)
+    assert.are.equal("", result.caller_output, "the calling shell went on after the runner got Ctrl-C")
+    assert.are.equal("", result.left, "the runner left temp files or folders behind")
+    assert.is_false(result.ended)
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
