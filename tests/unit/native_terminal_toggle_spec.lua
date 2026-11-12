@@ -426,7 +426,12 @@ describe("claudecode.terminal.native toggle behavior", function()
               local buf = mock_state.buffers[bufnr]
               if buf then
                 buf.options = buf.options or {}
+                local before = buf.options[option]
                 buf.options[option] = value
+                -- OptionSet fires when the value changes, inside the write.
+                if option == "bufhidden" and before ~= value and mock_state.bufhidden_autocmd then
+                  mock_state.bufhidden_autocmd(bufnr, value)
+                end
               end
             end,
             __index = function(_, option)
@@ -1588,6 +1593,131 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal(0, windows_showing(active))
       native_provider.simple_toggle("claude", {}, config)
       assert.are.equal(1, windows_showing(active))
+    end)
+
+    -- The write of bufhidden fires OptionSet inside the hide. An autocmd of that event can end, hide or show the
+    -- terminal, and the hide must not use the window it read before the write.
+    describe("when an OptionSet autocmd of bufhidden runs during a hide", function()
+      local mock_state
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        mock_vim.notify = function() end
+        mock_vim.log = { levels = { ERROR = 4, WARN = 3, INFO = 2 } }
+      end)
+
+      -- Starts Claude, lets an autocmd of yours set wipe (so the hide writes hide again), and arms the OptionSet autocmd.
+      local function arm(action)
+        native_provider.open("claude", {}, config, true)
+        local active = native_provider.get_active_bufnr()
+        mock_vim.bo[active].bufhidden = "wipe"
+        local fired = 0
+        mock_state.bufhidden_autocmd = function()
+          fired = fired + 1
+          action(active)
+        end
+        return active, function()
+          return fired
+        end
+      end
+
+      it("should raise nothing and leave Claude stopped when the autocmd calls close", function()
+        local active, fired = arm(function()
+          native_provider.close()
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.is_nil(native_provider.get_active_bufnr())
+        assert.is_nil(mock_state.buffers[active])
+        assert.is_nil(next(mock_state.running_jobs))
+      end)
+
+      it("should raise nothing when the autocmd closes the window of Claude itself", function()
+        local active, fired = arm(function(terminal_bufnr)
+          for winid, win in pairs(mock_state.windows) do
+            if win.bufnr == terminal_bufnr then
+              mock_state.windows[winid] = nil
+            end
+          end
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.are.equal(active, native_provider.get_active_bufnr())
+        assert.are.equal(0, windows_showing(active))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      end)
+
+      it("should leave the window of Claude when the autocmd closes every other window", function()
+        local active, fired = arm(function(terminal_bufnr)
+          for winid, win in pairs(mock_state.windows) do
+            if win.bufnr ~= terminal_bufnr then
+              mock_state.windows[winid] = nil
+            end
+          end
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.are.equal(1, windows_showing(active))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      end)
+
+      -- The autocmd hides Claude and shows it again, which gives it a new window. That window is not the one this hide read.
+      it("should leave the new window of Claude when the autocmd hides and shows it again", function()
+        local active, fired = arm(function()
+          native_provider.simple_toggle("claude", {}, config)
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.are.equal(active, native_provider.get_active_bufnr())
+        assert.are.equal(1, windows_showing(active))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      end)
+
+      local nested = {
+        {
+          "simple_toggle",
+          function()
+            native_provider.simple_toggle("claude", {}, config)
+          end,
+        },
+        {
+          "focus_toggle",
+          function()
+            native_provider.focus_toggle("claude", {}, config)
+          end,
+        },
+      }
+      for _, entry in ipairs(nested) do
+        it("should raise nothing and keep Claude hidden when the autocmd calls " .. entry[1], function()
+          local active, fired = arm(entry[2])
+
+          assert.has_no.errors(function()
+            native_provider.simple_toggle("claude", {}, config)
+          end)
+
+          assert.are.equal(1, fired())
+          assert.are.equal(active, native_provider.get_active_bufnr())
+          assert.are.equal(0, windows_showing(active))
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+        end)
+      end
     end)
 
     -- A write of the same value fires OptionSet, so a hide writes bufhidden only when it is not hide.

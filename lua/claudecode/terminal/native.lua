@@ -412,7 +412,13 @@ local function hide_terminal()
     -- closing the window would then end Claude. So a hide sets it again, and only then: a write of the same value fires
     -- OptionSet too.
     if vim.bo[bufnr].bufhidden ~= "hide" then
+      local hiding_winid = winid
       vim.bo[bufnr].bufhidden = "hide"
+      -- OptionSet fires inside the write, and an autocmd of it can have ended, hidden or shown the terminal. Then winid
+      -- is gone or names another window, and there is no window of this hide left to close.
+      if winid ~= hiding_winid or not vim.api.nvim_win_is_valid(winid) or is_last_window(winid) then
+        return
+      end
     end
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
