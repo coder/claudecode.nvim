@@ -1934,6 +1934,27 @@ describe("Range Selection Tests", function()
           end)
         end)
 
+        -- A typeahead can start the next selection and edit it before the schedule of the operator's edit runs.
+        it("does not let the stale check of an operator clear the listener of the next selection", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            _G.vim.test.set_mode("n")
+            edit_text(1) -- an operator's edit: the flush comes first, and its check is queued
+            leave_visual_mode()
+
+            enter_visual_mode() -- the next selection, in the same typeahead
+            edit_text(1) -- a plugin's edit of it sets the listener
+            assert.are.equal(1, #key_listeners())
+
+            queued[1]() -- the stale check of the operator runs now
+
+            assert.are.equal(1, #key_listeners())
+            press_next_key() -- the Esc: visual mode is on, so the edit of the plugin does not consume
+            assert.is_false(selection.state.visual_entry.consumed)
+            assert.are.equal(0, selection.state.visual_entry.unchecked_edits)
+          end)
+        end)
+
         it("keeps one key listener for several edits and clears it at the next key", function()
           with_queued_schedule(function()
             enter_visual_mode()
