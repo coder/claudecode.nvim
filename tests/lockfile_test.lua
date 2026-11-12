@@ -36,8 +36,8 @@ if not _G.vim then
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
       filereadable = function(path)
-        -- Vim gives 1 for a file that it can read, and 0 for a missing file, a file that it cannot read and a folder
-        -- (fopen opens a folder, and the first read of it fails).
+        -- Neovim gives 1 only for a file that exists, can be read and is not a folder (`:h filereadable()`). `io.open`
+        -- opens a folder on Linux, so the mock reads one byte, and that read fails for a folder.
         local file = io.open(path, "r")
         if file then
           local _, read_error = file:read(1)
@@ -287,6 +287,12 @@ do
       if test("-f") then
         return { type = "file" }
       end
+      if test("-p") then
+        return { type = "fifo" }
+      end
+      if test("-S") then
+        return { type = "socket" }
+      end
       return nil, "ENOENT: no such file or directory", "ENOENT"
     end
   end
@@ -303,6 +309,30 @@ do
     hrtime_counter = hrtime_counter + 1
     return hrtime_counter
   end
+end
+
+-- Whether this user is root. Root reads any file and opens any FIFO, whatever its mode.
+local function running_as_root()
+  local pipe = assert(io.popen("id -u"))
+  local uid = pipe:read("*l")
+  pipe:close()
+  return uid == "0"
+end
+
+-- Makes a FIFO at `path` with `mode` (as a string such as "600"), or returns false when mkfifo is not there.
+local function make_fifo(path, mode)
+  local ok = os.execute("mkfifo -m " .. mode .. " " .. temp_dir.quote(path) .. " 2>/dev/null")
+  return ok == 0 or ok == true
+end
+
+-- Makes a Unix socket file at `path` (python3 binds one and the file stays when it exits), or returns false.
+local function make_socket(path)
+  local ok = os.execute(
+    "python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "
+      .. temp_dir.quote(path)
+      .. " 2>/dev/null"
+  )
+  return ok == 0 or ok == true
 end
 
 describe("Lockfile Module", function()
@@ -596,6 +626,41 @@ describe("Lockfile Module", function()
       assert(still_there, "the lock file is gone")
     end)
 
+    -- A FIFO or a socket at the lock path was deleted before, because `filereadable` let it through. It is still.
+    it("should delete a FIFO at the lock path", function()
+      local port = 12358
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      if not make_fifo(lock_path, "600") then
+        return pending("cannot make a FIFO here")
+      end
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      if still_there then
+        os.remove(lock_path)
+      end
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(not still_there, "the FIFO stays")
+    end)
+
+    it("should delete a socket at the lock path", function()
+      local port = 12359
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      if not make_socket(lock_path) then
+        return pending("cannot make a socket here")
+      end
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      if still_there then
+        os.remove(lock_path)
+      end
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(not still_there, "the socket stays")
+    end)
+
     it("should report a failure when os.remove raises", function()
       local port = 12352
       local created, lock_path = lockfile.create(port)
@@ -723,6 +788,40 @@ describe("Lockfile Module", function()
       assert(err:find(lock_path, 1, true), err)
       assert(err:find("Permission denied", 1, true), err)
       assert(not err:find("does not exist", 1, true), err)
+    end)
+
+    it("should say that a FIFO that cannot be read exists but cannot be read", function()
+      local port = 12363
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      -- Root opens any FIFO whatever its mode, and the open would wait for a writer.
+      if running_as_root() then
+        return pending("root opens a FIFO with mode 000")
+      end
+      if not make_fifo(lock_path, "000") then
+        return pending("cannot make a FIFO here")
+      end
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.remove(lock_path)
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(tostring(err):find("Lock file exists but cannot be read: ", 1, true) == 1, tostring(err))
+    end)
+
+    it("should say that a socket at the lock path exists but cannot be read", function()
+      local port = 12364
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      if not make_socket(lock_path) then
+        return pending("cannot make a socket here")
+      end
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.remove(lock_path)
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(tostring(err):find("Lock file exists but cannot be read: ", 1, true) == 1, tostring(err))
     end)
 
     it("should say that a folder named like a lock file is not a lock file", function()

@@ -56,7 +56,7 @@ local fd = vim.loop.fs_open(tmp_path, "wx", tonumber("600", 8))
 os.rename(tmp_path, lock_path)
 ```
 
-- `remove` deletes the file with `os.remove`. It returns an error when no readable lock file exists and when `os.remove` fails [lua/claudecode/lockfile.lua:M.remove].
+- `remove` deletes the file with `os.remove`. It returns an error when `vim.loop.fs_stat` finds nothing or a folder at the lock path, and when `os.remove` fails. A lock file that exists but cannot be read (mode 000) is still deleted [lua/claudecode/lockfile.lua:M.remove].
 - `init.lua` owns the lifecycle. `start` calls `create` once the server has bound its port [lua/claudecode/init.lua:M.start]. `stop` calls `remove` and only logs a warning when the removal fails, so a lock file that the removal failed to delete stays [lua/claudecode/init.lua:M.stop]. The `VimLeavePre` autocmd that `setup` creates calls `stop` when the server runs [lua/claudecode/init.lua:M.setup] (see Resource Cleanup).
 
 ### 3. MCP Tool System (`tools/`)
