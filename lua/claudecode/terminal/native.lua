@@ -414,9 +414,15 @@ local function hide_terminal()
     if vim.bo[bufnr].bufhidden ~= "hide" then
       local hiding_winid = winid
       vim.bo[bufnr].bufhidden = "hide"
-      -- OptionSet fires inside the write, and an autocmd of it can have ended, hidden or shown the terminal. Then winid
-      -- is gone or names another window, and there is no window of this hide left to close.
-      if winid ~= hiding_winid or not vim.api.nvim_win_is_valid(winid) or is_last_window(winid) then
+      -- OptionSet fires inside the write, and an autocmd of it can have ended, hidden or shown the terminal, or shown a
+      -- file of yours in its window. Then winid is gone, names another window, or shows another buffer, and there is no
+      -- window of this hide left to close.
+      if
+        winid ~= hiding_winid
+        or not vim.api.nvim_win_is_valid(winid)
+        or vim.api.nvim_win_get_buf(winid) ~= bufnr
+        or is_last_window(winid)
+      then
         return
       end
     end

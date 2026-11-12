@@ -1690,6 +1690,32 @@ describe("claudecode.terminal.native toggle behavior", function()
         assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
       end)
 
+      -- The autocmd shows a file of yours in Claude's window. The window id stays the same, and it is your window now.
+      it(
+        "should leave the window that shows a file of yours when the autocmd swaps the file into Claude's window",
+        function()
+          local file_bufnr = mock_vim.api.nvim_create_buf(true, false)
+          local swapped_winid
+          local active, fired = arm(function(terminal_bufnr)
+            for winid, win in pairs(mock_state.windows) do
+              if win.bufnr == terminal_bufnr then
+                swapped_winid = winid
+                win.bufnr = file_bufnr
+              end
+            end
+          end)
+
+          assert.has_no.errors(function()
+            native_provider.simple_toggle("claude", {}, config)
+          end)
+
+          assert.are.equal(1, fired())
+          assert.is_not_nil(mock_state.windows[swapped_winid])
+          assert.are.equal(file_bufnr, mock_state.windows[swapped_winid].bufnr)
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+        end
+      )
+
       local nested = {
         {
           "simple_toggle",

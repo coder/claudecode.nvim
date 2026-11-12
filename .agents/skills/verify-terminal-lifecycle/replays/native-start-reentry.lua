@@ -99,7 +99,7 @@ vim.defer_fn(function()
     local term = fresh()
     local path = vim.fn.getcwd() .. "/autosave-file.txt"
     vim.fn.writefile({ "old text" }, path)
-    vim.cmd("edit " .. path)
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
     vim.api.nvim_buf_set_lines(0, 0, -1, false, { "new text the user typed" })
     vim.api.nvim_create_autocmd(
       "WinLeave",
@@ -185,7 +185,7 @@ vim.defer_fn(function()
   end)
 
   -- An OptionSet autocmd of bufhidden runs during the hide (it hides Claude after an autocmd of yours changed bufhidden).
-  for _, action in ipairs({ "close", "simple_toggle", "focus_toggle", "hide and show" }) do
+  for _, action in ipairs({ "close", "simple_toggle", "focus_toggle", "hide and show", "show a file" }) do
     local label = "native, an OptionSet(bufhidden) autocmd calls " .. action .. " during a hide"
     lib.attempt(label, function()
       local term = fresh()
@@ -195,6 +195,7 @@ vim.defer_fn(function()
       vim.bo[buf].bufhidden = "wipe"
       local group = vim.api.nvim_create_augroup("start_reentry_optionset", { clear = true })
       local fired = 0
+      local file_win = nil
       vim.api.nvim_create_autocmd("OptionSet", {
         group = group,
         pattern = "bufhidden",
@@ -204,6 +205,10 @@ vim.defer_fn(function()
             if action == "hide and show" then
               pcall(term.simple_toggle)
               pcall(term.simple_toggle)
+            elseif action == "show a file" then
+              -- A file of yours replaces Claude in its window. The window id stays, and the window is yours now.
+              file_win = vim.fn.bufwinid(buf)
+              vim.api.nvim_win_set_buf(file_win, vim.api.nvim_create_buf(true, false))
             else
               pcall(term[action])
             end
@@ -230,6 +235,7 @@ vim.defer_fn(function()
           or fired ~= 1
           or #running ~= wanted_running
           or (action == "hide and show" and shown ~= 1)
+          or (action == "show a file" and not (file_win and vim.api.nvim_win_is_valid(file_win)))
           or (action ~= "close" and action ~= "hide and show" and shown ~= 0)
           or #errors > 0
       )
