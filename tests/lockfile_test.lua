@@ -339,6 +339,14 @@ local function running_as_root()
   return uid == "0"
 end
 
+-- Runs a shell command that a test's setup needs, and fails the test when it exits with a status that is not 0.
+-- `assert(os.execute(...))` never fails here: LuaJIT returns the raw status, 0 for success and 256 for exit status 1, and
+-- every number is truthy. Lua 5.2 and later return true for success.
+local function shell(command)
+  local status = os.execute(command)
+  assert(status == 0 or status == true, "failed: " .. command)
+end
+
 -- Makes a FIFO at `path` with `mode` (as a string such as "600"), or returns false when mkfifo is not there.
 local function make_fifo(path, mode)
   local ok = os.execute("mkfifo -m " .. mode .. " " .. temp_dir.quote(path) .. " 2>/dev/null")
@@ -607,7 +615,7 @@ describe("Lockfile Module", function()
     it("should not delete a folder that is named like a lock file", function()
       local port = 12355
       local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
-      assert(os.execute("mkdir " .. temp_dir.quote(lock_path)))
+      shell("mkdir " .. temp_dir.quote(lock_path))
 
       local success, err = lockfile.remove(port)
       local still_there = exists(lock_path)
@@ -667,7 +675,7 @@ describe("Lockfile Module", function()
             local stat, err, name = real(path, ...)
             if path == lock_path and not replaced then
               replaced = true
-              assert(os.execute("rm -f " .. quoted .. " && mkdir " .. quoted))
+              shell("rm -f " .. quoted .. " && mkdir " .. quoted)
             end
             return stat, err, name
           end
@@ -705,9 +713,7 @@ describe("Lockfile Module", function()
 
     it("should remove a link that points nowhere", function()
       removes_only_the_name(12366, function(lock_path)
-        assert(
-          os.execute("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
-        )
+        shell("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
         return function()
           return true
         end
@@ -718,7 +724,7 @@ describe("Lockfile Module", function()
       removes_only_the_name(12367, function(lock_path)
         local created, other_path = lockfile.create(12368)
         assert(created == true)
-        assert(os.execute("ln -s " .. temp_dir.quote(other_path) .. " " .. temp_dir.quote(lock_path)))
+        shell("ln -s " .. temp_dir.quote(other_path) .. " " .. temp_dir.quote(lock_path))
         return function()
           -- The other file is still there, and it still holds its content (the test reads no content: test -s).
           local ok = os.execute("test -s " .. temp_dir.quote(other_path))
@@ -732,7 +738,7 @@ describe("Lockfile Module", function()
       removes_only_the_name(12369, function(lock_path)
         local created, other_path = lockfile.create(12370)
         assert(created == true)
-        assert(os.execute("ln " .. temp_dir.quote(other_path) .. " " .. temp_dir.quote(lock_path)))
+        shell("ln " .. temp_dir.quote(other_path) .. " " .. temp_dir.quote(lock_path))
         return function()
           local ok = os.execute("test -s " .. temp_dir.quote(other_path))
           os.remove(other_path)
@@ -744,8 +750,8 @@ describe("Lockfile Module", function()
     it("should remove a link to a folder and keep the folder and what it holds", function()
       removes_only_the_name(12371, function(lock_path)
         local folder = lockfile.lock_dir .. "/folder-of-12371"
-        assert(os.execute("mkdir " .. temp_dir.quote(folder) .. " && touch " .. temp_dir.quote(folder .. "/keep")))
-        assert(os.execute("ln -s " .. temp_dir.quote(folder) .. " " .. temp_dir.quote(lock_path)))
+        shell("mkdir " .. temp_dir.quote(folder) .. " && touch " .. temp_dir.quote(folder .. "/keep"))
+        shell("ln -s " .. temp_dir.quote(folder) .. " " .. temp_dir.quote(lock_path))
         return function()
           local ok = os.execute("test -f " .. temp_dir.quote(folder .. "/keep"))
           os.execute("rm -rf " .. temp_dir.quote(folder))
@@ -955,7 +961,7 @@ describe("Lockfile Module", function()
     it("should say that a folder named like a lock file is not a lock file", function()
       local port = 12362
       local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
-      assert(os.execute("mkdir " .. temp_dir.quote(lock_path)))
+      shell("mkdir " .. temp_dir.quote(lock_path))
 
       local success, token, err = lockfile.get_auth_token(port)
       os.execute("rmdir " .. temp_dir.quote(lock_path))
@@ -968,9 +974,7 @@ describe("Lockfile Module", function()
     it("should say that a link that points nowhere is no lock file", function()
       local port = 12372
       local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
-      assert(
-        os.execute("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
-      )
+      shell("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
 
       local success, token, err = lockfile.get_auth_token(port)
       os.execute("rm -f " .. temp_dir.quote(lock_path))
