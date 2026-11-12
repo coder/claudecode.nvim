@@ -8,78 +8,14 @@ end
 -- The providers and the diff put the Claude terminal into a split with `utils.win_set_buf_in_split`, and a plain
 -- `nvim_win_set_buf` was what they called before. The cases below pin what a user of the plugin sees of that swap, in
 -- shapes where a plain swap already works: the events Neovim fires and their order, an autosave on `BufHidden`, the
--- mode after a `startinsert` autocmd, whether a pending diff gets its answer, the error of a raising autocmd, a
--- terminal mapping that a `BufWinEnter` autocmd installs, and the buffers that a swap refuses to wipe. They go through
--- the public commands and `openDiff`, not through the helper, so they pass on a tree that has no helper. The helper must
--- keep every one of them. Each case runs in its own headless Neovim, so a crash or a hang fails one case, with its exit
--- code, and not the whole file.
-describe("what the Claude terminal placement keeps from a plain swap", function()
-  -- Every case script starts with this. `P` holds the parameters of the case, `result` is what the case reports.
-  local PRELUDE = [==[
-local P = vim.json.decode(os.getenv("CASE") or "{}")
-vim.o.swapfile = false
-local dir = vim.fn.tempname()
-vim.fn.mkdir(dir, "p")
-vim.fn.writefile({ "alpha", "beta" }, dir .. "/a.txt")
-vim.fn.writefile({ "b1", "b2" }, dir .. "/b.txt")
-vim.cmd("edit " .. vim.fn.fnameescape(dir .. "/a.txt"))
-local file, original = vim.api.nvim_get_current_buf(), vim.api.nvim_get_current_win()
-local first_tab = vim.api.nvim_get_current_tabpage()
-local result = {}
-local function finish()
-  vim.fn.writefile({ vim.json.encode(result) }, os.getenv("CONTRACT_OUT"))
-  vim.cmd("qa!")
-end
-vim.defer_fn(function()
-  result.timeout = true
-  finish()
-end, 15000)
-local function setup_native()
-  require("claudecode").setup({
-    auto_start = false,
-    log_level = "error",
-    terminal_cmd = "sleep 3600",
-    terminal = { provider = "native", auto_insert = false },
-  })
-  return require("claudecode.terminal")
-end
-local labels = {}
-local function buf_label(buf)
-  if buf == file then
-    return "A"
-  end
-  if labels[buf] then
-    return labels[buf]
-  end
-  if vim.api.nvim_buf_is_valid(buf) and (vim.b[buf].claudecode_native_terminal or vim.bo[buf].buftype == "terminal") then
-    return "T"
-  end
-  return "#" .. buf
-end
-local function win_label(win)
-  if win == original then
-    return "O"
-  end
-  return vim.api.nvim_win_get_tabpage(win) == first_tab and "S" or "N"
-end
-local events = {}
-local function record_events()
-  vim.api.nvim_create_autocmd(
-    { "BufLeave", "BufWinLeave", "BufHidden", "BufUnload", "BufEnter", "BufWinEnter", "WinEnter", "WinLeave" },
-    {
-      callback = function(ev)
-        events[#events + 1] = ev.event .. ":" .. buf_label(ev.buf) .. ":" .. win_label(vim.api.nvim_get_current_win())
-      end,
-    }
-  )
-end
-local function hide_terminal(terminal)
-  for _, win in ipairs(vim.fn.win_findbuf(terminal.get_active_terminal_bufnr())) do
-    vim.api.nvim_win_close(win, false)
-  end
-end
-]==]
+-- mode after a `startinsert` autocmd, the error of a raising autocmd, a terminal mapping that a `BufWinEnter` autocmd
+-- installs, and the buffers that a swap refuses to wipe. They go through the public commands and `openDiff`, not through
+-- the helper, so they pass on a tree that has no helper. The helper must keep every one of them. The answer of a pending
+-- diff is in terminal_placement_diff_answers_spec.lua. Each case runs in its own headless Neovim, so a crash or a hang
+-- fails one case, with its exit code, and not the whole file.
+local child = require("tests.helpers.placement_child")
 
+describe("what the Claude terminal placement keeps from a plain swap", function()
   local SCENARIOS = {
     events = [==[
 local terminal = setup_native()
@@ -253,80 +189,6 @@ vim.defer_fn(function()
         end, 150)
       end, 300)
     end, 150)
-  end, 200)
-end, 20)
-]==],
-    diff_handler = [==[
--- A pending openDiff whose proposal is the buffer that the terminal's split shows. A BufLeave autocmd of the user's on
--- the proposal (P.kind), then the terminal is shown: focused (:ClaudeCodeOpen, P.focus "f") or not (ensure_visible,
--- "u"). Does Claude get an answer, and is the proposal still in a window?
-local terminal = setup_native()
-local tools = require("claudecode.tools.init")
-local diff = require("claudecode.diff")
-tools.register_all()
-_G.claude_deferred_responses = {}
-vim.fn.writefile({ "other" }, dir .. "/other.txt")
-local answers = {}
-vim.defer_fn(function()
-  terminal.open()
-  vim.defer_fn(function()
-    hide_terminal(terminal)
-    vim.cmd("stopinsert")
-    local call = tools.handle_invoke({ id = "c" }, {
-      name = "openDiff",
-      arguments = {
-        old_file_path = dir .. "/a.txt",
-        new_file_path = dir .. "/a.txt",
-        new_file_contents = "alpha changed\n",
-        tab_name = "handler proposal",
-      },
-    })
-    _G.claude_deferred_responses[tostring(call.coroutine)] = function(response)
-      answers[#answers + 1] = response.content and response.content[1].text or "?"
-    end
-    local proposal = diff._get_active_diffs()["handler proposal"].new_buffer
-    local proposal_window = vim.fn.win_findbuf(proposal)[1]
-    vim.api.nvim_set_current_win(proposal_window)
-    local kind = P.kind
-    vim.api.nvim_create_autocmd("BufLeave", {
-      buffer = proposal,
-      once = true,
-      nested = P.nested == true,
-      callback = function()
-        local current = vim.api.nvim_get_current_win()
-        if kind == "close_current" then
-          pcall(vim.api.nvim_win_close, current, true)
-        elseif kind == "close_command" then
-          pcall(vim.cmd, "close")
-        elseif kind == "hide_command" then
-          pcall(vim.cmd, "hide")
-        elseif kind == "enew" then
-          pcall(vim.cmd, "enew")
-        elseif kind == "edit_other" then
-          pcall(vim.cmd, "edit " .. vim.fn.fnameescape(dir .. "/other.txt"))
-        elseif kind == "buffer_file" then
-          pcall(vim.cmd, "buffer " .. file)
-        elseif kind == "previous_window" then
-          pcall(vim.cmd, "wincmd p")
-        end
-      end,
-    })
-    result.show_ok = pcall(function()
-      if P.focus == "f" then
-        terminal.open()
-      else
-        terminal.ensure_visible()
-      end
-    end)
-    vim.defer_fn(function()
-      local entry = diff._get_active_diffs()["handler proposal"]
-      local valid = vim.api.nvim_buf_is_valid(proposal)
-      result.answers = #answers
-      result.status = entry and entry.status or "cleared"
-      result.proposal_windows = valid and #vim.fn.win_findbuf(proposal) or -1
-      result.outcome = #answers > 0 and "answered" or (result.proposal_windows > 0 and "pending-visible" or "pending-hidden")
-      finish()
-    end, 400)
   end, 200)
 end, 20)
 ]==],
@@ -509,52 +371,8 @@ finish()
 ]==],
   }
 
-  ---Runs scenario `name` with the parameters `case` in a headless Neovim. Returns its exit code (nil after a hang of
-  ---30 s) and the result it wrote.
-  local function run_case(name, case)
-    local script_file, out = vim.fn.tempname() .. ".lua", vim.fn.tempname()
-    vim.fn.writefile(vim.split(PRELUDE .. SCENARIOS[name], "\n"), script_file)
-    local exit_code
-    local job = vim.fn.jobstart({
-      vim.v.progpath,
-      "--headless",
-      "-u",
-      "NONE",
-      "-i",
-      "NONE",
-      "-n",
-      "--cmd",
-      "set rtp^=" .. vim.fn.getcwd(),
-      "-c",
-      "luafile " .. vim.fn.fnameescape(script_file),
-    }, {
-      env = { CASE = vim.json.encode(case or {}), CONTRACT_OUT = out },
-      on_exit = function(_, code)
-        exit_code = code
-      end,
-    })
-    assert.is_true(job > 0, "could not start a child Neovim")
-    if not vim.wait(30000, function()
-      return exit_code ~= nil
-    end, 50) then
-      vim.fn.jobstop(job)
-    end
-    local result
-    if vim.fn.filereadable(out) == 1 then
-      result = vim.json.decode(table.concat(vim.fn.readfile(out), "\n"))
-    end
-    vim.fn.delete(script_file)
-    vim.fn.delete(out)
-    return exit_code, result
-  end
-
-  ---The result of a case that ran to its end: Neovim exited 0, wrote a result, and its watchdog did not fire.
   local function run_to_end(name, case)
-    local exit_code, result = run_case(name, case)
-    assert.equal(0, exit_code, "Neovim must survive (nil is a hang): " .. vim.inspect(result))
-    assert.is_not_nil(result, "the case wrote no result")
-    assert.is_nil(result.timeout, "the case did not finish: " .. vim.inspect(result))
-    return result
+    return child.run_to_end(SCENARIOS[name], case)
   end
 
   describe("the events of the swap", function()
@@ -654,31 +472,6 @@ finish()
         assert.is_not.equal("other", result.current)
         assert.equal(result.before:sub(2), result.after, "a typed x must delete a character, not insert one")
       end)
-    end
-  end)
-
-  describe("a BufLeave autocmd of the user's on the proposal of a pending diff", function()
-    -- The proposal is in the user's window and in the split that the terminal is shown in. The autocmds that act on
-    -- the current window act on the split, which holds a second window of the proposal.
-    local keeps = { "noop", "enew", "edit_other", "buffer_file", "previous_window" }
-    local closes = { "close_current", "close_command", "hide_command" }
-    for _, focus in ipairs({ "f", "u" }) do
-      for _, kind in ipairs(keeps) do
-        it("leaves the proposal on screen and the diff pending: " .. kind .. ", focus " .. focus, function()
-          local result = run_to_end("diff_handler", { kind = kind, focus = focus })
-
-          assert.is_true(result.show_ok)
-          assert.equal("pending-visible", result.outcome, vim.inspect(result))
-          assert.equal(0, result.answers)
-        end)
-      end
-      for _, kind in ipairs(closes) do
-        it("never leaves the proposal in no window with the diff pending: " .. kind .. ", focus " .. focus, function()
-          local result = run_to_end("diff_handler", { kind = kind, focus = focus })
-
-          assert.is_not.equal("pending-hidden", result.outcome, vim.inspect(result))
-        end)
-      end
     end
   end)
 
