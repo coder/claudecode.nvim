@@ -1,9 +1,9 @@
 -- Real-Neovim check of the answer that each openDiff call gets in these exits: `:qa!`, SIGTERM, a buffer that deletes
 -- itself in its own BufUnload, `:qa!` inside a `nested = true` ClaudeCodeDiffOpened handler, and a `:qa!` or SIGTERM
--- that comes during an autocmd (nested or not). README.md lists the
--- answers under Global Invariants, in "Exit answers". This spec does not run SIGHUP, SIGKILL or :ClaudeCodeStop, and it
--- does not check the close codes, the lock file or the ClaudeCodeDiffClosed order. The child has no server, so the
--- cases without VimLeavePre show only that no call is answered.
+-- that comes during an autocmd (nested or not). README.md lists the answers under Global Invariants, in "Exit
+-- answers". This spec does not run SIGHUP, SIGKILL or :ClaudeCodeStop, and it does not check the close codes, the lock
+-- file or the ClaudeCodeDiffClosed order. The child has no server, so the cases without VimLeavePre show only that no
+-- call is answered.
 -- Neovim fires BufUnload for each loaded buffer at exit, and the proposal buffers' autocmds reject their diffs. That
 -- loop stops once an autocmd deletes the buffer it fired for: the reject of a new-file diff with the default
 -- `on_new_file_reject = "keep_empty"`, in a tab the diff did not open, deletes its proposal buffer, and another
