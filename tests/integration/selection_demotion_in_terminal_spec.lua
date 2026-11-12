@@ -1,8 +1,8 @@
 -- Real-Neovim check of a demotion that fires while you are in the Claude terminal (issue #246): select text, press
 -- Esc, enter a new Claude terminal before the demotion fires, come back. Claude must still hold the selection. A new
 -- terminal is not registered when its BufEnter fires, so nothing cancels the demotion there: with the default
--- visual_demotion_delay_ms of 50 it fires while the terminal is the current buffer, 100 ms before the debounce of the
--- terminal's own BufEnter would cancel it.
+-- visual_demotion_delay_ms of 50 it fires while the terminal is the current buffer, before the debounce of the
+-- terminal's own BufEnter can cancel it.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("a demotion that fires in the Claude terminal, with the real plugin", function()
     pending("needs a real Neovim")
