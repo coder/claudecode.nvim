@@ -133,7 +133,7 @@ site lua/claudecode/init.lua: local saved, unsaved, kept = diff.close_saved_diff
 == lua/claudecode/integrations.lua
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 == lua/claudecode/lockfile.lua
-file lua/claudecode/lockfile.lua dfc1e9c6cd9d899d
+file lua/claudecode/lockfile.lua e4fff785c71ab48b
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua

@@ -213,9 +213,10 @@ function M.remove(port)
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
   -- Deleting a file needs write permission on its folder, not read permission on the file, so a lock file that cannot
-  -- be read (mode 000) is still deleted. `filereadable` would call it missing. A folder with this name is not ours.
+  -- be read (mode 000) is still deleted. `filereadable` would call it missing. A folder with this name is not a lock
+  -- file, and it is not ours to delete (`filereadable` is 0 for a folder too).
   local stat = vim.loop.fs_stat(lock_path)
-  if not stat or stat.type ~= "file" then
+  if not stat or stat.type == "directory" then
     return false, "Lock file does not exist: " .. lock_path
   end
 
