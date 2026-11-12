@@ -104,10 +104,10 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 38c961cbff293013
+file lua/claudecode/diff_inline.lua 110bb4cbb9bf8fb0
 block inline_saved           0516057dbab0688a
 block inline_rejected        3a098216eef4b774
-block setup_inline           6c384d6803b05800
+block setup_inline           88b45f174b2e93ae
 site lua/claudecode/diff_inline.lua: diff._cleanup_diff_state(tab_name, "setup failed") @ local function cleanup_unregistered_inline_setup(tab_name, partial)
 site lua/claudecode/diff_inline.lua: diff._register_diff_state(tab_name, { @ function M.setup_inline_diff(params, resolution_callback, config)
 site lua/claudecode/diff_inline.lua: diff._resolve_diff_as_rejected(tab_name) @ function M.setup_inline_diff(params, resolution_callback, config)
@@ -123,7 +123,7 @@ site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ fun
 site lua/claudecode/diff_inline.lua: if diff_data.resolution_callback then @ function M.resolve_inline_as_saved(tab_name, diff_data)
 site lua/claudecode/diff_inline.lua: resolution_callback = resolution_callback, @ function M.setup_inline_diff(params, resolution_callback, config)
 == lua/claudecode/health.lua
-file lua/claudecode/health.lua 5ab73bf388f3ac97
+file lua/claudecode/health.lua 715d79c89291f563
 == lua/claudecode/init.lua
 file lua/claudecode/init.lua fc28de832b4056df
 block user_close_all         10e024fd8ada1c16
@@ -133,11 +133,11 @@ site lua/claudecode/init.lua: local saved, unsaved, kept = diff.close_saved_diff
 == lua/claudecode/integrations.lua
 file lua/claudecode/integrations.lua 5d7562e6ecb34a61
 == lua/claudecode/lockfile.lua
-file lua/claudecode/lockfile.lua 2746b4c6e0b2b630
+file lua/claudecode/lockfile.lua e743c68b37d6fcce
 == lua/claudecode/logger.lua
 file lua/claudecode/logger.lua 17b404dda41c3591
 == lua/claudecode/selection.lua
-file lua/claudecode/selection.lua 349b9bb73c6f64c5
+file lua/claudecode/selection.lua cf8e6464c4302b2f
 == lua/claudecode/server/client.lua
 file lua/claudecode/server/client.lua b8165df16f194471
 block create_client          24fa2a266b76e6ad

@@ -49,14 +49,7 @@ describe("the text a proposed diff accepts", function()
     _G.claude_deferred_responses = nil
   end)
 
-  local layouts = { "vertical" }
-  if vim.fn.has("nvim-0.9") == 1 then
-    layouts[#layouts + 1] = "unified"
-  else
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
+  local layouts = { "vertical", "unified" }
 
   -- Each proposal ends in the shape under test. Each one runs against a file with other text, so the diff has hunks,
   -- and against a file that is one line shorter, so the diff is a pure insertion.

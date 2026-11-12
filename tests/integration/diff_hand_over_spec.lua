@@ -228,10 +228,8 @@ describe(":ClaudeCodeCloseAllDiffs hand-over", function()
   local swap_layouts = {
     { "vertical", { layout = "vertical" } },
     { "vertical new-tab", { layout = "vertical", open_in_new_tab = true } },
+    { "unified", { layout = "unified" } },
   }
-  if vim.fn.has("nvim-0.9") == 1 then
-    swap_layouts[#swap_layouts + 1] = { "unified", { layout = "unified" } }
-  end
   for _, case in ipairs(swap_layouts) do
     local layout, diff_opts = case[1], case[2]
     it("names a swap file step that works from the " .. layout .. " diff window", function()
