@@ -7,7 +7,9 @@ end
 
 -- The accepted text goes back to Claude as the file's new contents, so it must match the proposal byte for byte. The
 -- vertical and horizontal layouts take that text from the proposal buffer. A new buffer has 'eol' on, so a proposal
--- without a final line break was accepted with one: "a" came back as "a\n".
+-- without a final line break was accepted with one: "a" came back as "a\n". The unified layout lost one line break of a
+-- proposal that ends in "\n\n": "a\n\n" came back as "a\n". A proposal that ends in a single "\n", such as "a\n" or
+-- "\n", kept it.
 describe("the text a proposed diff accepts, by how the proposal ends", function()
   local diff = require("claudecode.diff")
   local tools = require("claudecode.tools.init")
@@ -62,14 +64,7 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
   end)
 
   local split_layouts = { "vertical", "horizontal" }
-  local all_layouts = { "vertical", "horizontal" }
-  if vim.fn.has("nvim-0.9") == 1 then
-    all_layouts[#all_layouts + 1] = "unified"
-  else
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
+  local all_layouts = { "vertical", "horizontal", "unified" }
 
   local proposals = {
     { name = "a final line without a line break", text = "a" },
@@ -82,11 +77,14 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
     { name = "one blank line after the last line", text = "a\n\n" },
     { name = "two blank lines after the last line", text = "a\n\n\n" },
     { name = "two blank lines only", text = "\n\n" },
+    { name = "a blank line inside and one after the last line", text = "a\n\nb\n\n" },
   }
   local old_files = {
     { name = "a file with other text", text = "old\n" },
     { name = "a file without a final line break", text = "old" },
     { name = "a file that does not exist yet", text = nil },
+    -- Holds the first line of most proposals, so a proposal that adds blank lines to it is a pure insertion.
+    { name = "a file that is a line shorter", text = "a\n" },
   }
 
   for _, layout in ipairs(all_layouts) do

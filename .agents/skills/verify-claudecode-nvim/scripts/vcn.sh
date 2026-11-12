@@ -16,7 +16,7 @@
 #   connect                     start one more client, named by VCN_CLIENT, and finish its handshake
 #   disconnect                  kill the client VCN_CLIENT names (unset: the launch client)
 #   get [-z] <NAME>             print one value of run.env (OUT, WORK, SID, PORT, ...) after the check that every command makes; -z
-#                               ends it with a NUL, so `read -r -d ""` keeps a newline at its end
+#                               ends it with a NUL, so `IFS= read -r -d ""` keeps a newline at its end
 #   dashboard                   show the session live (agent-tty dashboard): run it in a terminal
 #   cleanup                     stop everything this run started, delete VCN_STATE, keep $OUT
 # VCN_CLIENT=<name> makes rpc, tool, await, connect and disconnect act as that client.
