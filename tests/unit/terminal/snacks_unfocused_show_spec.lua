@@ -17,6 +17,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local bufenter_ignored_during_set_buf
   local eventignore_during_set_buf
   local shows
+  local verbose
+  local logged
   local mock_snacks
 
   local function make_window(buf, relative)
@@ -63,6 +65,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     bufenter_ignored_during_set_buf = nil
     eventignore_during_set_buf = nil
     shows = {}
+    verbose = false
+    logged = {}
     source_win = make_window(500, "")
     current_win = source_win
 
@@ -94,6 +98,10 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           return ""
         end,
         expand = function()
+          if verbose then
+            -- Neovim raises this outside an autocmd when 'verbose' is above 0, for any level.
+            error('E496: No autocommand buffer number to substitute for "<abuf>"', 0)
+          end
           return ""
         end,
         win_findbuf = function(buf)
@@ -281,6 +289,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       info = function() end,
       warn = function() end,
       error = function() end,
+      one_line = function(level, component, message)
+        table.insert(logged, { level = level, component = component, message = message })
+      end,
     }
     package.loaded["claudecode.utils"] = nil
     package.loaded["claudecode.terminal.snacks"] = nil
@@ -387,6 +398,69 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     assert.is_nil(term.win)
     assert.are.equal(source_win, current_win)
     assert.is_false(windows[split_window].valid)
+  end)
+
+  for _, focus in ipairs({ true, false }) do
+    it(
+      "re-showing a hidden split " .. (focus and "with" or "without") .. " focus works with 'verbose' above 0",
+      function()
+        local cfg = config()
+        local term = open_then_hide(cfg)
+        cmd_log = {}
+        verbose = true
+
+        snacks_provider.open("claude", {}, cfg, focus)
+
+        assert.are.same({ "BufLeave", "swap" }, cmd_log)
+        assert.is_not_nil(term.win)
+      end
+    )
+  end
+
+  describe("when a BufLeave autocmd enters another window and closes the new split", function()
+    ---The new split's BufLeave autocmd: enter a third window, then close the split.
+    local function arm_close_from_third_window()
+      local third_window = make_window(600, "")
+      local split_window
+      local original_cmd = vim.cmd
+      vim.cmd = function(c)
+        original_cmd(c)
+        if c:find("split", 1, true) then
+          split_window = current_win
+        elseif c == "doautocmd <nomodeline> BufLeave" then
+          current_win = third_window
+          windows[split_window].valid = false
+        end
+      end
+      return third_window
+    end
+
+    it("puts the cursor back in the caller's window, and says that the terminal is hidden, without focus", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      arm_close_from_third_window()
+
+      snacks_provider.open("claude", {}, cfg, false)
+
+      assert.is_nil(term.win)
+      assert.are.equal(source_win, current_win)
+      assert.are.same(
+        { { level = "warn", component = "terminal", message = "A BufLeave autocmd closed the terminal's window." } },
+        logged
+      )
+    end)
+
+    it("says that the terminal is hidden, and leaves the cursor where the autocmd put it, with focus", function()
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      local third_window = arm_close_from_third_window()
+
+      snacks_provider.open("claude", {}, cfg, true)
+
+      assert.is_nil(term.win)
+      assert.are.equal(third_window, current_win)
+      assert.are.equal(1, #logged)
+    end)
   end)
 
   it("re-showing an externally closed float without focus keeps the caller's window and queues no insert", function()
