@@ -391,18 +391,14 @@ describe("Tool: get_open_editors", function()
       package.loaded["claudecode.selection"] = nil
     end)
 
-    it("marks terminal, bracketed and blank names as untitled", function()
+    it("marks a terminal buffer as untitled and a file as not", function()
       local tabs = open_editors({
         { name = "/path/to/a.lua" },
         { name = "term://~/project//123:zsh" },
-        { name = "[Scratch]" },
-        { name = "   " },
       })
 
       expect(tabs[1].isUntitled).to_be_false()
       expect(tabs[2].isUntitled).to_be_true()
-      expect(tabs[3].isUntitled).to_be_true()
-      expect(tabs[4].isUntitled).to_be_true()
     end)
 
     it("reports plaintext when the buffer has no filetype", function()

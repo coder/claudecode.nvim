@@ -260,6 +260,17 @@ describe("Tool: get_diagnostics", function()
     end)
   end
   describe("DiagnosticFile entries", function()
+    -- A diagnostic as vim.diagnostic.get returns it: vim.diagnostic.set fills in the buffer number, the severity
+    -- (Error) and the end position (the start), and it requires `lnum` (and `col` on Neovim 0.8). Only the message,
+    -- the code and the source can be missing (`evidence/p2r1/probe-unreachable-*.txt`).
+    local function diagnostic(fields)
+      local filled = { bufnr = 1, lnum = 0, col = 0, end_lnum = 0, end_col = 0, severity = 1 }
+      for key, value in pairs(fields) do
+        filled[key] = value
+      end
+      return filled
+    end
+
     local function files_for(diagnostics, params)
       _G.vim.diagnostic.get = spy.new(function()
         return diagnostics
@@ -271,9 +282,9 @@ describe("Tool: get_diagnostics", function()
 
     it("groups the diagnostics of one file into one entry, in order, and keeps the entries in order", function()
       local files = files_for({
-        { bufnr = 1, lnum = 1, severity = 1, message = "one" },
-        { bufnr = 2, lnum = 2, severity = 2, message = "two" },
-        { bufnr = 1, lnum = 3, severity = 3, message = "three" },
+        diagnostic({ bufnr = 1, lnum = 1, severity = 1, message = "one" }),
+        diagnostic({ bufnr = 2, lnum = 2, severity = 2, message = "two" }),
+        diagnostic({ bufnr = 1, lnum = 3, severity = 3, message = "three" }),
       })
 
       expect(#files).to_be(2)
@@ -284,72 +295,70 @@ describe("Tool: get_diagnostics", function()
       expect(#files[2].diagnostics).to_be(1)
     end)
 
-    it("names severities, keeps a string severity and calls an unknown one Info", function()
+    it("names severities 1 to 4 and calls any other number Info", function()
+      -- Neovim 0.12 keeps a severity of 9. Neovim 0.8 refuses it.
       local files = files_for({
-        { bufnr = 1, severity = 1 },
-        { bufnr = 1, severity = 2 },
-        { bufnr = 1, severity = 3 },
-        { bufnr = 1, severity = 4 },
-        { bufnr = 1, severity = "Custom" },
-        { bufnr = 1, severity = 9 },
-        { bufnr = 1 },
+        diagnostic({ severity = 1 }),
+        diagnostic({ severity = 2 }),
+        diagnostic({ severity = 3 }),
+        diagnostic({ severity = 4 }),
+        diagnostic({ severity = 9 }),
       })
 
       local severities = {}
-      for _, diagnostic in ipairs(files[1].diagnostics) do
-        table.insert(severities, diagnostic.severity)
+      for _, diagnostic_entry in ipairs(files[1].diagnostics) do
+        table.insert(severities, diagnostic_entry.severity)
       end
-      assert.are.same({ "Error", "Warning", "Info", "Hint", "Custom", "Info", "Info" }, severities)
+      assert.are.same({ "Error", "Warning", "Info", "Hint", "Info" }, severities)
     end)
 
-    it("defaults a missing range to the first character of the first line, and an end to the start", function()
+    it("copies the start and the end of a range, which can span lines", function()
       local files = files_for({
-        { bufnr = 1 },
-        { bufnr = 1, lnum = 4, col = 2 },
-        { bufnr = 1, lnum = 4, col = 2, end_lnum = 6 },
-        { bufnr = 1, lnum = 4, col = 2, end_col = 9 },
+        diagnostic({ lnum = 4, col = 2, end_lnum = 6, end_col = 9 }),
+        diagnostic({ lnum = 7, col = 1, end_lnum = 7, end_col = 1 }),
       })
 
       local ranges = {}
-      for _, diagnostic in ipairs(files[1].diagnostics) do
-        table.insert(ranges, diagnostic.range)
+      for _, diagnostic_entry in ipairs(files[1].diagnostics) do
+        table.insert(ranges, diagnostic_entry.range)
       end
-      assert.are.same({ line = 0, character = 0 }, ranges[1].start)
-      assert.are.same({ line = 0, character = 1 }, ranges[1]["end"])
-      assert.are.same({ line = 4, character = 2 }, ranges[2].start)
-      assert.are.same({ line = 4, character = 3 }, ranges[2]["end"])
-      assert.are.same({ line = 6, character = 3 }, ranges[3]["end"])
-      assert.are.same({ line = 4, character = 9 }, ranges[4]["end"])
+      assert.are.same({ line = 4, character = 2 }, ranges[1].start)
+      assert.are.same({ line = 6, character = 9 }, ranges[1]["end"])
+      assert.are.same({ line = 7, character = 1 }, ranges[2].start)
+      assert.are.same({ line = 7, character = 1 }, ranges[2]["end"])
     end)
 
     it("sends an empty message for a diagnostic without one, and no code or source", function()
-      local diagnostic = files_for({ { bufnr = 1 } })[1].diagnostics[1]
+      local entry = files_for({ diagnostic({}) })[1].diagnostics[1]
 
-      expect(diagnostic.message).to_be("")
-      expect(diagnostic.code).to_be_nil()
-      expect(diagnostic.source).to_be_nil()
+      expect(entry.message).to_be("")
+      expect(entry.code).to_be_nil()
+      expect(entry.source).to_be_nil()
     end)
 
-    it("names the file of the requested URI for a diagnostic whose buffer has no name or that has no buffer", function()
+    it("names the file of the requested URI for a diagnostic whose buffer has no name", function()
       _G.vim.api.nvim_buf_get_name = spy.new(function()
         return ""
       end)
 
-      local files = files_for({ { bufnr = 1, message = "unnamed" }, { message = "no buffer" } }, {
+      local files = files_for({ diagnostic({ message = "unnamed" }) }, {
         uri = "file:///test/file.lua",
       })
 
       expect(#files).to_be(1)
       expect(files[1].uri).to_be("file:///test/file.lua")
-      expect(#files[1].diagnostics).to_be(2)
+      expect(#files[1].diagnostics).to_be(1)
     end)
 
     it("takes a URI without a file scheme as the path", function()
       _G.vim.fn.bufnr = spy.new(function()
         return 3
       end)
+      _G.vim.api.nvim_buf_get_name = spy.new(function()
+        return ""
+      end)
 
-      local files = files_for({ { message = "relative" } }, { uri = "relative.lua" })
+      local files = files_for({ diagnostic({ bufnr = 3, message = "relative" }) }, { uri = "relative.lua" })
 
       expect(files[1].uri).to_be("file://relative.lua")
       assert.spy(_G.vim.uri_to_fname).was_not_called()
