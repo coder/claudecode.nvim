@@ -16,7 +16,8 @@ local M = {}
 ---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress: twice the ping interval, set by `start_ping_timer`
 ---@field pending_polls table<table, boolean>|nil The check and idle handles of each stall judgement that waits for the next poll: closed by `stop_server`
 
--- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
+-- Seed Lua's PRNG once per load of this module: `rng_seeded` is a module local, so a reload seeds again. Neovim loads
+-- the module once, so a fresh Neovim seeds once. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
 -- left LuaJIT's fixed default seed in place -- so every fresh Neovim picked the
 -- *same* starting port and parallel instances always collided (#283). Mixing in a
