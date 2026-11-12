@@ -13,22 +13,28 @@ set -o pipefail
 FILE_TIMEOUT=40s
 
 # The temp files and folders of the file that runs, and the file that holds the process id of its `timeout` while it
-# runs. SIGTERM and SIGHUP kill bash, which runs the EXIT trap first. SIGINT runs the INT trap, which exits 130 at once
-# while `wait` below runs: a Ctrl-C reaches the runner's own process group, and timeout leaves that group. The trap
-# stops the file's Neovims before it removes the folders, because one that ends later writes ShaDa and makes its state
-# folder again. It kills timeout itself first: until timeout has made its own group, no Neovim runs yet.
+# runs. The cleanup stops the file's Neovims before it removes the folders, because one that ends later writes ShaDa and
+# makes its state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs
+# yet. It uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM
+# would run on. SIGTERM and SIGHUP kill bash, which runs the EXIT trap first.
 CURRENT_TEMP=()
 CURRENT_GROUP_FILE=""
-timeout_pid=""
-trap '
+# shellcheck disable=SC2329 # The two traps below run it.
+cleanup_current_file() {
+  local timeout_pid
   if [[ -s $CURRENT_GROUP_FILE ]]; then
     timeout_pid=$(cat "$CURRENT_GROUP_FILE")
-    kill -KILL "$timeout_pid" 2> /dev/null || true
-    kill -KILL -- "-$timeout_pid" 2> /dev/null || true
+    kill -KILL "$timeout_pid" 2>/dev/null || true
+    kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
   rm -rf "${CURRENT_TEMP[@]}"
-' EXIT
-trap 'exit 130' INT
+}
+trap cleanup_current_file EXIT
+# A Ctrl-C reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
+# `wait` below returns at once when this trap runs. The trap cleans up, then kills the runner with SIGINT, not with
+# `exit 130`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one that exited
+# 130.
+trap 'cleanup_current_file; trap - EXIT INT; kill -INT $$; exit 130' INT
 
 echo "=== Running Integration Tests Individually ==="
 

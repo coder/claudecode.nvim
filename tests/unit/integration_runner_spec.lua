@@ -45,9 +45,11 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
   'echo "$*" >> "$STUB_DIR/nvim_args"',
   'if [ -f "$STUB_DIR/$name.sleep" ]; then',
+  '  if [ -f "$STUB_DIR/$name.deaf_to_term" ]; then trap "" TERM; fi',
   '  : > "$STUB_DIR/$name.started"',
   '  (sleep 2; mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada") &',
   "  wait",
+  '  : > "$STUB_DIR/$name.ended"',
   "fi",
   "folders=missing",
   'if [ -d "$XDG_STATE_HOME" ] && [ -d "$XDG_CONFIG_HOME" ]; then folders=present; fi',
@@ -409,21 +411,36 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_true(has_no_shada, args)
   end)
 
-  ---@param signal string The signal to send to the runner
-  ---@param window boolean Send it when timeout has started but has not made its process group yet
-  ---@return string status The status of the runner
-  ---@return string left What the runner left in its TMPDIR, after its Neovim's grandchild would have written
-  ---@return integer seconds How long the runner took to exit after the signal (its file runs 2 seconds)
-  local function signal_runner(signal, window)
+  ---@class SignalRun
+  ---@field window boolean|nil Send the signal when timeout has started but has not made its process group yet
+  ---@field deaf_to_term boolean|nil The file's Neovim ignores SIGTERM
+  ---@field caller_loop boolean|nil Run the runner twice in a calling shell and send the signal to their process group
+
+  ---@param signal string The signal to send
+  ---@param run SignalRun
+  ---@return table result `status` of the runner (of the calling shell with `caller_loop`), `left` in its TMPDIR once
+  --- its Neovim's grandchild would have written, `ended` when the file's Neovim got to the end of its 2 second run, and
+  --- `caller_output` of the calling shell
+  local function signal_runner(signal, run)
     write(dir .. "/tests/integration/slow_spec.lua", {})
     write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
     write(dir .. "/slow_spec.lua.exit", { "0" })
     write(dir .. "/slow_spec.lua.sleep", {})
-    if window then
+    if run.window then
       write(dir .. "/slow_spec.lua.window", {})
+    end
+    if run.deaf_to_term then
+      write(dir .. "/slow_spec.lua.deaf_to_term", {})
     end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
+    local job = quote(script) .. " > /dev/null 2>&1"
+    local target = "$pid"
+    if run.caller_loop then
+      job = "bash -c " .. quote('for i in 1 2; do "$0" > /dev/null 2>&1; echo ran=$i; done') .. " " .. quote(script)
+      job = job .. " > " .. quote(dir .. "/caller.out") .. " 2>&1"
+      target = "-- -$pid"
+    end
     -- `set -m` gives the background job its own process group and leaves SIGINT unignored, as a runner has at a prompt.
     local inner = "cd "
       .. quote(dir)
@@ -436,39 +453,72 @@ describe("scripts/run_integration_tests_individually.sh", function()
       .. " REAL_TIMEOUT="
       .. quote(real_timeout)
       .. "; set -m; "
-      .. quote(script)
-      .. " > /dev/null 2>&1 & pid=$!; for _ in $(seq 100); do [ -e "
-      .. quote(dir .. (window and "/slow_spec.lua.timeout_started" or "/slow_spec.lua.started"))
-      .. " ] && break; sleep 0.1; done; t0=$(date +%s); kill -"
+      .. job
+      .. " & pid=$!; for _ in $(seq 100); do [ -e "
+      .. quote(dir .. (run.window and "/slow_spec.lua.timeout_started" or "/slow_spec.lua.started"))
+      .. " ] && break; sleep 0.1; done; kill -"
       .. signal
-      .. " $pid; wait $pid; echo status=$?; echo took=$(($(date +%s) - t0)); sleep 3"
+      .. " "
+      .. target
+      .. "; wait $pid; echo status=$?; sleep 3"
     local pipe = assert(io.popen("bash -c " .. quote(inner)))
     local output = pipe:read("*a")
     pipe:close()
     local listing = assert(io.popen("ls -A " .. quote(temp)))
     local left = listing:read("*a")
     listing:close()
-    return output:match("status=(%d+)") or output, left, tonumber(output:match("took=(%d+)"))
+    local caller = io.open(dir .. "/caller.out")
+    local caller_output = caller and caller:read("*a") or ""
+    if caller then
+      caller:close()
+    end
+    local ended = io.open(dir .. "/slow_spec.lua.ended")
+    if ended then
+      ended:close()
+    end
+    return {
+      status = output:match("status=(%d+)") or output,
+      left = left,
+      ended = ended ~= nil,
+      caller_output = caller_output,
+    }
   end
 
   for _, case in ipairs({ { "SIGTERM", "TERM", "143" }, { "SIGINT", "INT", "130" } }) do
     local name, signal, expected_status = case[1], case[2], case[3]
     local description = "stops the running file and removes its temp files and folders on "
     it(description .. name .. " at once, and exits " .. expected_status, function()
-      local status, left, seconds = signal_runner(signal, false)
+      local result = signal_runner(signal, {})
 
-      assert.are.equal(expected_status, status)
-      assert.are.equal("", left, "the runner left temp files or folders behind, or its Neovim's grandchild ran on")
-      assert.is_true(seconds <= 1, "the runner took " .. seconds .. "s to exit, not at once")
+      assert.are.equal(expected_status, result.status)
+      assert.are.equal("", result.left, "the runner left temp files behind, or its Neovim's grandchild ran on")
+      assert.is_false(result.ended, "the runner waited for the file to end, it did not stop it")
     end)
   end
 
-  it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()
-    local status, left = signal_runner("TERM", true)
+  it("stops a file whose Neovim ignores SIGTERM when the runner gets SIGTERM", function()
+    local result = signal_runner("TERM", { deaf_to_term = true })
 
-    assert.are.equal("143", status)
-    assert.are.equal("", left, "the runner left temp files or folders behind")
+    assert.are.equal("143", result.status)
+    assert.are.equal("", result.left, "a Neovim that ignores SIGTERM ran on after the runner died")
+    assert.is_false(result.ended)
+  end)
+
+  it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()
+    local result = signal_runner("TERM", { window = true })
+
+    assert.are.equal("143", result.status)
+    assert.are.equal("", result.left, "the runner left temp files or folders behind")
     assert.is_nil(io.open(dir .. "/slow_spec.lua.started"), "the file's Neovim started after the runner died")
+  end)
+
+  it("dies by SIGINT on Ctrl-C, so a shell that calls it in a loop stops the loop", function()
+    local result = signal_runner("INT", { caller_loop = true })
+
+    assert.are.equal("130", result.status)
+    assert.are.equal("", result.caller_output, "the calling shell went on after the runner got Ctrl-C")
+    assert.are.equal("", result.left, "the runner left temp files or folders behind")
+    assert.is_false(result.ended)
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
