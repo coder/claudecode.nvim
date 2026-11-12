@@ -32,7 +32,14 @@
 
 ## Code Shape
 
-- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Deleting a buffer can close each window that shows it, so the same rule holds for those windows. Close a window that the plugin made without `force`: Neovim then refuses when the close would lose a modified buffer. Neovim does not refuse for a `buftype=nofile` buffer, so a close without `force` is still not safe for a window that the plugin cannot show it made. Issue #528 has the cases.
+- Interfaces: put a function on a module table `M` only when another module, the documented Lua API or Neovim calls it. Everything else is `local`. Tests drive behavior through that interface. Do not add `M._name` hooks for tests.
+- Modules: prefer few modules that each hide a lot. Merge a helper module into its only consumer. Do not add a module for one caller.
+- Validation: check data once, where it comes in: `setup(opts)` in `config.lua`, user command arguments, MCP messages at the socket and at the tool handler, files, user callbacks, other plugins, and Neovim state at the start of an async callback. Below that point, use the data without re-checking it.
+- One-off logic: write logic that has one call site where it is used. Keep a single-use function only when it is recursive, when it is a named algorithm (SHA-1, base64), or when inlining it turns early returns into flags or adds two levels of nesting.
+- `pcall`: use it only where the callee can fail while the plugin's own code and state are correct: optional plugins, user callbacks, data from the socket or a file, file and process IO, and Neovim calls that can throw on valid input, above all in cleanup paths.
+- Fail-closed checks on the auth token path stay, even where today's code cannot reach them.
+- The Busted suite runs on a mock `vim`, which does not throw where Neovim does. Before you remove a `pcall` or a guard around a Neovim call, probe the call in real Neovim.
+- Window cleanup: a cleanup closes, changes or deletes only a window, buffer or tab that the plugin can show it made. `:split`, `:vsplit` and `:tabnew` return no id and run the user's autocmds. So the current window after such a command is no proof of ownership, and neither is "the one new window". Deleting a buffer can close each window that shows it, so the same rule holds for those windows. Close without `force` a window that the plugin made: Neovim then refuses when the close would lose a modified buffer. Neovim does not refuse for a `buftype=nofile` buffer, so a close without `force` is still not safe for a window that the plugin cannot show it made. Today's `diff.lua` does not follow this rule yet, and a behavior-preserving refactor leaves that code as it is. Issue #528 has the cases.
 
 ## Testing Guidelines
 
