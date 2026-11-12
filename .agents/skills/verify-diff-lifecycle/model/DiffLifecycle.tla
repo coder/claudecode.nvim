@@ -33,6 +33,7 @@ CONSTANTS
   CloseTakesRejected,      \* diff.lua close_active_diffs also closes an entry a handler rejected since the snapshot
   StopRejectsPending,      \* server/init.lua M.stop closes pending diffs before clearing senders
   StopPendingOnly,         \* diff.lua close_pending_diffs filters status == "pending"
+  ExitRejectsPending,      \* diff.lua VimLeavePre autocmd rejects each pending diff before it cleans every diff up
   DisconnectRejects,       \* server/init.lua on_disconnect schedules close_diffs_for_client
   DisconnectPendingOnly,   \* diff.lua close_diffs_for_client filters status == "pending"
   UserCloseAllPendingOnly, \* init.lua :ClaudeCodeCloseAllDiffs calls close_pending_diffs
@@ -339,6 +340,26 @@ ServerStops ==
        SetW([v EXCEPT !.sender = [q \in Reqs |-> FALSE]])
   /\ UNCHANGED <<reqTab, reqClient, scheduled, staleOwner>>
 
+(* diff.lua _reject_pending_diffs: _resolve_diff_as_rejected for each diff that is still pending. *)
+(* The order does not matter: each rejection touches only its own diff and its own call.        *)
+RECURSIVE RejectEach(_, _)
+RejectEach(w, S) ==
+  IF S = {} THEN w
+  ELSE LET t == CHOOSE x \in S : TRUE
+       IN RejectEach(IF w.active[t] # NoDiff /\ w.active[t].status = "pending" THEN Resolve(w, t, "rejected") ELSE w,
+                     S \ {t})
+
+(* diff.lua VimLeavePre autocmd: _reject_pending_diffs, then _cleanup_all_active_diffs("shutdown"), which   *)
+(* removes every entry in any status. Neovim fires BufUnload for each loaded buffer before VimLeavePre, and *)
+(* the proposal buffers' autocmds reject their diffs there (the UserRejects action). That loop stops when an *)
+(* autocmd deletes the buffer it fired for, so a pending diff can still reach this step. Neovim quits right  *)
+(* after, and its buffers go with it, so this removal is not a teardown that SavedDiffKept counts.           *)
+DiffCleanupAtExit ==
+  /\ Idle /\ \E t \in Tabs : Open(t)
+  /\ LET rejected == IF ExitRejectsPending THEN RejectEach(W, Tabs) ELSE W
+     IN SetW([rejected EXCEPT !.active = [t \in Tabs |-> NoDiff]])
+  /\ UNCHANGED <<reqTab, reqClient, clientUp, serverUp, scheduled, staleOwner>>
+
 Next ==
   \/ \E r \in Reqs, c \in Clients, t \in Tabs : ClaudeOpensDiff(r, c, t)
   \/ \E r \in Reqs, o \in Outcomes : UserHandlerResolves(r, o)
@@ -352,6 +373,7 @@ Next ==
   \/ \E c \in Clients : ClientIdReused(c)
   \/ \E c \in Clients : DisconnectCleanupRuns(c)
   \/ ServerStops
+  \/ DiffCleanupAtExit
 
 (* Setup is synchronous and the scheduled cleanup runs on a later tick. *)
 Spec ==
