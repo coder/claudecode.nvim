@@ -169,6 +169,42 @@ describe("diff mode in a window that left a split diff", function()
     end
   end)
 
+  describe("a handler of the user that moves the focus while the diff opens", function()
+    -- The original window gets its `diffthis` without a window switch, so a BufEnter handler runs no more often than
+    -- on main, and the `diffthis` does not land in the window that the handler moved the focus to.
+    it("leaves diff mode off in the window that the handler moved the focus to", function()
+      local original = vim.api.nvim_get_current_win()
+      vim.cmd("botright split")
+      local user_win = vim.api.nvim_get_current_win()
+      vim.cmd("enew")
+      vim.api.nvim_set_current_win(original)
+      local moved = false
+      local group = vim.api.nvim_create_augroup("left_window_spec_focus", { clear = true })
+      vim.api.nvim_create_autocmd("BufEnter", {
+        group = group,
+        callback = function(args)
+          if
+            not moved
+            and vim.api.nvim_buf_get_name(args.buf) == file
+            and vim.api.nvim_get_current_win() ~= user_win
+          then
+            moved = true
+            vim.api.nvim_set_current_win(user_win)
+          end
+        end,
+      })
+
+      local ok, state = pcall(open_diff)
+      vim.api.nvim_del_augroup_by_id(group)
+
+      assert.is_true(ok, "openDiff waits for the user: " .. tostring(state))
+      assert.is_false(option(user_win, "diff"), "the user's other window is not in diff mode")
+      assert.is_true(option(state.target_window, "diff"), "the original window is in diff mode")
+      assert.is_true(option(state.new_window, "diff"), "the proposal window is in diff mode")
+      assert.equal(2, diff_windows())
+    end)
+  end)
+
   describe("a file that comes back after the cleanup, which the cleanup does not look at (as on main)", function()
     it(
       "turns diff mode on again in the original window that :edit switched, when :edit # brings the file back",
