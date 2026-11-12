@@ -173,6 +173,14 @@ describe("a visual selection released after the buffer changed, with the real pl
       return true
     end
 
+    -- What Claude was told last must be a cursor: whatever the debounce sent before the operator, the plugin must have sent
+    -- something after it that clears it, and not only forgotten it in its own state.
+    local function assert_last_sent_is_a_cursor()
+      local last = sent[#sent]
+      assert.is_truthy(last, "something was sent")
+      assert.is_true(last.params.selection.isEmpty, "the last selection_changed is a cursor")
+    end
+
     -- Every selection (not a cursor) among the first `count` messages is `alpha` of the first line, which the tests select
     -- with `ve`: the text and the range, so a right text at a wrong range fails too.
     local function assert_is_the_selection(count)
@@ -197,6 +205,7 @@ describe("a visual selection released after the buffer changed, with the real pl
       assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for c (vec)", function()
@@ -210,6 +219,7 @@ describe("a visual selection released after the buffer changed, with the real pl
       assert.are.equal("foo beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for a linewise > (Vj>)", function()
@@ -222,6 +232,7 @@ describe("a visual selection released after the buffer changed, with the real pl
 
       assert.are.same({ true }, { sent_no_selection() })
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for d after a plugin edited another line in visual mode", function()
@@ -241,6 +252,7 @@ describe("a visual selection released after the buffer changed, with the real pl
       assert.are.same({ true }, { sent_no_selection(before_operator) })
       assert_is_the_selection(before_operator)
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
 
     it("sends no selection for d after a :write in visual mode", function()
@@ -261,6 +273,7 @@ describe("a visual selection released after the buffer changed, with the real pl
       assert.are.same({ true }, { sent_no_selection(before_operator) })
       assert_is_the_selection(before_operator)
       assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
     end)
   end)
 
