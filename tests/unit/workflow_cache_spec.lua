@@ -58,10 +58,12 @@ describe(".github/workflows/test.yml cache settings", function()
   end
 
   ---@param step string[]
-  ---@return boolean caches_rocks whether an actions/cache step names the rock tree in any way: `.luarocks`,
-  ---`./.luarocks`, an absolute path, a line of a multi-line `path`
+  ---@return boolean caches_rocks whether the step uses actions/cache (plain, restore or save, with or without a quote
+  ---before the name) and one of its lines contains the text `.luarocks`: as `.luarocks`, `./.luarocks`, `~/.luarocks`,
+  ---an absolute path, or a line of a multi-line `path`. A path without that text (a glob such as `.luaroc*`, or a
+  ---parent folder) is not seen.
   local function caches_rock_tree(step)
-    if not (field(step, "uses") or ""):match("^actions/cache[/@]") then
+    if not (field(step, "uses") or ""):gsub("^[\"']", ""):match("^actions/cache[/@]") then
       return false
     end
     for _, line in ipairs(step) do
@@ -100,6 +102,10 @@ describe(".github/workflows/test.yml cache settings", function()
       local key = field(step, "cache_key", "with")
       assert.is_string(key, "the step has no cache_key under with:")
       assert.is_truthy(key:find("${{ hashFiles('mise.lock') }}", 1, true), "cache_key must hash mise.lock: " .. key)
+      assert.is_truthy(
+        key:match("^mise%-v%d+%-{{platform}}%-{{version}}%-%${{ hashFiles%('mise%.lock'%) }}$"),
+        "cache_key must be mise-v<n>-{{platform}}-{{version}}-${{ hashFiles('mise.lock') }}: " .. key
+      )
       assert.are.equal(1, select(2, key:gsub("hashFiles%(", "")), "cache_key must hash nothing else: " .. key)
       assert.is_nil(key:find("file_hash", 1, true), "{{file_hash}} hashes every mise config file: " .. key)
       assert.is_nil(key:find("{{default}}", 1, true), "{{default}} hashes every mise config file: " .. key)
