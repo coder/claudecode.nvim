@@ -248,11 +248,11 @@ end
 function M.setup_inline_diff(params, resolution_callback, config)
   local diff = require("claudecode.diff")
 
-  -- Version check: the diff function (vim.text.diff / vim.diff) requires Neovim >= 0.9.0
+  -- Neovim 0.8.0 has vim.diff, so this fails only on a Neovim that has neither diff function.
   if not get_diff_fn() then
     error({
       code = -32000,
-      message = "Inline diff requires Neovim >= 0.9.0",
+      message = "The unified layout needs vim.text.diff or vim.diff, and this Neovim has neither",
       data = "vim.text.diff()/vim.diff() is not available. Please use layout = 'vertical' or 'horizontal', or upgrade Neovim.",
     })
   end
