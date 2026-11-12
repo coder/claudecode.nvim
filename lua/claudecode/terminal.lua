@@ -264,8 +264,9 @@ local function build_config(opts_override)
   if requested_cwd then
     -- A folder that exists is taken as written. `vim.fn.expand` reads `[`, `{`, `*`, `?`, `$` and `\` in a name as
     -- patterns or variables, so it changed the path of a folder that has them. Text that names no folder still goes
-    -- through `expand`, so `~` and `$VAR` work.
-    if vim.fn.isdirectory(requested_cwd) == 1 then
+    -- through `expand`, so `~` and `$VAR` work. A leading `~` or `$` always asks for `expand`, as in a shell and in
+    -- `:cd`, so a stray folder named `~` in Neovim's cwd does not take the place of the home folder.
+    if not requested_cwd:match("^[~$]") and vim.fn.isdirectory(requested_cwd) == 1 then
       resolved_cwd = requested_cwd
     else
       resolved_cwd = vim.fn.expand(requested_cwd)

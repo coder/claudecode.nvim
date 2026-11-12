@@ -71,6 +71,19 @@ describe("the terminal working directory", function()
     return termopen_calls[1].opts.cwd
   end
 
+  --- Same as `started_in`, with Neovim's current folder set to `dir` while the terminal opens.
+  ---@param dir string
+  ---@param terminal_opts table
+  ---@return string|nil
+  local function started_in_folder(dir, terminal_opts)
+    local saved_cwd = vim.fn.getcwd()
+    vim.cmd("cd " .. vim.fn.fnameescape(dir))
+    local ok, got = pcall(started_in, terminal_opts)
+    vim.cmd("cd " .. vim.fn.fnameescape(saved_cwd))
+    assert.is_true(ok, got)
+    return got
+  end
+
   describe("with a folder that exists", function()
     for _, case in ipairs(names) do
       it("starts in a static cwd whose folder has " .. case.name .. ", as written", function()
@@ -118,6 +131,37 @@ describe("the terminal working directory", function()
       assert.are.equal(
         root .. "/home/sub",
         started_in({
+          cwd_provider = function()
+            return "~/sub"
+          end,
+        })
+      )
+    end)
+
+    it("expands a leading ~ even when Neovim's cwd holds a folder named ~", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.fn.mkdir(root .. "/work/~/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(root .. "/home/sub", started_in_folder(root .. "/work", { cwd = "~/sub" }))
+    end)
+
+    it("expands a leading $ even when Neovim's cwd holds a folder named $HOME", function()
+      vim.fn.mkdir(root .. "/home", "p")
+      vim.fn.mkdir(root .. "/work/$HOME", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(root .. "/home", started_in_folder(root .. "/work", { cwd = "$HOME" }))
+    end)
+
+    it("expands a leading ~ in a cwd_provider result even when Neovim's cwd holds a folder named ~", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.fn.mkdir(root .. "/work/~/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(
+        root .. "/home/sub",
+        started_in_folder(root .. "/work", {
           cwd_provider = function()
             return "~/sub"
           end,
