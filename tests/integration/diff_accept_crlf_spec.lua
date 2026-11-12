@@ -215,28 +215,37 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
 
   -- 'fileformats' decides how Neovim reads a text, and its first entry is the 'fileformat' of a new buffer. So the diff
   -- must not take the 'fileformat' of the proposal buffer from the option, and it takes dos only for a value that
-  -- includes dos. The oracle reads the text under the same value.
-  for _, fileformats in ipairs({ "unix,dos", "dos,unix", "unix" }) do
-    describe("with 'fileformats' set to " .. fileformats, function()
+  -- includes dos, whatever else the value holds. The oracle reads the text under the same value.
+  local lf_text = { name = "an LF proposal", text = "a\nb\n" }
+  local mixed_text = { name = "a proposal with CRLF and LF line breaks", text = "a\r\nb\n" }
+  local crlf_text = { name = "a CRLF proposal", text = "a\r\nb\r\n" }
+  local all_texts = { lf_text, mixed_text, crlf_text }
+  local fileformats_values = {
+    { value = "unix,dos", typed = all_texts },
+    { value = "dos,unix", typed = all_texts },
+    { value = "unix", typed = all_texts },
+    -- With the one entry dos, Neovim reads every file as dos, an LF file too, and `:w` writes CRLF for a line that
+    -- the user types into it. The diff keeps an LF proposal unix, so only the CRLF proposal is compared with `:w`.
+    { value = "dos", typed = { crlf_text } },
+    -- A value without dos must not give dos. It holds mac, which Neovim also detects in some texts with CRs, so only
+    -- the CRLF proposal is compared with `:w`.
+    { value = "unix,mac", typed = { crlf_text } },
+  }
+  for _, setting in ipairs(fileformats_values) do
+    describe("with 'fileformats' set to " .. setting.value, function()
       local saved_fileformats
 
       before_each(function()
         saved_fileformats = vim.o.fileformats
-        vim.o.fileformats = fileformats
+        vim.o.fileformats = setting.value
       end)
 
       after_each(function()
         vim.o.fileformats = saved_fileformats
       end)
 
-      local texts = {
-        { name = "an LF proposal", text = "a\nb\n" },
-        { name = "a proposal with CRLF and LF line breaks", text = "a\r\nb\n" },
-        { name = "a CRLF proposal", text = "a\r\nb\r\n" },
-      }
-
       for _, layout in ipairs(all_layouts) do
-        for _, proposal in ipairs(texts) do
+        for _, proposal in ipairs(all_texts) do
           it(("the %s layout accepts %s unedited"):format(layout, proposal.name), function()
             local state = open_diff(layout, "old\n", proposal.text)
 
@@ -246,7 +255,7 @@ describe("the text a diff accepts when the proposal has CRLF line breaks", funct
       end
 
       for _, layout in ipairs(split_layouts) do
-        for _, proposal in ipairs(texts) do
+        for _, proposal in ipairs(setting.typed) do
           it(
             ("the %s layout accepts what :w writes after a typed line, from %s"):format(layout, proposal.name),
             function()
