@@ -173,13 +173,20 @@ return true, result
 
 ### Resource Cleanup
 
-Automatic cleanup on shutdown:
+The `VimLeavePre` autocmd that `setup` creates runs `stop` only when the server runs. Without a server, it only clears the @-mention queue [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:clear_mention_queue]:
 
 ```lua
+-- init.lua, M.setup (shortened)
 vim.api.nvim_create_autocmd("VimLeavePre", {
+  group = vim.api.nvim_create_augroup("ClaudeCodeShutdown", { clear = true }),
   callback = function()
-    M.stop()  -- Stop server, try to remove lock file (only logs a warning when it cannot)
-  end
+    if M.state.server then
+      M.stop()  -- Stop server, try to remove lock file (only logs a warning when it cannot)
+    else
+      -- Clear queue even if server isn't running
+      clear_mention_queue()
+    end
+  end,
 })
 ```
 
@@ -266,4 +273,4 @@ vv netrw      # Test with built-in netrw
 - **Localhost Only**: Server binds to 127.0.0.1
 - **Resource Cleanup**: A `VimLeavePre` autocmd runs `stop` when the server runs. `stop` stops the server and tries to remove the lock file [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:M.stop]. A SIGKILL skips it and leaves the lock file
 - **In-memory State**: The plugin keeps, among other things, the latest selection [lua/claudecode/selection.lua:M.state], the proposed text of each open diff [lua/claudecode/diff.lua:M._register_diff_state], an input buffer for each connected client [lua/claudecode/server/client.lua:M.create_client], and the @-mentions that wait to go out [lua/claudecode/init.lua:mention_queue]. `lockfile.lua` reads `CLAUDE_CONFIG_DIR` once, when it loads [lua/claudecode/lockfile.lua:get_lock_dir]
-- **Async and Blocking I/O**: Sockets and timers use libuv callbacks. The TCP server accepts connections and reads through callbacks, writes with libuv's asynchronous `write`, and runs its ping timer from a libuv timer [lua/claudecode/server/tcp.lua:M._bind_and_listen] [lua/claudecode/server/tcp.lua:M._handle_new_connection] [lua/claudecode/server/tcp.lua:M.start_ping_timer]. The selection debounce and the @-mention queue use timers [lua/claudecode/selection.lua:M.debounce_update] [lua/claudecode/init.lua:start_timer]. File I/O is synchronous and blocks Neovim until it returns: `lockfile.lua` calls `fs_open`, `fs_write` and `fs_close` without callbacks and uses `os.rename` and `os.remove` [lua/claudecode/lockfile.lua:M.create] [lua/claudecode/lockfile.lua:M.remove], and `diff.lua` reads and writes files with `io.open` [lua/claudecode/diff.lua:read_file] [lua/claudecode/diff.lua:create_temp_file]
+- **Async and Blocking I/O**: Sockets and timers use libuv callbacks. The TCP server accepts connections and reads through callbacks, writes with libuv's asynchronous `write`, and runs its ping timer from a libuv timer [lua/claudecode/server/tcp.lua:M._bind_and_listen] [lua/claudecode/server/tcp.lua:M._handle_new_connection] [lua/claudecode/server/client.lua:write] [lua/claudecode/server/tcp.lua:M.start_ping_timer]. The selection debounce and the @-mention queue use timers [lua/claudecode/selection.lua:M.debounce_update] [lua/claudecode/init.lua:start_timer]. File I/O is synchronous and blocks Neovim until it returns: `lockfile.lua` calls `fs_open`, `fs_write` and `fs_close` without callbacks and uses `os.rename` and `os.remove` [lua/claudecode/lockfile.lua:M.create] [lua/claudecode/lockfile.lua:M.remove], and `diff.lua` reads and writes files with `io.open` [lua/claudecode/diff.lua:read_file] [lua/claudecode/diff.lua:create_temp_file]
