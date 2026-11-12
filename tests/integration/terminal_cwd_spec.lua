@@ -15,9 +15,10 @@ end
 -- The terminal starts in the folder that the `cwd_provider` result or the static `cwd` names. `build_config` ran both
 -- through `vim.fn.expand`, which reads `[`, `{`, `*`, `?`, `$` and `\` in a name as patterns or variables. So a folder
 -- named `$HOME-like` or `back\slash` came back as another path, and `[x] {y}` and `it's` came back with a trailing
--- slash. A folder that exists is now taken as written. Text that names no folder still goes through `vim.fn.expand`,
--- so `~` and `$VAR` keep working. Neovim's own `expand` and `isdirectory` decide this, so under busted's mock vim this
--- is pending; scripts/run_integration_tests_individually.sh runs it in Neovim.
+-- slash. Text that starts with `~` or `$` now always goes through `vim.fn.expand`, so `~` and `$VAR` work, even when
+-- Neovim's current folder holds a folder with that literal name. Any other text that names an existing folder is
+-- taken as written. Other text goes through `expand` too. Neovim's own `expand` and `isdirectory` decide this, so under
+-- busted's mock vim this is pending; scripts/run_integration_tests_individually.sh runs it in Neovim.
 describe("the terminal working directory", function()
   local terminal = require("claudecode.terminal")
   local root, real_termopen, termopen_calls, saved
@@ -138,6 +139,24 @@ describe("the terminal working directory", function()
       )
     end)
 
+    it("expands $VAR in a cwd_provider result", function()
+      vim.fn.mkdir(root .. "/base/sub", "p")
+      vim.env.CLAUDECODE_CWD_SPEC_BASE = root .. "/base"
+
+      assert.are.equal(
+        root .. "/base/sub",
+        started_in({
+          cwd_provider = function()
+            return "$CLAUDECODE_CWD_SPEC_BASE/sub"
+          end,
+        })
+      )
+    end)
+  end)
+
+  -- `isdirectory` does not expand, so a folder named `~` or `$HOME` in Neovim's current folder looks like a folder that
+  -- exists. Text that starts with `~` or `$` asks for expansion anyway, as in a shell and in `:cd`.
+  describe("with text that starts with ~ or $, while Neovim's cwd holds a folder of that name", function()
     it("expands a leading ~ even when Neovim's cwd holds a folder named ~", function()
       vim.fn.mkdir(root .. "/home/sub", "p")
       vim.fn.mkdir(root .. "/work/~/sub", "p")
@@ -169,15 +188,16 @@ describe("the terminal working directory", function()
       )
     end)
 
-    it("expands $VAR in a cwd_provider result", function()
-      vim.fn.mkdir(root .. "/base/sub", "p")
-      vim.env.CLAUDECODE_CWD_SPEC_BASE = root .. "/base"
+    it("expands a leading $ in a cwd_provider result even when Neovim's cwd holds a folder named $HOME", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.fn.mkdir(root .. "/work/$HOME/sub", "p")
+      vim.env.HOME = root .. "/home"
 
       assert.are.equal(
-        root .. "/base/sub",
-        started_in({
+        root .. "/home/sub",
+        started_in_folder(root .. "/work", {
           cwd_provider = function()
-            return "$CLAUDECODE_CWD_SPEC_BASE/sub"
+            return "$HOME/sub"
           end,
         })
       )
