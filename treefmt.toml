@@ -1,6 +1,7 @@
 # treefmt configuration — replaces the former Nix flake `nix fmt` (treefmt-nix).
 #
-# Run via `mise run format` (treefmt) or `mise run format-check` (treefmt --ci).
+# Run via `mise run format` (treefmt) or `mise run format-check` (scripts/format-check.sh, which runs treefmt on a copy
+# of the tree and writes nothing to the tree).
 # Every formatter/linter referenced here is provisioned by mise (see mise.toml).
 # treefmt's git walker already skips git-ignored paths; these also guard `--walk filesystem`.
 excludes = [

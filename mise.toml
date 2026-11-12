@@ -145,7 +145,8 @@ run = "treefmt"
 
 [tasks.format-check]
 description = "Verify formatting without writing (used in CI)"
-run = "treefmt --ci"
+# `treefmt --ci` writes the files it formats and then fails, so the script formats a copy and compares it with the tree.
+run = "scripts/format-check.sh"
 
 [tasks.reviewfix]
 description = "Run reviewfixer against PR review findings (see reviewfixer.yaml)"
