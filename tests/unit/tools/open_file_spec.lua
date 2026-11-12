@@ -1365,6 +1365,19 @@ describe("Tool: open_file", function()
         expect(buffers[30].buftype or "").to_be("")
       end)
 
+      it("gives the buffer its 'buftype' back when an autocommand unloads it, as 'bufhidden' unload does", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            buffers[30].loaded = false -- the buffer is still valid
+          end,
+        })
+
+        pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(buffers[30].buftype or "").to_be("")
+      end)
+
       it("fails with the error of the autocommand when the autocommand wipes the buffer first", function()
         _G.vim.api.nvim_create_autocmd("BufEnter", {
           buffer = 30,
