@@ -346,17 +346,21 @@ describe("Tool: get_diagnostics", function()
       expect(entry.source).to_be_nil()
     end)
 
-    it("names the file of the requested URI for a diagnostic whose buffer has no name", function()
+    -- Neovim finds a buffer by its name, so a requested path never finds a buffer with no name. Only a special name
+    -- of bufnr() can: "%" is the current buffer. The handler then answers the special name itself as a file URI. That
+    -- is today's answer on Neovim 0.12.3 and v0.8.0 (`evidence/p2r2/probe-p2r2-*.txt`, F1c).
+    it("answers file://%25 for the request % with an unnamed buffer (pins today's answer)", function()
+      _G.vim.fn.bufnr = spy.new(function()
+        return 1
+      end)
       _G.vim.api.nvim_buf_get_name = spy.new(function()
         return ""
       end)
 
-      local files = files_for({ diagnostic({ message = "unnamed" }) }, {
-        uri = "file:///test/file.lua",
-      })
+      local files = files_for({ diagnostic({ message = "unnamed" }) }, { uri = "%" })
 
       expect(#files).to_be(1)
-      expect(files[1].uri).to_be("file:///test/file.lua")
+      expect(files[1].uri).to_be("file://%25")
       expect(#files[1].diagnostics).to_be(1)
     end)
 
@@ -371,16 +375,18 @@ describe("Tool: get_diagnostics", function()
     end)
 
     it("takes a URI without a file scheme as the path", function()
-      _G.vim.fn.bufnr = spy.new(function()
-        return 3
+      -- The buffer that bufnr finds has the name that Neovim gives it: an absolute path.
+      _G.vim.fn.bufnr = spy.new(function(path)
+        return path == "relative.lua" and 3 or -1
       end)
       _G.vim.api.nvim_buf_get_name = spy.new(function()
-        return ""
+        return "/work/relative.lua"
       end)
 
       local files = files_for({ diagnostic({ bufnr = 3, message = "relative" }) }, { uri = "relative.lua" })
 
-      expect(files[1].uri).to_be("file://relative.lua")
+      assert.spy(_G.vim.fn.bufnr).was_called_with("relative.lua")
+      expect(files[1].uri).to_be("file:///work/relative.lua")
       assert.spy(_G.vim.uri_to_fname).was_not_called()
     end)
   end)
