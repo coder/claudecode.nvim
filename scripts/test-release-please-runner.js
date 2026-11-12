@@ -692,7 +692,9 @@ function unformattedRefusal() {
     "CHANGELOG.md is not formatted: Prettier would change it. " +
     "The update refuses it, because the change can move a heading that Communique and the update read. " +
     "A bare CR does that: Communique does not end a line at it, but the update does. " +
-    "Run `mise run format` and commit CHANGELOG.md."
+    "Run `mise run format`, then review its diff of CHANGELOG.md. " +
+    "Prettier can change what an entry says, for example around an identifier with underscores. " +
+    "Fix such a line by hand, for example by putting the identifier in backticks."
   );
 }
 
