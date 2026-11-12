@@ -161,34 +161,6 @@ describe("Tools Module", function()
       -- Add more checks for other registered tools as needed
     end)
 
-    it(
-      "lists exactly the ten MCP tools, with their schema description and input schema, and hides close_tab",
-      function()
-        local names = {}
-        for _, tool in ipairs(tools.get_tool_list()) do
-          table.insert(names, tool.name)
-          expect(tool.description).to_be(tools.tools[tool.name].schema.description)
-          expect(tool.inputSchema).to_be(tools.tools[tool.name].schema.inputSchema)
-        end
-        table.sort(names)
-
-        assert.are.same({
-          "checkDocumentDirty",
-          "closeAllDiffTabs",
-          "getCurrentSelection",
-          "getDiagnostics",
-          "getLatestSelection",
-          "getOpenEditors",
-          "getWorkspaceFolders",
-          "openDiff",
-          "openFile",
-          "saveDocument",
-        }, names)
-        expect(tools.tools.close_tab.handler).to_be_function()
-        expect(tools.tools.close_tab.schema).to_be_nil()
-      end
-    )
-
     it("should allow registering custom tools", function()
       local custom_tool_handler = spy.new(function()
         return "custom result"
@@ -473,6 +445,36 @@ describe("Tools Module", function()
         assert.equal("suspended", coroutine.status(result_obj.coroutine))
       end)
     end)
+  end)
+
+  describe("Tool list (get_tool_list)", function()
+    it(
+      "lists exactly the ten MCP tools, with their schema description and input schema, and hides close_tab",
+      function()
+        local names = {}
+        for _, tool in ipairs(tools.get_tool_list()) do
+          table.insert(names, tool.name)
+          expect(tool.description).to_be(tools.tools[tool.name].schema.description)
+          expect(tool.inputSchema).to_be(tools.tools[tool.name].schema.inputSchema)
+        end
+        table.sort(names)
+
+        assert.are.same({
+          "checkDocumentDirty",
+          "closeAllDiffTabs",
+          "getCurrentSelection",
+          "getDiagnostics",
+          "getLatestSelection",
+          "getOpenEditors",
+          "getWorkspaceFolders",
+          "openDiff",
+          "openFile",
+          "saveDocument",
+        }, names)
+        expect(tools.tools.close_tab.handler).to_be_function()
+        expect(tools.tools.close_tab.schema).to_be_nil()
+      end
+    )
   end)
 
   -- All individual tool describe blocks (e.g., "Open File Tool", "Get Diagnostics Tool", etc.)
