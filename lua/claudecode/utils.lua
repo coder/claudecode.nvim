@@ -277,4 +277,35 @@ function M.valid_utf8(text)
   return table.concat(parts)
 end
 
+-- Neovim 0.8 and 0.9 bundle a LuaJIT older than its commit e86990f7f of 2023-09-21 (LuaJIT issue 1066). When a Neovim
+-- API call in a coroutine runs a Lua callback and then raises into a pcall of that coroutine, such a LuaJIT keeps
+-- pointing at the main Lua thread, and the next exit from a compiled trace corrupts that thread's stack: Neovim aborts
+-- (exit 134 or 139). Only compiled traces read the stale pointer, and coroutine.resume sets it right when it returns.
+-- Rolling releases are numbered 2.1.<unix time of the commit>. A string that does not read that way counts as
+-- affected, which costs only a flush.
+local jit_affected = jit ~= nil and (tonumber(jit.version:match("^LuaJIT 2%.1%.(%d+)$")) or 0) < 1695261248
+
+---Turns the JIT back on when `was_on`, and passes the other arguments on as they are, trailing nils included.
+local function restore_jit(was_on, ...)
+  if was_on then
+    jit.on()
+  end
+  return ...
+end
+
+---`coroutine.resume` for the coroutine of a tool (`handle_invoke` and the resolution of a blocking diff). On a LuaJIT
+---with issue 1066 the JIT is off and its traces are flushed while the coroutine runs. A JIT that was off stays off.
+---@param co thread
+---@param ... any Values for the coroutine
+---@return boolean success
+---@return any ... What `coroutine.resume` returns
+function M.resume_tool_coroutine(co, ...)
+  local was_on = jit_affected and jit.status()
+  if jit_affected then
+    jit.off()
+    jit.flush()
+  end
+  return restore_jit(was_on, coroutine.resume(co, ...))
+end
+
 return M

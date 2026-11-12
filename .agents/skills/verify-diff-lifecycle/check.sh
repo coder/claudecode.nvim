@@ -176,7 +176,7 @@ fact[ClientTagged]=$(as_bool client_tagged)
 # the running coroutine, and open_diff_blocking returns that result.
 setup_answer_returned() {
   in_order '^ *local waiting = false$' 'pcall\(M\._setup_blocking_diff' '^ *if not waiting then$' \
-    '^ *setup_result = result$' '^ *return$' 'coroutine\.resume\(co, result\)' '^ *if setup_result then$' \
+    '^ *setup_result = result$' '^ *return$' 'utils\.resume_tool_coroutine\(co, result\)' '^ *if setup_result then$' \
     '^ *return setup_result$' '^ *waiting = true$' 'coroutine\.yield\(\)' <<<"$open_blocking"
 }
 fact[SetupAnswerReturned]=$(as_bool setup_answer_returned)

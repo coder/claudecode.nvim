@@ -1,6 +1,8 @@
 -- Tool implementation for Claude Code Neovim integration
 local M = {}
 
+local utils = require("claudecode.utils")
+
 M.ERROR_CODES = {
   PARSE_ERROR = -32700,
   INVALID_REQUEST = -32600,
@@ -110,7 +112,7 @@ function M.handle_invoke(client, params) -- client needed for blocking tools
     end)
 
     require("claudecode.logger").debug("tools", "About to resume coroutine for " .. tool_name)
-    local success, result, err = coroutine.resume(co)
+    local success, result, err = utils.resume_tool_coroutine(co)
     require("claudecode.logger").debug(
       "tools",
       "Coroutine resume returned - success:",
