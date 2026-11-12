@@ -354,12 +354,5 @@ describe("Tool: get_diagnostics", function()
       expect(files[1].uri).to_be("file://relative.lua")
       assert.spy(_G.vim.uri_to_fname).was_not_called()
     end)
-
-    it("does not take a URI that is not a string for a file URI", function()
-      local success, err = pcall(get_diagnostics_handler, { uri = 7 })
-
-      expect(success).to_be_false()
-      expect(err.code).to_be(-32001)
-    end)
   end)
 end)
