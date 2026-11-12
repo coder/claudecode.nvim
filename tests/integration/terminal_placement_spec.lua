@@ -953,6 +953,40 @@ describe("the terminal's placement in its own split", function()
       assert.equal(1, state.windows)
     end)
 
+    it("starts a new terminal that stays hidden, with no error, when the autocmd wipes the user's file", function()
+      -- The wipe closes the split and the window that the split was made from, and only a window of another file is left.
+      start_child()
+      call([[
+        vim.cmd("topleft split " .. vim.fn.fnameescape(_G.dir .. "/other.txt"))
+        _G.other_win = vim.api.nvim_get_current_win()
+        vim.cmd("wincmd j")
+        _G.file = vim.api.nvim_get_current_buf()
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = _G.file,
+          once = true,
+          callback = function()
+            vim.cmd("bwipeout! " .. _G.file)
+          end,
+        })
+      ]])
+
+      local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd("ClaudeCode")]], {})
+
+      local state = call([[
+        local terminal = require("claudecode.terminal")
+        local buf = terminal.get_active_terminal_bufnr()
+        return {
+          terminal_windows = buf and vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) or 0,
+          job_running = buf ~= nil and vim.fn.jobwait({ vim.b[buf].terminal_job_id }, 10)[1] == -1,
+          windows = #vim.api.nvim_tabpage_list_wins(0),
+        }
+      ]])
+      assert.is_true(ok, tostring(err))
+      assert.equal(0, state.terminal_windows)
+      assert.is_true(state.job_running, "the terminal must still start")
+      assert.equal(1, state.windows)
+    end)
+
     it("shows the terminal in a split on the next open", function()
       start_child()
       hide_terminal()

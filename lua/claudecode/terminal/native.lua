@@ -288,8 +288,9 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
     if effective_config.auto_insert ~= false then
       vim.cmd("startinsert")
     end
-  else
-    -- Preserve user context: return to the window they were in before terminal creation
+  elseif vim.api.nvim_win_is_valid(original_win) then
+    -- Preserve user context: return to the window they were in before terminal creation. A BufLeave autocmd that wiped
+    -- the user's file has closed it, and the terminal stays hidden then.
     vim.api.nvim_set_current_win(original_win)
   end
 
