@@ -6,7 +6,7 @@
 require("tests.busted_setup")
 
 describe("diffs still pending when Neovim exits", function()
-  local diff, dir, answers, senders
+  local diff, dir, answers
 
   ---The one VimLeavePre autocmd of diff.lua, run as Neovim runs it.
   local function leave()
@@ -37,7 +37,6 @@ describe("diffs still pending when Neovim exits", function()
     _G.claude_deferred_responses[tostring(co)] = function(response)
       answers[#answers + 1] = { name = name, text = response.content[1].text, tab = response.content[2].text }
     end
-    senders[name] = tostring(co)
     return co
   end
 
@@ -52,7 +51,7 @@ describe("diffs still pending when Neovim exits", function()
     diff = require("claudecode.diff")
     diff.setup({ diff_opts = {} })
     dir = require("tests.helpers.temp_dir").new()
-    answers, senders = {}, {}
+    answers = {}
     _G.claude_deferred_responses = {}
   end)
 
