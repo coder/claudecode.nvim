@@ -38,17 +38,21 @@ const PLACEHOLDERS = [
 ].filter(([path]) => path.length > 1);
 const PATHS = {
   $CWD: "the work folder",
-  $RUN: "the temp dir", // never named: the work folder path starts with it and is refused first
+  $RUN: "the temp dir", // never named: the loop refuses the work folder path first, which starts with it
   $TREE: "the tree",
   $HOME: "the home folder",
 };
-// A placeholder stands for a whole path: a path is rewritten only where `/`, the end of a JSON string (a quote, with
-// backslashes before it in a nested string) or the end of the text follows it. The work folder plus `X` is another path.
+// The work folder is the one path that a frame may hold, so it is rewritten only as a whole path: where `/`, the end of
+// a JSON string (a quote, with backslashes before it in a nested string) or the end of the text follows it. The work
+// folder plus `X` is then no work folder, and it reads as a `$RUN` path. The other paths are rewritten wherever their
+// text appears: an over-match of a leak path is a leak.
 const REWRITES = PLACEHOLDERS.map(([path, mark]) => [
-  new RegExp(
-    `${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=/|\\\\*"|$)`,
-    "g",
-  ),
+  mark === "$CWD"
+    ? new RegExp(
+        `${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=/|\\\\*"|$)`,
+        "g",
+      )
+    : path,
   mark,
 ]);
 // A leak is a Lua position (`.lua:` and a digit), or a path under the run dir, the plugin tree or the real home folder.
@@ -142,7 +146,7 @@ for (const { name, ok, strings = {} } of TOOLS) {
 
 const rewrite = (text) =>
   REWRITES.reduce(
-    (out, [pattern, mark]) => out.replace(pattern, () => mark),
+    (out, [pattern, mark]) => out.replaceAll(pattern, mark),
     text,
   );
 const parse = (text) => {
