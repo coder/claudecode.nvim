@@ -71,13 +71,13 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
     end)
   end
 
-  -- `blank_end` marks a proposal that ends in a blank line. The unified layout drops one of those on its own (see
-  -- diff_accept_trailing_newlines_spec.lua), so this file runs them in the split layouts only.
+  -- `blank_end` marks a proposal that ends in a blank line. On main the unified layout drops one of those (F11 fixes
+  -- that), so this file runs them in the split layouts only.
   local proposals = {
     { name = "a final line without a line break", text = "a" },
     { name = "two lines and no final line break", text = "a\nb" },
     { name = "no text", text = "" },
-    { name = "a blank final line without a line break", text = "a\n\nb" },
+    { name = "a blank line inside and no final line break", text = "a\n\nb" },
     { name = "one final line break", text = "a\n" },
     { name = "two lines and a final line break", text = "a\nb\n" },
     { name = "a blank line only", text = "\n" },
