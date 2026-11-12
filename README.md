@@ -459,9 +459,9 @@ You can fix the Claude terminal's working directory regardless of `autochdir` an
 - `cwd`: static path to use as working directory.
 - `git_repo_cwd = true`: resolves git root from the current file directory (or cwd if no file).
 
-A `cwd_provider` result or a `cwd` that names an existing folder is used as written, so a folder name with `$`, `\`, `[` or
-`{` in it works. Text that starts with `~` or `$`, and any text that names no folder, goes through `vim.fn.expand`, so
-`~/projects/my-app` and `$HOME/my-app` work.
+A `cwd_provider` result or a `cwd` that starts with `~` or `$` always goes through `vim.fn.expand`, so `~/projects/my-app`
+and `$HOME/my-app` work. Any other text that names an existing folder is used as written, so a folder name with `$`, `\`,
+`[` or `{` in it works. Other text goes through `expand` too.
 
 Examples:
 
