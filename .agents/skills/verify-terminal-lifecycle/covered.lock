@@ -1,5 +1,5 @@
 == lua/claudecode/init.lua
-file lua/claudecode/init.lua fc28de832b4056df
+file lua/claudecode/init.lua db4b58226c39fd20
 block user_commands          cb431d84207039e1
 block send_at_mention        508de16084cc702a
 site lua/claudecode/init.lua: terminal.close() @ function M._create_commands()

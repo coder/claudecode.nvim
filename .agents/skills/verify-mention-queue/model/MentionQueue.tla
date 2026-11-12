@@ -44,7 +44,8 @@ CONSTANTS
   FlushRemovesHead,        \* init.lua flush_mention_queue removes the head once a client took it
   FailedWriteReported,     \* a broadcast whose writes all failed shows an error (report_unwritten, tcp.lua broadcast)
   RefusedWriteReported,    \* client.lua send_message passes the error of a write that libuv refuses at once to its callback
-  StopClearsQueue          \* init.lua M.stop calls clear_mention_queue (empties the queue, stops both timers)
+  StopClearsQueue,         \* init.lua M.stop calls clear_mention_queue (empties the queue, stops both timers)
+  ImmediateWaitsForReady   \* init.lua _broadcast_at_mention sends at once only while a connected client is ready
 
 M == 1..Mentions
 C == 1..2
@@ -61,10 +62,11 @@ VARIABLES
   dlFor,       \* the mention whose deadline dlTimer was started for, 0 for none
   openRuns,    \* process_mention_queue(true) runs that on_open scheduled (a stop does not cancel them)
   early,       \* a mention went out while no connected client had been connected for connection_wait_delay
-  luaError, leaked
+  luaError, leaked,
+  immediate    \* the user's disable_broadcast_debouncing, either value, fixed for the whole run
 
 vars == <<sent, queue, outcome, stopped, recv, cstate, age, serverUp, connects, starts, flushTimer, dlTimer, dlFor,
-          openRuns, early, luaError, leaked>>
+          openRuns, early, luaError, leaked, immediate>>
 
 InSeq(m, s) == \E i \in 1..Len(s) : s[i] = m
 Pending(m) == InSeq(m, queue)
@@ -109,6 +111,7 @@ TypeOK ==
   /\ early \in BOOLEAN
   /\ luaError \in BOOLEAN
   /\ leaked \in BOOLEAN
+  /\ immediate \in BOOLEAN
 
 Init ==
   /\ sent = [m \in M |-> FALSE]
@@ -128,6 +131,7 @@ Init ==
   /\ early = FALSE
   /\ luaError = FALSE
   /\ leaked = FALSE
+  /\ immediate \in BOOLEAN
 
 (* init.lua expire_mentions while no client is ready: the k oldest mentions, whose deadline passed, leave with one    *)
 (* logger.error. The mention connection_timer was started for is the head if it still waits, and its deadline      *)
@@ -151,15 +155,15 @@ Expire(k, ft) ==
 -----------------------------------------------------------------------------
 (* You *)
 
-(* init.lua M.send_at_mention: no server, an error. Otherwise              *)
-(* queue_mention appends the mention with its deadline, starts            *)
-(* connection_timer for it when none runs, then schedule_mention_flush.   *)
-(* This is the default config only. With disable_broadcast_debouncing     *)
-(* set, _broadcast_at_mention broadcasts at once while the queue is empty *)
-(* and checks no readiness, so a Claude whose handshake just completed    *)
-(* gets the mention early: a known bug, which a follow-up PR fixes. That  *)
-(* path is not modeled, and a PASS of SentWhenReady does not cover it     *)
-(* (SKILL.md, "Scope and bounds").                                        *)
+(* init.lua M.send_at_mention: no server, an error. Claude connected:     *)
+(* _broadcast_at_mention, which with disable_broadcast_debouncing set and *)
+(* an empty queue broadcasts at once while ms_until_a_client_is_ready()   *)
+(* is 0 or nil. Every other send goes to queue_mention, which appends the *)
+(* mention with its deadline, starts connection_timer for it when none    *)
+(* runs, then schedule_mention_flush. A broadcast's writes all succeed,   *)
+(* all fail later, or are refused at once, as in a flush.                 *)
+SendsAtOnce == immediate /\ Connected /\ queue = <<>> /\ (ImmediateWaitsForReady => ~WaitForReady)
+
 YouSend ==
   \E m \in M :
     /\ ~sent[m]
@@ -167,7 +171,18 @@ YouSend ==
     /\ sent' = [sent EXCEPT ![m] = TRUE]
     /\ IF ~serverUp
        THEN /\ outcome' = [outcome EXCEPT ![m] = "refused"]
-            /\ UNCHANGED <<queue, flushTimer, dlTimer, dlFor>>
+            /\ UNCHANGED <<queue, flushTimer, dlTimer, dlFor, recv, early>>
+       ELSE IF SendsAtOnce
+       THEN \E result \in {"written", "failed", "refused"} :
+              LET reported == IF result = "failed" THEN FailedWriteReported
+                              ELSE RefusedWriteReported /\ FailedWriteReported
+              IN /\ outcome' = [outcome EXCEPT ![m] =
+                                   IF result = "written" THEN "delivered" ELSE IF reported THEN "failed" ELSE "silent"]
+                 /\ recv' = IF result = "written"
+                            THEN [c \in C |-> IF c \in Takers THEN Append(recv[c], m) ELSE recv[c]]
+                            ELSE recv
+                 /\ early' = (early \/ ~TrulyReady)
+                 /\ UNCHANGED <<queue, flushTimer, dlTimer, dlFor>>
        ELSE LET q == Append(queue, m)
                 arm == EnqueueArmsDeadline /\ dlTimer = "nil"
                 t == Schedule(q, flushTimer, IF arm THEN "running" ELSE dlTimer, IF arm THEN m ELSE dlFor)
@@ -175,8 +190,8 @@ YouSend ==
                /\ flushTimer' = t[1]
                /\ dlTimer' = t[2]
                /\ dlFor' = t[3]
-               /\ UNCHANGED outcome
-    /\ UNCHANGED <<stopped, recv, cstate, age, serverUp, connects, starts, openRuns, early, luaError, leaked>>
+               /\ UNCHANGED <<outcome, recv, early>>
+    /\ UNCHANGED <<stopped, cstate, age, serverUp, connects, starts, openRuns, luaError, leaked, immediate>>
 
 (* init.lua M.stop: the server closes every client, M.state.server = nil, *)
 (* and clear_mention_queue empties the queue and stops both timers.        *)
@@ -192,7 +207,7 @@ YouStop ==
           /\ dlTimer' = "nil"
           /\ dlFor' = 0
      ELSE UNCHANGED <<queue, outcome, flushTimer, dlTimer, dlFor>>
-  /\ UNCHANGED <<sent, recv, age, connects, starts, openRuns, early, luaError, leaked>>
+  /\ UNCHANGED <<sent, recv, age, connects, starts, openRuns, early, luaError, leaked, immediate>>
 
 YouStart ==
   /\ ~serverUp
@@ -200,13 +215,13 @@ YouStart ==
   /\ serverUp' = TRUE
   /\ starts' = starts + 1
   /\ UNCHANGED <<sent, queue, outcome, stopped, recv, cstate, age, connects, flushTimer, dlTimer, dlFor, openRuns,
-                 early, luaError, leaked>>
+                 early, luaError, leaked, immediate>>
 
 -----------------------------------------------------------------------------
 (* Claude: each client slot *)
 
 ClientOnly == UNCHANGED <<sent, queue, outcome, stopped, recv, serverUp, connects, starts, flushTimer, dlTimer, dlFor,
-                          openRuns, early, luaError, leaked>>
+                          openRuns, early, luaError, leaked, immediate>>
 
 (* server/tcp.lua _handle_new_connection: a new TCP client. *)
 ClaudeConnects(c) ==
@@ -215,7 +230,7 @@ ClaudeConnects(c) ==
   /\ age' = [age EXCEPT ![c] = "fresh"]
   /\ connects' = connects + 1
   /\ UNCHANGED <<sent, queue, outcome, stopped, recv, serverUp, starts, flushTimer, dlTimer, dlFor, openRuns, early,
-                 luaError, leaked>>
+                 luaError, leaked, immediate>>
 
 ClaudeUpgrades(c) ==
   /\ cstate[c] = "connecting"
@@ -231,7 +246,7 @@ HandshakeWritten(c) ==
   /\ cstate' = [cstate EXCEPT ![c] = "connected"]
   /\ openRuns' = IF HandshakeFlushes THEN openRuns + 1 ELSE openRuns
   /\ UNCHANGED <<sent, queue, outcome, stopped, recv, age, serverUp, connects, starts, flushTimer, dlTimer, dlFor,
-                 early, luaError, leaked>>
+                 early, luaError, leaked, immediate>>
 
 (* connection_wait_delay passes since the TCP accept. *)
 AcceptWaitPasses(c) ==
@@ -277,13 +292,14 @@ OpenRuns ==
      IN /\ flushTimer' = t[1]
         /\ dlTimer' = t[2]
         /\ dlFor' = t[3]
-  /\ UNCHANGED <<sent, queue, outcome, stopped, recv, cstate, age, serverUp, connects, starts, early, luaError, leaked>>
+  /\ UNCHANGED <<sent, queue, outcome, stopped, recv, cstate, age, serverUp, connects, starts, early, luaError, leaked,
+                 immediate>>
 
 FlushTimerFires ==
   /\ flushTimer = "running"
   /\ flushTimer' = "fired"
   /\ UNCHANGED <<sent, queue, outcome, stopped, recv, cstate, age, serverUp, connects, starts, dlTimer, dlFor, openRuns,
-                 early, luaError, leaked>>
+                 early, luaError, leaked, immediate>>
 
 (* The flush callback, flush_mention_queue. An empty queue stops both     *)
 (* timers. Otherwise assert(M.state.server). While some client counts but *)
@@ -337,14 +353,14 @@ FlushRuns ==
                        /\ dlTimer' = t[2]
                        /\ dlFor' = t[3]
                        /\ UNCHANGED luaError
-  /\ UNCHANGED <<sent, stopped, cstate, age, serverUp, connects, starts, openRuns>>
+  /\ UNCHANGED <<sent, stopped, cstate, age, serverUp, connects, starts, openRuns, immediate>>
 
 DeadlineFires ==
   /\ DeadlinesFire
   /\ dlTimer = "running"
   /\ dlTimer' = "fired"
   /\ UNCHANGED <<sent, queue, outcome, stopped, recv, cstate, age, serverUp, connects, starts, flushTimer, dlFor,
-                 openRuns, early, luaError, leaked>>
+                 openRuns, early, luaError, leaked, immediate>>
 
 (* The deadline callback, expire_mentions. While a ready client is        *)
 (* connected, it clears nothing, makes sure a flush is due, and stops:    *)
@@ -359,7 +375,8 @@ DeadlineRuns ==
           /\ flushTimer' = IF SparedQueueFlushes THEN Schedule(queue, flushTimer, "nil", 0)[1] ELSE flushTimer
           /\ UNCHANGED <<queue, outcome>>
      ELSE \E k \in (IF dlFor # 0 /\ Pending(dlFor) THEN 1 ELSE 0)..Len(queue) : Expire(k, flushTimer)
-  /\ UNCHANGED <<sent, stopped, recv, cstate, age, serverUp, connects, starts, openRuns, early, luaError, leaked>>
+  /\ UNCHANGED <<sent, stopped, recv, cstate, age, serverUp, connects, starts, openRuns, early, luaError, leaked,
+                 immediate>>
 
 Done ==
   /\ \A m \in M : sent[m] /\ ~Pending(m)
