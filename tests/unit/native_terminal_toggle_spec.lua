@@ -1724,7 +1724,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       -- Before Claude has a buffer with a mark, an entry that an autocmd calls finds no terminal to adopt. The vsplit
       -- fires WinLeave, WinNew and WinEnter, and creating the buffer fires BufNew and BufAdd. The start makes the one
       -- Claude, so those entries do nothing.
-      local entries = {
+      local early_entries = {
         {
           "open",
           function()
@@ -1759,7 +1759,7 @@ describe("claudecode.terminal.native toggle behavior", function()
         },
       }
       for _, autocmd in ipairs(early_autocmds) do
-        for _, entry in ipairs(entries) do
+        for _, entry in ipairs(early_entries) do
           it("should start one Claude when " .. autocmd[1] .. " calls " .. entry[1], function()
             local fired = 0
             autocmd[2](function()
