@@ -117,7 +117,7 @@ when `require("claudecode").setup()` runs. The main module lives in
   `--cmd 'let g:claudecode_auto_setup ...'` line:
 
   ```sh
-  nvim --headless -u NORC -i NONE --cmd "set rtp^=$PWD" \
+  nvim --headless -u NORC -i NONE --cmd "lua vim.opt.rtp:prepend(vim.fn.getcwd())" \
     --cmd 'let g:claudecode_auto_setup = {"auto_start": v:false}' \
     -c 'lua vim.defer_fn(function() io.stdout:write(vim.fn.exists(":ClaudeCode") .. "\n") vim.cmd("qa!") end, 100)'
   ```

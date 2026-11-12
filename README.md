@@ -1123,8 +1123,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 - The server listens only on `127.0.0.1` [lua/claudecode/server/tcp.lua:M.\_bind_and_listen].
 - A WebSocket upgrade must carry `x-claude-code-ide-authorization` that matches the lock-file token, compared in constant
   time [lua/claudecode/server/handshake.lua:M.validate_upgrade_request]. `start` returns `false` before it starts the server
-  if the token is shorter than 10 characters. It removes the lock file and stops the server if the token does not
-  match the token that `lockfile.create` wrote [lua/claudecode/init.lua:M.start].
+  if the token is shorter than 10 characters. If the token does not match the token that `lockfile.create` wrote, it tries to remove the lock file (a failed removal is only logged) and stops the
+  server [lua/claudecode/init.lua:M.start].
 - The token comes from `vim.loop.random` or `/dev/urandom`, never `math.random` [lua/claudecode/lockfile.lua:get_random_bytes].
 - Lock files live in `$CLAUDE_CONFIG_DIR/ide`, or in `~/.claude/ide` when that variable is unset or empty, named `<port>.lock` [lua/claudecode/lockfile.lua:M.lock_dir]. `repro_issue_238.sh`,
   `repro_issue_248.sh`, and the verify skill's `ws-client.mjs` read the port from that basename [scripts/repro_issue_238.sh:PORT] [scripts/repro_issue_248.sh:PORT]
@@ -1151,8 +1151,8 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
 
 ### Global Side Effects
 
-- Lock file: `start` writes `<port>.lock` (file `0600`, atomic rename). A new lock directory gets `0700`, and the chmod of an existing one is best-effort [lua/claudecode/lockfile.lua:M.create]. `stop` deletes it
-  [lua/claudecode/lockfile.lua:M.remove]. The `ClaudeCodeShutdown` `VimLeavePre` autocmd runs `stop`
+- Lock file: `start` writes `<port>.lock` (file `0600`, atomic rename). A new lock directory gets `0700`, and the chmod of an existing one is best-effort [lua/claudecode/lockfile.lua:M.create]. `stop` tries to delete it and logs a warning when it cannot
+  [lua/claudecode/lockfile.lua:M.remove] [lua/claudecode/init.lua:M.stop]. The `ClaudeCodeShutdown` `VimLeavePre` autocmd runs `stop`
   [lua/claudecode/init.lua:M.setup].
 - Network: one loopback TCP listener [lua/claudecode/server/init.lua:M.start] plus WebSocket frames and JSON-RPC
   broadcasts [lua/claudecode/server/init.lua:M.broadcast]: `selection_changed`
