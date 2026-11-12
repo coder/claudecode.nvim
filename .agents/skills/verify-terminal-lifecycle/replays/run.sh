@@ -19,25 +19,29 @@ command -v "$nvim" >/dev/null || {
   echo "ERROR: no Neovim at $nvim (set NVIM=<path to nvim>)" >&2
   exit 2
 }
-rtp=$repo
+snacks_rtp=
 # snacks-*.lua start with snacks.nvim on the runtimepath; auto-*.lua add it themselves, later.
 if [[ $replay == snacks-* || $replay == auto-* ]]; then
   [[ -n ${SNACKS_NVIM:-} && -f $SNACKS_NVIM/lua/snacks/init.lua && -f $SNACKS_NVIM/lua/snacks/terminal.lua ]] || {
     echo "ERROR: $replay needs SNACKS_NVIM=<snacks.nvim checkout with Snacks.terminal>" >&2
     exit 2
   }
-  [[ $replay == auto-* ]] || rtp=$rtp,$SNACKS_NVIM
+  [[ $replay == auto-* ]] || snacks_rtp=$SNACKS_NVIM
 fi
 home=$(mktemp -d "${TMPDIR:-/tmp}/verify-terminal-lifecycle-replay.XXXXXX")
 trap 'rm -rf "$home"' EXIT
 mkdir -p "$home"/{config,data,state,cache,claude,work}
 cd "$home/work"
+# The paths go to Neovim through the environment and a Lua call, not through `set rtp^=` and `luafile`: a path with a space,
+# a comma, a backslash or a | would be split or cut by those Ex commands. 'runtimepath' needs a comma and a backslash escaped.
 # lib.finish quits with 0 or 1. A replay that raises before it gets there runs on to `cquit 2`, a setup error, and one
 # that hangs is stopped by timeout (124), which is a setup error too.
 code=0
 XDG_CONFIG_HOME=$home/config XDG_DATA_HOME=$home/data XDG_STATE_HOME=$home/state XDG_CACHE_HOME=$home/cache \
-  CLAUDE_CONFIG_DIR=$home/claude REPLAY_LIB=$here/lib.lua timeout 60 "$nvim" --headless -u NONE -i NONE \
-  --cmd "set rtp^=$rtp" -c "luafile $here/$replay" -c "cquit 2" 2>&1 || code=$?
+  CLAUDE_CONFIG_DIR=$home/claude REPLAY_LIB=$here/lib.lua REPLAY_REPO=$repo REPLAY_SNACKS=$snacks_rtp \
+  REPLAY_FILE=$here/$replay timeout 60 "$nvim" --headless -u NONE -i NONE \
+  --cmd 'lua for _, dir in ipairs({ os.getenv("REPLAY_SNACKS"), os.getenv("REPLAY_REPO") }) do if dir ~= "" then vim.o.runtimepath = (dir:gsub("[\\,]", "\\%0")) .. "," .. vim.o.runtimepath end end' \
+  -c 'lua dofile(os.getenv("REPLAY_FILE"))' -c "cquit 2" 2>&1 || code=$?
 if [[ $code -eq 124 ]]; then
   echo "ERROR: $replay did not finish within 60 s" >&2
   exit 2
