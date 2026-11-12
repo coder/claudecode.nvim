@@ -2,9 +2,9 @@
 # Checks that `mise run format-check` writes nothing. On a tree with an unformatted file it must fail, name the file,
 # and leave the file as it was. On a formatted file it must pass and leave the file as it was. A linter failure
 # (shellcheck on a shell file that shfmt leaves as it is) must fail it too. A tracked file that is deleted from the
-# working tree must not fail it. A symlink that does not resolve, and a nested git repository, must not fail it
-# either, because treefmt's git walker skips both. A Prettier configuration in a folder above the checkout must apply,
-# as it does for `treefmt --ci` in the tree.
+# working tree must not fail it. A symlink that does not resolve in the copy, and a nested git repository, must not
+# fail it either, because treefmt's git walker skips both. A Prettier configuration in a folder above the checkout
+# must apply, as it does for `treefmt --ci` in the tree.
 # The test adds one or two untracked files to the working tree and removes them on exit. It also moves the tracked file
 # LICENSE out of the tree for one check and moves it back on exit. The last checks run a copy of format-check.sh in a
 # throwaway git repository in a temporary folder, with mise's treefmt and Prettier on PATH.
@@ -92,7 +92,8 @@ printf '[formatter.prettier]\ncommand = "prettier"\noptions = ["--write"]\ninclu
 printf '# Probe\n\nThis paragraph is longer than thirty characters.\n' >"$repo/probe.md"
 git init -q "$repo"
 
-# Runs the copy of format-check.sh in the throwaway repository. Sets `status`, and leaves the output in "$scratch/output".
+# Runs the copy of format-check.sh in the throwaway repository. Sets `status`, and leaves the output in
+# "$scratch/output".
 run_throwaway() {
   cp "$repo/probe.md" "$scratch/before"
   status=0
@@ -103,11 +104,14 @@ run_throwaway() {
 run_throwaway
 [ "$status" -eq 0 ] || fail "format-check failed the formatted throwaway repository: $(tail -n 5 "$scratch/output")"
 
-# treefmt's git walker skips a symlink. The copy of the files has none, so a link that does not resolve cannot fail diff.
+# treefmt's git walker skips a symlink. The copy of the files has none, so neither a link that does not resolve nor a
+# relative link to a file above the repository (it resolves in the repository, and nowhere in the copy) can fail diff.
+printf '# Outside\n' >"$scratch/parent/outside.md"
 ln -s no-such-file.md "$repo/dangling.md"
+ln -s ../outside.md "$repo/outside-link.md"
 run_throwaway
-[ "$status" -eq 0 ] || fail "format-check failed with a symlink that does not resolve: $(tail -n 5 "$scratch/output")"
-rm "$repo/dangling.md"
+[ "$status" -eq 0 ] || fail "format-check failed with a symlink: $(tail -n 5 "$scratch/output")"
+rm "$repo/dangling.md" "$repo/outside-link.md"
 
 # The git walker skips a nested repository (and a submodule) as one folder, so its unformatted file does not count.
 git init -q "$repo/nested"
@@ -121,6 +125,6 @@ rm -rf "$repo/nested"
 printf '{"proseWrap": "always", "printWidth": 30}\n' >"$scratch/parent/.prettierrc"
 run_throwaway
 [ "$status" -ne 0 ] || fail "format-check ignored a Prettier configuration above the repository"
-grep -q "probe.md" "$scratch/output" || fail "format-check does not name probe.md for a Prettier configuration above the repository"
+grep -q "probe.md" "$scratch/output" || fail "format-check does not name probe.md for a Prettier configuration above"
 
 echo "test-format-check: ok"
