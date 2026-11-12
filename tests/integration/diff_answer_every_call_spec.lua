@@ -192,7 +192,7 @@ describe("openDiff answers every call", function()
             require("claudecode.diff").setup({ terminal = { provider = "none" }, diff_opts = { layout = layout } })
             reloaded = require("claudecode.tools.init")
           else
-            _, reloaded = load_plugin(layout)
+            reloaded = select(2, load_plugin(layout))
           end
           second = open_recording(reloaded, "B", second_file, answers)
         end)
