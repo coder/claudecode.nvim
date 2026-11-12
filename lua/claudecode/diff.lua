@@ -1025,10 +1025,14 @@ function M._register_diff_state(tab_name, diff_data)
   diff_data.open_order = diffs_registered
   active_diffs[tab_name] = diff_data
   -- A plugin reload during the setup leaves this module's table out of reach of every command, which use the new
-  -- module. Register the diff there too, so that accept, deny and close-all answer it.
+  -- module. Register the diff there too, so that accept, deny and close-all answer it. When the new module keeps an
+  -- answered diff for the tab name, no command can reach this one, so reject it and clean it up here.
   local current = package.loaded["claudecode.diff"]
   if type(current) == "table" and current ~= M and current._adopt_diff_state then
-    current._adopt_diff_state(tab_name, diff_data)
+    if not current._adopt_diff_state(tab_name, diff_data) then
+      M._resolve_diff_as_rejected(tab_name)
+      M._cleanup_diff_state(tab_name, "replaced by new diff")
+    end
   end
 end
 
@@ -1037,16 +1041,18 @@ end
 ---stays, because the user can still hold its accepted edits.
 ---@param tab_name string
 ---@param diff_data table
+---@return boolean adopted False when this module kept its own diff for the tab name
 function M._adopt_diff_state(tab_name, diff_data)
   local existing = active_diffs[tab_name]
   if existing then
     if existing.status ~= "pending" then
-      return
+      return false
     end
     M._resolve_diff_as_rejected(tab_name)
     M._cleanup_diff_state(tab_name, "replaced by new diff")
   end
   M._register_diff_state(tab_name, diff_data)
+  return true
 end
 
 ---While the proposal buffer stays modified, `:wq`, `:x` and `ZZ` leave its window open, and `:qa` stops with E37 or

@@ -266,20 +266,48 @@ describe("openDiff answers every call", function()
     assert_answered_once(answers, "A", "FILE_SAVED", "A PROPOSAL\n")
   end)
 
-  it("keeps a diff that the new module already answered when an older module registers one", function()
-    local old_diff = load_plugin("vertical")
-    local diff, tools = load_plugin("vertical")
-    local answers = {}
-    assert.is_true(open_recording(tools, "B", dir .. "/b.txt", answers)._deferred)
-    accept_proposal_showing(diff, "B PROPOSAL")
-    local kept = diff._get_active_diffs()[tab_name]
-    assert.equal("saved", kept.status)
+  it("rejects the first call and keeps the second one that the user accepted before the first finished", function()
+    local _, tools = load_plugin("vertical")
+    local answers, accepted, second, fired = {}, nil, nil, false
+    local group = vim.api.nvim_create_augroup("OverlapSpec", { clear = true })
+    vim.api.nvim_create_autocmd("BufEnter", {
+      group = group,
+      callback = function(args)
+        if fired or not vim.api.nvim_buf_get_name(args.buf):find("(proposed)", 1, true) then
+          return
+        end
+        fired = true
+        vim.schedule(function()
+          local reloaded_diff, reloaded_tools = load_plugin("vertical")
+          second = open_recording(reloaded_tools, "B", dir .. "/missing.txt", answers)
+          accept_proposal_showing(reloaded_diff, "B PROPOSAL")
+          accepted = reloaded_diff
+        end)
+        vim.wait(1000, function()
+          return accepted ~= nil
+        end, 10)
+      end,
+    })
+    local first
+    silence_notify(function()
+      first = open_recording(tools, "A", dir .. "/a.txt", answers)
+    end)
+    vim.api.nvim_del_augroup_by_id(group)
 
-    local late = { status = "pending", new_file_contents = "late\n" }
-    old_diff._register_diff_state(tab_name, late)
-
-    assert.equal(kept, diff._get_active_diffs()[tab_name], "the answered diff stays registered")
-    assert.equal(late, old_diff._get_active_diffs()[tab_name], "the old module keeps its own state")
-    old_diff._get_active_diffs()[tab_name] = nil
+    assert.is_true(fired, "the reload ran inside the first setup")
+    assert.is_nil(first._deferred, "the first call is answered at once")
+    assert_answered_once(answers, "A", "DIFF_REJECTED")
+    assert.is_true(second._deferred, vim.inspect(second.error))
+    assert_answered_once(answers, "B", "FILE_SAVED", "B PROPOSAL\n")
+    local kept = accepted._get_active_diffs()[tab_name]
+    assert.equal("saved", kept.status, "the accepted diff stays registered")
+    assert.is_true(vim.api.nvim_buf_is_valid(kept.new_buffer), "the accepted proposal stays")
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      assert.is_not_equal(
+        vim.fn.fnamemodify(tab_name .. " (proposed)", ":p"),
+        vim.api.nvim_buf_get_name(buf),
+        "the proposal of the rejected call is gone"
+      )
+    end
   end)
 end)
