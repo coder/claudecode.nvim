@@ -3,6 +3,35 @@ describe("claudecode.terminal.native toggle behavior", function()
   local mock_vim
   local logger_spy
 
+  -- Neovim reads /proc/<pid>/comm on Linux, and asks nvim_get_proc where /proc is missing (macOS, the BSDs). stub_proc picks
+  -- the path, so a test does not depend on the host: `names` is false for no /proc, or a function(pid) that returns the name
+  -- of a process (pid "self" or "1": Neovim) or nil for a process that is gone. It returns the function that undoes it.
+  local function stub_proc(names, reads)
+    local open = io.open
+    rawset(io, "open", function(path, mode)
+      local pid = type(path) == "string" and path:match("^/proc/([^/]+)/comm$")
+      if not pid then
+        return open(path, mode)
+      end
+      table.insert(reads, pid)
+      local name = names and names(pid)
+      if not name then
+        return nil
+      end
+      return {
+        read = function()
+          return name
+        end,
+        close = function() end,
+      }
+    end)
+    return function()
+      rawset(io, "open", open)
+    end
+  end
+  local restore_proc
+  local proc_reads
+
   before_each(function()
     -- Clean up any loaded modules
     package.loaded["claudecode.terminal.native"] = nil
@@ -23,6 +52,7 @@ describe("claudecode.terminal.native toggle behavior", function()
       exiting_jobs = {},
       autocmds = {},
       waited_ms = 0,
+      now_ns = 0,
     }
 
     local function enter_buf(winid, bufnr)
@@ -84,6 +114,19 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
           return wins
         end,
+        -- Neovim is process 1 and has its own name. The child of a job (40000 + the job id) is gone, unless a test sets
+        -- mock_state.processes[pid]: a fork of Neovim has the name nvim until it runs exec. Like Neovim, it raises for a pid
+        -- that is no number.
+        nvim_get_proc = function(pid)
+          if type(pid) ~= "number" then
+            error("Invalid 'pid': Expected Lua number")
+          end
+          mock_state.proc_lookups = (mock_state.proc_lookups or 0) + 1
+          if pid == 1 then
+            return { name = "nvim", pid = 1, ppid = 0 }
+          end
+          return mock_state.processes and mock_state.processes[pid] or nil
+        end,
         nvim_list_tabpages = function()
           return { 1 }
         end,
@@ -137,15 +180,17 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
           local closing_bufnr = mock_state.windows[winid].bufnr
           mock_state.windows[winid] = nil
-          -- With 'nohidden', closing the last window of a buffer that is not bufhidden=hide unloads it. A terminal
-          -- buffer ends its job with it.
+          -- Closing the last window of a buffer ends it when its bufhidden is wipe or delete, and with 'nohidden' when it is
+          -- not hide. A terminal buffer ends its job with it, and another buffer unloads.
           local closing = mock_state.buffers[closing_bufnr]
-          if mock_state.nohidden and closing and closing.options.bufhidden ~= "hide" then
+          local policy = closing and closing.options.bufhidden
+          local ends_buffer = policy == "wipe" or policy == "delete"
+          if closing and (ends_buffer or (mock_state.nohidden and policy ~= "hide")) then
             local shown = false
             for _, win in pairs(mock_state.windows) do
               shown = shown or win.bufnr == closing_bufnr
             end
-            if not shown and closing.options.buftype == "terminal" then
+            if not shown and (ends_buffer or closing.options.buftype == "terminal") then
               mock_vim.api.nvim_buf_delete(closing_bufnr, { force = true })
             elseif not shown then
               closing.unloaded = true
@@ -231,7 +276,12 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
         end,
         nvim_create_buf = function(listed, _scratch)
-          return new_buffer(listed)
+          local bufnr = new_buffer(listed)
+          -- BufNew and BufAdd fire here, before the plugin has marked the buffer.
+          if mock_state.bufnew_autocmd then
+            mock_state.bufnew_autocmd(bufnr)
+          end
+          return bufnr
         end,
         -- Mirrors Neovim: a temporary window when no window shows bufnr, and a raised error comes back rewrapped.
         nvim_buf_call = function(bufnr, fn)
@@ -295,6 +345,10 @@ describe("claudecode.terminal.native toggle behavior", function()
           mock_state.next_winid = mock_state.next_winid + 1
           mock_state.windows[winid] = { bufnr = 0 }
           mock_state.current_win = winid
+          -- WinLeave, WinNew and WinEnter fire here, before the plugin has a buffer for the terminal.
+          if mock_state.vsplit_autocmd then
+            mock_state.vsplit_autocmd(winid)
+          end
         elseif command == "enew" then
           -- Create new buffer in current window
           local bufnr = mock_state.next_bufnr
@@ -305,6 +359,11 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
         end
       end,
+      loop = {
+        hrtime = function()
+          return mock_state.now_ns
+        end,
+      },
       o = {
         columns = 120,
         lines = 40,
@@ -355,6 +414,9 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
           mock_state.running_jobs[id] = nil
           table.insert(mock_state.exiting_jobs, id)
+          return 1
+        end,
+        getpid = function()
           return 1
         end,
         -- Neovim raises E900 for a job that exited or that jobstop already stopped.
@@ -415,7 +477,12 @@ describe("claudecode.terminal.native toggle behavior", function()
               local buf = mock_state.buffers[bufnr]
               if buf then
                 buf.options = buf.options or {}
+                local before = buf.options[option]
                 buf.options[option] = value
+                -- OptionSet fires when the value changes, inside the write.
+                if option == "bufhidden" and before ~= value and mock_state.bufhidden_autocmd then
+                  mock_state.bufhidden_autocmd(bufnr, value)
+                end
               end
             end,
             __index = function(_, option)
@@ -431,6 +498,9 @@ describe("claudecode.terminal.native toggle behavior", function()
       }),
     }
     _G.vim = mock_vim
+    -- No /proc by default: a close asks nvim_get_proc, whose mock finds no child.
+    proc_reads = {}
+    restore_proc = stub_proc(false, proc_reads)
 
     -- Mock logger
     logger_spy = {
@@ -456,6 +526,7 @@ describe("claudecode.terminal.native toggle behavior", function()
 
   after_each(function()
     require("tests.helpers.plain_placement").restore()
+    restore_proc()
     _G.vim = nil
     package.loaded["claudecode.terminal.native"] = nil
     package.loaded["claudecode.logger"] = nil
@@ -1032,6 +1103,168 @@ describe("claudecode.terminal.native toggle behavior", function()
     end)
   end)
 
+  -- A job that was just started can still be a fork of Neovim: its child has not run exec yet. A jobstop then ends Neovim
+  -- with SIGHUP, or the buffer delete after it hangs. So a close of a young job waits until the child has the name of its
+  -- command. The names come from /proc/<pid>/comm, or from nvim_get_proc where /proc is missing, and a close goes on to
+  -- jobstop when they cannot be read.
+  describe("close of a job that was just started", function()
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+    local mock_state
+    local child
+    local events
+    local waits
+
+    -- /proc has the names: Neovim is "nvim", and the child is the value of child_name() until it is gone (nil).
+    local function use_proc(child_name)
+      restore_proc()
+      restore_proc = stub_proc(function(pid)
+        if pid == "self" or pid == "1" then
+          return "nvim"
+        end
+        if pid == tostring(child) then
+          return child_name()
+        end
+      end, proc_reads)
+    end
+
+    before_each(function()
+      mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config, true)
+      local active = native_provider.get_active_bufnr()
+      child = 40000 + mock_state.buffers[active].jobid
+      mock_state.processes = { [child] = { name = "nvim", pid = child } }
+      events = {}
+      waits = {}
+      local jobstop = mock_vim.fn.jobstop
+      mock_vim.fn.jobstop = function(id)
+        table.insert(events, "jobstop")
+        return jobstop(id)
+      end
+    end)
+
+    -- Replaces vim.wait: the first look at the child runs `condition`, the child runs exec on the third look.
+    local function child_runs_exec_on_the_third_look(set_name_after_exec, looks)
+      local wait = mock_vim.wait
+      mock_vim.wait = function(timeout, condition, interval)
+        table.insert(waits, timeout)
+        if #waits == 1 then
+          for _ = 1, 2 do
+            table.insert(looks, condition())
+          end
+          table.insert(events, "exec")
+          set_name_after_exec()
+          table.insert(looks, condition())
+          return looks[#looks]
+        end
+        return wait(timeout, condition, interval)
+      end
+    end
+
+    it("should stop the job only after the child ran exec (names from /proc)", function()
+      local name = "nvim"
+      use_proc(function()
+        return name
+      end)
+      local looks = {}
+      child_runs_exec_on_the_third_look(function()
+        name = "sh"
+      end, looks)
+
+      native_provider.close()
+
+      assert.are.same({ "exec", "jobstop" }, events)
+      assert.are.same({ false, false, true }, looks)
+      assert.are.equal(0, mock_state.proc_lookups or 0, "nvim_get_proc stays unused where /proc exists")
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+
+    it("should stop the job only after the child ran exec (names from nvim_get_proc)", function()
+      local looks = {}
+      child_runs_exec_on_the_third_look(function()
+        mock_state.processes[child].name = "sh"
+      end, looks)
+
+      native_provider.close()
+
+      assert.are.same({ "exec", "jobstop" }, events)
+      assert.are.same({ false, false, true }, looks)
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+
+    it("should wait at most 1 s, and stop the job when the child never runs exec", function()
+      use_proc(function()
+        return "nvim"
+      end)
+      local wait = mock_vim.wait
+      mock_vim.wait = function(timeout, condition, interval)
+        table.insert(waits, timeout)
+        if #waits == 1 then
+          table.insert(events, "wait ran out")
+          return false
+        end
+        return wait(timeout, condition, interval)
+      end
+
+      native_provider.close()
+
+      assert.are.equal(1000, waits[1])
+      assert.are.same({ "wait ran out", "jobstop" }, events)
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+
+    it("should stop the job without a wait when no name can be read (no /proc, and ps is missing)", function()
+      mock_vim.api.nvim_get_proc = function()
+        error("Vim:E5108: Error executing lua: 'ps' is not executable")
+      end
+      local wait = mock_vim.wait
+      mock_vim.wait = function(timeout, condition, interval)
+        table.insert(waits, timeout)
+        return wait(timeout, condition, interval)
+      end
+
+      assert.has_no.errors(function()
+        native_provider.close()
+      end)
+
+      assert.are.same({ "jobstop" }, events)
+      assert.are.equal(1, #waits, "only the wait for the exit of the job")
+      assert.is_nil(next(mock_state.running_jobs))
+      assert.is_nil(native_provider.get_active_bufnr())
+    end)
+
+    it("should look at no process when the job already exited (a close from a TermClose autocmd)", function()
+      local active = native_provider.get_active_bufnr()
+      local jobid = mock_state.buffers[active].jobid
+      local closed
+      mock_vim.api.nvim_create_autocmd("TermClose", {
+        buffer = active,
+        callback = function()
+          closed = pcall(native_provider.close)
+        end,
+      })
+      -- The job exited and TermClose fires, before the cleanup that on_exit schedules has run. jobpid raises for it.
+      mock_state.running_jobs[jobid] = nil
+      mock_state.fire_term_close(active)
+
+      assert.is_true(closed)
+      assert.are.same({}, proc_reads)
+      assert.are.equal(0, mock_state.proc_lookups or 0)
+    end)
+
+    it("should look at no process when the job is older than 10 s", function()
+      use_proc(function()
+        return "nvim"
+      end)
+      mock_state.now_ns = 11 * 1e9
+
+      native_provider.close()
+
+      assert.are.same({}, proc_reads)
+      assert.are.same({ "jobstop" }, events)
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+  end)
+
   describe("close vs toggle behavior", function()
     local config = { split_side = "right", split_width_percentage = 0.3 }
 
@@ -1567,6 +1800,202 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal("hide", mock_state.buffers[active].options.bufhidden)
     end)
 
+    -- An autocmd of the user's can set bufhidden after the start (a TermEnter autocmd that sets wipe). The next hide closes
+    -- the window, which would then end Claude, so the hide sets bufhidden=hide again.
+    it("should keep Claude running when a hide follows a change of bufhidden to wipe", function()
+      local mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config, true)
+      local active = native_provider.get_active_bufnr()
+      mock_vim.bo[active].bufhidden = "wipe"
+
+      native_provider.simple_toggle("claude", {}, config)
+
+      assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      assert.are.equal(active, native_provider.get_active_bufnr())
+      assert.are.equal(0, windows_showing(active))
+      native_provider.simple_toggle("claude", {}, config)
+      assert.are.equal(1, windows_showing(active))
+    end)
+
+    -- The write of bufhidden fires OptionSet inside the hide. An autocmd of that event can end, hide or show the
+    -- terminal, and the hide must not use the window it read before the write.
+    describe("when an OptionSet autocmd of bufhidden runs during a hide", function()
+      local mock_state
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        mock_vim.notify = function() end
+        mock_vim.log = { levels = { ERROR = 4, WARN = 3, INFO = 2 } }
+      end)
+
+      -- Starts Claude, lets an autocmd of yours set wipe (so the hide writes hide again), and arms the OptionSet autocmd.
+      local function arm(action)
+        native_provider.open("claude", {}, config, true)
+        local active = native_provider.get_active_bufnr()
+        mock_vim.bo[active].bufhidden = "wipe"
+        local fired = 0
+        mock_state.bufhidden_autocmd = function()
+          fired = fired + 1
+          action(active)
+        end
+        return active, function()
+          return fired
+        end
+      end
+
+      it("should raise nothing and leave Claude stopped when the autocmd calls close", function()
+        local active, fired = arm(function()
+          native_provider.close()
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.is_nil(native_provider.get_active_bufnr())
+        assert.is_nil(mock_state.buffers[active])
+        assert.is_nil(next(mock_state.running_jobs))
+      end)
+
+      it("should raise nothing when the autocmd closes the window of Claude itself", function()
+        local active, fired = arm(function(terminal_bufnr)
+          for winid, win in pairs(mock_state.windows) do
+            if win.bufnr == terminal_bufnr then
+              mock_state.windows[winid] = nil
+            end
+          end
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.are.equal(active, native_provider.get_active_bufnr())
+        assert.are.equal(0, windows_showing(active))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      end)
+
+      it("should leave the window of Claude when the autocmd closes every other window", function()
+        local active, fired = arm(function(terminal_bufnr)
+          for winid, win in pairs(mock_state.windows) do
+            if win.bufnr ~= terminal_bufnr then
+              mock_state.windows[winid] = nil
+            end
+          end
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.are.equal(1, windows_showing(active))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      end)
+
+      -- The autocmd hides Claude and shows it again, which gives it a new window. That window is not the one this hide read.
+      it("should leave the new window of Claude when the autocmd hides and shows it again", function()
+        local active, fired = arm(function()
+          native_provider.simple_toggle("claude", {}, config)
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.has_no.errors(function()
+          native_provider.simple_toggle("claude", {}, config)
+        end)
+
+        assert.are.equal(1, fired())
+        assert.are.equal(active, native_provider.get_active_bufnr())
+        assert.are.equal(1, windows_showing(active))
+        assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+      end)
+
+      -- The autocmd shows a file of yours in Claude's window. The window id stays the same, and it is your window now.
+      it(
+        "should leave the window that shows a file of yours when the autocmd swaps the file into Claude's window",
+        function()
+          local file_bufnr = mock_vim.api.nvim_create_buf(true, false)
+          local swapped_winid
+          local active, fired = arm(function(terminal_bufnr)
+            for winid, win in pairs(mock_state.windows) do
+              if win.bufnr == terminal_bufnr then
+                swapped_winid = winid
+                win.bufnr = file_bufnr
+              end
+            end
+          end)
+
+          assert.has_no.errors(function()
+            native_provider.simple_toggle("claude", {}, config)
+          end)
+
+          assert.are.equal(1, fired())
+          assert.is_not_nil(mock_state.windows[swapped_winid])
+          assert.are.equal(file_bufnr, mock_state.windows[swapped_winid].bufnr)
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+        end
+      )
+
+      local nested = {
+        {
+          "simple_toggle",
+          function()
+            native_provider.simple_toggle("claude", {}, config)
+          end,
+        },
+        {
+          "focus_toggle",
+          function()
+            native_provider.focus_toggle("claude", {}, config)
+          end,
+        },
+      }
+      for _, entry in ipairs(nested) do
+        it("should raise nothing and keep Claude hidden when the autocmd calls " .. entry[1], function()
+          local active, fired = arm(entry[2])
+
+          assert.has_no.errors(function()
+            native_provider.simple_toggle("claude", {}, config)
+          end)
+
+          assert.are.equal(1, fired())
+          assert.are.equal(active, native_provider.get_active_bufnr())
+          assert.are.equal(0, windows_showing(active))
+          assert.is_true(mock_state.running_jobs[mock_state.buffers[active].jobid])
+        end)
+      end
+    end)
+
+    -- A write of the same value fires OptionSet, so a hide writes bufhidden only when it is not hide.
+    it("should not write bufhidden when a hide finds it already hide", function()
+      native_provider.open("claude", {}, config, true)
+      local writes = {}
+      local inner = mock_vim.bo
+      mock_vim.bo = setmetatable({}, {
+        __index = function(_, bufnr)
+          local buffer_options = inner[bufnr]
+          return setmetatable({}, {
+            __index = function(_, option)
+              return buffer_options[option]
+            end,
+            __newindex = function(_, option, value)
+              if option == "bufhidden" then
+                table.insert(writes, value)
+              end
+              buffer_options[option] = value
+            end,
+          })
+        end,
+      })
+
+      native_provider.simple_toggle("claude", {}, config)
+
+      assert.are.same({}, writes)
+      assert.are.equal(0, windows_showing(native_provider.get_active_bufnr()))
+    end)
+
     -- With 'nohidden', a window that closes during the start unloads a buffer that is not bufhidden=hide. Before termopen,
     -- Neovim loads it again, and on 0.8 its term:// reader starts a second terminal in it (a bare `claude`, with no
     -- arguments, no plugin env and no IDE connection, which then gets the sends). In TermOpen the job ends with it.
@@ -1632,6 +2061,279 @@ describe("claudecode.terminal.native toggle behavior", function()
 
         assert.is_true(fired)
         assert_hidden_and_tracked()
+      end)
+    end)
+
+    -- The vsplit of a start runs the autocmds of the user's (WinLeave, WinNew, WinEnter) before the plugin has a buffer for
+    -- Claude, and so does creating that buffer (BufNew, BufAdd). An entry that one of them calls must not start a second
+    -- Claude. A close() that a BufEnter or TermOpen autocmd calls cannot wait in the middle of termopen (on Neovim 0.8 that
+    -- aborts it).
+    describe("when the split of a start is created", function()
+      local mock_state
+      local notified
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        notified = {}
+        mock_vim.notify = function(msg, level)
+          table.insert(notified, { msg = msg, level = level })
+        end
+        mock_vim.log = { levels = { ERROR = 4, WARN = 3, INFO = 2 } }
+      end)
+
+      local function running_jobs()
+        local count = 0
+        for _ in pairs(mock_state.running_jobs) do
+          count = count + 1
+        end
+        return count
+      end
+
+      local function terminal_buffers()
+        local count = 0
+        for _, buf in pairs(mock_state.buffers) do
+          if buf.options and buf.options.buftype == "terminal" then
+            count = count + 1
+          end
+        end
+        return count
+      end
+
+      -- Before Claude has a buffer with a mark, an entry that an autocmd calls finds no terminal to adopt. The vsplit
+      -- fires WinLeave, WinNew and WinEnter, and creating the buffer fires BufNew and BufAdd. The start makes the one
+      -- Claude, so those entries do nothing.
+      local early_entries = {
+        {
+          "open",
+          function()
+            native_provider.open("claude", {}, config)
+          end,
+        },
+        {
+          "simple_toggle",
+          function()
+            native_provider.simple_toggle("claude", {}, config)
+          end,
+        },
+        {
+          "focus_toggle",
+          function()
+            native_provider.focus_toggle("claude", {}, config)
+          end,
+        },
+      }
+      local early_autocmds = {
+        {
+          "a WinLeave, WinNew or WinEnter autocmd of the split",
+          function(action)
+            mock_state.vsplit_autocmd = action
+          end,
+        },
+        {
+          "a BufNew or BufAdd autocmd of the new buffer",
+          function(action)
+            mock_state.bufnew_autocmd = action
+          end,
+        },
+      }
+      for _, autocmd in ipairs(early_autocmds) do
+        for _, entry in ipairs(early_entries) do
+          it("should start one Claude when " .. autocmd[1] .. " calls " .. entry[1], function()
+            local fired = 0
+            autocmd[2](function()
+              fired = fired + 1
+              if fired == 1 then
+                entry[2]()
+              end
+            end)
+
+            native_provider.open("claude", {}, config, true)
+
+            assert.are.equal(1, fired)
+            assert.are.equal(1, running_jobs())
+            assert.are.equal(1, terminal_buffers())
+            local active = native_provider.get_active_bufnr()
+            assert.is_not_nil(active)
+            assert.are.equal(1, windows_showing(active))
+            local open_windows = 0
+            for _ in pairs(mock_state.windows) do
+              open_windows = open_windows + 1
+            end
+            assert.are.equal(2, open_windows)
+            assert.are.same({}, notified)
+          end)
+        end
+      end
+
+      it("should not stay in the start after the vsplit raised", function()
+        local original_cmd = mock_vim.cmd
+        mock_vim.cmd = function(command)
+          if command:match("vsplit") then
+            error("Vim(vsplit):E36: Not enough room")
+          end
+          return original_cmd(command)
+        end
+
+        local ok = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.cmd = original_cmd
+        assert.is_false(ok)
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.are.equal(1, running_jobs())
+        assert.is_not_nil(native_provider.get_active_bufnr())
+        native_provider.close()
+        assert.are.equal(0, running_jobs())
+      end)
+
+      -- A start that raises after the job started leaves Claude running and tracked. A close must still stop it, not wait
+      -- for a start that is over.
+      it("should close a Claude whose start raised after the job started", function()
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if next(mock_state.running_jobs) then
+            error("raised after termopen")
+          end
+          return set_current_win(winid)
+        end
+
+        local ok = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.api.nvim_set_current_win = set_current_win
+        assert.is_false(ok)
+        assert.are.equal(1, running_jobs())
+
+        native_provider.close()
+
+        assert.are.equal(0, running_jobs())
+      end)
+
+      local function from_bufenter(action)
+        local fired = false
+        mock_state.bufenter_autocmd = function(_, bufnr)
+          if not fired and bufnr ~= 0 then
+            fired = true
+            action()
+          end
+        end
+        return function()
+          return fired
+        end
+      end
+
+      local function from_termopen(action)
+        local fired = false
+        mock_vim.api.nvim_create_autocmd("TermOpen", {
+          callback = function()
+            if not fired then
+              fired = true
+              action()
+            end
+          end,
+        })
+        return function()
+          return fired
+        end
+      end
+
+      -- The close was asked for, and a later step of the start raised after the job started. The open fails, and the close
+      -- still runs: Claude does not stay running against the request.
+      it("should run a deferred close when the start raises after the job started", function()
+        from_termopen(function()
+          native_provider.close()
+        end)
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if next(mock_state.running_jobs) then
+            error("raised after termopen")
+          end
+          return set_current_win(winid)
+        end
+
+        local ok = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.api.nvim_set_current_win = set_current_win
+
+        assert.is_false(ok)
+        assert.are.equal(0, running_jobs())
+        assert.is_nil(native_provider.get_active_bufnr())
+      end)
+
+      -- The start raised and the close that it ran raised too: the caller gets the error of the start, which is the cause.
+      it("should raise the error of the start when the deferred close raises as well", function()
+        from_termopen(function()
+          native_provider.close()
+        end)
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if next(mock_state.running_jobs) then
+            error("the start raised after termopen", 0)
+          end
+          return set_current_win(winid)
+        end
+        local jobstop = mock_vim.fn.jobstop
+        mock_vim.fn.jobstop = function()
+          error("the close raised", 0)
+        end
+
+        local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.api.nvim_set_current_win = set_current_win
+        mock_vim.fn.jobstop = jobstop
+
+        assert.is_false(ok)
+        assert.are.equal("the start raised after termopen", err)
+      end)
+
+      -- The start went well, and the close that an autocmd asked for raised: the caller gets the error of the close, because
+      -- no error of the start is there to report.
+      it("should raise the error of the deferred close when the start itself went well", function()
+        from_bufenter(function()
+          native_provider.close()
+        end)
+        local jobstop = mock_vim.fn.jobstop
+        mock_vim.fn.jobstop = function()
+          error("the close raised", 0)
+        end
+
+        local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.fn.jobstop = jobstop
+
+        assert.is_false(ok)
+        assert.are.equal("the close raised", err)
+      end)
+
+      local closers = { { "a BufEnter autocmd", from_bufenter }, { "a TermOpen autocmd", from_termopen } }
+      for _, closer in ipairs(closers) do
+        it("should close Claude after the start when " .. closer[1] .. " calls close", function()
+          local fired = closer[2](function()
+            native_provider.close()
+          end)
+
+          local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+
+          assert.is_true(ok, tostring(err))
+          assert.is_true(fired())
+          assert.are.equal(0, running_jobs())
+          assert.are.equal(0, terminal_buffers())
+          assert.is_nil(native_provider.get_active_bufnr())
+          assert.are.same({}, notified)
+          local open_windows = 0
+          for _ in pairs(mock_state.windows) do
+            open_windows = open_windows + 1
+          end
+          assert.are.equal(1, open_windows)
+        end)
+      end
+
+      it("should start Claude again after a close that waited for the start", function()
+        from_bufenter(function()
+          native_provider.close()
+        end)
+        native_provider.open("claude", {}, config, true)
+        mock_state.bufenter_autocmd = nil
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.are.equal(1, running_jobs())
+        assert.is_not_nil(native_provider.get_active_bufnr())
       end)
     end)
 
