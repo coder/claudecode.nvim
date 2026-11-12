@@ -436,6 +436,10 @@ describe("Tool: open_file", function()
     { name = "a netrw buffer", filetype = "netrw" },
     { name = "an aerial outline", filetype = "aerial" },
     { name = "a tagbar outline", filetype = "tagbar" },
+    -- Neovim 0.12 makes these two floats. A float opened relative to the cursor or the mouse is reported as relative
+    -- = "win", so no input has `cursor` or `mouse` (`evidence/p2r2/probe-p2r2-*.txt`, G4 and G5).
+    { name = "a laststatus-relative float", config = { relative = "laststatus" } },
+    { name = "a tabline-relative float", config = { relative = "tabline" } },
   }) do
     it("does not open into " .. case.name .. "; picks the plain editor", function()
       _G.vim.api.nvim_list_wins = spy.new(function()
