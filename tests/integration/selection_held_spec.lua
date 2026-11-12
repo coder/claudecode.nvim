@@ -32,9 +32,9 @@ describe("a held selection with the real plugin", function()
   -- Waits until the plugin has finished what it started: no debounce timer is pending, no demotion timer is pending
   -- (unless keep_demotion), and every vim.schedule callback that was queued before the call has run (the check after
   -- an edit is one). A fixed wait() cannot say that. When the main loop stalls for 300 ms under load, vim.wait returns
-  -- in the iteration that fires the timers, before their vim.schedule_wrap callbacks run. The step after the wait then
-  -- reads a plugin that is not done: the debounce has not read the cursor, or a demotion fires after the step has
-  -- renamed the buffer.
+  -- in the iteration that fires the timers, before their vim.schedule_wrap callbacks run, and a debounce that fires
+  -- late arms a demotion that is still pending. The step after the wait then reads a plugin that is not done: the
+  -- debounce has not read the cursor, the demotion has not fired, or it fires after the step has renamed the buffer.
   local function settle(keep_demotion)
     local drained = false
     vim.schedule(function()
