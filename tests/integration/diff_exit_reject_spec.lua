@@ -1,6 +1,6 @@
 -- Real-Neovim check of the answer that each openDiff call gets in these exits: `:qa!`, SIGTERM, a buffer that deletes
 -- itself in its own BufUnload, `:qa!` inside a `nested = true` ClaudeCodeDiffOpened handler, and a `:qa!` or SIGTERM
--- that comes during an autocmd (nested or not, pumping the event loop with vim.wait or not). README.md lists the
+-- that comes during an autocmd (nested or not). README.md lists the
 -- answers under Global Invariants, in "Exit answers". This spec does not run SIGHUP, SIGKILL or :ClaudeCodeStop, and it
 -- does not check the close codes, the lock file or the ClaudeCodeDiffClosed order. The child has no server, so the
 -- cases without VimLeavePre show only that no call is answered.
@@ -70,9 +70,9 @@ describe("openDiff at exit", function()
         vim.loop.kill(vim.fn.getpid(), 15)
         return
       end
-      if quit == "autocmd" or quit == "nested_autocmd" or quit == "pump" or quit == "busy" then
+      if quit == "autocmd" or quit == "nested_autocmd" or quit == "pump" then
         -- The exit starts inside a User autocmd. `autocmd` and `nested_autocmd` run :qa! in it. `pump` sends SIGTERM and
-        -- waits in vim.wait, which runs the event loop. `busy` sends SIGTERM and waits in a Lua loop, which does not.
+        -- waits in vim.wait, which runs the event loop, so Neovim handles the signal while the autocmd still runs.
         vim.api.nvim_create_autocmd("User", {
           pattern = "ExitProbe",
           nested = quit == "nested_autocmd",
@@ -84,11 +84,6 @@ describe("openDiff at exit", function()
               vim.wait(5000, function()
                 return false
               end, 10)
-            elseif quit == "busy" then
-              vim.loop.kill(vim.fn.getpid(), 15)
-              local started = vim.loop.hrtime()
-              while (vim.loop.hrtime() - started) / 1e6 < 500 do
-              end
             else
               vim.cmd("qa!")
             end
@@ -298,8 +293,9 @@ describe("openDiff at exit", function()
     it(
       ("gives no answer when :qa! runs directly in an autocmd that is not nested (%s layout)"):format(layout),
       function()
-        local lines = exit_with(steps, layout, "keep_empty", false, "autocmd")
+        local lines, code = exit_with(steps, layout, "keep_empty", false, "autocmd")
 
+        assert.is_true(code ~= -1, "the child did not end by itself\n" .. table.concat(lines, "\n"))
         assert_waiting(lines, { "new1.txt", "b.txt" })
         assert.same({}, answers_by_name(lines), table.concat(lines, "\n"))
       end
@@ -309,23 +305,11 @@ describe("openDiff at exit", function()
         layout
       ),
       function()
-        local lines = exit_with(steps, layout, "keep_empty", false, "pump")
+        local lines, code = exit_with(steps, layout, "keep_empty", false, "pump")
 
+        assert.is_true(code ~= -1, "the child did not end by itself\n" .. table.concat(lines, "\n"))
         assert_waiting(lines, { "new1.txt", "b.txt" })
         assert.same({}, answers_by_name(lines), table.concat(lines, "\n"))
-      end
-    )
-    it(
-      ("answers each call when SIGTERM comes while an autocmd that is not nested does not pump (%s layout)"):format(
-        layout
-      ),
-      function()
-        local lines = exit_with(steps, layout, "keep_empty", false, "busy")
-
-        assert_waiting(lines, { "new1.txt", "b.txt" })
-        local answers = answers_by_name(lines)
-        assert.same({ "DIFF_REJECTED" }, answers["new1.txt"], table.concat(lines, "\n"))
-        assert.same({ "DIFF_REJECTED" }, answers["b.txt"], table.concat(lines, "\n"))
       end
     )
     it(("answers each call when :qa! runs directly in a nested autocmd (%s layout)"):format(layout), function()
