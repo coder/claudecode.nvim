@@ -1,5 +1,5 @@
 -- ReadyDelivers (the #480 drain finding): you send 100 mentions at once, as a tree add of 100 files does, while
--- Claude starts. Its handshake comes 8.6 s later. The queue drains to it 25 ms apart, past the deadline at 10.6 s,
+-- Claude starts: it connects after an 8.6 s wait. The queue drains to it 25 ms apart, past the deadline at 10.6 s,
 -- and the deadline once cleared the rest while Claude was taking them. Now no deadline clears a mention while a ready
 -- client is connected: all 100 must arrive, in order, with no error.
 -- Model path: YouSend (each mention), ClaudeConnects(c), ClaudeUpgrades(c), HandshakeWritten(c), OpenRuns,
@@ -31,5 +31,5 @@ L.log("Claude received %d, in order: %s; notices=%d", #got, tostring(in_order), 
 L.verdict(
   in_order and #L.notices == 0,
   "ReadyDelivers",
-  string.format("100 at once, handshake at 8.6 s: received=%d errors=%d", #got, #L.notices)
+  string.format("100 at once, Claude connects after an 8.6 s wait: received=%d errors=%d", #got, #L.notices)
 )
