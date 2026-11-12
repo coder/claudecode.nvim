@@ -39,6 +39,8 @@ describe("Diff UI cleanup behavior", function()
     local target_win = 2002
     vim._windows[new_win] = { buf = 2 }
     vim._windows[target_win] = { buf = 3 }
+    -- The save reads the proposal buffer, and the mock's nvim_buf_call refuses a buffer that does not exist
+    vim._buffers[2] = vim._buffers[2] or { lines = { "line1", "line2" } }
 
     -- Register a pending diff that was opened in a new tab
     diff._register_diff_state(tab_name, {
