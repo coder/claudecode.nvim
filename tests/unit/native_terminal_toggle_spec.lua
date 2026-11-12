@@ -1794,6 +1794,28 @@ describe("claudecode.terminal.native toggle behavior", function()
         end
       end
 
+      -- The close was asked for, and a later step of the start raised after the job started. The open fails, and the close
+      -- still runs: Claude does not stay running against the request.
+      it("should run a deferred close when the start raises after the job started", function()
+        from_termopen(function()
+          native_provider.close()
+        end)
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if next(mock_state.running_jobs) then
+            error("raised after termopen")
+          end
+          return set_current_win(winid)
+        end
+
+        local ok = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.api.nvim_set_current_win = set_current_win
+
+        assert.is_false(ok)
+        assert.are.equal(0, running_jobs())
+        assert.is_nil(native_provider.get_active_bufnr())
+      end)
+
       local closers = { { "a BufEnter autocmd", from_bufenter }, { "a TermOpen autocmd", from_termopen } }
       for _, closer in ipairs(closers) do
         it("should close Claude after the start when " .. closer[1] .. " calls close", function()

@@ -318,11 +318,15 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   starting = false
   local close_requested = close_after_start
   close_after_start = false
+  if close_requested then
+    -- Also when the start raised: the job may run and be tracked then, and the close was asked for.
+    local closed, close_error = pcall(close_terminal)
+    if started and not closed then
+      error(close_error, 0)
+    end
+  end
   if not started then
     error(start_error, 0)
-  end
-  if close_requested then
-    close_terminal()
   end
 end
 
