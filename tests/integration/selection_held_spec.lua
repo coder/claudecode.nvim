@@ -293,6 +293,7 @@ describe("a held selection with the real plugin", function()
       vim.v.errmsg = ""
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
       settle()
+      wait(300) -- settle() ends when nothing is pending, so give a send that a later timer makes 300 ms to show
 
       assert.are.equal("", vim.v.errmsg)
       assert.are.same({}, sent) -- no selection and no cursor of the terminal reached Claude
@@ -314,6 +315,7 @@ describe("a held selection with the real plugin", function()
       vim.v.errmsg = ""
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
       settle() -- a demotion that the check did not cancel fires here
+      wait(300) -- and a send that a later timer makes shows too
 
       assert.are.equal("", vim.v.errmsg)
       assert.are.same({}, sent)
@@ -340,6 +342,7 @@ describe("a held selection with the real plugin", function()
       rename_to_claude_terminal(file_buf)
       vim.api.nvim_buf_set_text(file_buf, 0, 0, 0, 6, {}) -- a plugin deletes "alpha "
       settle()
+      wait(300) -- a send that a later timer makes shows too
 
       assert.are.equal(term_buf, vim.api.nvim_get_current_buf())
       assert.are.same({}, sent)
