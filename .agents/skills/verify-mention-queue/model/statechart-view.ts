@@ -50,12 +50,14 @@ export const state = (v: any) => {
   const regions: Record<string, string> = {};
   for (const c of [1, 2]) regions[`Claude ${c}`] = client(v, c);
   for (const m of ids(v)) regions[`Mention ${m}`] = mention(v, m);
-  if (v.early)
-    regions["Sent early"] = "a mention went out before any client was ready";
-  if (v.luaError) regions["Lua error"] = "Lua error";
-  if (v.leaked)
-    regions["Sent after a stop"] =
-      "a mention queued before :ClaudeCodeStop reached a Claude after the stop";
+  // /statechart needs the same regions in every state, so each harm region is there from the start, as "no".
+  regions["Sent early"] = v.early
+    ? "a mention went out before any client was ready"
+    : "no";
+  regions["Lua error"] = v.luaError ? "Lua error" : "no";
+  regions["Sent after a stop"] = v.leaked
+    ? "a mention queued before :ClaudeCodeStop reached a Claude after the stop"
+    : "no";
   return regions;
 };
 
