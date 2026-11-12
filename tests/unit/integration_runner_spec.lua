@@ -419,8 +419,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@param signal string The signal to send
   ---@param run SignalRun
   ---@return table result `status` of the runner (of the calling shell with `caller_loop`), `left` in its TMPDIR once
-  --- its Neovim's grandchild would have written, `ended` when the file's Neovim got to the end of its 2 second run, and
-  --- `caller_output` of the calling shell
+  --- its Neovim's grandchild would have written, `ended` when the file's Neovim got to the end of its 2 second run,
+  --- `runner_output` (stdout and stderr of the runner), and `caller_output` of the calling shell
   local function signal_runner(signal, run)
     write(dir .. "/tests/integration/slow_spec.lua", {})
     write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
@@ -434,11 +434,12 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
-    local job = quote(script) .. " > /dev/null 2>&1"
+    local runner_out = " > " .. quote(dir .. "/runner.out") .. " 2>&1"
+    local job = quote(script) .. runner_out
     local target = "$pid"
     if run.caller_loop then
-      job = "bash -c " .. quote('for i in 1 2; do "$0" > /dev/null 2>&1; echo ran=$i; done') .. " " .. quote(script)
-      job = job .. " > " .. quote(dir .. "/caller.out") .. " 2>&1"
+      job = "bash -c " .. quote('for i in 1 2; do "$0" > ' .. quote(dir .. "/runner.out") .. " 2>&1; echo ran=$i; done")
+      job = job .. " " .. quote(script) .. " > " .. quote(dir .. "/caller.out") .. " 2>&1"
       target = "-- -$pid"
     end
     -- `set -m` gives the background job its own process group and leaves SIGINT unignored, as a runner has at a prompt.
@@ -472,6 +473,11 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if caller then
       caller:close()
     end
+    local runner = io.open(dir .. "/runner.out")
+    local runner_output = runner and runner:read("*a") or ""
+    if runner then
+      runner:close()
+    end
     local ended = io.open(dir .. "/slow_spec.lua.ended")
     if ended then
       ended:close()
@@ -481,6 +487,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       left = left,
       ended = ended ~= nil,
       caller_output = caller_output,
+      runner_output = runner_output,
     }
   end
 
@@ -493,6 +500,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
       assert.are.equal(expected_status, result.status)
       assert.are.equal("", result.left, "the runner left temp files behind, or its Neovim's grandchild ran on")
       assert.is_false(result.ended, "the runner waited for the file to end, it did not stop it")
+      assert.is_nil(
+        result.runner_output:find("line %d+:"),
+        "bash printed a report of the killed job: " .. result.runner_output
+      )
     end)
   end
 

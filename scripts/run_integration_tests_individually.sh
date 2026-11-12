@@ -69,8 +69,11 @@ run_test_file() {
   # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
   # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
-  # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs.
+  # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
+  # subshell has no pipefail and exits with the status of the first command itself: with pipefail, bash prints a job
+  # report ("Killed", two lines) in the subshell when the cleanup above kills `timeout`.
   (
+    set +o pipefail
     VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
       CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
       XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
@@ -78,6 +81,7 @@ run_test_file() {
       nvim --headless -i NONE -u tests/minimal_init.lua \
       -c "lua require('plenary.test_harness').test_file('$test_file')" \
       2>&1 | tee "$temp_output"
+    exit "${PIPESTATUS[0]}"
   ) &
   if wait $!; then
     EXIT_CODE=0
