@@ -6,7 +6,7 @@ claudecode.nvim runs a WebSocket server on `127.0.0.1` and writes a lock file, `
 
 - `server-status` `:ClaudeCodeStatus` prints `Claude Code integration is running on port <port>` or `Claude Code integration is not running`.
 - `server-lock` the lock file is mode `0600` in a `0700` folder and holds nvim's `pid`, `ideName` `Neovim`, `transport` `ws`, the cwd in `workspaceFolders`, and a 32-character hex `authToken`.
-- `server-stop` `:ClaudeCodeStop` deletes `<port>.lock`, answers each pending openDiff with `DIFF_REJECTED`, closes each client with code 1001, and prints `Claude Code integration stopped`.
+- `server-stop` `:ClaudeCodeStop` deletes `<port>.lock`, answers each openDiff that waits for the user with `DIFF_REJECTED`, closes each client with code 1001, and prints `Claude Code integration stopped`.
 - `server-start` `:ClaudeCodeStart` listens on a new random port, writes a new lock file with a new token, and prints `Claude Code integration started on port <port>`.
 - `server-twice` Start while running warns `Claude Code integration is already running on port <port>`. Stop while stopped warns `Claude Code integration is not running`.
 - `server-exit` quitting Neovim deletes the lock file.
