@@ -34,7 +34,7 @@ jobs:
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         env:
-          # mise retries a failed download 3 times, with 3 to 5 s of backoff in total. 6 retries give 25 to 50 s.
+          # mise retries a failed download 3 times, with 2.6 to 5.2 s of backoff in total. 6 retries give 25 to 50 s.
           MISE_HTTP_RETRIES: "6"
         with:
           # --locked installs only tools listed in mise.lock, fails when an entry is missing, and never rewrites it.
@@ -44,7 +44,8 @@ jobs:
           # The default cache key hashes every mise config file, so an edit to a task in mise.toml missed the cache and
           # every tool downloaded again. mise.lock pins the tool set, so this key hashes only it. There are no
           # restore-keys on purpose: mise does not check an installed tool against mise.lock, so a cache restored from
-          # another lock could keep a tool that the new lock changed.
+          # another lock could keep a tool that the new lock changed. A change that alters an install without changing
+          # mise.lock (a tool option in mise.toml) keeps this key: bump v1 then.
           cache_key: mise-v1-{{platform}}-{{version}}-${{ hashFiles('mise.lock') }}
           # mise is pinned because `--locked` rules change between releases (2026.11.0 started to require a
           # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release.
