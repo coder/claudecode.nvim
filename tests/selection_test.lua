@@ -1887,6 +1887,26 @@ describe("Range Selection Tests", function()
           end)
         end)
 
+        -- Another ModeChanged handler that runs before the plugin's can turn the main loop (vim.wait), so a queued check
+        -- runs after Neovim ended visual mode and before the flush. The key listener already checked the edit at the
+        -- key, so that check must find nothing to judge: judging it again, with visual mode over, takes the plugin's
+        -- edit for an operator's.
+        it("does not judge an edit again in a check that runs after visual mode ended and before the flush", function()
+          with_queued_schedule(function(queued)
+            enter_visual_mode()
+            edit_text(1) -- a plugin's edit of another line, in a mapping
+            press_next_key() -- the Esc: visual mode is still on, so the edit is spared
+            _G.vim.test.set_mode("n") -- Neovim ended visual mode, and the ModeChanged handler of the plugin has not run
+            queued[1]() -- the vim.wait of another handler runs the queued check now
+            assert.is_false(selection.state.visual_entry.consumed)
+
+            leave_visual_mode()
+
+            assert(mock_server.last_broadcast ~= nil)
+            assert.are.equal("alpha", mock_server.last_broadcast.data.text)
+          end)
+        end)
+
         it("judges several edits that come before the next key together", function()
           with_queued_schedule(function(queued)
             enter_visual_mode()

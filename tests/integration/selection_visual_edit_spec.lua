@@ -129,6 +129,7 @@ describe("a visual selection released after the buffer changed, with the real pl
     pcall(claudecode.stop)
     server.broadcast = real_broadcast
     vim.env.CLAUDE_CONFIG_DIR = real_config_dir
+    pcall(vim.api.nvim_del_augroup_by_name, "ClaudeCodeSelectionVisualEditSpec")
     vim.cmd("silent! only")
     vim.cmd("silent! %bwipeout!")
   end)
@@ -400,6 +401,36 @@ describe("a visual selection released after the buffer changed, with the real pl
       assert.are.equal("SECOND line", vim.api.nvim_buf_get_lines(0, 1, 2, false)[1])
       assert.are.equal("alpha", held_text())
       assert.are.equal("alpha", last_sent_text())
+    end)
+  end)
+
+  -- The key listener checks the edit at the Esc, with visual mode still on. The schedule of that edit is still queued,
+  -- and another ModeChanged handler that runs before the plugin's, and turns the main loop (vim.wait), runs it after
+  -- Neovim ended visual mode and before the flush. That second check must find nothing to judge: judging the edit
+  -- again, with visual mode over, takes the plugin's edit for an operator's.
+  describe("when a queued check runs after visual mode ended and before the flush", function()
+    it("holds the selection after a mapping edits another line and presses Esc", function()
+      local group = vim.api.nvim_create_augroup("ClaudeCodeSelectionVisualEditSpec", { clear = true })
+      vim.api.nvim_create_autocmd("ModeChanged", {
+        group = group,
+        pattern = "*:n",
+        callback = function()
+          vim.wait(0)
+        end,
+      })
+      start() -- after the handler above, so that it runs first
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("ve")
+      wait(20)
+      press("<Cmd>lua vim.api.nvim_buf_set_lines(0, 1, 2, false, { 'second line changed' })<CR><Esc>")
+      wait(400)
+
+      assert.are.equal("second line changed", vim.api.nvim_buf_get_lines(0, 1, 2, false)[1])
+      assert.are.equal("alpha", held_text())
+      assert.are.equal("alpha", last_sent_text())
+      assert.is_false(selection.get_latest_selection().selection.isEmpty)
     end)
   end)
 
