@@ -1,10 +1,10 @@
 == lua/claudecode/config.lua
-file lua/claudecode/config.lua 787fa0432d1d77d7
+file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua 35b7af3572d13018
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua eea6b4bcdd655787
-block resolve_saved          46d5f3f732711fe1
+file lua/claudecode/diff.lua ac01bc69a313e411
+block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
 block setup_blocking         b96c84e0961817fc
@@ -23,7 +23,7 @@ block cleanup_all            43e7b595cf106229
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
 block register_state         8cf78b6711a9ecc6
-block cleanup_state          a5abba550a9bd679
+block cleanup_state          2ff77c6e3ecddf07
 block diff_autocmds          01fff2946c5a2149
 block write_proposal         9baeff1cd3273193
 block reject_when_hidden     dd45932e5cd7090d
@@ -104,8 +104,8 @@ site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ fu
 site lua/claudecode/diff.lua: return close_active_diffs(function(diff_data) @ function M.close_rejected_diffs(reason)
 site lua/claudecode/diff.lua: return close_active_diffs(nil, reason or "close all diffs", client_id) @ function M.close_all_diffs(reason, client_id)
 == lua/claudecode/diff_inline.lua
-file lua/claudecode/diff_inline.lua 6ebc375cd00f480f
-block inline_saved           53e3ff9a47388fc9
+file lua/claudecode/diff_inline.lua 38c961cbff293013
+block inline_saved           0516057dbab0688a
 block inline_rejected        3a098216eef4b774
 block setup_inline           6c384d6803b05800
 site lua/claudecode/diff_inline.lua: diff._cleanup_diff_state(tab_name, "setup failed") @ local function cleanup_unregistered_inline_setup(tab_name, partial)
@@ -211,7 +211,7 @@ file lua/claudecode/tools/open_file.lua b277cbe8b86ac7c8
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua
-file lua/claudecode/types.lua dbd0dcb8b70c8107
+file lua/claudecode/types.lua 69e2907853403759
 == lua/claudecode/utils.lua
 file lua/claudecode/utils.lua c4a21fe74858afe2
 == lua/claudecode/visual_commands.lua

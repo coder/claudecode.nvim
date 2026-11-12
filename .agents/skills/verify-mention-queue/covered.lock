@@ -1,0 +1,121 @@
+== lua/claudecode/config.lua
+file lua/claudecode/config.lua 3afb1bdeff27bfb6
+site lua/claudecode/config.lua: "connection_timeout must be a positive number" @ function M.validate(config)
+site lua/claudecode/config.lua: "connection_wait_delay must be a non-negative number" @ function M.validate(config)
+site lua/claudecode/config.lua: connection_timeout = 10000, @ M.defaults = {
+site lua/claudecode/config.lua: connection_wait_delay = 600, -- Milliseconds to wait after connection before sending queued @ mentions @ M.defaults = {
+site lua/claudecode/config.lua: queue_timeout = 5000, -- Unused, kept so that configs that set it stay valid (see connection_timeout) @ M.defaults = {
+site lua/claudecode/config.lua: type(config.connection_timeout) == "number" and config.connection_timeout > 0, @ function M.validate(config)
+site lua/claudecode/config.lua: type(config.connection_wait_delay) == "number" and config.connection_wait_delay >= 0, @ function M.validate(config)
+== lua/claudecode/init.lua
+file lua/claudecode/init.lua fc28de832b4056df
+block is_connected           21c035c32b5cee13
+block until_ready            cd0663523297ab20
+block start_timer            067cb9333a8fbff9
+block clear_queue            4312e85f7da39bbd
+block expire                 1b7f50cc49d9a9d3
+block unwritten              6d6b0cfe1d094994
+block flush                  33c98740183b82fd
+block schedule               d927c59c32177eac
+block queue_mention          22183b749ca8f79a
+block process_queue          816e89295bbfc620
+block send_at_mention        508de16084cc702a
+block broadcast_mention      f270a13f4fab1104
+block main_stop              d754def6d5865650
+site lua/claudecode/init.lua: M.state.mention_queue = M.state.mention_queue or {} @ local function mention_queue()
+site lua/claudecode/init.lua: M.state.mention_queue = {} @ local function clear_mention_queue()
+site lua/claudecode/init.lua: M.state.server.broadcast("at_mentioned", params, report_unwritten("command", formatted_path)) @ function M._broadcast_at_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: clear_mention_queue() @ function M.setup(opts)
+site lua/claudecode/init.lua: clear_mention_queue() @ function M.stop()
+site lua/claudecode/init.lua: clear_mention_queue() @ local function expire_mentions()
+site lua/claudecode/init.lua: connection_timer = nil, @ M.state = {
+site lua/claudecode/init.lua: elseif M.is_claude_connected() and not M.state.mention_timer then @ schedule_mention_flush = function(delay)
+site lua/claudecode/init.lua: expire_mentions() @ local function flush_mention_queue()
+site lua/claudecode/init.lua: expire_mentions() @ local function flush_mention_queue()
+site lua/claudecode/init.lua: flush_mention_queue() @ function M.process_mention_queue(from_new_connection)
+site lua/claudecode/init.lua: function M.is_claude_connected() @ function M.is_claude_connected()
+site lua/claudecode/init.lua: function M.process_mention_queue(from_new_connection) @ function M.process_mention_queue(from_new_connection)
+site lua/claudecode/init.lua: if #mention_queue() == 0 then @ schedule_mention_flush = function(delay)
+site lua/claudecode/init.lua: if #mention_queue() > 0 then @ local function flush_mention_queue()
+site lua/claudecode/init.lua: if M.is_claude_connected() then @ function M.send_at_mention(file_path, start_line, end_line, context)
+site lua/claudecode/init.lua: if M.is_claude_connected() then @ local function expire_mentions()
+site lua/claudecode/init.lua: if immediate and #mention_queue() == 0 then @ function M._broadcast_at_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: if info.state == "connected" and info.handshake_complete == true and info.connected_at then @ local function ms_until_a_client_is_ready()
+site lua/claudecode/init.lua: if info.state == "connected" and info.handshake_complete == true then @ function M.is_claude_connected()
+site lua/claudecode/init.lua: if ms_until_a_client_is_ready() == 0 then @ local function expire_mentions()
+site lua/claudecode/init.lua: if not M.is_claude_connected() then @ function M._ensure_terminal_visible_if_connected()
+site lua/claudecode/init.lua: if not M.state.connection_timer then @ local function queue_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: if not server.broadcast("at_mentioned", params, report_unwritten("queue", mention.file_path)) then @ local function flush_mention_queue()
+site lua/claudecode/init.lua: local function clear_mention_queue() @ local function clear_mention_queue()
+site lua/claudecode/init.lua: local function expire_mentions() @ local function expire_mentions()
+site lua/claudecode/init.lua: local function flush_mention_queue() @ local function flush_mention_queue()
+site lua/claudecode/init.lua: local function mention_queue() @ local function mention_queue()
+site lua/claudecode/init.lua: local function ms_until_a_client_is_ready() @ local function ms_until_a_client_is_ready()
+site lua/claudecode/init.lua: local function queue_mention(file_path, start_line, end_line) @ local function queue_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: local function report_unwritten(component, file_path) @ local function report_unwritten(component, file_path)
+site lua/claudecode/init.lua: local left = math.max(0, info.connected_at + M.state.config.connection_wait_delay - vim.loop.now()) @ local function ms_until_a_client_is_ready()
+site lua/claudecode/init.lua: local queue = mention_queue() @ local function clear_mention_queue()
+site lua/claudecode/init.lua: local queue = mention_queue() @ local function expire_mentions()
+site lua/claudecode/init.lua: local queue = mention_queue() @ local function flush_mention_queue()
+site lua/claudecode/init.lua: local queue = mention_queue() @ local function queue_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: local schedule_mention_flush @ local schedule_mention_flush
+site lua/claudecode/init.lua: local timeout = M.state.config.connection_timeout + M.state.config.connection_wait_delay @ local function queue_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: local wait = ms_until_a_client_is_ready() @ local function flush_mention_queue()
+site lua/claudecode/init.lua: mention_queue = {}, @ M.state = {
+site lua/claudecode/init.lua: mention_timer = nil, @ M.state = {
+site lua/claudecode/init.lua: queue_mention(formatted_path, start_line, end_line) @ function M._broadcast_at_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: queue_mention(mention.file_path, mention.start_line, mention.end_line) @ function M.send_at_mention(file_path, start_line, end_line, context)
+site lua/claudecode/init.lua: return M.state.mention_queue @ local function mention_queue()
+site lua/claudecode/init.lua: schedule_mention_flush = function(delay) @ schedule_mention_flush = function(delay)
+site lua/claudecode/init.lua: schedule_mention_flush(M.state.config.connection_wait_delay) @ function M.process_mention_queue(from_new_connection)
+site lua/claudecode/init.lua: schedule_mention_flush(debounce_delay) @ local function flush_mention_queue()
+site lua/claudecode/init.lua: schedule_mention_flush(debounce_delay) @ local function queue_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: schedule_mention_flush(inter_message_delay) @ local function expire_mentions()
+site lua/claudecode/init.lua: schedule_mention_flush(inter_message_delay) @ local function flush_mention_queue()
+site lua/claudecode/init.lua: start_timer("connection_timer", queue[1].deadline - now, expire_mentions) @ local function expire_mentions()
+site lua/claudecode/init.lua: start_timer("connection_timer", timeout, expire_mentions) @ local function queue_mention(file_path, start_line, end_line)
+site lua/claudecode/init.lua: start_timer("mention_timer", delay, flush_mention_queue) @ schedule_mention_flush = function(delay)
+site lua/claudecode/init.lua: start_timer("mention_timer", wait, flush_mention_queue) @ local function flush_mention_queue()
+site lua/claudecode/init.lua: stop_timer("connection_timer") @ local function clear_mention_queue()
+site lua/claudecode/init.lua: stop_timer("connection_timer") @ schedule_mention_flush = function(delay)
+site lua/claudecode/init.lua: stop_timer("mention_timer") @ local function clear_mention_queue()
+site lua/claudecode/init.lua: stop_timer("mention_timer") @ schedule_mention_flush = function(delay)
+== lua/claudecode/server/client.lua
+file lua/claudecode/server/client.lua b8165df16f194471
+block write                  e4716d226ccc2499
+block process_data           309347512099d250
+block send_message           4224f2da335cf996
+block client_info            f173ff23b4707508
+site lua/claudecode/server/client.lua: M.process_data(client, "", on_message, on_close, on_error, auth_token, on_open) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.connected_at = vim.loop.now() @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: client.handshake_complete = true @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: connected_at = client.connected_at, @ function M.get_client_info(client)
+site lua/claudecode/server/client.lua: function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: handshake_complete = client.handshake_complete, @ function M.get_client_info(client)
+site lua/claudecode/server/client.lua: handshake_complete = false, @ function M.create_client(tcp_handle, keepalive_timeout)
+site lua/claudecode/server/client.lua: if client.handshake_complete or client.state == "upgrading" then @ function M.close_client(client, code, reason)
+site lua/claudecode/server/client.lua: if not client.handshake_complete then @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: if on_open then @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+site lua/claudecode/server/client.lua: on_open(client) @ function M.process_data(client, data, on_message, on_close, on_error, auth_token, on_open)
+== lua/claudecode/server/init.lua
+file lua/claudecode/server/init.lua 8da8851fff781946
+block on_open                605dc737a2bfdad0
+block server_broadcast       fc69234ae8ed7cf0
+block server_status          e2759841ce0f1b90
+site lua/claudecode/server/init.lua: function M.broadcast(method, params, on_written) @ function M.broadcast(method, params, on_written)
+site lua/claudecode/server/init.lua: if diff and client.handshake_complete then @ function M.start(config, auth_token)
+site lua/claudecode/server/init.lua: if main_module.process_mention_queue then @ function M.start(config, auth_token)
+site lua/claudecode/server/init.lua: main_module.process_mention_queue(true) @ function M.start(config, auth_token)
+site lua/claudecode/server/init.lua: on_open = function(client) @ function M.start(config, auth_token)
+site lua/claudecode/server/init.lua: return tcp_server.broadcast(M.state.server, json_message, on_written) > 0 @ function M.broadcast(method, params, on_written)
+== lua/claudecode/server/tcp.lua
+file lua/claudecode/server/tcp.lua 8be1dd96671223ea
+block new_connection         e1daff4237326df4
+block tcp_broadcast          2b207928d69c9dbd
+block clients_info           b2d757e5dc9d2c2f
+site lua/claudecode/server/tcp.lua: end, server.auth_token, server.on_open) @ function M._handle_new_connection(server)
+site lua/claudecode/server/tcp.lua: function M.broadcast(server, message, on_written) @ function M.broadcast(server, message, on_written)
+site lua/claudecode/server/tcp.lua: if on_written then @ function M.broadcast(server, message, on_written)
+site lua/claudecode/server/tcp.lua: if on_written then @ function M.broadcast(server, message, on_written)
+site lua/claudecode/server/tcp.lua: on_open = callbacks.on_open or function() end, @ function M.create_server(config, callbacks, auth_token)
+site lua/claudecode/server/tcp.lua: on_written(written) @ function M.broadcast(server, message, on_written)
