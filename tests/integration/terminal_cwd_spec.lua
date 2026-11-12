@@ -1,0 +1,256 @@
+if vim == nil or vim.fn.has("nvim") ~= 1 then
+  describe("the terminal working directory", function()
+    pending("needs a real Neovim")
+  end)
+  return
+end
+
+if vim.fn.has("win32") == 1 then
+  describe("the terminal working directory", function()
+    pending("these names are not legal on Windows")
+  end)
+  return
+end
+
+-- The terminal starts in the folder that the `cwd_provider` result or the static `cwd` names. `build_config` ran both
+-- through `vim.fn.expand`, which reads `[`, `{`, `*`, `?`, `$` and `\` in a name as patterns or variables. So a folder
+-- named `$HOME-like` or `back\slash` came back as another path, and `[x] {y}` and `it's` came back with a trailing
+-- slash. Text that starts with `~` or `$` now always goes through `vim.fn.expand`, so `~` and `$VAR` work, even when
+-- Neovim's current folder holds a folder with that literal name. Any other text that names an existing folder is
+-- taken as written. Other text goes through `expand` too. Neovim's own `expand` and `isdirectory` decide this, so under
+-- busted's mock vim this is pending; scripts/run_integration_tests_individually.sh runs it in Neovim.
+describe("the terminal working directory", function()
+  local terminal = require("claudecode.terminal")
+  local root, real_termopen, termopen_calls, saved
+
+  -- Each name is legal in a path on Linux and macOS.
+  local names = {
+    { name = "no unusual character", folder = "plain" },
+    { name = "a space", folder = "with space" },
+    { name = "a comma", folder = "comma,dir" },
+    { name = "a single quote", folder = "it's" },
+    { name = "brackets and braces", folder = "[x] {y}" },
+    { name = "a star and a question mark", folder = "star*mark?" },
+    { name = "a percent sign and a hash", folder = "percent%d#hash" },
+    { name = "a backslash", folder = "back\\slash" },
+    { name = "a dollar sign", folder = "$HOME-like" },
+    { name = "a leading tilde", folder = "~tilde" },
+  }
+
+  before_each(function()
+    root = vim.fn.tempname()
+    vim.fn.mkdir(root, "p")
+    saved = { home = vim.env.HOME, base = vim.env.CLAUDECODE_CWD_SPEC_BASE }
+    termopen_calls = {}
+    real_termopen = vim.fn.termopen
+    vim.fn.termopen = function(cmd, opts)
+      table.insert(termopen_calls, { cmd = cmd, opts = opts })
+      return 1000 + #termopen_calls
+    end
+    require("claudecode")._create_commands()
+  end)
+
+  after_each(function()
+    terminal.close()
+    vim.fn.termopen = real_termopen
+    vim.env.HOME, vim.env.CLAUDECODE_CWD_SPEC_BASE = saved.home, saved.base
+    terminal.defaults.cwd, terminal.defaults.cwd_provider = nil, nil
+    terminal.setup({ provider = "native" }, nil)
+    vim.cmd("silent! tabonly!")
+    vim.cmd("silent! only!")
+    vim.cmd("silent! %bwipeout!")
+    vim.fn.delete(root, "rf")
+  end)
+
+  --- Opens the terminal with these terminal options and returns the folder that it started in.
+  ---@param terminal_opts table
+  ---@return string|nil
+  local function started_in(terminal_opts)
+    terminal.setup(vim.tbl_extend("force", { provider = "native" }, terminal_opts), "claude")
+    vim.cmd("ClaudeCodeOpen")
+    assert.are.equal(1, #termopen_calls, "the command started one terminal job")
+    return termopen_calls[1].opts.cwd
+  end
+
+  --- Same as `started_in`, with Neovim's current folder set to `dir` while the terminal opens.
+  ---@param dir string
+  ---@param terminal_opts table
+  ---@return string|nil
+  local function started_in_folder(dir, terminal_opts)
+    local saved_cwd = vim.fn.getcwd()
+    vim.cmd("cd " .. vim.fn.fnameescape(dir))
+    local ok, got = pcall(started_in, terminal_opts)
+    vim.cmd("cd " .. vim.fn.fnameescape(saved_cwd))
+    assert.is_true(ok, got)
+    return got
+  end
+
+  describe("with a folder that exists", function()
+    for _, case in ipairs(names) do
+      it("starts in a static cwd whose folder has " .. case.name .. ", as written", function()
+        local dir = root .. "/" .. case.folder
+        vim.fn.mkdir(dir, "p")
+
+        assert.are.equal(dir, started_in({ cwd = dir }))
+      end)
+
+      it("starts in a cwd_provider result whose folder has " .. case.name .. ", as written", function()
+        local dir = root .. "/" .. case.folder
+        vim.fn.mkdir(dir, "p")
+
+        assert.are.equal(
+          dir,
+          started_in({
+            cwd_provider = function()
+              return dir
+            end,
+          })
+        )
+      end)
+    end
+  end)
+
+  describe("with text that names no folder", function()
+    it("expands ~ in a static cwd", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(root .. "/home/sub", started_in({ cwd = "~/sub" }))
+    end)
+
+    it("expands $VAR in a static cwd", function()
+      vim.fn.mkdir(root .. "/base/sub", "p")
+      vim.env.CLAUDECODE_CWD_SPEC_BASE = root .. "/base"
+
+      assert.are.equal(root .. "/base/sub", started_in({ cwd = "$CLAUDECODE_CWD_SPEC_BASE/sub" }))
+    end)
+
+    it("expands ~ in a cwd_provider result", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(
+        root .. "/home/sub",
+        started_in({
+          cwd_provider = function()
+            return "~/sub"
+          end,
+        })
+      )
+    end)
+
+    it("expands $VAR in a cwd_provider result", function()
+      vim.fn.mkdir(root .. "/base/sub", "p")
+      vim.env.CLAUDECODE_CWD_SPEC_BASE = root .. "/base"
+
+      assert.are.equal(
+        root .. "/base/sub",
+        started_in({
+          cwd_provider = function()
+            return "$CLAUDECODE_CWD_SPEC_BASE/sub"
+          end,
+        })
+      )
+    end)
+  end)
+
+  -- `isdirectory` does not expand, so a folder named `~` or `$HOME` in Neovim's current folder looks like a folder that
+  -- exists. Text that starts with `~` or `$` asks for expansion anyway, as in a shell and in `:cd`.
+  describe("with text that starts with ~ or $, while Neovim's cwd holds a folder of that name", function()
+    it("expands a leading ~ even when Neovim's cwd holds a folder named ~", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.fn.mkdir(root .. "/work/~/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(root .. "/home/sub", started_in_folder(root .. "/work", { cwd = "~/sub" }))
+    end)
+
+    it("expands a leading $ even when Neovim's cwd holds a folder named $HOME", function()
+      vim.fn.mkdir(root .. "/home", "p")
+      vim.fn.mkdir(root .. "/work/$HOME", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(root .. "/home", started_in_folder(root .. "/work", { cwd = "$HOME" }))
+    end)
+
+    it("expands a leading ~ in a cwd_provider result even when Neovim's cwd holds a folder named ~", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.fn.mkdir(root .. "/work/~/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(
+        root .. "/home/sub",
+        started_in_folder(root .. "/work", {
+          cwd_provider = function()
+            return "~/sub"
+          end,
+        })
+      )
+    end)
+
+    it("expands a leading $ in a cwd_provider result even when Neovim's cwd holds a folder named $HOME", function()
+      vim.fn.mkdir(root .. "/home/sub", "p")
+      vim.fn.mkdir(root .. "/work/$HOME/sub", "p")
+      vim.env.HOME = root .. "/home"
+
+      assert.are.equal(
+        root .. "/home/sub",
+        started_in_folder(root .. "/work", {
+          cwd_provider = function()
+            return "$HOME/sub"
+          end,
+        })
+      )
+    end)
+  end)
+
+  describe("which setting wins", function()
+    local function folder(name)
+      local dir = root .. "/" .. name
+      vim.fn.mkdir(dir, "p")
+      return dir
+    end
+
+    it("takes the cwd_provider result over the static cwd", function()
+      local from_static, from_provider = folder("static"), folder("provider")
+
+      assert.are.equal(
+        from_provider,
+        started_in({
+          cwd = from_static,
+          cwd_provider = function()
+            return from_provider
+          end,
+        })
+      )
+    end)
+
+    it("takes the static cwd when the cwd_provider returns an empty string", function()
+      local from_static = folder("static")
+
+      assert.are.equal(
+        from_static,
+        started_in({
+          cwd = from_static,
+          cwd_provider = function()
+            return ""
+          end,
+        })
+      )
+    end)
+
+    it("takes the static cwd when the cwd_provider raises", function()
+      local from_static = folder("static")
+
+      assert.are.equal(
+        from_static,
+        started_in({
+          cwd = from_static,
+          cwd_provider = function()
+            error("provider failed")
+          end,
+        })
+      )
+    end)
+  end)
+end)
