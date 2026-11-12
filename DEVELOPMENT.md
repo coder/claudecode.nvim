@@ -154,7 +154,7 @@ ANTHROPIC_API_KEY=... \
 ## Implementation Guidelines
 
 1. **Error Handling**
-   - All public functions should have error handling
+   - Handle errors where data comes in and where a call can fail (see "Code Shape" in `AGENTS.md`)
    - Return `success, result_or_error` pattern
    - Log meaningful error messages
 
