@@ -73,12 +73,18 @@ const DRAFT_NODE_TYPES = new Set([
   "image",
   "html_inline",
 ]);
-// A line that starts with `## ` once the blanks that Communique removes are gone. Communique 1.1.3 trims a line with
-// Rust's `trim` (U+0009 to U+000D, a space, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F
-// and U+3000), and it ends its draft at a trimmed line `## <version>`. CommonMark keeps most of those blanks as text,
-// so such a line is not a heading to the update.
-const COMMUNIQUE_SECTION_LINE_PATTERN =
-  /^[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*## /;
+// The blanks that Rust's `str::trim` and `char::is_whitespace` know, the characters with the Unicode property
+// White_Space: U+0009 to U+000D, a space, U+0085, U+00A0, U+1680, U+2000 to U+200A, U+2028, U+2029, U+202F, U+205F and
+// U+3000. Communique 1.1.3 is written in Rust, and it trims each line of the changelog with them. CommonMark keeps most
+// of them as text.
+const RUST_BLANK_PATTERN =
+  /[\t\n\v\f\r \u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]/;
+const RUST_LEADING_BLANKS_PATTERN = new RegExp(
+  `^${RUST_BLANK_PATTERN.source}+`,
+);
+const RUST_TRAILING_BLANKS_PATTERN = new RegExp(
+  `${RUST_BLANK_PATTERN.source}+$`,
+);
 // A list item line that holds a marker and nothing else (`-`, `*`, `+`, `1.`, `2)`, or `- -`).
 const EMPTY_ITEM_LINE_PATTERN = /^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]*)+$/;
 // CommonMark ends a line with LF, CR, or CR LF. Every text is split with this
@@ -409,8 +415,7 @@ function topLevelHeadings(text) {
  * blocks after it, up to the next top-level heading of the anchor's level or a higher one (an H1 or H2 after an H2
  * anchor), or to the end of the text. An H3 under an H2 anchor is a subsection of the draft, whatever it says. `level`
  * is the level of the anchor. `headEnd` is the last line of the anchor and `restStart` the first line after the draft,
- * both numbered from 1. `restStart` is null when the draft runs to the end of the text, and `end` is the heading that
- * ends the draft, or null.
+ * both numbered from 1. `restStart` is null when the draft runs to the end of the text.
  */
 function findUnreleasedDraft(lines) {
   assert.ok(Array.isArray(lines), "lines must be an array");
@@ -433,8 +438,156 @@ function findUnreleasedDraft(lines) {
     blocks: blocks.slice(anchor + 1, next === -1 ? blocks.length : next),
     headEnd: blocks[anchor].sourcepos[1][0],
     restStart: next === -1 ? null : blocks[next].sourcepos[0][0],
-    end: next === -1 ? null : blocks[next],
   };
+}
+
+/**
+ * Rust's `str::trim`: removes the blanks of `RUST_BLANK_PATTERN` at both ends.
+ */
+function rustTrim(text) {
+  assert.equal(typeof text, "string", "text must be a string");
+  return text
+    .replace(RUST_LEADING_BLANKS_PATTERN, "")
+    .replace(RUST_TRAILING_BLANKS_PATTERN, "");
+}
+
+/**
+ * Whether Communique 1.1.3 reads `line` as the heading that starts the Unreleased draft (`is_unreleased_header` in
+ * `src/generate.rs`): once trimmed, `## [Unreleased]`, `## Unreleased`, or `## [Unreleased](` and anything after.
+ */
+function isCommuniqueAnchorLine(line) {
+  const trimmed = rustTrim(line);
+  return (
+    trimmed === "## Unreleased" ||
+    trimmed === "## [Unreleased]" ||
+    trimmed.startsWith("## [Unreleased](")
+  );
+}
+
+/**
+ * Whether Communique 1.1.3 reads `line` as the heading of a release, and so ends its draft there (`header_version` in
+ * `src/generate.rs`): once trimmed, `## ` and then a version. A version is the text up to the first blank, or the text
+ * between `[` and the first `]`. It is a version when it holds a dot and starts with a digit, or with `v` and a digit.
+ * So `## 1. Install` is a version heading, and `## Notes`, `## v1`, `##\t[0.2.0]` and `# [0.2.0]` are not.
+ */
+function isCommuniqueVersionLine(line) {
+  const trimmed = rustTrim(line);
+  if (!trimmed.startsWith("## ")) {
+    return false;
+  }
+  const rest = trimmed.slice(3).replace(RUST_LEADING_BLANKS_PATTERN, "");
+  let version;
+  if (rest.startsWith("[")) {
+    const close = rest.indexOf("]");
+    if (close === -1) {
+      return false;
+    }
+    version = rest.slice(1, close);
+  } else {
+    version = rest.split(RUST_BLANK_PATTERN, 1)[0];
+  }
+  const number = version.startsWith("v") ? version.slice(1) : version;
+  return /^[0-9]/.test(number) && number.includes(".");
+}
+
+/**
+ * Where Communique 1.1.3 reads the Unreleased draft of `content`, or null when it reads none. Communique reads the file
+ * as lines that end with LF alone (a bare CR is no line break to it), and it does not parse Markdown: a line in a code
+ * fence or a comment counts. The draft starts below the first line for which `isCommuniqueAnchorLine` holds and ends
+ * at the first later line for which `isCommuniqueVersionLine` holds, or at the end of the text. The result is
+ * `{ anchor, end }`, and each is `{ number, offset, line }`: the line numbered from 1, the offset of its first
+ * character in `content`, and the line without its line ending. `end` is null when the draft runs to the end of the
+ * text. Communique refuses a file with two such anchors ("multiple Unreleased sections"), and this function reads the
+ * first one.
+ */
+function findCommuniqueDraft(content) {
+  assert.equal(typeof content, "string", "content must be a string");
+  let anchor = null;
+  let offset = 0;
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const found = { number: i + 1, offset, line: line.replace(/\r$/, "") };
+    if (anchor === null) {
+      if (isCommuniqueAnchorLine(line)) {
+        anchor = found;
+      }
+    } else if (isCommuniqueVersionLine(line)) {
+      return { anchor, end: found };
+    }
+    offset += line.length + 1;
+  }
+  return anchor === null ? null : { anchor, end: null };
+}
+
+/**
+ * Throws unless the update and Communique read the Unreleased draft between the same two lines. Communique folds the
+ * draft that it reads into the new entry, and the update drops the draft that it reads, and keeps every line after it.
+ * So if the two start or end the draft at different lines, the update either drops a line that Communique never read
+ * (text that nobody reconciled into the new entry is lost), or it keeps a line that Communique read and folded into the
+ * new entry (the text shows twice, as a note in the entry and as a section below it), or it adds a second Unreleased
+ * heading. `lines` and `endings` are the lines of `content` and their line endings (see `splitLines`), and `draft` is
+ * the result of `findUnreleasedDraft`. The lines are compared by the offset of their first character, because
+ * Communique and CommonMark break lines differently (a bare CR). The update ends its draft at the next heading of level
+ * 1 or 2, and Communique only at a line `## <version>` (see `isCommuniqueVersionLine`). So the draft must end at a
+ * heading `## <version>`, or at the end of the text. A line that CommonMark reads as text and Communique as a version
+ * heading (a no-break space before `## [0.4.1]`, a lazy line with four spaces of indent), an H1, a tab after the marks,
+ * an empty or a setext heading, and an H2 that is no version, end the draft in two places. A draft under a heading that
+ * Communique does not read (an H3 anchor) is empty, because the update refuses another one, and an empty one can go.
+ */
+function assertCommuniqueReadsTheSameDraft(content, lines, endings, draft) {
+  assert.equal(typeof content, "string", "content must be a string");
+  assert.ok(Array.isArray(lines), "lines must be an array");
+  assert.equal(lines.length, endings.length, "each line needs an ending");
+  const communique = findCommuniqueDraft(content);
+  const starts = [];
+  for (let i = 0, offset = 0; i < lines.length; i += 1) {
+    starts.push(offset);
+    offset += lines[i].length + endings[i].length;
+  }
+  const lineAt = (number) => ({
+    number,
+    offset: starts[number - 1],
+    line: lines[number - 1],
+  });
+  const update =
+    draft === null
+      ? { anchor: null, end: null }
+      : {
+          anchor: lineAt(draft.headEnd),
+          end: draft.restStart === null ? null : lineAt(draft.restStart),
+        };
+  const show = (found, none) =>
+    found === null
+      ? none
+      : `line ${found.number}: ${JSON.stringify(found.line.slice(0, 80))}`;
+
+  if (communique === null && (draft === null || draft.blocks.length === 0)) {
+    return;
+  }
+  if (communique?.anchor.offset !== update.anchor?.offset) {
+    throw new Error(
+      "The update and Communique find the Unreleased heading in different places. " +
+        `The update finds it at ${show(update.anchor, "no line")}. Communique finds it at ${show(communique?.anchor ?? null, "no line")}. ` +
+        "The update would drop a draft that Communique never read, keep one that Communique folds into the new entry, or add a second Unreleased heading. " +
+        "Communique reads `## [Unreleased]` and `## Unreleased` after it trims the line, and it reads `## [Unreleased](...)`. " +
+        "Write the heading as `## [Unreleased]` at the start of a line, once.",
+    );
+  }
+  if ((update.end?.offset ?? null) !== (communique.end?.offset ?? null)) {
+    const communiqueIsLater =
+      communique.end === null ||
+      (update.end !== null && communique.end.offset > update.end.offset);
+    throw new Error(
+      "The update and Communique end the Unreleased draft in different places. " +
+        `The update ends it at ${show(update.end, "the end of the text")}. Communique ends it at ${show(communique.end, "the end of the text")}. ` +
+        (communiqueIsLater
+          ? "Communique reads the lines in between as draft too and folds them into the new entry, and the update keeps them, so they would show twice. "
+          : "Communique never reads the lines in between, and the update would drop them. ") +
+        "Communique ends a draft only at a `## ` heading with a version, such as `## [0.4.1]`. " +
+        "Write the heading that ends the draft that way, or move the lines in between out of the Unreleased draft.",
+    );
+  }
 }
 
 /**
@@ -446,13 +599,10 @@ function findUnreleasedDraft(lines) {
  * error names the line and the node type, and it comes before anything is formatted. A code fence keeps the error of
  * the fence check that came first. A draft under an H3 anchor is refused whatever it holds, because Communique reads a
  * draft only under an H2 anchor, and the update would drop text that nobody reconciled into the new entry. An empty
- * draft under an H3 anchor is fine. A draft line that starts with `## ` once the blanks that Communique trims are
- * removed (a no-break space before `## [0.4.1]`, for example) is refused, because Communique ends its draft there and
- * reads nothing below it. The heading that ends the draft must be a one-line heading with text: an empty heading or a
- * setext heading is refused, because Communique reads the text below it and the update would keep it. `draft` is the
- * result of `findUnreleasedDraft`, and `lines` the lines of the text it
- * read. The cost: a draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused
- * until a maintainer edits it.
+ * draft under an H3 anchor is fine. `draft` is the result of `findUnreleasedDraft`, and `lines` the lines of the text it
+ * read. Where the draft starts and ends is not checked here (see `assertCommuniqueReadsTheSameDraft`). The cost: a
+ * draft with a code block, a quote, HTML, a rule, a deeper heading or a link definition is refused until a maintainer
+ * edits it.
  */
 function assertDraftIsPlain(lines, draft) {
   assert.ok(Array.isArray(lines), "lines must be an array");
@@ -528,28 +678,6 @@ function assertDraftIsPlain(lines, draft) {
           "Move it out of the Unreleased draft.",
       );
     }
-    if (COMMUNIQUE_SECTION_LINE_PATTERN.test(lines[line - 1] ?? "")) {
-      throw new Error(
-        `The Unreleased draft has a line that Communique reads as a section heading. Line ${line}: ${shownLine(line)}. ` +
-          "Communique ends its draft there, so it never reads the lines below it, and the update would drop them. " +
-          "Move it out of the Unreleased draft, or write it as a paragraph.",
-      );
-    }
-  }
-  // The heading that ends the draft is a one-line heading with text. Communique reads the text below any other end
-  // (an empty heading or a setext heading) as part of its draft and folds it into the new entry, and the update keeps
-  // it, so it would show twice.
-  if (
-    draft.end !== null &&
-    (draft.end.sourcepos[0][0] !== draft.end.sourcepos[1][0] ||
-      headingText(draft.end) === "")
-  ) {
-    const line = draft.end.sourcepos[0][0];
-    throw new Error(
-      `The Unreleased draft ends at a heading that is empty or a setext heading. Line ${line} starts it: ${shownLine(line)}. ` +
-        "Communique reads the text below it as draft too and folds it into the new entry, so the update would write that text twice. " +
-        "Write the heading on one line with `## ` and its text, or move the text out of the Unreleased draft.",
-    );
   }
 }
 
@@ -620,8 +748,10 @@ function formatKeepingHeadings(markdown, entry, kept) {
  * a higher one, or to the end of the text. It can hold only paragraphs, lists and H3 headings (see
  * `assertDraftIsPlain`), and the update refuses anything else before it formats. A draft under an H3 anchor is
  * refused, because Communique reads none. An H3 heading directly under `## [Unreleased]` is a subsection of the draft
- * whatever it says, so `### [0.3.0]` there is dropped with the draft. After the formatter runs, the headings of the new
- * entry and the older releases must be unchanged (see `formatKeepingHeadings`).
+ * whatever it says, so `### [0.3.0]` there is dropped with the draft. The update and Communique must read the draft
+ * between the same two lines, or the update refuses (see `assertCommuniqueReadsTheSameDraft`): the draft ends at the
+ * heading `## <version>` where Communique ends it, or at the end of the text. After the formatter runs, the headings of
+ * the new entry and the older releases must be unchanged (see `formatKeepingHeadings`).
  */
 class UnreleasedAwareChangelog {
   constructor(options) {
@@ -641,13 +771,16 @@ class UnreleasedAwareChangelog {
 
   updateContent(content) {
     // Every line ending becomes LF, as CRLF already did.
-    const { lines } = splitLines(content ?? "");
+    const { lines, endings } = splitLines(content ?? "");
     const existing = lines.join("\n");
     const entry = this.changelogEntry.trim();
 
     const draft = findUnreleasedDraft(lines);
     if (draft !== null) {
       assertDraftIsPlain(lines, draft);
+    }
+    assertCommuniqueReadsTheSameDraft(content ?? "", lines, endings, draft);
+    if (draft !== null) {
       const head = lines.slice(0, draft.headEnd).join("\n");
       const rest =
         draft.restStart === null
@@ -855,6 +988,7 @@ module.exports = {
   assertLlmCredentials,
   buildCommuniqueArgs,
   createCommuniqueChangelogNotes,
+  findCommuniqueDraft,
   findLineOutsideFences,
   formatChangelogMarkdown,
   formatChangelogSection,

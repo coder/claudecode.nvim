@@ -1104,8 +1104,13 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
   local final_content = table.concat(content_lines, "\n")
-  -- Add trailing newline if the buffer has one
-  if #content_lines > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
+  -- Add trailing newline if the buffer has one, as :w does. :w writes nothing for an empty buffer, whatever 'eol' is.
+  -- Such a buffer has no lines, but nvim_buf_get_lines still returns one empty string for it, so the count of bytes tells
+  -- it from a buffer with one empty line.
+  local byte_count = vim.api.nvim_buf_call(buffer_id, function()
+    return vim.fn.wordcount().bytes
+  end)
+  if byte_count > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
     final_content = final_content .. "\n"
   end
 
@@ -1918,10 +1923,10 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    -- A raising handler of the user (autocmd callback) makes the cleanup above fail inside Neovim API calls. Neovim
-    -- 0.8.0 bundles a LuaJIT that then keeps pointing at the main Lua thread, while this code runs in the coroutine
-    -- of tools.handle_invoke. The next JIT trace exit corrupts the stack of the main thread and Neovim aborts or
-    -- crashes, exit 134 or 139 (LuaJIT issue #1066, fixed in September 2023). An API call that returns normally points
+    -- A raising handler of the user (autocmd callback) makes the cleanup above fail inside Neovim API calls. A LuaJIT
+    -- older than September 2023 (bundled by Neovim 0.8 and 0.9) then keeps pointing at the main Lua thread, while this
+    -- code runs in the coroutine of tools.handle_invoke. The next JIT trace exit corrupts the stack of the main thread
+    -- and Neovim aborts or crashes, exit 134 or 139 (LuaJIT issue #1066). An API call that returns normally points
     -- LuaJIT at the running coroutine again. Make one before the error leaves the coroutine.
     vim.api.nvim_get_current_tabpage()
 
