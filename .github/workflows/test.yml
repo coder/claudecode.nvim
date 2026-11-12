@@ -63,9 +63,9 @@ jobs:
       - name: Run release tooling tests
         run: npm --prefix scripts run test:release-please-runner
 
-      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds. actions/cache would save it in
-      # a post step on every event, after the PR's own scripts ran, so restore and save are separate steps, and only a
-      # push to main saves.
+      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds. After a miss, actions/cache
+      # saves in a post step on a pull request or a merge queue run too, after the PR's own scripts ran. So restore and
+      # save are separate steps, and only a push to main saves.
       - name: Restore Lua test rocks
         id: luarocks-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5

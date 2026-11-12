@@ -7,12 +7,6 @@ describe(".github/workflows/test.yml cache settings", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
   local steps
 
-  ---@param text string
-  ---@return string
-  local function escape(text)
-    return (text:gsub("%p", "%%%0"))
-  end
-
   ---Every step is a `- ` item at six spaces. A step ends at the next step or at a line with less indent, and a comment
   ---line is not part of it.
   ---@return string[][] steps the lines of each step
@@ -40,17 +34,42 @@ describe(".github/workflows/test.yml cache settings", function()
     return found
   end
 
+  ---Finds a setting by its place in the step: a key of the step itself sits at eight spaces (the `- name:` line
+  ---counts), and an entry of its `with:` or `env:` block sits at ten.
   ---@param step string[]
   ---@param key string
+  ---@param block string|nil `"with"` or `"env"`, the step key whose block holds `key`. nil for a key of the step
   ---@return string|nil value the text after `key:`, without a trailing YAML comment
-  local function field(step, key)
-    for _, line in ipairs(step) do
-      local value = line:match("^%s+%-?%s*" .. escape(key) .. ":%s*(.-)%s*$")
-      if value then
+  local function field(step, key, block)
+    local current
+    for _, text in ipairs(step) do
+      local line = text:gsub("^      %- ", "        ", 1)
+      local indent = #line:match("^ *")
+      local name, value = line:match("^ *([%w_%-]+):%s*(.-)%s*$")
+      if name and indent == 8 then
+        current = name
+      end
+      local in_place = (indent == 8 and block == nil) or (indent == 10 and block ~= nil and current == block)
+      if name == key and in_place then
         return (value:gsub("%s+#.*$", ""))
       end
     end
     return nil
+  end
+
+  ---@param step string[]
+  ---@return boolean caches_rocks whether an actions/cache step names the rock tree in any way: `.luarocks`,
+  ---`./.luarocks`, an absolute path, a line of a multi-line `path`
+  local function caches_rock_tree(step)
+    if not (field(step, "uses") or ""):match("^actions/cache[/@]") then
+      return false
+    end
+    for _, line in ipairs(step) do
+      if line:find(".luarocks", 1, true) then
+        return true
+      end
+    end
+    return false
   end
 
   ---@param name string
@@ -78,9 +97,9 @@ describe(".github/workflows/test.yml cache settings", function()
     end)
 
     it("keys the tool cache on mise.lock only", function()
-      local key = field(step, "cache_key")
-      assert.is_string(key, "the step has no cache_key")
-      assert.is_truthy(key:find("hashFiles('mise.lock')", 1, true), "cache_key must hash mise.lock: " .. key)
+      local key = field(step, "cache_key", "with")
+      assert.is_string(key, "the step has no cache_key under with:")
+      assert.is_truthy(key:find("${{ hashFiles('mise.lock') }}", 1, true), "cache_key must hash mise.lock: " .. key)
       assert.are.equal(1, select(2, key:gsub("hashFiles%(", "")), "cache_key must hash nothing else: " .. key)
       assert.is_nil(key:find("file_hash", 1, true), "{{file_hash}} hashes every mise config file: " .. key)
       assert.is_nil(key:find("{{default}}", 1, true), "{{default}} hashes every mise config file: " .. key)
@@ -93,12 +112,12 @@ describe(".github/workflows/test.yml cache settings", function()
     end)
 
     it("saves the cache only on a push", function()
-      assert.are.equal("${{ github.event_name == 'push' }}", field(step, "cache_save"))
+      assert.are.equal("${{ github.event_name == 'push' }}", field(step, "cache_save", "with"))
     end)
 
     it("retries a failed download at least 6 times", function()
-      local retries = field(step, "MISE_HTTP_RETRIES")
-      assert.is_string(retries, "the step sets no MISE_HTTP_RETRIES")
+      local retries = field(step, "MISE_HTTP_RETRIES", "env")
+      assert.is_string(retries, "the step sets no MISE_HTTP_RETRIES under env:")
       local digits = retries:match("^[\"']?(%d+)[\"']?$")
       assert.is_truthy(digits, "MISE_HTTP_RETRIES must be an integer: " .. retries)
       assert.is_true(tonumber(digits) >= 6, "MISE_HTTP_RETRIES is below 6: " .. retries)
@@ -111,7 +130,7 @@ describe(".github/workflows/test.yml cache settings", function()
     before_each(function()
       local rock_steps = {}
       for _, step in ipairs(steps) do
-        if field(step, "path") == ".luarocks" then
+        if caches_rock_tree(step) then
           table.insert(rock_steps, step)
         end
       end
@@ -134,14 +153,30 @@ describe(".github/workflows/test.yml cache settings", function()
       assert.are.equal(restore_sha, save_sha)
     end)
 
+    it("restores and saves the same path", function()
+      -- The cache version comes from the path, so a save under another spelling of it is never restored.
+      assert.are.equal(".luarocks", field(restore, "path", "with"))
+      assert.are.equal(".luarocks", field(save, "path", "with"))
+    end)
+
     it("restores the key that the rock list in mise.toml decides", function()
-      assert.is_truthy(field(restore, "key"):find("hashFiles('mise.toml')", 1, true), field(restore, "key"))
+      local key = field(restore, "key", "with")
+      assert.is_string(key, "the restore step has no key under with:")
+      assert.is_truthy(key:find("hashFiles('mise.toml')", 1, true), key)
+    end)
+
+    it("restores from the exact key only", function()
+      -- `mise run setup` skips the install when busted, luacheck and luacov exist, so a tree restored from another
+      -- mise.toml would keep rocks whose pins changed.
+      for _, line in ipairs(restore) do
+        assert.is_nil(line:find("restore-keys", 1, true), "a restore-keys fallback is not allowed: " .. line)
+      end
     end)
 
     it("saves under the key that the restore step tried", function()
       local id = field(restore, "id")
       assert.is_string(id, "the restore step needs an id")
-      assert.are.equal("${{ steps." .. id .. ".outputs.cache-primary-key }}", field(save, "key"))
+      assert.are.equal("${{ steps." .. id .. ".outputs.cache-primary-key }}", field(save, "key", "with"))
     end)
 
     it("saves only on a push, and only after a miss", function()
