@@ -1,10 +1,9 @@
--- Real-Neovim check that :qa! (or SIGTERM) answers every openDiff call that is still open, exactly once: a pending diff
--- gets DIFF_REJECTED, and a call whose setup a ClaudeCodeDiffOpened handler cut off by quitting gets a -32603 error.
+-- Real-Neovim check of the exit answers that README.md lists under Global Invariants, in "Exit answers".
 -- Neovim fires BufUnload for each loaded buffer at exit, and the proposal buffers' autocmds reject their diffs. That
 -- loop stops once an autocmd deletes the buffer it fired for: the reject of a new-file diff with the default
 -- `on_new_file_reject = "keep_empty"`, in a tab the diff did not open, deletes its proposal buffer, and another
 -- plugin's buffer can delete itself. SIGTERM runs VimLeavePre without the loop. The diffs behind it get no BufUnload,
--- so the VimLeavePre autocmd of diff.lua must answer them. A child Neovim does the exit, because it ends the process.
+-- so the VimLeavePre autocmd of diff.lua must reject them. A child Neovim does the exit, because it ends the process.
 -- Mock vim cannot run an exit, so under busted this is pending.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("openDiff at exit", function()

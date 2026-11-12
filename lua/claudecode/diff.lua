@@ -2003,8 +2003,11 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
   return user_action_result
 end
 
----Answer every diff that is still pending with DIFF_REJECTED, oldest first. A diff that already has its answer is
----skipped, so each openDiff gets one. One diff that fails to reject must not leave the others waiting.
+---Resolve each diff whose status is `pending` as rejected, oldest first, each under `pcall`, so one diff that fails to
+---reject cannot leave the others waiting. A diff with another status is skipped. A reject can remove its own diff
+---(`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a diff whose openDiff setup is
+---still running stays in `setup_result` (see `open_diff_blocking`) and sends nothing: the call has no response sender
+---yet, and the server's `stop` sends its response.
 function M._reject_pending_diffs()
   local pending = {}
   for tab_name, diff_data in pairs(active_diffs) do
@@ -2028,7 +2031,8 @@ end
 ---The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
 ---its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
 ---buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
----pending. SIGKILL or a crash runs no VimLeavePre. The pending diffs are answered before the cleanup removes them.
+---pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre. The reject
+---pass runs first. The cleanup pass of every diff runs after it.
 local function cleanup_at_exit()
   M._reject_pending_diffs()
   M._cleanup_all_active_diffs("shutdown")

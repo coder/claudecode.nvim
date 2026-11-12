@@ -1,6 +1,7 @@
 -- A request has no answer until its handler returns, and a blocking tool has no response sender before that. When
--- Neovim exits inside a handler, the handler never returns, so `server.stop` must answer the request: Claude gets one
--- answer for every call that reached the server, and `_handle_request` sends nothing after a stop that answered it.
+-- Neovim exits inside a handler, the handler never returns, so `server.stop` must answer the request, and
+-- `_handle_request` sends nothing after a stop that answered it. README.md lists what Claude receives, under Global
+-- Invariants, in "Exit answers".
 require("tests.busted_setup")
 
 describe("a request whose handler is still running when the server stops", function()

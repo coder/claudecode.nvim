@@ -175,12 +175,12 @@ return true, result
 
 At exit, Neovim fires `BufUnload` for each loaded buffer, and then runs the `VimLeavePre` autocmds. The plugin registers two of them, and they run in this order. Neovim runs the autocmds of one event in the order that they were registered. `diff.lua` registers its autocmd when it first loads, and `M.setup` loads `diff.lua` before it registers its own [lua/claudecode/init.lua:M.setup].
 
-First, the autocmd of `diff.lua`, in the `ClaudeCodeMCPDiff` group, answers every `openDiff` call that is still pending with `DIFF_REJECTED`, oldest first, while the server still runs. Then it closes every diff and clears its state. It runs whether or not the server runs [lua/claudecode/diff.lua:cleanup_at_exit] [lua/claudecode/diff.lua:M._reject_pending_diffs] [lua/claudecode/diff.lua:M._cleanup_all_active_diffs]:
+First, the autocmd of `diff.lua`, in the `ClaudeCodeMCPDiff` group, rejects each diff whose status is `pending`, oldest first, while the server still runs. Then it closes every diff and clears its state. It runs whether or not the server runs [lua/claudecode/diff.lua:cleanup_at_exit] [lua/claudecode/diff.lua:M._reject_pending_diffs] [lua/claudecode/diff.lua:M._cleanup_all_active_diffs]:
 
 ```lua
 -- diff.lua, module level (shortened)
 local function cleanup_at_exit()
-  M._reject_pending_diffs() -- DIFF_REJECTED for each pending diff, oldest first
+  M._reject_pending_diffs() -- reject each diff that is pending, oldest first
   M._cleanup_all_active_diffs("shutdown") -- close each diff and clear its state
 end
 
@@ -190,9 +190,9 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
-The `BufUnload` loop that runs before both autocmds already rejects most diffs, because the `BufUnload` autocmd of a proposal buffer rejects its diff [lua/claudecode/diff.lua:register_diff_autocmds]. That loop stops when an autocmd deletes the buffer that it fired for, and SIGTERM and SIGHUP run `VimLeavePre` without the loop. `_reject_pending_diffs` answers the diffs that the loop did not reach. A diff that already has its answer gets no second one.
+The `BufUnload` loop that runs before both autocmds already rejects most diffs, because the `BufUnload` autocmd of a proposal buffer rejects its diff [lua/claudecode/diff.lua:register_diff_autocmds]. That loop stops when an autocmd deletes the buffer that it fired for, and SIGTERM and SIGHUP run `VimLeavePre` without the loop. `_reject_pending_diffs` rejects the diffs that the loop did not reach, and it skips a diff whose status is not `pending`. A reject can remove its own diff (a new-file diff with `on_new_file_reject = "keep_empty"`), so a diff can be gone before the next one is rejected.
 
-Second, the autocmd of `init.lua`, in the `ClaudeCodeShutdown` group, runs `stop` only when the server runs. Without a server, it only clears the @-mention queue [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:clear_mention_queue]. `stop` removes the lock file, stops the server, and clears the queue [lua/claudecode/init.lua:M.stop]. The server's own `stop` answers a call whose handler is still running with the error -32603, and the TCP server then closes each client with the close code 1001 [lua/claudecode/server/init.lua:M.stop] [lua/claudecode/server/tcp.lua:M.stop_server]:
+Second, the autocmd of `init.lua`, in the `ClaudeCodeShutdown` group, runs `stop` only when the server runs. Without a server, it only clears the @-mention queue [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:clear_mention_queue]. `stop` removes the lock file, stops the server, and clears the queue [lua/claudecode/init.lua:M.stop]. The server's own `stop` sends a response for each request whose handler is still running, and the TCP server then closes each client with the close code 1001 [lua/claudecode/server/init.lua:M.stop] [lua/claudecode/server/tcp.lua:M.stop_server]:
 
 ```lua
 -- init.lua, M.setup (shortened)
@@ -209,7 +209,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
-SIGKILL, a crash, and a quit from inside an autocmd that is not `nested` run neither autocmd. Claude then sees the socket drop (close code 1006) with no answer for a pending diff, and the lock file stays.
+SIGKILL, a crash, and a quit from inside an autocmd that is not `nested` run neither autocmd. What Claude receives for each kind of call, in each kind of exit, is in the root [README.md](./README.md), under Global Invariants.
 
 ## Module Structure
 
@@ -292,6 +292,6 @@ vv netrw      # Test with built-in netrw
 
 - **Debounced Updates**: 100 ms debounce on selection changes, except leaving visual mode, editing or consuming the held text, and moving the cursor away from a held selection, which report at once
 - **Localhost Only**: Server binds to 127.0.0.1
-- **Resource Cleanup**: At exit, two `VimLeavePre` autocmds run. The one in `diff.lua` runs first and answers each pending diff. The one in `init.lua` runs `stop` when the server runs, and `stop` stops the server and tries to remove the lock file [lua/claudecode/diff.lua:cleanup_at_exit] [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:M.stop]. A SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` skips both and leaves the lock file
+- **Resource Cleanup**: At exit, two `VimLeavePre` autocmds run. The one in `diff.lua` runs first and rejects each pending diff. The one in `init.lua` runs `stop` when the server runs, and `stop` stops the server and tries to remove the lock file [lua/claudecode/diff.lua:cleanup_at_exit] [lua/claudecode/init.lua:M.setup] [lua/claudecode/init.lua:M.stop]. A SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` skips both and leaves the lock file
 - **In-memory State**: The plugin keeps, among other things, the latest selection [lua/claudecode/selection.lua:M.state], the proposed text of each open diff [lua/claudecode/diff.lua:M._register_diff_state], an input buffer for each connected client [lua/claudecode/server/client.lua:M.create_client], and the @-mentions that wait to go out [lua/claudecode/init.lua:mention_queue]. `lockfile.lua` reads `CLAUDE_CONFIG_DIR` once, when it loads [lua/claudecode/lockfile.lua:get_lock_dir]
 - **Async and Blocking I/O**: Sockets and timers use libuv callbacks. The TCP server accepts connections and reads through callbacks, writes with libuv's asynchronous `write`, and runs its ping timer from a libuv timer [lua/claudecode/server/tcp.lua:M._bind_and_listen] [lua/claudecode/server/tcp.lua:M._handle_new_connection] [lua/claudecode/server/client.lua:write] [lua/claudecode/server/tcp.lua:M.start_ping_timer]. The selection debounce and the @-mention queue use timers [lua/claudecode/selection.lua:M.debounce_update] [lua/claudecode/init.lua:start_timer]. File I/O is synchronous and blocks Neovim until it returns: `lockfile.lua` calls `fs_open`, `fs_write` and `fs_close` without callbacks and uses `os.rename` and `os.remove` [lua/claudecode/lockfile.lua:M.create] [lua/claudecode/lockfile.lua:M.remove], and `diff.lua` reads and writes files with `io.open` [lua/claudecode/diff.lua:read_file] [lua/claudecode/diff.lua:create_temp_file]

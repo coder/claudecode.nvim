@@ -139,8 +139,8 @@ fact[ClientIdsUnique]=$(as_bool client_ids_unique)
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \
   '_G\.claude_deferred_responses = \{\}' <<<"$server_stop")
 fact[StopPendingOnly]=$(as_bool grep -qE '^ *return diff_data\.status == "pending"$' <<<"$close_pending")
-# At exit, a diff that no BufUnload rejected still gets its answer: the VimLeavePre autocmd rejects every pending diff
-# before _cleanup_all_active_diffs removes any entry.
+# The VimLeavePre callback runs _reject_pending_diffs before _cleanup_all_active_diffs, so a diff that no BufUnload
+# rejected is rejected before the final cleanup pass.
 FACTS+=(ExitRejectsPending)
 exit_rejects_pending() {
   in_order '^function M\._reject_pending_diffs\(\)$' 'diff_data\.status == "pending"' \
