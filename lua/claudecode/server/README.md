@@ -12,7 +12,7 @@ Layers, top to bottom:
 4. `handshake.lua` and `frame.lua`: HTTP upgrade validation and frame encode/decode.
 5. `utils.lua`: base64, SHA-1, masking, UTF-8, and constant-time compare helpers.
 
-`mock.lua` is an in-memory stand-in with no sockets. Nothing in `lua/` or `tests/` requires it.
+`mock.lua` is an in-memory stand-in with no sockets. Nothing in `lua/` requires it. `tests/unit/server/mock_spec.lua` tests its `broadcast`.
 
 ## Interface
 

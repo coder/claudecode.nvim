@@ -301,7 +301,7 @@ This plugin creates a WebSocket server that Claude Code CLI connects to, impleme
 The protocol uses a WebSocket-based variant of MCP (Model Context Protocol) that:
 
 1. Creates a WebSocket server on a random port
-2. Writes a lock file to `~/.claude/ide/[port].lock` (or `$CLAUDE_CONFIG_DIR/ide/[port].lock` if `CLAUDE_CONFIG_DIR` is set) with connection info
+2. Writes a lock file to `~/.claude/ide/[port].lock` (or `$CLAUDE_CONFIG_DIR/ide/[port].lock` if `CLAUDE_CONFIG_DIR` is set and not empty) with connection info
 3. Sets environment variables that tell Claude where to connect
 4. Implements MCP tools that Claude can call
 
@@ -1070,7 +1070,7 @@ opts = {
 ## Troubleshooting
 
 - **First stop:** Run `:checkhealth claudecode` — it verifies the Claude CLI is installed, the WebSocket server is running, the lock file exists, and whether Claude is connected
-- **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set)
+- **Claude not connecting?** Check `:ClaudeCodeStatus` and verify lock file exists in `~/.claude/ide/` (or `$CLAUDE_CONFIG_DIR/ide/` if `CLAUDE_CONFIG_DIR` is set and not empty)
 - **Need debug logs?** Set `log_level = "debug"` in opts
 - **Terminal issues?** Try `provider = "native"` if using snacks.nvim
 - **Local installation not working?** If you used `claude migrate-installer`, set `terminal_cmd = "~/.claude/local/claude"` in your config. Check `which claude` vs `ls ~/.claude/local/claude` to verify your installation type.
@@ -1153,7 +1153,9 @@ The plugin runs the CLI through a [terminal provider](./lua/claudecode/terminal/
   [lua/claudecode/selection.lua:M.send_selection_update] and `at_mentioned` [lua/claudecode/init.lua:M.\_broadcast_at_mention].
 - Processes: the terminal provider spawns the Claude CLI with `ENABLE_IDE_INTEGRATION`, `FORCE_CODE_TERMINAL`,
   loopback `no_proxy`/`NO_PROXY`, and, while the server runs, `CLAUDE_CODE_SSE_PORT`
-  [lua/claudecode/terminal.lua:get_claude_command_and_env].
+  [lua/claudecode/terminal.lua:get_claude_command_and_env]. `:checkhealth claudecode` runs the CLI with `--version`
+  [lua/claudecode/health.lua:check_cli]. With `terminal.git_repo_cwd`, the terminal module runs
+  `git rev-parse --show-toplevel` [lua/claudecode/cwd.lua:M.git_root].
 - Disk: `open_diff` writes diff temp files under `stdpath("cache")/claudecode_diffs`, or
   `stdpath("cache")/claudecode_diffs_fallback` when a directory cannot be created in the first. If both fail, it returns
   an error that names both directories [lua/claudecode/diff.lua:create_temp_file]. The `openDiff` tool writes no temp
