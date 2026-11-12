@@ -38,10 +38,19 @@ const PLACEHOLDERS = [
 ].filter(([path]) => path.length > 1);
 const PATHS = {
   $CWD: "the work folder",
-  $RUN: "the temp dir",
+  $RUN: "the temp dir", // never named: the work folder path starts with it and is refused first
   $TREE: "the tree",
   $HOME: "the home folder",
 };
+// A placeholder stands for a whole path: a path is rewritten only where `/`, the end of a JSON string (a quote, with
+// backslashes before it in a nested string) or the end of the text follows it. The work folder plus `X` is another path.
+const REWRITES = PLACEHOLDERS.map(([path, mark]) => [
+  new RegExp(
+    `${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=/|\\\\*"|$)`,
+    "g",
+  ),
+  mark,
+]);
 // A leak is a Lua position (`.lua:` and a digit), or a path under the run dir, the plugin tree or the real home folder.
 // The last three are the placeholders that the normalization leaves in a frame. A frame that holds the auth token is
 // one too.
@@ -132,7 +141,10 @@ for (const { name, ok, strings = {} } of TOOLS) {
 }
 
 const rewrite = (text) =>
-  PLACEHOLDERS.reduce((out, [path, mark]) => out.replaceAll(path, mark), text);
+  REWRITES.reduce(
+    (out, [pattern, mark]) => out.replace(pattern, () => mark),
+    text,
+  );
 const parse = (text) => {
   try {
     return /^[[{]/.test(text) ? JSON.parse(text) : text;
