@@ -211,22 +211,17 @@ describe("openDiff at exit", function()
   local rejects = { "keep_empty", "close_window" }
 
   for _, layout in ipairs(layouts) do
-    local runs_here = layout ~= "unified" or vim.fn.has("nvim-0.9") == 1
-    local define = runs_here and it or pending
-    define(("answers each pending diff when SIGTERM ends Neovim (%s layout)"):format(layout), function()
+    it(("answers each pending diff when SIGTERM ends Neovim (%s layout)"):format(layout), function()
       local lines = exit_with({ "new1.txt:new", "b.txt:old" }, layout, "keep_empty", false, "sigterm")
       local answers = answers_by_name(lines)
       assert.same({ "DIFF_REJECTED" }, answers["new1.txt"], table.concat(lines, "\n"))
       assert.same({ "DIFF_REJECTED" }, answers["b.txt"], table.concat(lines, "\n"))
     end)
-    define(
-      ("answers one diff that another plugin's buffer kept from its BufUnload (%s layout)"):format(layout),
-      function()
-        local lines, code = exit_with({ "a.txt:old" }, layout, "keep_empty", true)
-        assert.equal(0, code, "the child exited with :qa!\n" .. table.concat(lines, "\n"))
-        assert.same({ "DIFF_REJECTED" }, answers_by_name(lines)["a.txt"], table.concat(lines, "\n"))
-      end
-    )
+    it(("answers one diff that another plugin's buffer kept from its BufUnload (%s layout)"):format(layout), function()
+      local lines, code = exit_with({ "a.txt:old" }, layout, "keep_empty", true)
+      assert.equal(0, code, "the child exited with :qa!\n" .. table.concat(lines, "\n"))
+      assert.same({ "DIFF_REJECTED" }, answers_by_name(lines)["a.txt"], table.concat(lines, "\n"))
+    end)
   end
 
   ---The answers that the server sent, by request id.
@@ -244,20 +239,15 @@ describe("openDiff at exit", function()
   end
 
   for _, layout in ipairs(layouts) do
-    local runs_here = layout ~= "unified" or vim.fn.has("nvim-0.9") == 1
-    local define = runs_here and it or pending
-    define(
-      ("answers the call whose setup was running when a handler quit Neovim (%s layout)"):format(layout),
-      function()
-        local lines = exit_in_opened_handler({ "new1.txt:new", "b.txt:old" }, "b.txt", layout)
+    it(("answers the call whose setup was running when a handler quit Neovim (%s layout)"):format(layout), function()
+      local lines = exit_in_opened_handler({ "new1.txt:new", "b.txt:old" }, "b.txt", layout)
 
-        local responses = responses_by_id(lines)
-        local log = table.concat(lines, "\n")
-        assert.same({ "DIFF_REJECTED" }, responses[1], log)
-        assert.same({ "error -32603" }, responses[2], log)
-      end
-    )
-    define(("answers the only call when a handler quit Neovim during its setup (%s layout)"):format(layout), function()
+      local responses = responses_by_id(lines)
+      local log = table.concat(lines, "\n")
+      assert.same({ "DIFF_REJECTED" }, responses[1], log)
+      assert.same({ "error -32603" }, responses[2], log)
+    end)
+    it(("answers the only call when a handler quit Neovim during its setup (%s layout)"):format(layout), function()
       local lines = exit_in_opened_handler({ "a.txt:old" }, "a.txt", layout)
 
       assert.same({ "error -32603" }, responses_by_id(lines)[1], table.concat(lines, "\n"))
@@ -272,10 +262,7 @@ describe("openDiff at exit", function()
           layout,
           reject
         )
-        -- The unified layout needs Neovim 0.9. The split layout bug is the same on 0.8.
-        local runs_here = layout ~= "unified" or vim.fn.has("nvim-0.9") == 1
-        local define = runs_here and it or pending
-        define(title, function()
+        it(title, function()
           local lines, code = exit_with(scenario.steps, layout, reject)
 
           assert.equal(0, code, "the child exited with :qa!\n" .. table.concat(lines, "\n"))
