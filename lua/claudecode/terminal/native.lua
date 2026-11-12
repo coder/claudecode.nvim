@@ -358,6 +358,17 @@ function close_terminal()
       exited = true
     end,
   })
+  -- A job that was just started can still be a fork of Neovim: its child has not run exec yet. A jobstop then ends
+  -- Neovim (SIGHUP), or the buffer delete below hangs. After the exec the child has the name of its command, so wait
+  -- for that. A job that already exited has no pid, and a child that is gone returns no process.
+  local has_pid, child_pid = pcall(vim.fn.jobpid, closing_jobid)
+  if has_pid then
+    local own_name = vim.api.nvim_get_proc(vim.fn.getpid()).name
+    vim.wait(1000, function()
+      local child = vim.api.nvim_get_proc(child_pid)
+      return child == nil or child.name ~= own_name
+    end, 5)
+  end
   -- jobstop returns 0 for a job that already exited, for example when close runs from a TermClose autocmd.
   -- TermClose has fired then, so waiting for it would block for the full timeout.
   if vim.fn.jobstop(closing_jobid) == 1 then

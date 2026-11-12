@@ -84,6 +84,14 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
           return wins
         end,
+        -- Neovim is process 1 and has its own name. The child of a job (40000 + the job id) is gone, unless a test sets
+        -- mock_state.processes[pid]: a fork of Neovim has the name nvim until it runs exec.
+        nvim_get_proc = function(pid)
+          if pid == 1 then
+            return { name = "nvim", pid = 1, ppid = 0 }
+          end
+          return mock_state.processes and mock_state.processes[pid] or nil
+        end,
         nvim_list_tabpages = function()
           return { 1 }
         end,
@@ -369,6 +377,9 @@ describe("claudecode.terminal.native toggle behavior", function()
           return 1
         end,
         -- Neovim raises E900 for a job that exited or that jobstop already stopped.
+        getpid = function()
+          return 1
+        end,
         jobpid = function(id)
           if not mock_state.running_jobs[id] then
             error("Vim:E900: Invalid channel id")
@@ -1043,6 +1054,71 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.is_true(set_current_win_called)
       assert.are.equal(terminal_winid, focused_winid)
       assert.are.equal(initial_bufnr, native_provider.get_active_bufnr())
+    end)
+  end)
+
+  -- A job that was just started can still be a fork of Neovim: its child has not run exec yet. A jobstop then ends Neovim
+  -- with SIGHUP, or the buffer delete after it hangs. So a close waits until the child has the name of its command.
+  describe("close of a job whose child has not run exec yet", function()
+    local config = { split_side = "right", split_width_percentage = 0.3 }
+    local mock_state
+    local child
+    local events
+
+    before_each(function()
+      mock_state = _G.get_mock_state()
+      native_provider.open("claude", {}, config, true)
+      local active = native_provider.get_active_bufnr()
+      child = 40000 + mock_state.buffers[active].jobid
+      mock_state.processes = { [child] = { name = "nvim", pid = child } }
+      events = {}
+      local jobstop = mock_vim.fn.jobstop
+      mock_vim.fn.jobstop = function(id)
+        table.insert(events, "jobstop")
+        return jobstop(id)
+      end
+    end)
+
+    it("should stop the job only after the child ran exec", function()
+      local wait = mock_vim.wait
+      local looks = {}
+      mock_vim.wait = function(timeout, condition, interval)
+        if mock_state.processes[child].name == "nvim" then
+          -- The wait for the exec: the child runs it on the third look.
+          for _ = 1, 2 do
+            table.insert(looks, condition())
+          end
+          table.insert(events, "exec")
+          mock_state.processes[child].name = "sh"
+          table.insert(looks, condition())
+          return looks[#looks]
+        end
+        return wait(timeout, condition, interval)
+      end
+
+      native_provider.close()
+
+      assert.are.same({ "exec", "jobstop" }, events)
+      assert.are.same({ false, false, true }, looks)
+      assert.is_nil(next(mock_state.running_jobs))
+    end)
+
+    it("should stop the job when the child never runs exec, after the wait ran out", function()
+      local wait = mock_vim.wait
+      local first_wait = true
+      mock_vim.wait = function(timeout, condition, interval)
+        if first_wait then
+          first_wait = false
+          table.insert(events, "wait ran out")
+          return false
+        end
+        return wait(timeout, condition, interval)
+      end
+
+      native_provider.close()
+
+      assert.are.same({ "wait ran out", "jobstop" }, events)
+      assert.is_nil(next(mock_state.running_jobs))
     end)
   end)
 
@@ -2058,6 +2134,24 @@ describe("claudecode.terminal.native toggle behavior", function()
 
         assert.is_false(ok)
         assert.are.equal("the start raised after termopen", err)
+      end)
+
+      -- The start went well, and the close that an autocmd asked for raised: the caller gets the error of the close, because
+      -- no error of the start is there to report.
+      it("should raise the error of the deferred close when the start itself went well", function()
+        from_bufenter(function()
+          native_provider.close()
+        end)
+        local jobstop = mock_vim.fn.jobstop
+        mock_vim.fn.jobstop = function()
+          error("the close raised", 0)
+        end
+
+        local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.fn.jobstop = jobstop
+
+        assert.is_false(ok)
+        assert.are.equal("the close raised", err)
       end)
 
       local closers = { { "a BufEnter autocmd", from_bufenter }, { "a TermOpen autocmd", from_termopen } }
