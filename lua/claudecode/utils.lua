@@ -124,9 +124,9 @@ end
 ---the other window of the buffer.
 ---Differences from a plain swap: no `OptionSet` event runs while the swap runs, and a change of 'eventignore' that
 ---an autocmd makes during it is undone afterwards. The swap is a plain `nvim_win_set_buf`, with its redirect from an
----autocmd that enters another window, when the helper runs inside an autocmd, when a plain swap could refuse to leave
----the old buffer (it is modified, not hidden and shown in no other window), and with 'winfixbuf' or in the command-line
----window.
+---autocmd that enters another window, when `win` is not the current window or shows `buf` already, when the helper runs
+---inside an autocmd, when a plain swap could refuse to leave the old buffer (it is modified, not hidden and shown in
+---no other window), and with 'winfixbuf' or in the command-line window.
 ---@param win number
 ---@param buf number
 ---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events. A handler of a terminal
