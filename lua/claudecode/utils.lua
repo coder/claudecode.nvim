@@ -49,6 +49,8 @@ local function ignoring_bufenter(fn)
   end
 end
 
+local probe_calls = 0
+
 ---A window of `win`'s tab that shows `buf`, other than `win`, to leave `win` for and come back from. The previous window
 ---is the one that the split was made from, so it comes first.
 ---@param win number
@@ -91,7 +93,9 @@ end
 ---@return boolean events_ran
 local function enter_window(win)
   local ran = false
-  local group = vim.api.nvim_create_augroup("claudecode_placement_probe", { clear = true })
+  -- A group for each call, so a call that an autocmd of the move starts does not clear the group of this one.
+  probe_calls = probe_calls + 1
+  local group = vim.api.nvim_create_augroup("claudecode_placement_probe_" .. probe_calls, { clear = true })
   vim.api.nvim_create_autocmd({ "WinLeave", "BufLeave", "WinEnter", "BufEnter" }, {
     group = group,
     callback = function()

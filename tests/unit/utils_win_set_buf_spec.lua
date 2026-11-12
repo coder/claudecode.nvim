@@ -71,7 +71,8 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       state.win_bufs[win] = buf
     end)
     stub(vim.api, "nvim_create_augroup", function(name)
-      table.insert(log, "create_group " .. name)
+      assert.is_truthy(name:match("^claudecode_placement_probe_%d+$"), name)
+      table.insert(log, "create_group")
       return 77
     end)
     stub(vim.api, "nvim_create_autocmd", function(events, opts)
@@ -147,7 +148,7 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       assert.same({
         "noautocmd set_buf 1001 8",
         "noautocmd enter 1002",
-        "create_group claudecode_placement_probe",
+        "create_group",
         "enter 1001 eventignore=",
         "del_group 77",
         "BufWinEnter@8 in 1001 eventignore=",
@@ -187,7 +188,7 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     assert.same({
       "noautocmd set_buf 1001 8",
       "noautocmd enter 1002",
-      "create_group claudecode_placement_probe",
+      "create_group",
       "enter 1001 eventignore=",
       "del_group 77",
     }, log)
@@ -213,7 +214,7 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     assert.same({
       "noautocmd set_buf 1001 8",
       "noautocmd enter 1002",
-      "create_group claudecode_placement_probe",
+      "create_group",
       "enter 1001 eventignore=",
       "del_group 77",
       "noautocmd enter 1001",
