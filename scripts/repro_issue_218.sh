@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Reproduction / verification for issue #218:
+# Check for issue #218:
 #   "[BUG] Neovim crashes when accepting new file diff with render-markdown.nvim
 #    installed"
 #   https://github.com/coder/claudecode.nvim/issues/218
 #
-# Root cause (verified): accepting (:w) a NEW-file *markdown* diff that claudecode
+# Root cause found for the report: accepting (:w) a NEW-file *markdown* diff that claudecode
 # opened in a NEW TAB (diff_opts.open_in_new_tab = true) tears the diff down via
 # diff.close_diff_by_tab_name -> _cleanup_diff_state, which runs `:tabclose` on
 # the tab whose windows are STILL in diff mode. When render-markdown.nvim is
@@ -14,10 +14,12 @@
 # or turning diff mode off before the teardown (the reporter's `diffoff`
 # workaround), avoids it.
 #
-# The exact symptom is build-dependent (same memory-unsafety bug):
-#   * Neovim 0.12.3            -> SIGSEGV, raw exit 139  (matches the reporter)
+# On the builds that crashed, the symptom was build-dependent (same memory-unsafety bug):
+#   * a Neovim 0.12.3 build     -> SIGSEGV, raw exit 139  (matches the reporter)
 #   * some 0.11.0 release builds -> abnormal exit 0, no VimLeave, dies mid-tabclose
-# Either way Neovim disappears the instant the diff is accepted.
+# Either way Neovim disappeared the instant the diff was accepted. Whether a given
+# build, set of plugin commits and claudecode.nvim checkout still crashes is what
+# this script finds out. It does not assume it.
 #
 # This driver needs a REAL terminal UI (the crash is in the redraw/teardown path,
 # which does not run under --headless), so it uses the `agent-tty` CLI. No real
@@ -25,11 +27,62 @@
 # (a sleeping process) and drives the openDiff coroutine flow directly.
 #
 # Usage:
-#   scripts/repro_issue_218.sh                 # repro (expects crash)
+#   scripts/repro_issue_218.sh                 # default run: render-markdown installed
 #   NVIM_BIN=/path/to/nvim scripts/repro_issue_218.sh
-#   scripts/repro_issue_218.sh --no-render-markdown   # control (expects survival)
+#   scripts/repro_issue_218.sh --no-render-markdown   # control run: render-markdown removed
 #
-# Exit code: 0 if the expected outcome was observed, 1 otherwise.
+# What it checks: is Neovim still running after the new-file markdown diff is accepted?
+#
+# The run works on a COPY of fixtures/issue-218 in a temp directory (the copy keeps
+# the committed lazy-lock.json), so it never modifies a tracked file. The temp
+# directory is removed on exit. So are the agent-tty session, its entry in agent-tty's
+# per-user home registry, and its empty socket directory under /tmp/agent-tty (the
+# session's home is a fresh temp directory, so none of them belongs to another run).
+# agent-tty keys the socket directory and the registry on the physical path of its home, so the
+# script uses that path for every agent-tty command, and TMPDIR can be a link. The script
+# computes the socket directory from the home (sha256sum, shasum or openssl). Without one of
+# the three, the cleanup removes only the directory that `inspect` names, and an exited session
+# has no path there, so its empty socket directory stays.
+# SIGTERM, SIGINT and SIGHUP run the same cleanup, and the cleanup ignores further signals,
+# so every step in it has a deadline. It stops the Neovim that is restoring plugins and
+# that Neovim's child processes (SIGTERM, then SIGKILL after about 5 s). A Neovim that gets
+# a deadly signal while a vim.fn.system() child runs, as in lazy.nvim's bootstrap clone,
+# stops that child within a few seconds and then does not exit. The cleanup removes the
+# plugin directories that the interrupted restore added, so that no half-installed plugin
+# stays for the next run. It lets an `agent-tty create` that is already running finish
+# (about 5 s), and destroys every session in the run's own agent-tty home. Each agent-tty
+# call in the cleanup runs in its own process group (bash job control) and has a deadline
+# (30 s, and 60 s for `destroy`), because Node resets a signal that the cleanup ignores, and
+# a second signal to the script's process group would kill the call. A call that a deadline
+# stops, or that exits with a non-zero status, prints a warning on the stderr that the script
+# started with. If that call is `list`, `inspect` or `destroy`, a session can still be
+# running, so the agent-tty home, its registry entry, the temp directory and the socket
+# directory stay, and the warning prints the commands that list and remove them. A `home
+# forget` that fails or is stopped leaves only the registry entry after the home is removed,
+# and its warning prints the command that removes that entry. The temp directory is removed
+# only if this run's `mkdir` made it.
+# Plugins are installed into stdpath("data") of the
+# fixture's NVIM_APPNAME (${XDG_DATA_HOME:-$HOME/.local/share}/issue-218 or
+# issue-218norm), outside the temp directory, and `Lazy! restore` pins them to the
+# commits in that lock file. The exception is lazy.nvim itself on the first run (empty
+# data dir): at startup it rewrites its own lock entry to the `stable` commit that the
+# bootstrap in fixtures/issue-218/lua/config/lazy.lua clones, so the pin does not apply
+# to it. Later runs restore it to the pinned commit.
+#
+# Exit code:
+#   0  default run: Neovim terminated after the accept (the crash was observed).
+#      control run: Neovim kept running (control OK).
+#   1  default run: Neovim kept running (the crash was NOT observed on this build and
+#      checkout, which is the expected result once the crash is fixed).
+#      control run: Neovim terminated (unexpected).
+#      Either run: agent-tty, nvim or jq is missing, or no agent-tty session could be created.
+#   2  Either run: Neovim did not show "Repro218 ready" within 10 s after :Repro218, so the
+#      run never reached the ready state and checked nothing.
+#   3  Either run: after `Lazy! restore` a fixture plugin is not at its commit in
+#      lazy-lock.json (the restore failed), so the run would test other revisions.
+# 143, 130, 129
+#      Either run: the script received SIGTERM, SIGINT or SIGHUP, ran its cleanup and
+#      reached no verdict.
 
 # Note: no `set -e` — agent-tty subcommands can return non-zero on benign
 # conditions (e.g. a `wait` that times out), and we handle outcomes explicitly.
@@ -48,67 +101,385 @@ command -v "$NVIM_BIN" >/dev/null 2>&1 || {
   echo "ERROR: nvim binary '$NVIM_BIN' not found (set NVIM_BIN)." >&2
   exit 1
 }
+command -v jq >/dev/null 2>&1 || {
+  echo "ERROR: jq not found on PATH (required to read the agent-tty JSON output)." >&2
+  exit 1
+}
 
-WORK="$(mktemp -d)"
-AGENT_HOME="$WORK/atty"
+# The warnings of the cleanup go to the stderr that the script started with, kept on fd 8. The
+# cleanup can run inside a call whose stderr is redirected, such as `run_killable ... >/dev/null
+# 2>&1`, and a warning would vanish there.
+exec 8>&2 || exec 8>/dev/null
+# State that the cleanup reads. A signal before the first assignment finds it empty.
+WORK=""
+WORK_MADE=0  # 1 once this run's `mkdir` made WORK: the cleanup removes only a directory that it made
+MAKING=0     # 1 while the `mkdir` runs
+MKDIR_PID="" # the `mkdir` that makes WORK
+AGENT_HOME=""
+ATTY=(agent-tty)
+SID=""
+CREATE_PID=""  # `agent-tty create`: the cleanup lets it finish, then destroys its session
+RESTORING=0    # 1 while the restore Neovim runs
+LAZY_DIR=""    # stdpath("data")/lazy of the fixture's NVIM_APPNAME
+LAZY_BEFORE="" # the entries of LAZY_DIR before the restore
+# bash runs a trap only after a foreground command ends, but `wait` returns at once. So the
+# long commands run in the background and the script waits for them. A signal then runs the
+# cleanup at once, and the cleanup stops every job that is still running.
+run_killable() {
+  "$@" &
+  wait $!
+}
+# The live processes among the PIDs in $2... and all the current descendants of PID $1, one `ps`
+# call. A zombie does not count. `ps -A -o pid= -o ppid= -o stat=` works on Linux and macOS.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+tree_alive() {
+  local root=$1
+  shift
+  ps -A -o pid= -o ppid= -o stat= 2>/dev/null | awk -v root="$root" -v list=" $* " '
+    { pid[NR] = $1; st[NR] = $3; kids[$2] = kids[$2] " " $1 }
+    END {
+      seen[root] = 1; queue[1] = root; n = 1
+      for (h = 1; h <= n; h++) {
+        m = split(kids[queue[h]], k, " ")
+        for (i = 1; i <= m; i++) if (!(k[i] in seen)) { seen[k[i]] = 1; queue[++n] = k[i] }
+      }
+      for (i = 1; i <= NR; i++)
+        if (st[i] !~ /^Z/ && ((pid[i] in seen) || index(list, " " pid[i] " "))) printf "%s ", pid[i]
+    }'
+}
+# Stop the process $1 and its descendants. SIGTERM first: git removes a partial clone on SIGTERM.
+# A Neovim that got a deadly signal while a vim.fn.system() child ran stops the child and then
+# does not exit, so SIGKILL whatever is alive after about 5 s. Descendants that appear while it
+# waits get the SIGTERM too. The deadline is in seconds, not in loop counts, because one `ps`
+# call can take 0.3 s on a loaded host.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+stop_tree() {
+  local known=" " live new p end=$((SECONDS + 6))
+  while :; do
+    # shellcheck disable=SC2086  # the list of PIDs is split on purpose
+    live="$(tree_alive "$1" $known)"
+    [[ -n "$live" ]] || return 0
+    new=""
+    for p in $live; do
+      [[ "$known" == *" $p "* ]] || new+=" $p"
+    done
+    known+="$new "
+    # shellcheck disable=SC2086
+    [[ -z "$new" ]] || kill $new 2>/dev/null || true
+    ((SECONDS < end)) || break
+    sleep 0.1
+  done
+  # shellcheck disable=SC2086
+  kill -KILL $live 2>/dev/null || true
+}
+# The socket directory of agent-tty home $1: /tmp/agent-tty/ and the first 8 hex digits of the
+# sha256 of the home path (agent-tty's sessionPaths.js). agent-tty resolves symbolic links in the
+# home path before it hashes, so $1 must be the physical path (AGENT_HOME is). Prints nothing
+# without a sha256 tool.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+socket_dir() {
+  local sum=""
+  if command -v sha256sum >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | sha256sum)"
+  elif command -v shasum >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | shasum -a 256)"
+  elif command -v openssl >/dev/null 2>&1; then
+    sum="$(printf '%s' "$1" | openssl dgst -sha256 | sed 's/^.* //')"
+  fi
+  sum="${sum:0:8}"
+  [[ "$sum" =~ ^[0-9a-f]{8}$ ]] && printf '/tmp/agent-tty/%s' "$sum"
+  return 0
+}
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+warn() {
+  printf '%s\n' "$*" >&8
+}
+# An agent-tty call from the cleanup: its own process group, and SIGKILL after about $1 seconds.
+# Node resets a signal that `trap ''` ignores, so a second signal to this script's process group
+# would kill `list`, `inspect` or `destroy`, and the session would survive. Job control (`set -m`)
+# puts the call in a process group of its own, which that signal cannot reach, and needs no tool
+# beyond bash. The call reads /dev/null because a background group cannot read a terminal. Output
+# goes to the caller, and the error output is dropped. A call that takes 3 s on a quiet host can
+# take 10 s on a busy one, so the deadlines are long. A call that the deadline stops prints a
+# warning and returns 124. A call that exits with a non-zero status prints a warning and returns
+# that status, because a failed `destroy` leaves the session running.
+# shellcheck disable=SC2329  # only the cleanup (an EXIT trap) calls it
+atty_cleanup() {
+  local secs=$1 end=$((SECONDS + $1)) pid live what rc
+  shift
+  what=$1
+  [[ "$1" != home ]] || what="$1 $2"
+  set -m
+  "${ATTY[@]}" "$@" 2>/dev/null </dev/null &
+  pid=$!
+  set +m
+  while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+  if kill -0 "$pid" 2>/dev/null; then
+    live="$(tree_alive "$pid" "$pid")"
+    # shellcheck disable=SC2086
+    kill -KILL $live 2>/dev/null || true
+    wait "$pid" 2>/dev/null
+    warn "WARNING: the cleanup stopped 'agent-tty $what' after $secs s."
+    return 124
+  fi
+  wait "$pid" 2>/dev/null
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    warn "WARNING: 'agent-tty $what' exited with status $rc."
+    return "$rc"
+  fi
+  return 0
+}
+# shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
+cleanup() {
+  trap '' INT TERM HUP # a second signal must not cut the cleanup short
+  local pid sid sock socks dir end entry stopped='' forget_stopped='' q_home q_work q_socks
+  # `mkdir` runs in its own process group, so a signal to the group did not cut it. It takes
+  # milliseconds. Wait for it (5 s at most): its exit status says whether this run made WORK.
+  if [[ "$MAKING" -eq 1 ]]; then
+    end=$((SECONDS + 5))
+    for pid in ${MKDIR_PID:-$(jobs -p)}; do
+      while kill -0 "$pid" 2>/dev/null && ((SECONDS < end)); do sleep 0.05; done
+      ! kill -0 "$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null
+      if wait "$pid" 2>/dev/null; then WORK_MADE=1; fi
+    done
+  fi
+  # A create that is still running makes a session whose ID this script has not read yet.
+  # Give it about 5 s to finish, then stop it.
+  if [[ -n "$CREATE_PID" ]]; then
+    end=$((SECONDS + 6))
+    while kill -0 "$CREATE_PID" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+    ! kill -0 "$CREATE_PID" 2>/dev/null || stop_tree "$CREATE_PID"
+    wait "$CREATE_PID" 2>/dev/null || true
+  fi
+  # Every other job: the restore Neovim, or an agent-tty wait. `jobs -p` also finds a job that
+  # a signal caught between `&` and the line that saves its PID.
+  for pid in $(jobs -p); do
+    stop_tree "$pid"
+    wait "$pid" 2>/dev/null || true
+  done
+  # The fixture's bootstrap skips the clone when lazy.nvim's own directory exists. So a bootstrap
+  # clone that only SIGKILL stopped leaves a half-installed lazy.nvim that the next run trusts.
+  # (lazy.nvim marks the clones that it makes for the other plugins with a `.cloning` file and
+  # clones them again.) Remove the entries that this run added.
+  if [[ "$RESTORING" -eq 1 && -n "$LAZY_DIR" && -d "$LAZY_DIR" ]]; then
+    for entry in "$LAZY_DIR"/* "$LAZY_DIR"/.[!.]*; do
+      [[ -e "$entry" || -L "$entry" ]] || continue
+      [[ $'\n'"$LAZY_BEFORE"$'\n' == *$'\n'"${entry##*/}"$'\n'* ]] || rm -rf "$entry"
+    done
+  fi
+  # Only once ATTY carries --home: before that, `agent-tty list` would read the user's own home.
+  if [[ "${ATTY[1]:-}" == "--home" ]]; then
+    # The home is a fresh temp dir, so every session in it belongs to this run, and `--all`
+    # includes a session whose Neovim has exited. `destroy` leaves the session's empty socket
+    # directory in /tmp/agent-tty, and rmdir never removes a directory that still holds a
+    # socket. It also leaves this run's home in agent-tty's per-user registry.
+    socks="$(socket_dir "$AGENT_HOME")"
+    atty_cleanup 30 list --all --json >"$WORK/cleanup-list.json" || stopped=1
+    for sid in $(jq -r '.result.sessions[]?.sessionId // empty' "$WORK/cleanup-list.json" 2>/dev/null); do
+      atty_cleanup 30 inspect "$sid" --json >"$WORK/cleanup-inspect.json" || stopped=1
+      sock="$(jq -r '.result.host.rpcSocketPath // empty' "$WORK/cleanup-inspect.json" 2>/dev/null)"
+      atty_cleanup 60 destroy "$sid" --json >/dev/null || stopped=1
+      if [[ "$sock" == /* ]]; then socks+=" $(dirname "$sock")"; fi
+    done
+    # The directory of a session whose Neovim has exited has no path in `inspect`, so the home
+    # gives it. The same directory often comes from both sources, so list each one once.
+    dir=""
+    for sock in $socks; do
+      [[ " $dir " == *" $sock "* ]] || dir+=" $sock"
+    done
+    socks="$dir"
+    # The host can delete its socket file a moment after `destroy` returns, so retry.
+    if [[ -z "$stopped" ]]; then
+      end=$((SECONDS + 5))
+      for dir in $socks; do
+        while [[ -d "$dir" ]] && ! rmdir "$dir" 2>/dev/null && ((SECONDS < end)); do sleep 0.1; done
+        [[ ! -d "$dir" ]] || warn "WARNING: the socket directory $dir still holds a socket. A session host of this run can still be running."
+      done
+    fi
+    [[ -n "$stopped" ]] || atty_cleanup 30 home forget "$AGENT_HOME" --json >/dev/null || forget_stopped=1
+  fi
+  if [[ -n "$stopped" ]]; then
+    # A call stopped or failed, so a session of this run can still be running, and only the run's
+    # own home lists it. So the home and its registry entry stay, and the warning says how to
+    # find the session and how to remove everything.
+    q_home="$(printf '%q' "$AGENT_HOME")"
+    q_work="$(printf '%q' "$WORK")"
+    q_socks=""
+    for dir in $socks; do
+      if [[ -d "$dir" ]]; then q_socks+=" $(printf '%q' "$dir")"; fi
+    done
+    warn "         A session of this run can still be running. Its agent-tty home stays: $q_home"
+    warn "         List its sessions:  agent-tty --home $q_home list --all"
+    warn "         Remove a session:   agent-tty --home $q_home destroy <session-id>"
+    [[ -z "$q_socks" ]] || warn "         Its socket directory stays:$q_socks"
+    warn "         When no session is left: agent-tty home forget $q_home; rm -rf $q_work${q_socks:+; rmdir$q_socks}"
+  elif [[ -n "$WORK" && "$WORK_MADE" -eq 1 ]]; then
+    rm -rf "$WORK"
+  fi
+  if [[ -n "$forget_stopped" ]]; then
+    # `agent-tty home list` hides a home whose directory is gone, but the registry file keeps the entry.
+    q_home="$(printf '%q' "$AGENT_HOME")"
+    warn "         agent-tty's registry file still holds an entry for the removed home $q_home."
+    warn "         'agent-tty home list' does not show it. Remove it with: agent-tty home forget $q_home"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+# The name of WORK exists before the directory does, and `mkdir` runs in a process group of its
+# own (bash job control), so a signal to this script's process group cannot kill it after it made
+# the directory and before it returned. The cleanup waits for it and removes WORK only when its
+# exit status says that this run made the directory. A directory of another run with the same
+# name makes `mkdir` fail, and the cleanup leaves it alone. The name holds this script's PID and
+# two random numbers, and a name that exists is never used.
+WORK_PARENT="${TMPDIR:-/tmp}"
+WORK_PARENT="${WORK_PARENT%/}"
+for ((attempt = 0; attempt < 20; attempt++)); do
+  candidate="$WORK_PARENT/repro218.$$.$RANDOM$RANDOM"
+  if [[ -e "$candidate" || -L "$candidate" ]]; then continue; fi
+  WORK="$candidate"
+  MAKING=1
+  set -m
+  mkdir -m 700 -- "$WORK" 2>/dev/null </dev/null &
+  MKDIR_PID=$!
+  set +m
+  if wait "$MKDIR_PID"; then WORK_MADE=1; fi
+  MKDIR_PID=""
+  MAKING=0
+  [[ "$WORK_MADE" -eq 0 ]] || break
+  WORK=""
+done
+if [[ -z "$WORK" ]]; then
+  echo "ERROR: cannot create a directory under ${WORK_PARENT:-/}." >&2
+  exit 1
+fi
+# agent-tty resolves symbolic links in its home path (TMPDIR is a link on macOS) and keys the
+# socket directory and the registry on the result. So the home is the physical path from the
+# start, and the socket directory, the registry commands and the printed commands all use it.
+AGENT_HOME="$(cd -P -- "$WORK" 2>/dev/null && pwd -P || printf '%s' "$WORK")/atty"
 mkdir -p "$AGENT_HOME" # agent-tty requires its --home dir to exist before `create`
+ATTY=(agent-tty --home "$AGENT_HOME")
 EXITF="$WORK/nvim_exit.txt"
 : >"$EXITF"
 
+# Run a COPY of the fixture, committed lazy-lock.json included: `Lazy!` writes that
+# lock file, and it must not write the tracked one in the checkout.
 if [[ "$WANT_RM" -eq 1 ]]; then
   APPNAME="issue-218"
-  CONFHOME="$REPO_ROOT/fixtures"
 else
-  # Build a sibling fixture without render-markdown.lua (the control).
-  APPNAME="issue-218norm"
-  CONFHOME="$WORK/fixtures-norm"
-  mkdir -p "$CONFHOME/$APPNAME/lua/plugins"
-  cp -R "$REPO_ROOT/fixtures/issue-218/lua/config" "$CONFHOME/$APPNAME/lua/config"
-  cp "$REPO_ROOT/fixtures/issue-218/lua/plugins/dev-claudecode.lua" "$CONFHOME/$APPNAME/lua/plugins/"
-  cp "$REPO_ROOT/fixtures/issue-218/lua/plugins/snacks.lua" "$CONFHOME/$APPNAME/lua/plugins/"
-  printf 'require("config.lazy")\n' >"$CONFHOME/$APPNAME/init.lua"
+  APPNAME="issue-218norm" # the control: the same fixture without render-markdown.lua
 fi
+CONFHOME="$WORK/config"
+mkdir -p "$CONFHOME"
+cp -R "$REPO_ROOT/fixtures/issue-218" "$CONFHOME/$APPNAME"
+if [[ "$WANT_RM" -eq 0 ]]; then
+  rm "$CONFHOME/$APPNAME/lua/plugins/render-markdown.lua"
+fi
+# lazy.nvim runs `:source` on the plugin files of the checkout, and `:source` expands `$VAR`
+# and backticks in a path. Neovim gets this plain symlink instead of the checkout path, so a
+# checkout under any directory name loads.
+CHECKOUT_LINK="$WORK/checkout"
+ln -s "$REPO_ROOT" "$CHECKOUT_LINK"
 
 echo "Repo:        $REPO_ROOT"
-echo "Neovim:      $($NVIM_BIN --version | head -1)  ($NVIM_BIN)"
+echo "Neovim:      $("$NVIM_BIN" --version | head -1)  ($NVIM_BIN)"
 echo "render-md:   $([[ $WANT_RM -eq 1 ]] && echo INSTALLED || echo REMOVED)"
 echo "Workdir:     $WORK"
 echo
 
-echo "==> Installing fixture plugins (lazy sync)…"
-NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" "$NVIM_BIN" --headless "+Lazy! sync" "+qa" >/dev/null 2>&1 || true
+echo "==> Installing fixture plugins at the commits in lazy-lock.json (lazy restore)…"
+# Neovim exits 0 even when `Lazy! restore` fails (for example when a pinned commit cannot be
+# fetched), so the check below compares every plugin the config uses with the committed
+# lock file. lazy.nvim itself is skipped (see the header). Paths reach Neovim through
+# environment variables, never through its command line, so a path cannot be parsed as Ex
+# syntax. The copy is outside the checkout, so CLAUDECODE_DEV_DIR tells the fixture which
+# checkout to load.
+RESTORE_CHECK="$WORK/restore_check.lua"
+cat >"$RESTORE_CHECK" <<'EOF'
+local lock = vim.json.decode(table.concat(vim.fn.readfile(vim.env.REPRO218_LOCKFILE), "\n"))
+local Git = require("lazy.manage.git")
+local stale = {}
+for _, plugin in ipairs(require("lazy").plugins()) do
+  if plugin.name ~= "lazy.nvim" and not plugin._.is_local then
+    local want = lock[plugin.name] and lock[plugin.name].commit
+    local info = plugin._.installed and Git.info(plugin.dir) or nil
+    if not (want and info and info.commit == want) then
+      table.insert(stale, plugin.name)
+    end
+  end
+end
+if #stale > 0 then
+  io.stderr:write("not at the commit in lazy-lock.json: " .. table.concat(stale, ", ") .. "\n")
+  vim.cmd("cquit 3")
+end
+EOF
+RESTORE_LOG="$WORK/restore.log"
+LAZY_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/$APPNAME/lazy"
+LAZY_BEFORE="$(ls -A "$LAZY_DIR" 2>/dev/null)"
+RESTORING=1
+# Neovim reads nothing here. Without </dev/null a failed bootstrap clone waits for a key.
+run_killable env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
+  REPRO218_LOCKFILE="$REPO_ROOT/fixtures/issue-218/lazy-lock.json" REPRO218_RESTORE_CHECK="$RESTORE_CHECK" \
+  "$NVIM_BIN" --headless "+Lazy! restore" "+lua dofile(vim.env.REPRO218_RESTORE_CHECK)" "+qa" >"$RESTORE_LOG" 2>&1 </dev/null
+RESTORE_RC=$?
+RESTORING=0
+if [[ "$RESTORE_RC" -ne 0 ]]; then
+  STALE="$(sed -n 's/^.*not at the commit in lazy-lock.json: //p' "$RESTORE_LOG")"
+  echo "ERROR: Lazy! restore did not leave the fixture plugins at the commits in lazy-lock.json (nvim exit $RESTORE_RC)." >&2
+  if [[ -n "$STALE" ]]; then
+    echo "       Not at their locked commit: $STALE" >&2
+  else
+    echo "       Last lines from Neovim:" >&2
+    tail -n 5 "$RESTORE_LOG" | sed 's/^/         /' >&2
+  fi
+  echo "       The run would test other plugin revisions, so it reached no verdict." >&2
+  exit 3
+fi
 
-# Wrapper launcher that captures Neovim's RAW exit status (139 = SIGSEGV).
+# Wrapper launcher that captures Neovim's RAW exit status (139 = SIGSEGV). It is a fixed
+# script: the work dir, the nvim binary and the status file arrive as arguments and the
+# Neovim environment arrives through `env` below, so no path is ever interpolated into shell
+# code.
 LAUNCH="$WORK/launch.sh"
-cat >"$LAUNCH" <<EOF
+cat >"$LAUNCH" <<'EOF'
 #!/bin/bash
-export NVIM_APPNAME="$APPNAME"
-export XDG_CONFIG_HOME="$CONFHOME"
-cd "$WORK"
-"$NVIM_BIN"
-echo "RAW=\$?" > "$EXITF"
-exit \$?
+cd "$1" || exit 1
+"$2"
+echo "RAW=$?" > "$3"
+exit $?
 EOF
 chmod +x "$LAUNCH"
 
-ATTY=(agent-tty --home "$AGENT_HOME")
 echo "==> Launching Neovim under agent-tty…"
-SID="$("${ATTY[@]}" create --json --cols 150 --rows 44 -- "$LAUNCH" | jq -r '.result.sessionId')"
+CREATE_OUT="$WORK/create.json"
+"${ATTY[@]}" create --json --cols 150 --rows 44 -- \
+  env NVIM_APPNAME="$APPNAME" XDG_CONFIG_HOME="$CONFHOME" CLAUDECODE_DEV_DIR="$CHECKOUT_LINK" \
+  "$LAUNCH" "$WORK" "$NVIM_BIN" "$EXITF" >"$CREATE_OUT" &
+CREATE_PID=$!
+wait "$CREATE_PID"
+CREATE_PID=""
+SID="$(jq -r '.result.sessionId' "$CREATE_OUT")"
 if [[ -z "$SID" || "$SID" == "null" ]]; then
   echo "ERROR: failed to create agent-tty session." >&2
   exit 1
 fi
-# shellcheck disable=SC2329  # invoked indirectly via the EXIT trap below
-cleanup() { "${ATTY[@]}" destroy "$SID" --json >/dev/null 2>&1 || true; }
-trap cleanup EXIT
 
-"${ATTY[@]}" wait "$SID" --screen-stable-ms 1800 --json >/dev/null 2>&1 || true
+run_killable "${ATTY[@]}" wait "$SID" --screen-stable-ms 1800 --json >/dev/null 2>&1 || true
 
 echo "==> :Repro218 (open new-file markdown diff in a new tab)…"
 "${ATTY[@]}" type "$SID" ":Repro218" --json >/dev/null 2>&1
 "${ATTY[@]}" send-keys "$SID" "Enter" --json >/dev/null 2>&1
-"${ATTY[@]}" wait "$SID" --text "Repro218 ready" --timeout 10000 --json >/dev/null 2>&1 || true
-"${ATTY[@]}" wait "$SID" --screen-stable-ms 1200 --json >/dev/null 2>&1 || true
+run_killable "${ATTY[@]}" wait "$SID" --text "Repro218 ready" --timeout 10000 --json >/dev/null 2>&1
+READY_RC=$?
+if [[ "$READY_RC" -ne 0 ]]; then
+  # Without the ready state the :w below checks nothing, so any verdict would be meaningless.
+  echo "ERROR: Neovim did not show 'Repro218 ready' within 10 s (agent-tty wait exit $READY_RC)." >&2
+  echo "       The run never reached the ready state, so it reached no verdict." >&2
+  exit 2
+fi
+run_killable "${ATTY[@]}" wait "$SID" --screen-stable-ms 1200 --json >/dev/null 2>&1 || true
 
 echo "==> :w (accept the diff)…"
 "${ATTY[@]}" send-keys "$SID" "Escape" --json >/dev/null 2>&1
@@ -116,7 +487,7 @@ echo "==> :w (accept the diff)…"
 "${ATTY[@]}" send-keys "$SID" "Enter" --json >/dev/null 2>&1
 
 # Give Neovim a moment to crash (or not).
-"${ATTY[@]}" wait "$SID" --exit --timeout 8000 --json >/dev/null 2>&1 || true
+run_killable "${ATTY[@]}" wait "$SID" --exit --timeout 8000 --json >/dev/null 2>&1 || true
 
 STATUS="$("${ATTY[@]}" inspect "$SID" --json 2>&1 | jq -r '.result.session.status')"
 RAW="$(sed -n 's/^RAW=//p' "$EXITF" 2>/dev/null || true)"
