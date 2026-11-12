@@ -55,15 +55,14 @@ bin() {
 # named. Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes
 # doctor"). The message takes the tool's name from its path, so no code line of this function holds the word jq or setsid.
 # The no-bare-tools case of proof-static.sh fails on a code line that names either as a bare call or as the default of a
-# parameter expansion, except the two resolutions, and it skips a line that is only a comment. $2, when given, is the
-# advice that ends the message, for a tool that does not come from PATH.
+# parameter expansion, except the two resolutions, and it skips a line that is only a comment.
+# The message gives no remedy: the fix that works depends on whether mise or PATH supplied the tool (bin() asks mise first).
 runs_or_die() {
-  local why first tool=${1##*/} fix
-  fix=${2-Put a working $tool earlier on PATH}
+  local why first tool=${1##*/}
   why=$("$1" --version 2>&1 >/dev/null </dev/null) || {
     first=${why%%$'\n'*}
     die "$tool at $1 does not run: ${first:-it printed no error}
-If it is a mise shim, mise may not trust this checkout. $fix."
+If it is a mise shim, mise may not trust this checkout."
   }
 }
 
@@ -555,7 +554,7 @@ cmd_launch() {
   else
     nvim_exe=$(bin nvim)
   fi
-  runs_or_die "$nvim_exe" ${VCN_NVIM:+"Set VCN_NVIM to a Neovim that runs"}
+  runs_or_die "$nvim_exe"
   [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
   att_cands=$(agent_tty_candidates)
   [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"

@@ -34,9 +34,9 @@
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
-#   tool-nvim      the nvim that launch finds cannot run (a mise shim in a checkout that mise does not trust): launch names it
-#                  and the fix, where it once went on and blamed agent-tty
-#   tool-vcn-nvim  the nvim that VCN_NVIM names cannot run
+#   tool-nvim      the nvim that launch finds cannot run (a mise shim in a checkout that mise does not trust): launch names it,
+#                  its path and its own error line, and gives no remedy, where it once went on and blamed agent-tty
+#   tool-vcn-nvim  the nvim that VCN_NVIM names cannot run: the same message
 #   tool-jq        the jq that launch finds cannot run, with VCN_NVIM set: launch names jq
 #   tool-node      the node that launch finds cannot run, with VCN_NVIM set: launch names node
 #   tool-setsid    the setsid that launch finds cannot run, with VCN_NVIM set: launch names setsid
@@ -339,10 +339,11 @@ for dead in nvim jq node setsid; do
   printf '#!/bin/sh\necho "mise ERROR stand-in %s cannot run" >&2\nexit 1\n' "$dead" >"$TMP/dead-$dead/$dead"
   chmod +x "$TMP/dead-$dead/mise" "$TMP/dead-$dead/$dead"
 done
+dead_nvim_msg="nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run"$'\n'"If it is a mise shim, mise may not trust this checkout."
 refused tool-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" PATH="$TMP/dead-nvim:$PATH"
-[[ $err == *"Put a working nvim earlier on PATH."* ]] || fail "tool-nvim: the advice does not say to put a working nvim earlier on PATH: $err"
+[[ $err == "vcn: $dead_nvim_msg" ]] || fail "tool-nvim: the message is not the tool, its path, its own error line and the possible cause alone (a remedy sentence is not allowed): $err"
 refused tool-vcn-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" VCN_NVIM="$TMP/dead-nvim/nvim"
-[[ $err == *"Set VCN_NVIM to a Neovim that runs."* ]] || fail "tool-vcn-nvim: the advice does not name VCN_NVIM: $err"
+[[ $err == "vcn: $dead_nvim_msg" ]] || fail "tool-vcn-nvim: the message is not the tool, its path, its own error line and the possible cause alone (a remedy sentence is not allowed): $err"
 refused tool-jq "jq at $TMP/dead-jq/jq does not run: mise ERROR stand-in jq cannot run" PATH="$TMP/dead-jq:$PATH" VCN_NVIM="$real_nvim"
 refused tool-node "node at $TMP/dead-node/node does not run: mise ERROR stand-in node cannot run" PATH="$TMP/dead-node:$PATH" VCN_NVIM="$real_nvim"
 refused tool-setsid "setsid at $TMP/dead-setsid/setsid does not run: mise ERROR stand-in setsid cannot run" \
