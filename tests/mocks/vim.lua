@@ -268,9 +268,16 @@ local vim = {
     end,
 
     nvim_buf_call = function(bufnr, callback)
-      -- Mock implementation - just call the callback
+      -- Mock implementation - just call the callback. It also names the buffer for the calls that act on the current one.
       if vim._buffers[bufnr] then
-        return callback()
+        local outer = vim._buf_call_target
+        vim._buf_call_target = bufnr
+        local ok, result = pcall(callback)
+        vim._buf_call_target = outer
+        if not ok then
+          error(result, 0)
+        end
+        return result
       end
       error("Invalid buffer id: " .. tostring(bufnr))
     end,
@@ -696,6 +703,20 @@ local vim = {
 
     getcwd = function()
       return "/home/user/project"
+    end,
+
+    --- Mock of wordcount() for the buffer that nvim_buf_call named, else buffer 1. Every line counts its bytes and a line
+    --- break. A buffer with `empty = true` stands for Neovim's "--No lines in buffer--": its lines are { "" }, as
+    --- nvim_buf_get_lines returns them, and it counts 0 bytes.
+    wordcount = function()
+      local buffer = vim._buffers[vim._buf_call_target or 1]
+      local bytes = 0
+      if buffer and not buffer.empty then
+        for _, line in ipairs(buffer.lines or {}) do
+          bytes = bytes + #line + 1
+        end
+      end
+      return { bytes = bytes }
     end,
 
     fnamemodify = function(path, modifier)
