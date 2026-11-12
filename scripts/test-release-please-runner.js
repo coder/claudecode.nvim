@@ -1638,6 +1638,12 @@ async function testUnreleasedDraftStructure() {
       "##",
     ],
     [
+      "an H2 with a character reference that is a blank",
+      "Draft text.\n\n## &nbsp;\n\n- Rest of the draft",
+      "## &nbsp;",
+      "## &nbsp;",
+    ],
+    [
       "a setext H1",
       "Draft text.\n\nTitle\n=====\n\n- Rest of the draft",
       "Title",
@@ -1773,6 +1779,26 @@ async function testUnreleasedDraftStructure() {
       );
     }
   });
+  // The first and the last line of the draft are read as well.
+  const nbspHeading = "\u00a0## [0.2.0] - 2026-02-02 MK2";
+  for (const [name, text, number] of [
+    [
+      "the first line of the draft",
+      `# Changelog\n\n## [Unreleased]\n${nbspHeading}\n\n- MK3${previous}`,
+      4,
+    ],
+    [
+      "the last line of the draft",
+      `${head}- MK1\n${nbspHeading}\n## [0.1.0] - 2026-01-01\n\n- MK9\n`,
+      6,
+    ],
+  ]) {
+    assert.throws(
+      () => withMissingFormatter(() => update(text)),
+      { message: communiqueLineRefusal(number, nbspHeading) },
+      name,
+    );
+  }
   // These lines are not `## ` for Communique, so they are read as text, and the text of main is the text that the
   // update writes: a character that Rust does not trim, a blank inside the line, a deeper heading, no space after the marks.
   const readLines = [
@@ -1791,6 +1817,7 @@ async function testUnreleasedDraftStructure() {
     ],
     ["a no-break space before an H3", "\u00a0### Added"],
     ["no space after the marks", "\u00a0##[0.2.0] - 2026-02-02 MK2"],
+    ["a tab after the marks", "\u00a0##\t[0.2.0] - 2026-02-02 MK2"],
   ].map(([name, line]) => ({ name, line }));
   checkCases(readLines, ({ line }) => {
     const text = `${head}- MK1\n\n${line}\n\n- MK3${previous}`;
