@@ -42,6 +42,9 @@
 #   tool-setsid    the setsid that launch finds cannot run, with VCN_NVIM set: launch names setsid
 #   old-run-cleanup  a run that exists, with a run.env that has no JQ_BIN (an older vcn.sh wrote it), and a jq on PATH that
 #                  cannot run: cleanup still exits 0 and leaves no process and no state dir, as on main (only launch checks)
+#   connect-setsid   a run that exists and a setsid on PATH that cannot run: connect still starts a client, because launch
+#                  recorded its setsid in run.env. A run.env without SETSID_BIN (an older vcn.sh wrote it) still connects and
+#                  cleans up, because load resolves setsid again
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 #   race           another launch makes the missing dir above VERIFY_OUT first, group-writable: launch uses it,
 #                  refuses it in the check after mkdir, and leaves it in place
@@ -356,6 +359,27 @@ left=0
 [[ -z $pids ]] || fail "$name: processes tagged $state are still alive: $(tr '\n' ' ' <<<"$pids")"
 ((left == 0)) || fail "$name: $state is still there"
 echo "PASS $name: cleanup of a run without JQ_BIN, with a jq that cannot run, exited 0 and left no process and no state dir"
+# Launch records its setsid in run.env, and connect uses it: a setsid that cannot run first on PATH does not break the run. The
+# second check drops SETSID_BIN from run.env, as an older vcn.sh wrote it: load resolves setsid again, and connect and cleanup
+# still work. The case runs cleanup with a working PATH at the end, whatever happened, so that it leaves no run.
+name=connect-setsid why=""
+err=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR VCN_NVIM="$real_nvim" VERIFY_OUT="$TMP/connect-out" "$V" launch 2>&1) || fail "$name: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+rc=0
+err=$(env PATH="$TMP/dead-setsid:$PATH" VCN_STATE="$state" VCN_CLIENT=b "$V" connect 2>&1) || rc=$?
+((rc == 0)) || why="connect with a setsid that cannot run first on PATH exited $rc: $err"
+sed -i '/^SETSID_BIN=/d' "$state/run.env"
+rc=0
+err=$(env VCN_STATE="$state" VCN_CLIENT=c "$V" connect 2>&1) || rc=$?
+((rc == 0)) || why="${why:+$why, }connect on a run.env without SETSID_BIN exited $rc: $err"
+rc=0
+err=$(env VCN_STATE="$state" "$V" cleanup 2>&1) || rc=$?
+pids=$(grep -lzxF "VCN_RUN_TAG=$state" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
+((rc == 0)) || why="${why:+$why, }cleanup of the run exited $rc: $err"
+[[ -z $pids ]] || why="${why:+$why, }processes tagged $state are still alive: $(tr '\n' ' ' <<<"$pids")"
+[[ ! -e $state ]] || why="${why:+$why, }$state is still there"
+[[ -z $why ]] || fail "$name: $why"
+echo "PASS $name: connect started a client with a setsid that cannot run first on PATH, and again on a run.env without SETSID_BIN, and cleanup left nothing"
 # Two first launches can both find the default parent dir missing. The mkdir shim plays the launch that makes
 # $TMP/race/mid first, and makes it unsafe, so only the check after mkdir can refuse it.
 mkdir "$TMP/race" "$TMP/race-bin"

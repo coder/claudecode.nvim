@@ -118,8 +118,9 @@ load() {
     why=$(bad_node_dir "$NODE_DIR")
     [[ -z $why ]] || die "NODE_DIR=$NODE_DIR in $VCN_STATE/run.env is not usable: $why. No command, cleanup included, runs agent-tty with it. To stop this run by hand, stop its nvim and agent-tty processes, then remove its state dir: rm -rf $(printf %q "$VCN_STATE")"
   fi
-  # A run that an older vcn.sh started has no JQ_BIN.
+  # A run that an older vcn.sh started has no JQ_BIN and no SETSID_BIN.
   [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
+  [[ -n ${SETSID_BIN-} ]] || SETSID_BIN=$(bin setsid)
 }
 
 # agent-tty needs Node 24+, so it runs on the repo's mise node. During a teardown (own_session set) it gets a session of
@@ -503,7 +504,6 @@ cmd_connect() {
   [[ -n ${VCN_CLIENT-} ]] || die "connect needs VCN_CLIENT=<name> for the new client"
   var=$(client_pid_var)
   [[ -z ${!var-} ]] || die "client $VCN_CLIENT was already started in this run"
-  SETSID_BIN=$(bin setsid)
   start_client
   echo "client $VCN_CLIENT connected; its messages are in $OUT/ws-out$(chan).jsonl and $OUT/ws-in$(chan).jsonl"
 }
@@ -678,6 +678,7 @@ cmd_launch() {
     env_line NVIM_08 "$nvim_08"
     env_line NODE_DIR "$(dirname "$node_exe")"
     env_line JQ_BIN "$JQ_BIN"
+    env_line SETSID_BIN "$SETSID_BIN"
   } >"$state/run.env"
   export VCN_STATE=$state
   # load refuses a state dir that is not its own resolved path or that others can reach, before launch has a teardown to run,
