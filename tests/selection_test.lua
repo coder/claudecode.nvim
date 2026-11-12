@@ -2621,6 +2621,36 @@ describe("Range Selection Tests", function()
         assert.is_nil(mock_server.last_broadcast)
       end)
 
+      -- The demotion that did nothing in the terminal must not keep a selection that you left behind: the move of the
+      -- cursor ends the hold at CursorMoved, as it does when you never went to the terminal.
+      it(
+        "reports the cursor when you move it after you come back from the terminal that the demotion fired in",
+        function()
+          selection.enable(mock_server)
+          start_selecting(5)
+          release_selection(1, 5, 4)
+          fire_debounce() -- arms the demotion
+          local demotion = selection.state.demotion_timer
+          assert(demotion ~= nil)
+
+          _G.vim.test.add_buffer(2, "", { "" })
+          enter_buffer(2)
+          terminal_module.get_active_terminal_bufnr = function()
+            return 2 -- registered right after BufEnter
+          end
+          demotion:fire()
+          settle()
+          go_to_buffer(1, 4)
+          settle()
+          assert.are.equal("alpha", selection.get_latest_selection().text)
+
+          move_cursor(2)
+          settle()
+
+          assert_claude_holds_cursor("/path/to/a.txt", 2)
+        end
+      )
+
       it("keeps the selection when its demotion fires in a terminal that only its name says is Claude's", function()
         selection.enable(mock_server)
         start_selecting(5)
