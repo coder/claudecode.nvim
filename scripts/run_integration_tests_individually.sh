@@ -61,7 +61,7 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  local temp_output group_file state_dir config_dir status_file status_fd
+  local temp_output group_file state_dir config_dir status_file
   temp_output=$(mktemp)
   group_file=$(mktemp)
   state_dir=$(mktemp -d)
@@ -69,7 +69,7 @@ run_test_file() {
   status_file=$state_dir/exit_statuses
   CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir")
   CURRENT_GROUP_FILE=$group_file
-  exec {status_fd}>"$status_file"
+  exec 9>"$status_file"
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
   # plenary's test_file takes no options, so the Neovim it starts for a spec gets no -u and would read the developer's
@@ -83,9 +83,11 @@ run_test_file() {
   # subshell has no pipefail, because with it bash prints a job report ("Killed", two lines) when the cleanup above
   # kills `timeout`. It writes the exit statuses of nvim and of `tee` to a file in the state folder, so that the reason
   # line can name the stage that failed, and exits with the status of nvim, or with that of `tee` when nvim exited 0.
-  # The runner opens that file before it starts the subshell, and the subshell writes to the open descriptor. A subshell
+  # The runner opens that file as descriptor 9 before it starts the subshell, and the subshell writes to it. A subshell
   # that ends while the cleanup above removes the folder opens no path, so it cannot make a file in a folder that is
-  # being removed. nvim and `tee` close the descriptor, which only the subshell needs.
+  # being removed. The subshell closes descriptor 9 for nvim and `tee`, which do not need it. The number is fixed,
+  # because bash 3.2 (the macOS /bin/bash) does not know a `{name}>` redirection: it fails the `exec`, and with an EXIT
+  # trap set it then exits 0 without running a spec.
   (
     set +o pipefail
     set +e
@@ -95,9 +97,9 @@ run_test_file() {
       bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
       nvim --headless -i NONE -u tests/minimal_init.lua \
       -c "lua require('plenary.test_harness').test_file('$test_file')" \
-      {status_fd}>&- 2>&1 | tee "$temp_output" {status_fd}>&-
+      9>&- 2>&1 | tee "$temp_output" 9>&-
     pipe_status=("${PIPESTATUS[@]}")
-    echo "${pipe_status[0]} ${pipe_status[1]}" >&"$status_fd"
+    echo "${pipe_status[0]} ${pipe_status[1]}" >&9
     exit $((pipe_status[0] != 0 ? pipe_status[0] : pipe_status[1]))
   ) &
   if wait $!; then
@@ -106,7 +108,7 @@ run_test_file() {
     EXIT_CODE=$?
   fi
   CURRENT_GROUP_FILE=""
-  exec {status_fd}>&-
+  exec 9>&-
   local tee_status=0 status_line
   if status_line=$(cat "$status_file" 2>/dev/null) && [[ $status_line =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
     EXIT_CODE=${BASH_REMATCH[1]}
@@ -160,7 +162,7 @@ run_test_file() {
   fi
 
   # A file whose nvim exited non-zero gets a line with a reason: the no-summary line, the TIMEOUT line, or this one. A
-  # file with no summary and a status of 124, 137 or 143 gets the first two, as on main.
+  # file with no summary and a status of 124, 137 or 143 gets the first two.
   if [[ $EXIT_CODE -ne 0 ]] && [[ $reason_printed == false ]]; then
     echo "FAILED: $basename: nvim exit $EXIT_CODE$(signal_note "$EXIT_CODE")"
   fi

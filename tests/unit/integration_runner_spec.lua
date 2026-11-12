@@ -151,14 +151,31 @@ local STUB_TEE = {
   'exit "$status"',
 }
 
+local mktemp_pipe = assert(io.popen("command -v mktemp 2> /dev/null"))
+local real_mktemp = assert(mktemp_pipe:read("*l"), "needs mktemp")
+mktemp_pipe:close()
+-- Runs the real mktemp, except when $STUB_DIR/mktemp.drop_dirs exists: then mktemp -d prints the name of a folder
+-- that it made and removed again, so the folder does not exist.
+local STUB_MKTEMP = {
+  "#!/bin/sh",
+  'if [ ! -f "$STUB_DIR/mktemp.drop_dirs" ]; then exec ' .. quote(real_mktemp) .. ' "$@"; fi',
+  "path=$(" .. quote(real_mktemp) .. ' "$@") || exit $?',
+  'case "$1" in -d) rmdir "$path" ;; esac',
+  'echo "$path"',
+}
+
 local rm_pipe = assert(io.popen("command -v rm 2> /dev/null"))
 local real_rm = assert(rm_pipe:read("*l"), "needs rm")
 rm_pipe:close()
--- Runs the real rm, except when $STUB_DIR/rm.slow exists: then it walks the way rm -rf does, but slowly. It deletes the
+-- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Runs the real rm, except when
+-- $STUB_DIR/rm.slow exists: then it walks the way rm -rf does, but slowly. It deletes the
 -- files, waits the seconds in that file, and only then removes the folders, so a file that something makes meanwhile in
 -- a folder stops the removal of the folder ("Directory not empty"), as it does for a slow rm -rf under strace.
 local STUB_RM = {
   "#!/bin/sh",
+  "for fd in /proc/$$/fd/*; do",
+  '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/rm.holds_status_file" ;; esac',
+  "done",
   'if [ ! -f "$STUB_DIR/rm.slow" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
   "shift",
   'for path in "$@"; do find "$path" -type f -delete; done',
@@ -221,6 +238,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
     write(dir .. "/bin/tee", STUB_TEE, true)
     write(dir .. "/bin/rm", STUB_RM, true)
+    write(dir .. "/bin/mktemp", STUB_MKTEMP, true)
   end)
 
   after_each(function()
@@ -615,6 +633,30 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("0", status, output)
     assert.is_nil(io.open(dir .. "/a_spec.lua.holds_status_file"), "nvim kept the status file open")
     assert.is_nil(io.open(dir .. "/tee.holds_status_file"), "tee kept the status file open")
+    assert.is_nil(io.open(dir .. "/rm.holds_status_file"), "the runner kept the status file open after it read it")
+  end)
+
+  it("uses no named descriptor redirection, which bash 3.2 does not know", function()
+    local file = assert(io.open(script))
+    local source = file:read("*a")
+    file:close()
+
+    for line in source:gmatch("[^\n]+") do
+      if not line:match("^%s*#") then
+        assert.is_nil(line:find("{[%a_][%w_]*}[<>]"), line)
+      end
+    end
+  end)
+
+  it("stops and does not pass when it cannot open the status file", function()
+    write(dir .. "/mktemp.drop_dirs", {})
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are_not.equal("0", status, output)
+    assert.is_nil(output:find("All integration tests passed", 1, true), output)
+    assert.are.same({}, ran)
   end)
 
   it("uses the exit status of the file's subshell when it cannot read the statuses back", function()
