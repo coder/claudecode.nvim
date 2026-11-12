@@ -210,7 +210,7 @@ describe("openDiff answers every call", function()
     vim.api.nvim_del_augroup_by_id(group)
     assert.is_true(fired, "the reload ran inside the first setup")
     assert.is_not_equal(diff_before, require("claudecode.diff"), "the diff module was reloaded")
-    return require("claudecode.diff"), answers, first, second
+    return require("claudecode.diff"), answers, first, second, diff_before
   end
 
   local reload_orders = {
@@ -302,6 +302,63 @@ describe("openDiff answers every call", function()
       assert_answered_once(answers, "C", "DIFF_REJECTED")
     end
   )
+
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it(
+      "rejects the late first call once, and fires no open event, when a handler reloads the plugin again while the "
+        .. "second module rejects the second call: "
+        .. layout,
+      function()
+        local answers, events, kept, second_module = {}, {}, nil, nil
+        local group = vim.api.nvim_create_augroup("OverlapSpecClosed", { clear = true })
+        vim.api.nvim_create_autocmd("User", {
+          group = group,
+          pattern = { "ClaudeCodeDiffOpened", "ClaudeCodeDiffClosed" },
+          callback = function(args)
+            table.insert(events, args.match .. ":" .. vim.fn.fnamemodify(args.data.file_path, ":t"))
+          end,
+        })
+        vim.api.nvim_create_autocmd("User", {
+          group = group,
+          pattern = "ClaudeCodeDiffClosed",
+          once = true,
+          callback = function()
+            second_module = package.loaded["claudecode.diff"]
+            vim.schedule(function()
+              local third_diff, third_tools = load_plugin(layout)
+              open_recording(third_tools, "C", dir .. "/missing.txt", answers)
+              accept_proposal_showing(third_diff, "C PROPOSAL")
+              kept = third_diff
+            end)
+            vim.wait(1000, function()
+              return kept ~= nil
+            end, 10)
+          end,
+        })
+
+        local _, _, first, second, original = reload_inside_setup(layout, false, dir .. "/missing.txt", answers)
+
+        assert.is_not_nil(second)
+        assert.is_not_nil(kept, "a handler reloaded the plugin a second time")
+        assert.is_not_equal(original, kept, "the diff module was reloaded twice")
+        assert.is_nil(first._deferred, "the first call is answered at once")
+        assert_answered_once(answers, "A", "DIFF_REJECTED")
+        assert_answered_once(answers, "B", "DIFF_REJECTED")
+        assert_answered_once(answers, "C", "FILE_SAVED", "C PROPOSAL\n")
+        assert.equal("saved", kept._get_active_diffs()[tab_name].status, "the accepted diff keeps the tab name")
+        assert.is_nil(original._get_active_diffs()[tab_name], "the module of the late diff forgot it")
+        assert.is_nil(second_module._get_active_diffs()[tab_name], "the second module forgot it")
+        local first_events = vim.tbl_filter(function(event)
+          return event:find("a.txt", 1, true) ~= nil
+        end, events)
+        assert.same(
+          { "ClaudeCodeDiffClosed:a.txt" },
+          first_events,
+          "the late diff closes once, and no open event follows"
+        )
+      end
+    )
+  end
 
   for _, layout in ipairs({ "vertical", "unified" }) do
     it(

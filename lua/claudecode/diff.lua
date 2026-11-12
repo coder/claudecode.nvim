@@ -1017,31 +1017,39 @@ end
 
 local diffs_registered = 0
 
+---Track a diff in this module. A plugin reload during the setup leaves this module's table out of reach of every
+---command, which use the new module. So the diff is registered there too, and accept, deny and close-all answer it.
+---@param tab_name string
+---@param diff_data table
+---@return boolean registered False when a newer module kept an answered diff for the tab name. The caller that owns
+---the diff then rejects it and cleans it up, once.
+local function track_diff_state(tab_name, diff_data)
+  diffs_registered = diffs_registered + 1
+  diff_data.open_order = diffs_registered
+  active_diffs[tab_name] = diff_data
+  local current = package.loaded["claudecode.diff"]
+  if type(current) == "table" and current ~= M and current._adopt_diff_state then
+    return current._adopt_diff_state(tab_name, diff_data)
+  end
+  return true
+end
+
 ---Register diff state for tracking
 ---@param tab_name string Unique identifier for the diff
 ---@param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
-  diffs_registered = diffs_registered + 1
-  diff_data.open_order = diffs_registered
-  active_diffs[tab_name] = diff_data
-  -- A plugin reload during the setup leaves this module's table out of reach of every command, which use the new
-  -- module. Register the diff there too, so that accept, deny and close-all answer it. When the new module keeps an
-  -- answered diff for the tab name, no command can reach this one, so reject it and clean it up here.
-  local current = package.loaded["claudecode.diff"]
-  if type(current) == "table" and current ~= M and current._adopt_diff_state then
-    if not current._adopt_diff_state(tab_name, diff_data) then
-      M._resolve_diff_as_rejected(tab_name)
-      M._cleanup_diff_state(tab_name, "replaced by new diff")
-    end
+  if not track_diff_state(tab_name, diff_data) then
+    M._resolve_diff_as_rejected(tab_name)
+    M._cleanup_diff_state(tab_name, "replaced by new diff")
   end
 end
 
 ---Register a diff that a setup of an older module finished, in this module. A pending diff that this module holds for
 ---the tab name is rejected first, as a new openDiff for the same tab name rejects it. A diff that was already answered
----stays, because the user can still hold its accepted edits.
+---stays, because the user can still hold its accepted edits. The older module cleans up a diff that is not adopted.
 ---@param tab_name string
 ---@param diff_data table
----@return boolean adopted False when this module kept its own diff for the tab name
+---@return boolean adopted False when this module, or a module that is newer still, kept its own diff for the tab name
 function M._adopt_diff_state(tab_name, diff_data)
   local existing = active_diffs[tab_name]
   while existing do
@@ -1055,8 +1063,13 @@ function M._adopt_diff_state(tab_name, diff_data)
     assert(active_diffs[tab_name] ~= existing, "the replaced diff is still registered")
     existing = active_diffs[tab_name]
   end
-  M._register_diff_state(tab_name, diff_data)
-  return true
+  if track_diff_state(tab_name, diff_data) then
+    return true
+  end
+  if active_diffs[tab_name] == diff_data then
+    active_diffs[tab_name] = nil
+  end
+  return false
 end
 
 ---While the proposal buffer stays modified, `:wq`, `:x` and `ZZ` leave its window open, and `:qa` stops with E37 or
