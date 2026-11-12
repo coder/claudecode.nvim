@@ -11,7 +11,7 @@ The user hands Claude a file, a directory, or a line range as context. `:ClaudeC
 - `send-add-errors` sends nothing and shows an error for a missing path or a start line after the end line.
 - `send-mapped` sends from a Visual or Select mode mapping to `<cmd>ClaudeCodeSend<CR>`, as in the README, and leaves the user in Normal mode.
 - `send-tree` sends the file under the cursor in netrw on `:ClaudeCodeTreeAdd` or `:ClaudeCodeSend`.
-- `send-queue` holds a mention made while no client is connected and sends it to the next client that completes its WebSocket handshake within `connection_timeout` (default 10000 ms), `connection_wait_delay` (default 600 ms) after that handshake. Without such a client it shows "Connection timeout - clearing 1 queued @ mentions".
+- `send-queue` holds a mention made while no client is connected and sends it to the next client that completes its WebSocket handshake within `connection_timeout` (default 10000 ms), `connection_wait_delay` (default 600 ms) after that handshake. Without such a client it shows "Connection timeout - clearing 1 queued @ mentions" at the deadline, `connection_timeout + connection_wait_delay` (10.6 s) after the send. While a client is connected but not ready yet, the text is "Send timeout - clearing 1 queued @ mentions that the connected Claude did not take in time".
 
 ## How to get to it (user POV)
 
