@@ -62,14 +62,7 @@ describe("the text a proposed diff accepts, by how the proposal ends", function(
   end)
 
   local split_layouts = { "vertical", "horizontal" }
-  local all_layouts = { "vertical", "horizontal" }
-  if vim.fn.has("nvim-0.9") == 1 then
-    all_layouts[#all_layouts + 1] = "unified"
-  else
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
+  local all_layouts = { "vertical", "horizontal", "unified" }
 
   local proposals = {
     { name = "a final line without a line break", text = "a" },

@@ -705,6 +705,10 @@ local vim = {
       return "/home/user/project"
     end,
 
+    simplify = function(path)
+      return path
+    end,
+
     --- Mock of wordcount() for the buffer that nvim_buf_call named, else buffer 1. Every line counts its bytes and a line
     --- break. A buffer with `empty = true` stands for Neovim's "--No lines in buffer--": its lines are { "" }, as
     --- nvim_buf_get_lines returns them, and it counts 0 bytes.
