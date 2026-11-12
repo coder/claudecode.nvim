@@ -289,6 +289,9 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   -- A later autocmd of the start can show the terminal in another window. Look for the window that shows it now.
   is_valid()
   job_auto_close = effective_config.auto_close
+  -- Again, after the autocmds of the start: one of them can have changed it (to wipe, for example), and a hide must keep
+  -- the job.
+  vim.bo[bufnr].bufhidden = "hide"
   utils.map_terminal_suspend(bufnr)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen

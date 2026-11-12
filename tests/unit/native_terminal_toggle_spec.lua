@@ -1549,6 +1549,23 @@ describe("claudecode.terminal.native toggle behavior", function()
       end
     end)
 
+    -- An autocmd of the start can change the buffer's bufhidden (a terminal cleanup autocmd sets wipe). A hide of the
+    -- terminal must still keep the job, so the start sets hide again when the autocmds are done.
+    it("should keep bufhidden=hide on the terminal when an autocmd of the start sets another value", function()
+      local mock_state = _G.get_mock_state()
+      mock_vim.api.nvim_create_autocmd("TermOpen", {
+        callback = function(args)
+          mock_vim.bo[args.buf].bufhidden = "wipe"
+        end,
+      })
+
+      native_provider.open("claude", {}, config, true)
+
+      local active = native_provider.get_active_bufnr()
+      assert.is_not_nil(active)
+      assert.are.equal("hide", mock_state.buffers[active].options.bufhidden)
+    end)
+
     -- With 'nohidden', a window that closes during the start unloads a buffer that is not bufhidden=hide. Before termopen,
     -- Neovim loads it again, and on 0.8 its term:// reader starts a second terminal in it (a bare `claude`, with no
     -- arguments, no plugin env and no IDE connection, which then gets the sends). In TermOpen the job ends with it.
