@@ -104,6 +104,7 @@ Module map (direct files):
 - Provider selection: `auto` uses snacks if available, else native. `external` requires `external_terminal_cmd` as a function or as a string containing `%s`. Every other failure falls back to `native` [terminal.lua:get_provider]
 - The Claude command is `terminal_cmd`, or `claude` when it is unset. `no_proxy` and `NO_PROXY` always include `localhost`, `127.0.0.1`, and `::1` [terminal.lua:get_claude_command_and_env]
 - Terminal cwd precedence: `cwd_provider`, then static `cwd`, then the git root when `git_repo_cwd` is set [terminal.lua:build_config]
+- The cwd lookups take a directory path as written: a folder name with `[`, `{`, `*`, `?`, `$`, `\`, a space or a comma stays that folder, and only a string that is not a directory is expanded (`~`, `$VAR`). When `git rev-parse` cannot run or finds no repository, `git_root` walks up from the full path of `start_dir` to the nearest folder that holds a `.git` folder [cwd.lua:M.git_root] [cwd.lua:normalize_dir]
 - `send_to_terminal` never opens a terminal. It refuses the `none` and `external` providers. It wraps multi-line text in bracketed-paste markers [terminal.lua:M.send_to_terminal]
 - `utils.parse_command` does no globbing or variable expansion, so model aliases such as `opus[1m]` stay intact [utils.lua:M.parse_command]
 

@@ -3,6 +3,13 @@
 
 local M = {}
 
+---Tell whether a path names an existing directory, as written: no expansion.
+---@param path string
+---@return boolean
+local function is_directory(path)
+  return vim.fn.isdirectory(path) == 1
+end
+
 ---Normalize and validate a directory path
 ---@param dir string|nil
 ---@return string|nil
@@ -10,13 +17,14 @@ local function normalize_dir(dir)
   if type(dir) ~= "string" or dir == "" then
     return nil
   end
+  -- A directory that exists is taken as written. `vim.fn.expand` reads `[`, `{`, `*`, `?`, `$` and `\` in a name as
+  -- patterns or variables, so it would change the path of a folder that has them, or find none.
+  if is_directory(dir) then
+    return dir
+  end
   -- Expand ~ and similar
   local expanded = vim.fn.expand(dir)
-  local isdir = 1
-  if vim.fn.isdirectory then
-    isdir = vim.fn.isdirectory(expanded)
-  end
-  if isdir == 1 then
+  if is_directory(expanded) then
     return expanded
   end
   return nil
@@ -53,16 +61,20 @@ function M.git_root(start_dir)
     end
   end
 
-  -- Fallback: search for .git directory upward
-  if vim.fn.finddir then
-    local git_dir = vim.fn.finddir(".git", start_dir .. ";")
-    if type(git_dir) == "string" and git_dir ~= "" then
-      local parent = vim.fn.fnamemodify(git_dir, ":h")
-      return normalize_dir(parent)
+  -- Fallback: search for .git directory upward. The walk tests each folder as written. `vim.fn.finddir` reads its path
+  -- as a list ('path' option syntax), so a space or a comma in the path split it, and a `;` ended it. It starts from the
+  -- full path, so a relative `start_dir` also reaches the folders above the current one.
+  local dir = vim.fn.fnamemodify(start_dir, ":p:h")
+  while true do
+    if vim.fn.isdirectory(dir .. "/.git") == 1 then
+      return dir
     end
+    local parent = vim.fn.fnamemodify(dir, ":h")
+    if parent == dir then
+      return nil
+    end
+    dir = parent
   end
-
-  return nil
 end
 
 ---Resolve the effective working directory based on terminal config and context
