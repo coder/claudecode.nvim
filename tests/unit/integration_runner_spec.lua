@@ -119,8 +119,8 @@ local function shell(command)
   assert(status == 0 or status == true, "failed: " .. command)
 end
 
--- The stubs below list the files they hold open from /proc/<pid>/fd. Where it does not exist they list nothing, and a
--- runner that keeps a descriptor open would pass the test that reads their notes.
+-- The nvim, tee and rm stubs list the files they hold open from /proc/<pid>/fd. Where it does not exist they list
+-- nothing, and a runner that keeps a descriptor open would pass the test that reads their notes.
 local has_proc_fd = (function()
   local status = os.execute("test -d /proc/self/fd")
   return status == 0 or status == true
@@ -551,14 +551,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field hold boolean|nil Send the signal while the shell that execs timeout waits before its first command, and let it
   --- go after the runner is gone
   ---@field hold_cleanup boolean|nil With `hold`, let the shell go while the runner's rm waits, with the folder still there
-  ---@field interrupt "mktemp"|"mkdir"|nil The first call of that command sends the signal itself, and nothing else does
+  ---@field interrupt "mktemp"|"mkdir"|nil The first call of that command sends SIGINT itself, and `signal` goes unused
 
   ---@param signal string The signal to send
   ---@param run SignalRun
   ---@return table result `status` of the runner (of the calling shell with `caller_loop`), `left` in its TMPDIR once
   --- its Neovim's grandchild would have written, `ended` when the file's Neovim got to the end of its 2 second run,
   --- `runner_output` (stdout and stderr of the runner), `caller_output` of the calling shell, and `report`, one line
-  --- with all of these for the message of an assertion
+  --- with all of these but `ended` for the message of an assertion
   local function signal_runner(signal, run)
     write(dir .. "/tests/integration/slow_spec.lua", {})
     write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))

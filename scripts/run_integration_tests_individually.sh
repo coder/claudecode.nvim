@@ -72,7 +72,8 @@ run_test_file() {
 
   # All temp items of the file live in one folder. The runner picks the name of the folder and stores it before it makes
   # the folder, so that no signal finds a folder that the runner made but does not know yet. `mktemp -u` makes nothing
-  # and prints a random name. mkdir fails when that name exists, and the runner then removes nothing.
+  # and prints a random name. mkdir fails when that name exists, and the runner then drops the name. Only a signal that
+  # comes before it drops the name can make it remove a folder that it did not make.
   local work_dir temp_output group_file state_dir config_dir status_file
   work_dir=$(mktemp -u)
   CURRENT_WORK=$work_dir
@@ -106,9 +107,6 @@ run_test_file() {
   # being removed. The subshell closes descriptor 9 for nvim and `tee`, which do not need it. The number is fixed,
   # because bash 3.2 (the macOS /bin/bash) does not know a `{name}>` redirection: it fails the `exec`, and with an EXIT
   # trap set it then exits 0 without running a spec.
-  # The shell that execs `timeout` writes its process id first, then looks for the folder and for `cancel`, and it exits
-  # when it writes nothing, finds no folder, or finds `cancel`. A signal that stopped the runner before that shell wrote
-  # its id has made `cancel` or removed the folder, so no Neovim starts that the cleanup cannot find.
   (
     set +o pipefail
     set +e
