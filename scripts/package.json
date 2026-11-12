@@ -6,6 +6,11 @@
     "prettier": "3.8.4",
     "release-please": "17.9.0"
   },
+  "overrides": {
+    "@google-automations/git-file-utils": {
+      "minimatch": "^11.0.1"
+    }
+  },
   "scripts": {
     "test:release-please-runner": "node test-release-please-runner.js"
   }
