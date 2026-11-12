@@ -693,18 +693,14 @@ function M.handle_selection_demotion(original_bufnr_when_scheduled)
   end
 
   local current_buf = vim.api.nvim_get_current_buf()
-  local claude_term_bufnr = terminal.get_active_terminal_bufnr()
 
-  -- Condition 1: Switched to Claude Terminal
-  if claude_term_bufnr and current_buf == claude_term_bufnr then
-    -- Visual selection is preserved (M.state.latest_selection is still the visual one).
-    -- The "pending" status of last_active_visual_selection is resolved.
-    if
-      M.state.last_active_visual_selection
-      and M.state.last_active_visual_selection.bufnr == original_bufnr_when_scheduled
-    then
-      M.state.last_active_visual_selection = nil
-    end
+  -- Condition 1: Switched to a Claude terminal. The timer does nothing there: the selection stays held, and so does
+  -- last_active_visual_selection. A new terminal is not registered when its BufEnter fires, so nothing cancelled this
+  -- demotion then, and a short delay lets it fire before the debounce of the terminal does. When you come back,
+  -- update_selection keeps the selection while the cursor is where you released it, as it does when you never left
+  -- (Condition 3). It is the check that update_selection and the flush use, so a terminal that only its name marks
+  -- counts too.
+  if M.is_claude_terminal_buffer(current_buf) then
     return
   end
 
