@@ -59,3 +59,4 @@
 
 - Do not commit secrets or local paths; prefer environment variables. The plugin honors `CLAUDE_CONFIG_DIR` for lock files.
 - Local CLI paths (e.g., `opts.terminal_cmd`) should be configured in user config, not hardcoded in repo files.
+- Wire probe cleanup: `.agents/skills/verify-claudecode-nvim/scripts/proof-tools-call-wire.sh` starts a test server that writes its auth token to a lock file. Keep its one cleanup rule: nvim is a direct child of the script, checks its parent every half second and stops its server when the parent is gone. So the lock file is gone within 5 seconds after the script ends, as long as nvim is still alive and its main loop runs. The script's own cleanup is only the faster path. Do not add a second cleanup mechanism to make that time shorter. `features/tools-call-wire.md` in that skill states the limits.
