@@ -218,6 +218,10 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   local new_bufnr = vim.api.nvim_create_buf(true, false)
   -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
   vim.b[new_bufnr][OWNED_MARK] = true
+  -- Hidden when its window closes, as soon as it has one. An autocmd of the start can close the split, and with
+  -- 'nohidden' that would unload a buffer that is not bufhidden=hide. Before termopen, Neovim loads it again, and on
+  -- 0.8 its term:// reader starts a second terminal in it. In TermOpen, the unload ends Claude.
+  vim.bo[new_bufnr].bufhidden = "hide"
   if new_winid then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
@@ -285,7 +289,6 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   -- A later autocmd of the start can show the terminal in another window. Look for the window that shows it now.
   is_valid()
   job_auto_close = effective_config.auto_close
-  vim.bo[bufnr].bufhidden = "hide"
   utils.map_terminal_suspend(bufnr)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen

@@ -135,7 +135,22 @@ describe("claudecode.terminal.native toggle behavior", function()
           if window_count() == 1 then
             error("Vim:E444: Cannot close last window")
           end
+          local closing_bufnr = mock_state.windows[winid].bufnr
           mock_state.windows[winid] = nil
+          -- With 'nohidden', closing the last window of a buffer that is not bufhidden=hide unloads it. A terminal
+          -- buffer ends its job with it.
+          local closing = mock_state.buffers[closing_bufnr]
+          if mock_state.nohidden and closing and closing.options.bufhidden ~= "hide" then
+            local shown = false
+            for _, win in pairs(mock_state.windows) do
+              shown = shown or win.bufnr == closing_bufnr
+            end
+            if not shown and closing.options.buftype == "terminal" then
+              mock_vim.api.nvim_buf_delete(closing_bufnr, { force = true })
+            elseif not shown then
+              closing.unloaded = true
+            end
+          end
         end,
         nvim_buf_delete = function(bufnr, opts)
           local buf = mock_state.buffers[bufnr]
@@ -222,6 +237,14 @@ describe("claudecode.terminal.native toggle behavior", function()
         nvim_buf_call = function(bufnr, fn)
           if not mock_state.buffers[bufnr] then
             error("Invalid buffer id: " .. tostring(bufnr))
+          end
+          local loading = mock_state.buffers[bufnr]
+          if loading.unloaded then
+            -- Neovim loads an unloaded buffer again, and on 0.8 its term:// reader starts a second terminal in it.
+            loading.unloaded = false
+            local second_jobid = mock_state.next_jobid
+            mock_state.next_jobid = second_jobid + 1
+            mock_state.running_jobs[second_jobid] = true
           end
           local saved_win = mock_state.current_win
           local target_win = nil
@@ -1462,6 +1485,14 @@ describe("claudecode.terminal.native toggle behavior", function()
       before_each(function()
         mock_state = _G.get_mock_state()
         native_provider.setup(auto_close_config) -- the adoption in the autocmd exits with the module's config
+        -- Neovim raises for a window that is gone, where the mock ignores it.
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if not mock_state.windows[winid] then
+            error("Invalid window id: " .. tostring(winid))
+          end
+          set_current_win(winid)
+        end
       end)
 
       local function hide_and_show()
@@ -1516,6 +1547,74 @@ describe("claudecode.terminal.native toggle behavior", function()
           assert.is_nil(native_provider.get_active_bufnr())
         end)
       end
+    end)
+
+    -- With 'nohidden', a window that closes during the start unloads a buffer that is not bufhidden=hide. Before termopen,
+    -- Neovim loads it again, and on 0.8 its term:// reader starts a second terminal in it (a bare `claude`, with no
+    -- arguments, no plugin env and no IDE connection, which then gets the sends). In TermOpen the job ends with it.
+    describe("with 'nohidden' when an autocmd of the start closes the new split", function()
+      local mock_state
+      local notified
+
+      before_each(function()
+        mock_state = _G.get_mock_state()
+        mock_state.nohidden = true
+        notified = {}
+        mock_vim.notify = function(msg, level)
+          table.insert(notified, { msg = msg, level = level })
+        end
+        mock_vim.log = { levels = { ERROR = 4, WARN = 3, INFO = 2 } }
+      end)
+
+      local function running_jobs()
+        local count = 0
+        for _ in pairs(mock_state.running_jobs) do
+          count = count + 1
+        end
+        return count
+      end
+
+      local function assert_hidden_and_tracked()
+        assert.are.equal(1, running_jobs())
+        assert.are.same({}, notified)
+        local active = native_provider.get_active_bufnr()
+        assert.is_not_nil(active)
+        assert.are.equal(mock_state.buffers[active].jobid, next(mock_state.running_jobs))
+        assert.are.equal(0, windows_showing(active))
+      end
+
+      it("should run one Claude when a BufEnter autocmd closes the split before termopen", function()
+        local fired = false
+        mock_state.bufenter_autocmd = function(_, bufnr)
+          if not fired and bufnr ~= 0 then
+            fired = true
+            mock_vim.api.nvim_win_close(mock_state.current_win, false)
+            mock_state.current_win = 1
+          end
+        end
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.is_true(fired)
+        assert_hidden_and_tracked()
+      end)
+
+      it("should run one Claude when a TermOpen autocmd hides it", function()
+        local fired = false
+        mock_vim.api.nvim_create_autocmd("TermOpen", {
+          callback = function()
+            if not fired then
+              fired = true
+              native_provider.focus_toggle("claude", {}, config)
+            end
+          end,
+        })
+
+        native_provider.open("claude", {}, config, true)
+
+        assert.is_true(fired)
+        assert_hidden_and_tracked()
+      end)
     end)
 
     -- The vsplit of a start fires WinNew and WinEnter before the plugin has a buffer for Claude, so an entry that such an
