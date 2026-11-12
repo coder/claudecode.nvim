@@ -1744,6 +1744,9 @@ function M._setup_blocking_diff(params, resolution_callback)
       table.remove(lines, #lines)
     end
     vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
+    -- A new buffer has 'eol' on, and the saved text ends with a line break exactly when 'eol' is on. So the buffer takes
+    -- the ending of the proposal, and a proposal without a final line break is saved without one.
+    vim.api.nvim_buf_set_option(new_buffer, "eol", params.new_file_contents:sub(-1) == "\n")
 
     vim.api.nvim_buf_set_option(new_buffer, "buftype", "acwrite") -- Allows saving but stays as scratch-like
     vim.api.nvim_buf_set_option(new_buffer, "modifiable", true)
@@ -1866,9 +1869,9 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     -- A raising handler of the user (autocmd callback) makes the cleanup above fail inside Neovim API calls. Neovim
     -- 0.8.0 bundles a LuaJIT that then keeps pointing at the main Lua thread, while this code runs in the coroutine
-    -- of tools.handle_invoke. The next JIT trace exit corrupts the stack of the main thread and Neovim aborts
-    -- (LuaJIT issue #1066, fixed in September 2023). An API call that returns normally points LuaJIT at the running
-    -- coroutine again. Make one before the error leaves the coroutine.
+    -- of tools.handle_invoke. The next JIT trace exit corrupts the stack of the main thread and Neovim aborts or
+    -- crashes, exit 134 or 139 (LuaJIT issue #1066, fixed in September 2023). An API call that returns normally points
+    -- LuaJIT at the running coroutine again. Make one before the error leaves the coroutine.
     vim.api.nvim_get_current_tabpage()
 
     -- Re-throw the error for MCP compliance

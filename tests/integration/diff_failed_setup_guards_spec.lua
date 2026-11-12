@@ -145,10 +145,10 @@ describe("openDiff when the setup fails in a new tab", function()
 
   -- Neovim 0.8.0 bundles a LuaJIT with a bug (LuaJIT issue #1066, fixed in September 2023). When a Neovim API call
   -- raises inside a coroutine because a handler it ran raised, LuaJIT keeps pointing at the main Lua thread, and the
-  -- next JIT trace exit corrupts the stack of that thread. Neovim then aborts (exit 134, "bad stack slot") and plenary
-  -- prints no summary. openDiff runs in a coroutine (tools.handle_invoke). The three cases above hit the bug in a few
-  -- of 100 runs. A JIT that compiles at once makes the passes below hit it in most runs, so this case fails on Neovim
-  -- 0.8.0 when diff.lua leaves the bug in place.
+  -- next JIT trace exit corrupts the stack of that thread. Neovim then aborts (exit 134, "bad stack slot") or crashes
+  -- (exit 139), and plenary prints no summary. openDiff runs in a coroutine (tools.handle_invoke). The three cases
+  -- above hit the bug in a few of 100 runs. A JIT that compiles at once makes the passes below hit it in most runs,
+  -- so this case fails on Neovim 0.8.0 when diff.lua leaves the bug in place.
   it("keeps Neovim running when handlers raise on repeated failed setups under an eager JIT", function()
     if jit then
       jit.opt.start("hotloop=1", "hotexit=1", "tryside=1")
