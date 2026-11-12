@@ -31,14 +31,14 @@ describe("a visual selection released after the buffer changed, with the real pl
 
   -- After an operator the plugin reports the cursor once its flush has run, and a busy host can delay that past any fixed
   -- wait (get_latest_selection() is nil until then). So wait until it holds a cursor, then let the debounce and the
-  -- demotion run, so that a selection sent late would show.
+  -- demotion run for 400 ms, so that a selection sent late would show.
   local function wait_for_cursor()
     local held = vim.wait(5000, function()
       local latest = selection.get_latest_selection()
       return latest ~= nil and latest.selection.isEmpty
     end, 5)
     assert.is_true(held, "the plugin holds a cursor after the operator")
-    wait(200)
+    wait(400)
   end
 
   local function start()
@@ -266,6 +266,31 @@ describe("a visual selection released after the buffer changed, with the real pl
       vim.cmd("silent write")
       wait(20)
       local before_operator = #sent
+      press("d")
+      wait_for_cursor()
+
+      assert.are.equal(" beta gamma", vim.api.nvim_buf_get_lines(0, 0, 1, false)[1])
+      assert.are.same({ true }, { sent_no_selection(before_operator) })
+      assert_is_the_selection(before_operator)
+      assert.is_true(selection.get_latest_selection().selection.isEmpty)
+      assert_last_sent_is_a_cursor()
+    end)
+
+    -- The two specs above press the operator within the 100 ms debounce, so usually nothing was sent in visual mode and
+    -- their checks of an early selection (assert_is_the_selection, and a cursor as the last message) have nothing to
+    -- look at. Here the debounce has sent the selection before d, on every run.
+    it("sends a cursor for d after the debounce sent the selection in visual mode", function()
+      start()
+      open_file({ "alpha beta gamma", "second line" })
+      wait(50)
+
+      press("ve")
+      local sent_in_visual_mode = vim.wait(5000, function()
+        return held_text() == "alpha"
+      end, 5)
+      assert.is_true(sent_in_visual_mode, "the debounce sent the selection in visual mode")
+      local before_operator = #sent
+      assert.is_true(before_operator >= 1)
       press("d")
       wait_for_cursor()
 
