@@ -29,9 +29,21 @@ describe("a visual selection released after the buffer changed, with the real pl
     end, 5)
   end
 
+  -- Runs every vim.schedule callback that is queued now. A timer that fires in the last iteration of a wait has not run
+  -- its vim.schedule_wrap callback when the wait returns.
+  local function drain()
+    local drained = false
+    vim.schedule(function()
+      drained = true
+    end)
+    vim.wait(5000, function()
+      return drained
+    end, 5)
+  end
+
   -- After an operator the plugin reports the cursor once its flush has run, and a busy host can delay that past any fixed
   -- wait (get_latest_selection() is nil until then). So wait until it holds a cursor, then let the debounce and the
-  -- demotion run for 400 ms, so that a selection sent late would show.
+  -- demotion run for 400 ms and drain the callbacks, so that a selection sent late would show.
   local function wait_for_cursor()
     local held = vim.wait(5000, function()
       local latest = selection.get_latest_selection()
@@ -39,6 +51,7 @@ describe("a visual selection released after the buffer changed, with the real pl
     end, 5)
     assert.is_true(held, "the plugin holds a cursor after the operator")
     wait(400)
+    drain()
   end
 
   local function start()
