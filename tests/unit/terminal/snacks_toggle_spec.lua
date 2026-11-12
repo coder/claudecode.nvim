@@ -105,6 +105,9 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
       }),
       keymap = { set = function() end },
       fn = {
+        win_findbuf = function()
+          return {}
+        end,
         maparg = function()
           return {}
         end,

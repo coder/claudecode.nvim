@@ -206,7 +206,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   local new_bufnr = vim.api.nvim_create_buf(true, false)
   -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
   vim.b[new_bufnr][OWNED_MARK] = true
-  vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+  utils.win_set_buf_in_split(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
@@ -261,7 +261,7 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
 
   jobid = termopen_result
   if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
-    vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+    utils.win_set_buf_in_split(new_winid, new_bufnr)
   end
   winid = new_winid
   bufnr = new_bufnr
@@ -404,7 +404,7 @@ function show_hidden_terminal(effective_config, focus)
   vim.api.nvim_win_set_height(new_winid, full_height)
 
   -- Set the existing buffer in the new window
-  vim.api.nvim_win_set_buf(new_winid, bufnr)
+  utils.win_set_buf_in_split(new_winid, bufnr)
   winid = new_winid
 
   if focus then

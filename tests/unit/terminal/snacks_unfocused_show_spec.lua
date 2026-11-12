@@ -11,6 +11,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   local next_win_id
   local next_buf_id
   local pending_insert
+  local fail_swap
+  local exec_log
   local bufenter_handlers
   local bufenter_ignored_during_set_buf
   local eventignore_during_set_buf
@@ -55,6 +57,8 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     next_win_id = 1000
     next_buf_id = 1
     pending_insert = false
+    fail_swap = false
+    exec_log = {}
     bufenter_handlers = {}
     bufenter_ignored_during_set_buf = nil
     eventignore_during_set_buf = nil
@@ -80,6 +84,16 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       }),
       keymap = { set = function() end },
       fn = {
+        win_findbuf = function(buf)
+          local wins = {}
+          for w, win in pairs(windows) do
+            if win.valid and win.buf == buf then
+              table.insert(wins, w)
+            end
+          end
+          table.sort(wins)
+          return wins
+        end,
         maparg = function()
           return {}
         end,
@@ -89,8 +103,19 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       },
       cmd = function(c)
         c = tostring(c)
+        local swap_win, swap_buf = c:match("^noautocmd call nvim_win_set_buf%((%d+), (%d+)%)$")
+        local enter_win = c:match("^noautocmd call nvim_set_current_win%((%d+)%)$")
         if c == "startinsert" then
           pending_insert = true
+        elseif swap_win then
+          if fail_swap then
+            error("E5555: boom")
+          end
+          windows[tonumber(swap_win)].buf = tonumber(swap_buf)
+          bufenter_ignored_during_set_buf = ignores_bufenter()
+          eventignore_during_set_buf = vim.o.eventignore
+        elseif enter_win then
+          current_win = tonumber(enter_win)
         elseif c:find("split") then
           current_win = make_window(500, "")
         end
@@ -165,6 +190,16 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           end
         end,
         nvim_win_set_height = function() end,
+        nvim_get_current_buf = function()
+          return windows[current_win].buf
+        end,
+        -- The events that the placement runs after its swap. An ignored event does not run.
+        nvim_exec_autocmds = function(event, opts)
+          table.insert(exec_log, { event = event, buffer = opts.buffer, win = current_win })
+          if event == "BufEnter" and bufenter_handlers[opts.buffer] and not ignores_bufenter() then
+            bufenter_handlers[opts.buffer]()
+          end
+        end,
         nvim_get_current_win = function()
           return current_win
         end,
@@ -289,6 +324,30 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     assert.is_true(pending_insert)
     assert.is_false(bufenter_ignored_during_set_buf)
   end)
+
+  for _, focus in ipairs({ true, false }) do
+    it(
+      "re-showing a hidden split " .. (focus and "with" or "without") .. " focus fires BufWinEnter in the split",
+      function()
+        -- Snacks closes the window of a terminal whose BufWinEnter fires in another window (its fixbuf autocmd).
+        local cfg = config()
+        local term = open_then_hide(cfg)
+        exec_log = {}
+
+        snacks_provider.open("claude", {}, cfg, focus)
+
+        local entered = {}
+        for _, entry in ipairs(exec_log) do
+          if entry.event == "BufWinEnter" then
+            table.insert(entered, entry)
+          end
+        end
+        assert.are.equal(1, #entered)
+        assert.are.equal(term.buf, entered[1].buffer)
+        assert.are.equal(term.win, entered[1].win)
+      end
+    )
+  end
 
   it("re-showing an externally closed float without focus keeps the caller's window and queues no insert", function()
     local cfg = config({ position = "float" })
@@ -468,9 +527,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     it("is back to the caller's value when the unfocused show fails", function()
       local cfg = config()
       open_then_hide(cfg)
-      vim.api.nvim_win_set_buf = function()
-        error("E5555: boom")
-      end
+      fail_swap = true
 
       assert.has_error(function()
         snacks_provider.open("claude", {}, cfg, false)

@@ -28,12 +28,10 @@ function M.map_terminal_suspend(bufnr)
   vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
 end
 
----Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
----`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
----'eventignore' is back to the caller's value afterwards, also when the call raises.
----@param win number
----@param buf number
-function M.win_set_buf_without_bufenter(win, buf)
+---Run `fn` with BufEnter in 'eventignore'. 'eventignore' is back to the caller's value afterwards, also when `fn`
+---raises.
+---@param fn fun()
+local function ignoring_bufenter(fn)
   local saved = vim.o.eventignore
   -- A `-BufEnter` entry wins wherever it stands in the list.
   local ignored = {}
@@ -44,10 +42,80 @@ function M.win_set_buf_without_bufenter(win, buf)
   end
   table.insert(ignored, "BufEnter")
   vim.o.eventignore = table.concat(ignored, ",")
-  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  local ok, err = pcall(fn)
   vim.o.eventignore = saved
   if not ok then
     error(err, 0)
+  end
+end
+
+---`nvim_win_set_buf` with no autocmd and no option write: `:noautocmd` sets 'eventignore' inside Neovim, and no
+---`OptionSet` autocmd sees that.
+---@param win number
+---@param buf number
+local function win_set_buf_without_autocmds(win, buf)
+  vim.cmd(string.format("noautocmd call nvim_win_set_buf(%d, %d)", win, buf))
+end
+
+---Whether `buf` stays loaded, with its job running, after it loses its last window.
+---@param buf number
+---@return boolean
+local function stays_loaded_when_hidden(buf)
+  local bufhidden = vim.api.nvim_buf_get_option(buf, "bufhidden")
+  return bufhidden == "hide" or (bufhidden == "" and vim.o.hidden)
+end
+
+---Show `buf` in `win`, a split that was just made for it and that is the current window, with the events that
+---`nvim_win_set_buf` fires, in the order it fires them, except that no autocmd can run while the swap is under way.
+---`BufLeave` autocmds of the buffer that `win` showed run inside the call, and one that enters another window there
+---makes Neovim load `buf` into that window, even though the call names `win`. Here the events of the buffer that
+---leaves run before the swap, so an autocmd that enters another window only moves the cursor, and the cursor goes back
+---to `win`. The swap runs under `:noautocmd`, and `BufEnter` and `BufWinEnter` run after it, in `win`.
+---The events of the leaving buffer are `BufLeave`, and when `win` was its last window, also `BufWinLeave` and `BufHidden`.
+---That order is only the order of a buffer that stays loaded when it is hidden. For another buffer (the swap would
+---unload it, or raise E37 for an unsaved one) the plain swap runs.
+---@param win number
+---@param buf number
+---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events, as
+---`win_set_buf_without_bufenter` does.
+function M.win_set_buf_in_split(win, buf, opts)
+  local function place()
+    local old = vim.api.nvim_win_get_buf(win)
+    local shown_elsewhere = false
+    for _, other in ipairs(vim.fn.win_findbuf(old)) do
+      shown_elsewhere = shown_elsewhere or other ~= win
+    end
+    if
+      old == buf
+      or vim.api.nvim_get_current_win() ~= win
+      or not (shown_elsewhere or stays_loaded_when_hidden(old))
+    then
+      vim.api.nvim_win_set_buf(win, buf)
+      return
+    end
+
+    vim.api.nvim_exec_autocmds("BufLeave", { buffer = old, modeline = false })
+    if not shown_elsewhere and vim.api.nvim_win_is_valid(win) then
+      vim.api.nvim_exec_autocmds("BufWinLeave", { buffer = old, modeline = false })
+      vim.api.nvim_exec_autocmds("BufHidden", { buffer = old, modeline = false })
+    end
+    if not vim.api.nvim_win_is_valid(win) then
+      return
+    end
+    -- Back to `win`, as `nvim_win_set_buf` leaves the cursor after such an autocmd, without the events of entering it.
+    if vim.api.nvim_get_current_win() ~= win then
+      vim.cmd(string.format("noautocmd call nvim_set_current_win(%d)", win))
+    end
+    win_set_buf_without_autocmds(win, buf)
+    vim.api.nvim_exec_autocmds("BufEnter", { buffer = buf, modeline = false })
+    -- A BufEnter autocmd can swap another buffer into the window, and then BufWinEnter is for that buffer.
+    vim.api.nvim_exec_autocmds("BufWinEnter", { buffer = vim.api.nvim_get_current_buf(), modeline = false })
+  end
+
+  if opts and opts.ignore_bufenter then
+    ignoring_bufenter(place)
+  else
+    place()
   end
 end
 

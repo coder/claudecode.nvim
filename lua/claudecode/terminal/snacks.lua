@@ -417,9 +417,9 @@ local function cc_show(term, focus, config)
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
   if focus then
-    vim.api.nvim_win_set_buf(new_win, term.buf)
+    utils.win_set_buf_in_split(new_win, term.buf)
   else
-    utils.win_set_buf_without_bufenter(new_win, term.buf)
+    utils.win_set_buf_in_split(new_win, term.buf, { ignore_bufenter = true })
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native

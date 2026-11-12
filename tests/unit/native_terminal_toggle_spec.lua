@@ -290,6 +290,9 @@ describe("claudecode.terminal.native toggle behavior", function()
         set = function() end,
       },
       fn = {
+        win_findbuf = function()
+          return {}
+        end,
         maparg = function()
           return {}
         end,
