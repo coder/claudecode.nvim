@@ -9,7 +9,7 @@
 # character (the checker refuses it: the leak rule could not find such a path in a frame. A backslash in the tree path
 # can make nvim fail first: exit 2 too).
 # VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be the Neovim binary itself or a wrapper that
-# runs it with exec, because nvim must be a direct child of this script, and not a version-manager shim, which does not
+# runs it with exec, since nvim must be a direct child of the script, and not a version-manager shim, which can fail to
 # start with an empty environment. nvim and the checker start with an empty environment. When nvim and node are the
 # binaries themselves, nvim gets only PATH=/usr/bin:/bin, WIRE_PARENT, WIRE_TREE, WIRE_CWD, and HOME, TMPDIR,
 # XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME, XDG_CACHE_HOME and CLAUDE_CONFIG_DIR in the run dir, and the checker
