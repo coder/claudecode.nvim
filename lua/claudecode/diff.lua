@@ -1784,11 +1784,11 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
     vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    -- A proposal whose every line break is CRLF takes 'fileformat' dos, as the same text read from a file does, when
-    -- the user's 'fileformats' includes dos. The buffer then holds the lines without their CRs, as the file's own
-    -- buffer does, and the save gives a line that the user types a CRLF, as :w does. Any other text is unix, with its
-    -- CRs inside the lines, which :w writes back unchanged. 'fileformat' is set in both cases, because a new buffer
-    -- takes the first entry of 'fileformats', and that entry can be dos.
+    -- A proposal that has a line break, and only CRLF line breaks, takes 'fileformat' dos, as the same text read from
+    -- a file does, when the user's 'fileformats' includes dos. The buffer then holds the lines without their CRs, as
+    -- the file's own buffer does, and the save gives a line that the user types a CRLF, as :w does. Any other text is
+    -- unix, with its CRs inside the lines, which :w writes back unchanged. 'fileformat' is set in both cases, because
+    -- a new buffer takes the first entry of 'fileformats', and that entry can be dos.
     local proposal = params.new_file_contents
     local is_dos = vim.o.fileformats:find("dos", 1, true) ~= nil
       and proposal:find("\n", 1, true) ~= nil
