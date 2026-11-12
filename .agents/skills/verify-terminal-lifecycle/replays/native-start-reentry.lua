@@ -98,7 +98,10 @@ lib.attempt("native, an autosave on WinLeave saves the file before Claude starts
   vim.fn.writefile({ "old text" }, path)
   vim.cmd("edit " .. path)
   vim.api.nvim_buf_set_lines(0, 0, -1, false, { "new text the user typed" })
-  vim.api.nvim_create_autocmd("WinLeave", { group = vim.api.nvim_create_augroup("start_reentry_save", { clear = true }), command = "silent! update" })
+  vim.api.nvim_create_autocmd(
+    "WinLeave",
+    { group = vim.api.nvim_create_augroup("start_reentry_save", { clear = true }), command = "silent! update" }
+  )
   local opened, open_err = pcall(term.open)
   lib.settle()
   vim.api.nvim_del_augroup_by_name("start_reentry_save")
@@ -173,7 +176,7 @@ lib.attempt("native, bufhidden is wipe when you hide Claude", function()
       shown_after,
       #errors > 0 and table.concat(errors, " | ") or "none"
     ),
-    (not opened) or (not hid) or #running ~= 1 or shown_before ~= 0 or not still_tracked or shown_after ~= 1
+    (not opened) or not hid or #running ~= 1 or shown_before ~= 0 or not still_tracked or shown_after ~= 1
   )
   clean_up()
 end)
