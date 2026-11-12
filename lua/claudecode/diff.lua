@@ -1027,7 +1027,7 @@ function M._register_diff_state(tab_name, diff_data)
   -- A plugin reload during the setup leaves this module's table out of reach of every command, which use the new
   -- module. Register the diff there too, so that accept, deny and close-all answer it.
   local current = package.loaded["claudecode.diff"]
-  if current ~= nil and current ~= M and current._adopt_diff_state then
+  if type(current) == "table" and current ~= M and current._adopt_diff_state then
     current._adopt_diff_state(tab_name, diff_data)
   end
 end
