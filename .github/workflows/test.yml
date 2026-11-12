@@ -31,19 +31,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # mise-action's own cache is keyed on a hash of every mise config file, so an edit to a task in mise.toml
-      # misses it and every tool downloads again (www.lua.org failed the next step that way), and it has no
-      # restore-keys. This cache is keyed on mise.lock, which pins the tool set. When the lock changes, the
-      # newest cache of the same mise version restores and only the changed tools download. The key prefix is
-      # the one mise-action used, so its caches restore too.
-      - name: Cache mise tools
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ~/.local/share/mise
-          key: mise-v1-linux-x64-2026.11.5-${{ hashFiles('mise.lock') }}
-          restore-keys: |
-            mise-v1-linux-x64-2026.11.5-
-
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
         env:
@@ -54,11 +41,13 @@ jobs:
           # Without it, `mise install` fills in missing lock data and downloads tools again to do it, so a slow
           # www.lua.org failed this step.
           install_args: --locked
-          # The cache above replaces mise-action's own.
-          cache: false
+          # The default cache key hashes every mise config file, so an edit to a task in mise.toml missed the cache and
+          # every tool downloaded again. mise.lock pins the tool set, so this key hashes only it. There are no
+          # restore-keys on purpose: mise does not check an installed tool against mise.lock, so a cache restored from
+          # another lock could keep a tool that the new lock changed.
+          cache_key: mise-v1-{{platform}}-{{version}}-${{ hashFiles('mise.lock') }}
           # mise is pinned because `--locked` rules change between releases (2026.11.0 started to require a
-          # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release. The cache keys above
-          # name this version too.
+          # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release.
           version: 2026.11.5
           sha256: 7a5b051d6f17d335c502f8047a5175cf3103f347d91942771c60da4e302ebcb0
 
