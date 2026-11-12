@@ -57,7 +57,7 @@ vim.api.nvim_create_autocmd("VimLeavePre", {
 })
 ```
 
-The real cleanup runs from `init.lua`: its `VimLeavePre` autocmd calls `stop` when the server runs, `stop` calls `lockfile.remove`, and `stop` only logs a warning when the removal fails, so the lock file stays.
+The real cleanup runs from `init.lua`: its `VimLeavePre` autocmd calls `stop` when the server runs, `stop` calls `lockfile.remove`, and `stop` only logs a warning when the removal fails, so a lock file that the removal failed to delete stays.
 
 ### 3. MCP Tool System (`tools/`)
 
