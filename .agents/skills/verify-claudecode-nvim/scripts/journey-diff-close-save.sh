@@ -2,7 +2,8 @@
 # Checks that `:wq`, `:x` and `ZZ` close the proposal window, a second `:w` neither fails nor answers again, no buffer
 # stays modified after an answer (so `:qa` can quit), and `:b hello.txt` or `:e other.txt` in the proposal window keeps
 # that window after `close_tab`, out of diff mode and with its own sign column, and a sign column that the user sets
-# after the `:e` stays. Needs VCN_STATE from a fresh launch:
+# after the `:e` stays. For an existing file it also checks that close_tab leaves the last window out of diff mode when
+# the user showed the proposal in the original window. Needs VCN_STATE from a fresh launch:
 #   vcn.sh launch                                       # the split layout
 #   VCN_SETUP='{"diff_opts":{"layout":"unified"}}' vcn.sh launch
 # Pass `new` to propose the new file new.txt instead of hello.txt. Prints one `ok:` or `FAIL:` line per check and
@@ -72,6 +73,7 @@ kept_windows() {
 kept_window_out_of_diff_mode() { [[ $(kept_windows '&diff') == '2|hello.txt|0,0' ]]; }
 kept_window_sign_column_back() { [[ $(kept_windows '&signcolumn') == '2|other.txt|auto,auto' ]]; }
 kept_window_own_sign_column() { [[ $("$V" expr "bufname() . '|' . &signcolumn") == 'other.txt|yes:2' ]]; }
+back_out_of_diff_mode() { [[ $("$V" expr "winnr('\$') . '|' . bufname() . '|' . &diff") == '1|hello.txt|0' ]]; }
 
 "$V" doctor >"$OUT/diff-close-save-doctor.txt" || {
   echo "FAIL: doctor failed: $(cat "$OUT/diff-close-save-doctor.txt")" >&2
@@ -141,6 +143,19 @@ check ":e answers DIFF_REJECTED" answered reject-own-sign DIFF_REJECTED
 close_diff reject-own-sign || true
 "$V" capture diff-close-save-reject-own-sign >/dev/null
 check "close_tab leaves the sign column that the user set" kept_window_own_sign_column
+
+if [[ $target == existing ]]; then
+  "$V" keys ':only' Enter ':e hello.txt' Enter ':diffoff' Enter
+  back_to_one_window || true
+  step "The user shows the proposal in the original window with :b, then close_tab deletes it"
+  open_diff reject-orig-proposal
+  "$V" keys ':wincmd t' Enter ':b proposed' Enter
+  close_diff reject-orig-proposal || true
+  back_to_one_window || true
+  "$V" capture diff-close-save-orig-proposal >/dev/null
+  check "the last window shows hello.txt out of diff mode" back_out_of_diff_mode
+
+fi
 
 if ((failures == 0)); then
   echo "PASS diff-close-save ($target): $checks checks; evidence in $OUT"

@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua eea1bfab1f40eb51
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 0ec43e91b199531e
+file lua/claudecode/diff.lua ac01bc69a313e411
 block resolve_saved          4d34b0c7e34d561f
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          92067df7f9d4d4d9
@@ -23,7 +23,7 @@ block cleanup_all            43e7b595cf106229
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
 block register_state         8cf78b6711a9ecc6
-block cleanup_state          a5abba550a9bd679
+block cleanup_state          2ff77c6e3ecddf07
 block diff_autocmds          01fff2946c5a2149
 block write_proposal         9baeff1cd3273193
 block reject_when_hidden     dd45932e5cd7090d
