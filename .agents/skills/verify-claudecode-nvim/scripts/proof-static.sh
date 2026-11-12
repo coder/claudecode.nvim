@@ -14,6 +14,8 @@
 #   doc-recipe     the recipe that features/README.md and SKILL.md give for reading OUT and WORK returns both whole, for a
 #                  VERIFY_OUT that ends in a newline and holds a backslash, and stops the call with status 1 and a message when `get`
 #                  refuses (the case runs the documented line on a hand-made run.env, with no V of its own)
+#   no-trust-hint  no file under the skill folder, apart from this script, has a line with the text `mise trust` or
+#                  `MISE_TRUSTED_CONFIG_PATHS`: the scanner reads each text file line by line and matches the case of the text
 # What the checks do not see: an indented code block (four spaces) and <pre>, a command that a variable or an eval of a built
 # string holds, a source in a file that is not a shell script (.lua, .py, .mjs), a fence in a quote or a list that markdown
 # would not open, a `read` that takes `get` through a pipe or a file, and seven shapes that no code block and no code line of a script has: in a code block, a
@@ -373,9 +375,55 @@ doc_recipe_case() {
   cases=$((cases + 1))
 }
 
+# The skill checks other people's branches, and a trusted mise.toml runs code as the reader, so no file of the skill may tell the
+# reader to trust the checkout: the message that launch prints, the docs and the scripts are all files of the skill folder. This
+# script holds the text in its own patterns, so the case skips it by its path.
+# trust_hits <dir> <skip>: one `<path under dir>:<line>:<text>` for each line that holds either text, in each text file under dir
+# except the file <skip>.
+trust_hits() {
+  local dir=$1 skip=$2 file out line rc
+  while IFS= read -r -d '' file; do
+    [[ $file != "$skip" ]] || continue
+    rc=0
+    out=$(grep -nIF -e 'mise trust' -e 'MISE_TRUSTED_CONFIG_PATHS' -- "$file") || rc=$?
+    ((rc <= 1)) || fail no-trust-hint "cannot read $file"
+    if [[ -n $out ]]; then
+      while IFS= read -r line; do
+        printf '%s:%s\n' "${file#"$dir"/}" "$line"
+      done <<<"$out"
+    fi
+  done < <(find "$dir" -type f -print0)
+}
+
+no_trust_hint_case() {
+  local name=no-trust-hint dir self sample hits files
+  need_docs "$name"
+  [[ -f $V ]] || fail "$name" "$V is missing"
+  # The scanner finds each text, in a file of any name, names the file and the line, and skips the file that it is told to skip.
+  sample=$TMP/trust-sample
+  mkdir -p "$sample/sub"
+  printf 'fine\nrun `mise trust` in it\n' >"$sample/sub/a.md"
+  printf 'x=1\nexport MISE_TRUSTED_CONFIG_PATHS=$REPO\n' >"$sample/b.sh"
+  printf 'mise trust\nMISE_TRUSTED_CONFIG_PATHS\n' >"$sample/skip.sh"
+  printf 'nothing here\n' >"$sample/clean.md"
+  hits=$(trust_hits "$sample" "$sample/skip.sh")
+  [[ $hits == *"sub/a.md:2:"* ]] || fail "$name" "the scanner misses the trust command in a file: $hits"
+  [[ $hits == *"b.sh:2:"* ]] || fail "$name" "the scanner misses the trust variable in a file: $hits"
+  [[ $hits != *skip.sh* && $hits != *clean.md* ]] || fail "$name" "the scanner names a file that it skips or a file with no hit: $hits"
+  dir=$(realpath -- "$skill")
+  self=$(realpath -- "${BASH_SOURCE[0]}")
+  files=$(find "$dir" -type f | wc -l)
+  ((files > 1)) || fail "$name" "$dir holds $files files, so there is nothing to scan"
+  hits=$(trust_hits "$dir" "$self")
+  [[ -z $hits ]] || fail "$name" "a file of the skill folder tells the reader to trust the checkout, and a trusted mise.toml runs code as the reader: $(tr '\n' ' ' <<<"$hits")"
+  echo "ok $name: no file of the skill folder, apart from this script, names mise's trust command or its trust variable ($files files read)"
+  cases=$((cases + 1))
+}
+
 bare_tools_case
 doc_vars_case
 no_source_case
 doc_get_exact_case
 doc_recipe_case
+no_trust_hint_case
 echo "CASES $cases"
