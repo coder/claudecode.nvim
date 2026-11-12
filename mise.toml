@@ -145,7 +145,8 @@ run = "treefmt"
 
 [tasks.format-check]
 description = "Verify formatting without writing (used in CI)"
-# `treefmt --ci` writes the files it formats and then fails, so the script formats a copy and compares it with the tree.
+# `treefmt --ci` writes the files it formats and then fails, so a failed check left the tree rewritten. The script
+# formats a copy of the files that git lists and compares it with the tree, so it writes nothing to the tree.
 run = "scripts/format-check.sh"
 
 [tasks.reviewfix]
