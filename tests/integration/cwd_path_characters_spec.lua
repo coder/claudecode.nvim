@@ -227,6 +227,40 @@ describe("the git root of a folder whose name holds unusual characters", functio
       assert.equals(realpath(repo), variable and realpath(variable))
     end)
 
+    --- Runs `fn` with Neovim's current folder set to `dir` and HOME set to `home`, then puts both back.
+    local function with_cwd_and_home(dir, home, fn)
+      local saved_cwd, saved_home = vim.fn.getcwd(), vim.env.HOME
+      vim.cmd("cd " .. vim.fn.fnameescape(dir))
+      vim.env.HOME = home
+      local ok, result = pcall(fn)
+      vim.env.HOME = saved_home
+      vim.cmd("cd " .. vim.fn.fnameescape(saved_cwd))
+      assert.is_true(ok, result)
+      return result
+    end
+
+    it("expands a leading ~ even when Neovim's cwd holds a folder named ~", function()
+      vim.fn.mkdir(root .. "/stray/home/sub", "p")
+      vim.fn.mkdir(root .. "/stray/work/~/sub", "p")
+
+      local resolved = with_cwd_and_home(root .. "/stray/work", root .. "/stray/home", function()
+        return cwd.resolve({ cwd = "~/sub" }, {})
+      end)
+
+      assert.equals(realpath(root .. "/stray/home/sub"), resolved and realpath(resolved))
+    end)
+
+    it("expands a leading $ even when Neovim's cwd holds a folder named $HOME", function()
+      vim.fn.mkdir(root .. "/stray/home", "p")
+      vim.fn.mkdir(root .. "/stray/work/$HOME", "p")
+
+      local resolved = with_cwd_and_home(root .. "/stray/work", root .. "/stray/home", function()
+        return cwd.resolve({ cwd = "$HOME" }, {})
+      end)
+
+      assert.equals(realpath(root .. "/stray/home"), resolved and realpath(resolved))
+    end)
+
     it("takes a static cwd with brackets and a star as the folder it names", function()
       local repo = repo_in("setting", "[a] {b} *", function(path)
         vim.fn.mkdir(path .. "/.git", "p")

@@ -18,8 +18,10 @@ local function normalize_dir(dir)
     return nil
   end
   -- A directory that exists is taken as written. `vim.fn.expand` reads `[`, `{`, `*`, `?`, `$` and `\` in a name as
-  -- patterns or variables, so it would change the path of a folder that has them, or find none.
-  if is_directory(dir) then
+  -- patterns or variables, so it would change the path of a folder that has them, or find none. Text that starts with
+  -- `~` or `$` asks for expansion, as in a shell and in `:cd`, so it goes through `expand` first: `is_directory` does not
+  -- expand, and a stray folder named `~` in Neovim's current folder must not take the place of the home folder.
+  if not dir:match("^[~$]") and is_directory(dir) then
     return dir
   end
   -- Expand ~ and similar
