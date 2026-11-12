@@ -145,9 +145,11 @@ run = "treefmt"
 
 [tasks.format-check]
 description = "Verify formatting without writing (used in CI)"
-# `treefmt --ci` writes the files it formats and then fails, so a failed check left the tree rewritten. The script
-# formats a copy of the files that git lists and compares it with the tree, so it writes nothing to the tree.
-run = "scripts/format-check.sh"
+# `treefmt --ci` has no dry run: with the write flags it rewrites the files it formats and then fails. FORMAT_CHECK=1
+# makes scripts/treefmt-formatter.sh run stylua, prettier and shfmt in check mode, so a failed check writes nothing to
+# the tree.
+env = { FORMAT_CHECK = "1" }
+run = "treefmt --ci"
 
 [tasks.reviewfix]
 description = "Run reviewfixer against PR review findings (see reviewfixer.yaml)"

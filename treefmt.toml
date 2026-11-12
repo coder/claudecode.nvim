@@ -1,7 +1,9 @@
 # treefmt configuration — replaces the former Nix flake `nix fmt` (treefmt-nix).
 #
-# Run via `mise run format` (treefmt) or `mise run format-check` (scripts/format-check.sh, which runs treefmt on a copy
-# of the tree and writes nothing to the tree).
+# Run via `mise run format` (treefmt) or `mise run format-check` (`treefmt --ci` with FORMAT_CHECK=1, which writes
+# nothing to the tree). The three formatters that write files (stylua, prettier, shfmt) run through
+# scripts/treefmt-formatter.sh, which holds their write flags and their check flags. Their includes and excludes stay
+# here, so both modes format the same files.
 # Every formatter/linter referenced here is provisioned by mise (see mise.toml).
 # treefmt's git walker already skips git-ignored paths; these also guard `--walk filesystem`.
 excludes = [
@@ -10,12 +12,13 @@ excludes = [
 ]
 
 [formatter.stylua]
-command = "stylua"
+command = "scripts/treefmt-formatter.sh"
+options = ["stylua"]
 includes = ["*.lua"]
 
 [formatter.prettier]
-command = "prettier"
-options = ["--write"]
+command = "scripts/treefmt-formatter.sh"
+options = ["prettier"]
 includes = [
   "*.css",
   "*.html",
@@ -38,8 +41,8 @@ includes = [
 excludes = ["fixtures/*/lazy-lock.json"]
 
 [formatter.shfmt]
-command = "shfmt"
-options = ["-i", "2", "-w"]
+command = "scripts/treefmt-formatter.sh"
+options = ["shfmt"]
 includes = ["*.sh"]
 
 [formatter.shellcheck]
