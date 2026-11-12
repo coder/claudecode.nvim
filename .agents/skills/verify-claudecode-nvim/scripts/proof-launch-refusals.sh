@@ -36,6 +36,10 @@
 #                  and the fix, where it once went on and blamed agent-tty
 #   tool-vcn-nvim  the nvim that VCN_NVIM names cannot run
 #   tool-jq        the jq that launch finds cannot run, with VCN_NVIM set: launch names jq
+#   tool-node      the node that launch finds cannot run, with VCN_NVIM set: launch names node
+#   tool-setsid    the setsid that launch finds cannot run, with VCN_NVIM set: launch names setsid
+#   old-run-cleanup  a run that exists, with a run.env that has no JQ_BIN (an older vcn.sh wrote it), and a jq on PATH that
+#                  cannot run: cleanup still exits 0 and leaves no process and no state dir, as on main (only launch checks)
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 #   race           another launch makes the missing dir above VERIFY_OUT first, group-writable: launch uses it,
 #                  refuses it in the check after mkdir, and leaves it in place
@@ -248,16 +252,38 @@ refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCR
 real_node=$(mise which node 2>/dev/null || command -v node) || fail "tool: no node to use"
 real_att=$(command -v agent-tty || mise which agent-tty) || fail "tool: no agent-tty to use"
 real_nvim=$(mise which nvim 2>/dev/null || command -v nvim) || fail "tool: no nvim to use"
-for dead in nvim jq; do
+for dead in nvim jq node setsid; do
   mkdir "$TMP/dead-$dead"
-  printf '#!/bin/sh\ncase "$*" in\n"which node") echo "%s" ;;\n"which agent-tty") echo "%s" ;;\n*) exit 1 ;;\nesac\n' \
-    "$real_node" "$real_att" >"$TMP/dead-$dead/mise"
+  {
+    printf '#!/bin/sh\ncase "$*" in\n'
+    [[ $dead == node ]] || printf '"which node") echo "%s" ;;\n' "$real_node"
+    printf '"which agent-tty") echo "%s" ;;\n*) exit 1 ;;\nesac\n' "$real_att"
+  } >"$TMP/dead-$dead/mise"
   printf '#!/bin/sh\necho "mise ERROR stand-in %s cannot run" >&2\nexit 1\n' "$dead" >"$TMP/dead-$dead/$dead"
   chmod +x "$TMP/dead-$dead/mise" "$TMP/dead-$dead/$dead"
 done
 refused tool-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" PATH="$TMP/dead-nvim:$PATH"
 refused tool-vcn-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" VCN_NVIM="$TMP/dead-nvim/nvim"
 refused tool-jq "jq at $TMP/dead-jq/jq does not run: mise ERROR stand-in jq cannot run" PATH="$TMP/dead-jq:$PATH" VCN_NVIM="$real_nvim"
+refused tool-node "node at $TMP/dead-node/node does not run: mise ERROR stand-in node cannot run" PATH="$TMP/dead-node:$PATH" VCN_NVIM="$real_nvim"
+refused tool-setsid "setsid at $TMP/dead-setsid/setsid does not run: mise ERROR stand-in setsid cannot run" \
+  PATH="$TMP/dead-setsid:$PATH" VCN_NVIM="$real_nvim"
+# Only launch checks a tool, so a run that exists can always be cleaned up. A run.env without JQ_BIN makes cleanup resolve jq
+# again, and here that jq cannot run: cleanup must still exit 0 and leave nothing, as it does on main. A cleanup that refuses
+# leaves its run, so the case stops that run with a working jq before it fails.
+name=old-run-cleanup rc=0
+err=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR VCN_NVIM="$real_nvim" VERIFY_OUT="$TMP/old-run-out" "$V" launch 2>&1) || fail "$name: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+sed -i '/^JQ_BIN=/d' "$state/run.env"
+err=$(env PATH="$TMP/dead-jq:$PATH" VCN_STATE="$state" "$V" cleanup 2>&1) || rc=$?
+pids=$(grep -lzxF "VCN_RUN_TAG=$state" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
+left=0
+[[ ! -e $state ]] || left=1
+((left == 0)) || VCN_STATE=$state "$V" cleanup >/dev/null 2>&1 || true
+((rc == 0)) || fail "$name: cleanup exited $rc, wanted 0: $err"
+[[ -z $pids ]] || fail "$name: processes tagged $state are still alive: $(tr '\n' ' ' <<<"$pids")"
+((left == 0)) || fail "$name: $state is still there"
+echo "PASS $name: cleanup of a run without JQ_BIN, with a jq that cannot run, exited 0 and left no process and no state dir"
 # Two first launches can both find the default parent dir missing. The mkdir shim plays the launch that makes
 # $TMP/race/mid first, and makes it unsafe, so only the check after mkdir can refuse it.
 mkdir "$TMP/race" "$TMP/race-bin"

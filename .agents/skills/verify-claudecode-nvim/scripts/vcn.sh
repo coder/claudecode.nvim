@@ -42,22 +42,21 @@ die() {
   exit 1
 }
 
-# A tool that is found but cannot run, such as a mise shim in a checkout that mise does not trust, stops here and is named.
-# Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes doctor").
-runs_or_die() {
-  local why first
-  why=$("$2" --version 2>&1 >/dev/null </dev/null) || {
-    first=${why%%$'\n'*}
-    die "$1 at $2 does not run: ${first:-it printed no error}
-If it is a mise shim, mise may not trust this checkout: export MISE_TRUSTED_CONFIG_PATHS=$REPO, or run \`mise trust\` in it. Otherwise put a working $1 on PATH."
-  }
+bin() {
+  mise which "$1" 2>/dev/null || command -v "$1" || die "$1 not found on PATH"
 }
 
-bin() {
-  local exe
-  exe=$(mise which "$1" 2>/dev/null || command -v "$1") || die "$1 not found on PATH"
-  runs_or_die "$1" "$exe"
-  printf '%s\n' "$exe"
+# launch calls this for each tool it resolves, and no other command does: a run that exists must always be able to clean up.
+# A tool that is found but cannot run, such as a mise shim in a checkout that mise does not trust, stops launch here and is
+# named. Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes
+# doctor"). The tool is named by its file name, so this file holds no bare word jq or setsid for the proof to find.
+runs_or_die() {
+  local why first tool=${1##*/}
+  why=$("$1" --version 2>&1 >/dev/null </dev/null) || {
+    first=${why%%$'\n'*}
+    die "$tool at $1 does not run: ${first:-it printed no error}
+If it is a mise shim, mise may not trust this checkout: export MISE_TRUSTED_CONFIG_PATHS=$REPO, or run \`mise trust\` in it. Otherwise put a working $tool on PATH."
+  }
 }
 
 env_line() { printf '%s=%q\n' "$1" "$2"; }
@@ -496,19 +495,22 @@ cmd_launch() {
     # Absolute, without resolving symlinks: a mise shim only works under its own name.
     nvim_exe=$(realpath -s -- "$VCN_NVIM")
     [[ -f $nvim_exe && -x $nvim_exe ]] || die "VCN_NVIM=$VCN_NVIM is not an executable file"
-    runs_or_die nvim "$nvim_exe"
   else
     nvim_exe=$(bin nvim)
   fi
+  runs_or_die "$nvim_exe"
   [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
   att_cands=$(agent_tty_candidates)
   [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"
   mapfile -t att_cands <<<"$att_cands"
   VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
+  runs_or_die "$node_exe"
   # Every call runs these paths, not the bare names: another setsid or jq earlier on PATH could differ or fail.
   SETSID_BIN=$(bin setsid)
+  runs_or_die "$SETSID_BIN"
   JQ_BIN=$(bin jq)
+  runs_or_die "$JQ_BIN"
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
   if [[ -n ${VERIFY_OUT-} ]]; then
     # A trailing slash would make -L test the symlink's target.
