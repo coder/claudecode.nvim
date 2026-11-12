@@ -213,16 +213,19 @@ function M.remove(port)
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
   -- Deleting a file needs write permission on its folder, not read permission on the file, so a lock file that cannot
-  -- be read (mode 000) is still deleted. `filereadable` would call it missing. A folder with this name is not a lock
-  -- file, and it is not ours to delete (`filereadable` is 0 for a folder too).
-  local stat = vim.loop.fs_stat(lock_path)
+  -- be read (mode 000) is still deleted. `filereadable` would call it missing. `fs_lstat` does not follow a link, so
+  -- a link at this path (even one that points nowhere) is a name that this call can remove, and `fs_unlink` removes
+  -- the link and never its target. A folder with this name is not a lock file, and it is not ours to delete.
+  local stat = vim.loop.fs_lstat(lock_path)
   if not stat or stat.type == "directory" then
     return false, "Lock file does not exist: " .. lock_path
   end
 
-  -- os.remove reports most failures (such as a read-only folder) as (nil, message, errno) without raising, so
-  -- check the return value as well as the pcall status.
-  local ok, removed, err = pcall(os.remove, lock_path)
+  -- Another process can replace the file with a folder between the check above and the delete. `fs_unlink` refuses a
+  -- folder (EISDIR), where `os.remove` deletes an empty one, so the delete itself never removes a folder. It reports
+  -- most failures (such as a read-only folder) as (nil, message, name) without raising, so check the return value as
+  -- well as the pcall status.
+  local ok, removed, err = pcall(vim.loop.fs_unlink, lock_path)
 
   if not ok then
     return false, "Failed to remove lock file: " .. tostring(removed or "unknown error")
