@@ -49,16 +49,20 @@ bin() {
   mise which "$1" 2>/dev/null || command -v "$1" || die "$1 not found on PATH"
 }
 
-# launch calls this for each tool it resolves, and no other command does: a run that exists must always be able to clean up.
+# launch calls this for the tools that it resolves (nvim, node, setsid and jq), and no other command does, so a tool that
+# cannot run never stops the cleanup of a run that exists.
 # A tool that is found but cannot run, such as a mise shim in a checkout that mise does not trust, stops launch here and is
 # named. Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes
-# doctor"). The tool is named by its file name, so this file holds no bare word jq or setsid for the proof to find.
+# doctor"). The message takes the tool's name from its path, so no code line of this function holds the word jq or setsid:
+# proof-static.sh fails on that word in a code line, and skips a line that is only a comment. $2, when given, is the advice
+# that ends the message, for a tool that does not come from PATH.
 runs_or_die() {
-  local why first tool=${1##*/}
+  local why first tool=${1##*/} fix
+  fix=${2-put a working $tool on PATH}
   why=$("$1" --version 2>&1 >/dev/null </dev/null) || {
     first=${why%%$'\n'*}
     die "$tool at $1 does not run: ${first:-it printed no error}
-If it is a mise shim, mise may not trust this checkout: export MISE_TRUSTED_CONFIG_PATHS=$REPO, or run \`mise trust\` in it. Otherwise put a working $tool on PATH."
+If it is a mise shim, mise may not trust this checkout: export MISE_TRUSTED_CONFIG_PATHS=$REPO, or run \`mise trust\` in it. Otherwise $fix."
   }
 }
 
@@ -118,9 +122,9 @@ load() {
     why=$(bad_node_dir "$NODE_DIR")
     [[ -z $why ]] || die "NODE_DIR=$NODE_DIR in $VCN_STATE/run.env is not usable: $why. No command, cleanup included, runs agent-tty with it. To stop this run by hand, stop its nvim and agent-tty processes, then remove its state dir: rm -rf $(printf %q "$VCN_STATE")"
   fi
-  # A run that an older vcn.sh started has no JQ_BIN and no SETSID_BIN.
+  # A run that an older vcn.sh started has no JQ_BIN, and cleanup needs one, as on main. It has no SETSID_BIN either: start_client
+  # resolves that, because only a command that starts a client needs setsid.
   [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
-  [[ -n ${SETSID_BIN-} ]] || SETSID_BIN=$(bin setsid)
 }
 
 # agent-tty needs Node 24+, so it runs on the repo's mise node. During a teardown (own_session set) it gets a session of
@@ -486,6 +490,8 @@ start_client() {
   : >>"$OUT/ws-in$ch.jsonl"
   # setsid: an agent's bash tool kills the background jobs of a call when the call ends, and the
   # client must outlive it. The client reads the token from the lock file, so it is not in argv.
+  # A run that an older vcn.sh started has no SETSID_BIN: connect, the only command that gets here for such a run, resolves it.
+  [[ -n ${SETSID_BIN-} ]] || SETSID_BIN=$(bin setsid)
   VCN_RUN_TAG=$VCN_STATE "$SETSID_BIN" "$NODE_DIR/node" "$SKILL_DIR/scripts/ws-client.mjs" \
     "$VCN_STATE/claude/ide/$PORT.lock" "$OUT/ws-out$ch.jsonl" "$OUT/ws-in$ch.jsonl" \
     </dev/null >/dev/null 2>>"$OUT/ws-client$ch.log" &
@@ -548,7 +554,7 @@ cmd_launch() {
   else
     nvim_exe=$(bin nvim)
   fi
-  runs_or_die "$nvim_exe"
+  runs_or_die "$nvim_exe" ${VCN_NVIM:+"set VCN_NVIM to a Neovim that runs"}
   [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
   att_cands=$(agent_tty_candidates)
   [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"
