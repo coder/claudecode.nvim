@@ -61,9 +61,20 @@ export const state = (v: any) => {
 const notStopping = (v: any) =>
   running(v).filter((t) => !(v.pc.op === "waiting" && v.pc.t === t));
 
+// CloseNeverReuses and FailedStartLeavesNoWindow read the state, not `bad`.
+const reusesClosed = (v: any) =>
+  (v.closed ?? []).some((t: string) => v.ntrack === t || v.strack === t);
+const failedStartResidue = (v: any) =>
+  terms(v).some(
+    (t) =>
+      v.job[t] === "failed" &&
+      (v.win[t] || v.buf[t] || v.ntrack === t || v.strack === t),
+  );
+
 export const group = (v: any) => {
   if (v.bad.length > 0) return "broken";
   if (notStopping(v).length > 1) return "broken";
+  if (reusesClosed(v) || failedStartResidue(v)) return "broken";
   if (v.pc.op !== "idle") return "busy";
   return running(v).length === 1 ? "running" : "idle";
 };

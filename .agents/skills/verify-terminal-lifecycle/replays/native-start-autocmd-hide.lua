@@ -196,7 +196,7 @@ for _, event in ipairs({ "BufEnter", "TermOpen" }) do
     local bin = vim.fn.tempname()
     vim.fn.mkdir(bin, "p")
     local script = assert(io.open(bin .. "/claude", "w"))
-    script:write(string.format('#!/bin/sh\necho "started args=[$*]" >> %s\nexec sleep 60\n', log))
+    script:write(string.format('#!/bin/sh\necho "started args=[$*]" >> %s\nexec sleep 60\n', vim.fn.shellescape(log)))
     script:close()
     vim.loop.fs_chmod(bin .. "/claude", 493)
     local path = vim.env.PATH

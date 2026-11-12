@@ -19,6 +19,8 @@ command -v "$nvim" >/dev/null || {
   echo "ERROR: no Neovim at $nvim (set NVIM=<path to nvim>)" >&2
   exit 2
 }
+# The runner changes into a work directory, so a relative path of the caller must be absolute first.
+[[ $nvim == */* ]] && nvim=$(cd "$(dirname "$nvim")" && pwd)/$(basename "$nvim")
 snacks_rtp=
 # snacks-*.lua start with snacks.nvim on the runtimepath; auto-*.lua add it themselves, later.
 if [[ $replay == snacks-* || $replay == auto-* ]]; then
@@ -26,6 +28,8 @@ if [[ $replay == snacks-* || $replay == auto-* ]]; then
     echo "ERROR: $replay needs SNACKS_NVIM=<snacks.nvim checkout with Snacks.terminal>" >&2
     exit 2
   }
+  SNACKS_NVIM=$(cd "$SNACKS_NVIM" && pwd)
+  export SNACKS_NVIM
   [[ $replay == auto-* ]] || snacks_rtp=$SNACKS_NVIM
 fi
 home=$(mktemp -d "${TMPDIR:-/tmp}/verify-terminal-lifecycle-replay.XXXXXX")

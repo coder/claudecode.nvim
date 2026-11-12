@@ -65,7 +65,11 @@ for _, reloads_after in ipairs({ 0, 1, 2 }) do
           float,
           backdrops
         ),
-        (float == "float hidden" and backdrops > 0) or (float == "float shown" and backdrops ~= 1)
+        -- A show must leave the float on the screen with exactly one backdrop. A hide may hide the float or close its window,
+        -- depending on the Snacks version, and either must leave no backdrop shown.
+        (what == "show" and (float ~= "float shown" or backdrops ~= 1))
+          or (float == "float hidden" and backdrops > 0)
+          or (float == "float shown" and backdrops ~= 1)
       )
     end
   end)
