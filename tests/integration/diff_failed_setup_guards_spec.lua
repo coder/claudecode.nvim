@@ -1,6 +1,6 @@
 -- Real-Neovim guards for openDiff with `diff_opts.open_in_new_tab`: when the diff setup fails after `:tabnew` and a
 -- handler of the user raises while the plugin cleans up, openDiff still answers "Diff setup failed", closes the tab
--- it opened and goes back to the tab it left. Under busted's mock vim this is pending;
+-- it opened and goes back to the tab it left, and Neovim keeps running. Under busted's mock vim this is pending;
 -- scripts/run_integration_tests_individually.sh runs it in Neovim, including CI's oldest supported version.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("openDiff when the setup fails in a new tab", function()
@@ -101,32 +101,67 @@ describe("openDiff when the setup fails in a new tab", function()
     _G.claude_deferred_responses = {}
   end)
 
-  after_each(function()
+  local function reset()
     pcall(vim.api.nvim_del_augroup_by_name, group)
     diff._cleanup_all_active_diffs("test cleanup")
     vim.cmd("silent! tabonly!")
     vim.cmd("silent! only!")
     vim.cmd("silent! %bwipeout!")
+  end
+
+  after_each(function()
+    reset()
     vim.fn.delete(dir, "rf")
     _G.claude_deferred_responses = nil
+    if jit then
+      jit.opt.start("hotloop=56", "hotexit=10", "tryside=4") -- LuaJIT's defaults
+    end
   end)
 
+  local function a_WinClosed_handler_raises()
+    wipe_the_proposal_when_shown()
+    raise_when_a_window_closes()
+  end
+
+  local function a_WinLeave_handler_raises_during_the_cleanup()
+    fail_the_setup_and_then_raise_when("WinLeave")
+  end
+
+  local function a_BufLeave_handler_raises_during_the_cleanup()
+    fail_the_setup_and_then_raise_when("BufLeave")
+  end
+
   it("closes the new tab and goes back to the tab it left when a WinClosed handler raises", function()
-    closes_the_new_tab_and_goes_back(function()
-      wipe_the_proposal_when_shown()
-      raise_when_a_window_closes()
-    end)
+    closes_the_new_tab_and_goes_back(a_WinClosed_handler_raises)
   end)
 
   it("closes the new tab and goes back when a WinLeave handler raises during the cleanup", function()
-    closes_the_new_tab_and_goes_back(function()
-      fail_the_setup_and_then_raise_when("WinLeave")
-    end)
+    closes_the_new_tab_and_goes_back(a_WinLeave_handler_raises_during_the_cleanup)
   end)
 
   it("closes the new tab and goes back when a BufLeave handler raises during the cleanup", function()
-    closes_the_new_tab_and_goes_back(function()
-      fail_the_setup_and_then_raise_when("BufLeave")
-    end)
+    closes_the_new_tab_and_goes_back(a_BufLeave_handler_raises_during_the_cleanup)
+  end)
+
+  -- Neovim 0.8.0 bundles a LuaJIT with a bug (LuaJIT issue #1066, fixed in September 2023). When a Neovim API call
+  -- raises inside a coroutine because a handler it ran raised, LuaJIT keeps pointing at the main Lua thread, and the
+  -- next JIT trace exit corrupts the stack of that thread. Neovim then aborts (exit 134, "bad stack slot") and plenary
+  -- prints no summary. openDiff runs in a coroutine (tools.handle_invoke). The three cases above hit the bug in a few
+  -- of 100 runs. A JIT that compiles at once makes the passes below hit it in most runs, so this case fails on Neovim
+  -- 0.8.0 when diff.lua leaves the bug in place.
+  it("keeps Neovim running when handlers raise on repeated failed setups under an eager JIT", function()
+    if jit then
+      jit.opt.start("hotloop=1", "hotexit=1", "tryside=1")
+    end
+    local arrangements = {
+      a_WinClosed_handler_raises,
+      a_WinLeave_handler_raises_during_the_cleanup,
+      a_BufLeave_handler_raises_during_the_cleanup,
+    }
+    for pass = 1, 6 do
+      vim.api.nvim_create_augroup(group, { clear = true })
+      closes_the_new_tab_and_goes_back(arrangements[pass % #arrangements + 1])
+      reset()
+    end
   end)
 end)
