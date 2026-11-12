@@ -41,21 +41,23 @@ Key implementation details:
 
 ### 2. Lock File System (`lockfile.lua`)
 
-Manages discovery files for Claude CLI:
+Writes the discovery file that Claude CLI reads to find the server, and removes it again:
+
+- The file is `<port>.lock` in `$CLAUDE_CONFIG_DIR/ide`, or in `~/.claude/ide` when that variable is unset or empty [lua/claudecode/lockfile.lua:get_lock_dir].
+- It holds JSON with `pid`, `workspaceFolders` (the working directory, then the workspace folders of each LSP client), `ideName` (`"Neovim"`), `transport` (`"ws"`) and `authToken` [lua/claudecode/lockfile.lua:M.create] [lua/claudecode/lockfile.lua:M.get_workspace_folders].
+- A new lock directory gets mode `0700`, and `create` tries to tighten an existing one to `0700`.
+- `create` writes the file atomically: it writes a temp file in the same directory, then renames it onto the lock path. The temp file has mode `0600` and is opened with `wx`, so an existing file or symlink at its path makes the open fail. A failed write or rename removes the temp file:
 
 ```lua
--- Atomic file writing to prevent partial reads
-local temp_path = lock_path .. ".tmp"
-write_file(temp_path, json_data)
-vim.loop.fs_rename(temp_path, lock_path)
-
--- Cleanup on exit
-vim.api.nvim_create_autocmd("VimLeavePre", {
-  callback = function()
-    vim.loop.fs_unlink(lock_path)
-  end
-})
+-- lockfile.lua, M.create (shortened)
+local tmp_path = lock_path .. ".tmp." .. vim.fn.getpid() .. "." .. string.format("%d", vim.loop.hrtime())
+local fd = vim.loop.fs_open(tmp_path, "wx", tonumber("600", 8))
+-- ... write every byte, close fd ...
+os.rename(tmp_path, lock_path)
 ```
+
+- `remove` deletes the file with `os.remove`. It returns an error when no readable lock file exists and when `os.remove` fails [lua/claudecode/lockfile.lua:M.remove].
+- `init.lua` owns the lifecycle. `start` calls `create` once the server has bound its port [lua/claudecode/init.lua:M.start]. `stop` calls `remove` and only logs a warning when the removal fails, so a lock file that the removal failed to delete stays [lua/claudecode/init.lua:M.stop]. The `VimLeavePre` autocmd that `setup` creates calls `stop` when the server runs [lua/claudecode/init.lua:M.setup] (see Resource Cleanup).
 
 ### 3. MCP Tool System (`tools/`)
 
