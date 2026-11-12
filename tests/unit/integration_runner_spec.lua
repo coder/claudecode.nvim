@@ -119,6 +119,13 @@ local function shell(command)
   assert(status == 0 or status == true, "failed: " .. command)
 end
 
+-- The stubs below list the files they hold open from /proc/<pid>/fd. Where it does not exist they list nothing, and a
+-- runner that keeps a descriptor open would pass the test that reads their notes.
+local has_proc_fd = (function()
+  local status = os.execute("test -d /proc/self/fd")
+  return status == 0 or status == true
+end)()
+
 -- In some locales a bash regex bracket range such as [0-9] also matches digits like the fullwidth １.
 ---@return string|nil locale A common locale name in which it does, or nil when the host has none
 local function find_wide_digit_locale()
@@ -167,7 +174,8 @@ local STUB_MKTEMP = {
 local rm_pipe = assert(io.popen("command -v rm 2> /dev/null"))
 local real_rm = assert(rm_pipe:read("*l"), "needs rm")
 rm_pipe:close()
--- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Runs the real rm, except when
+-- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Runs the real rm and then exits with 1
+-- when $STUB_DIR/rm.fail exists, as rm does when a folder is not empty. Runs the real rm, except when
 -- $STUB_DIR/rm.slow exists: then it walks the way rm -rf does, but slowly. It deletes the
 -- files, waits the seconds in that file, and only then removes the folders, so a file that something makes meanwhile in
 -- a folder stops the removal of the folder ("Directory not empty"), as it does for a slow rm -rf under strace.
@@ -176,6 +184,7 @@ local STUB_RM = {
   "for fd in /proc/$$/fd/*; do",
   '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/rm.holds_status_file" ;; esac',
   "done",
+  'if [ -f "$STUB_DIR/rm.fail" ]; then ' .. quote(real_rm) .. ' "$@"; exit 1; fi',
   'if [ ! -f "$STUB_DIR/rm.slow" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
   "shift",
   'for path in "$@"; do find "$path" -type f -delete; done',
@@ -502,12 +511,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field caller_loop boolean|nil Run the runner twice in a calling shell and send the signal to their process group
   ---@field late_tee number|nil The file's tee ends this many seconds after its input ends
   ---@field slow_rm number|nil The runner's rm waits this many seconds between deleting files and removing folders
+  ---@field rm_fails boolean|nil The runner's rm removes what it is told to and then exits with 1
 
   ---@param signal string The signal to send
   ---@param run SignalRun
   ---@return table result `status` of the runner (of the calling shell with `caller_loop`), `left` in its TMPDIR once
   --- its Neovim's grandchild would have written, `ended` when the file's Neovim got to the end of its 2 second run,
-  --- `runner_output` (stdout and stderr of the runner), and `caller_output` of the calling shell
+  --- `runner_output` (stdout and stderr of the runner), `caller_output` of the calling shell, and `report`, one line
+  --- with all of these for the message of an assertion
   local function signal_runner(signal, run)
     write(dir .. "/tests/integration/slow_spec.lua", {})
     write(dir .. "/slow_spec.lua.out", summary(1, 0, 0))
@@ -524,6 +535,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     if run.slow_rm then
       write(dir .. "/rm.slow", { tostring(run.slow_rm) })
+    end
+    if run.rm_fails then
+      write(dir .. "/rm.fail", {})
     end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
@@ -575,12 +589,20 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if ended then
       ended:close()
     end
+    local status = output:match("status=(%d+)") or output
     return {
-      status = output:match("status=(%d+)") or output,
+      status = status,
       left = left,
       ended = ended ~= nil,
       caller_output = caller_output,
       runner_output = runner_output,
+      report = string.format(
+        "status %s, left %q, caller output %q, runner output %q",
+        status,
+        left,
+        caller_output,
+        runner_output
+      ),
     }
   end
 
@@ -590,7 +612,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     it(description .. name .. " at once, and exits " .. expected_status, function()
       local result = signal_runner(signal, {})
 
-      assert.are.equal(expected_status, result.status)
+      assert.are.equal(expected_status, result.status, result.report)
       assert.are.equal("", result.left, "the runner left temp files behind, or its Neovim's grandchild ran on")
       assert.is_false(result.ended, "the runner waited for the file to end, it did not stop it")
       assert.is_nil(
@@ -603,7 +625,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   it("stops a file whose Neovim ignores SIGTERM when the runner gets SIGTERM", function()
     local result = signal_runner("TERM", { deaf_to_term = true })
 
-    assert.are.equal("143", result.status)
+    assert.are.equal("143", result.status, result.report)
     assert.are.equal("", result.left, "a Neovim that ignores SIGTERM ran on after the runner died")
     assert.is_false(result.ended)
   end)
@@ -611,7 +633,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   it("leaves no exit status file when the file's subshell ends after the runner cleaned up", function()
     local result = signal_runner("TERM", { late_tee = 1 })
 
-    assert.are.equal("143", result.status)
+    assert.are.equal("143", result.status, result.report)
     assert.are.equal("", result.left, "the file's subshell wrote its exit statuses after the runner deleted its items")
     assert.is_nil(result.runner_output:find("No such file", 1, true), result.runner_output)
   end)
@@ -620,12 +642,15 @@ describe("scripts/run_integration_tests_individually.sh", function()
     -- The file's tee ends half a second after the signal, while the stub rm waits between its files and its folders.
     local result = signal_runner("TERM", { late_tee = 0.5, slow_rm = 1.5 })
 
-    assert.are.equal("143", result.status)
+    assert.are.equal("143", result.status, result.report)
     assert.are.equal("", result.left, "something made a file in a folder that the cleanup was removing")
     assert.is_nil(result.runner_output:find("Directory not empty", 1, true), result.runner_output)
   end)
 
   it("closes the status file for nvim and for tee, which only the file's subshell needs", function()
+    if not has_proc_fd then
+      pending("needs /proc/<pid>/fd to see which files a process holds open")
+    end
     local status, output = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
     })
@@ -674,7 +699,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()
     local result = signal_runner("TERM", { window = true })
 
-    assert.are.equal("143", result.status)
+    assert.are.equal("143", result.status, result.report)
     assert.are.equal("", result.left, "the runner left temp files or folders behind")
     assert.is_nil(io.open(dir .. "/slow_spec.lua.started"), "the file's Neovim started after the runner died")
   end)
@@ -682,7 +707,16 @@ describe("scripts/run_integration_tests_individually.sh", function()
   it("dies by SIGINT on Ctrl-C, so a shell that calls it in a loop stops the loop", function()
     local result = signal_runner("INT", { caller_loop = true })
 
-    assert.are.equal("130", result.status)
+    assert.are.equal("130", result.status, result.report)
+    assert.are.equal("", result.caller_output, "the calling shell went on after the runner got Ctrl-C")
+    assert.are.equal("", result.left, "the runner left temp files or folders behind")
+    assert.is_false(result.ended)
+  end)
+
+  it("dies by SIGINT on Ctrl-C when its cleanup fails, so a shell that calls it in a loop stops the loop", function()
+    local result = signal_runner("INT", { caller_loop = true, rm_fails = true })
+
+    assert.are.equal("130", result.status, result.report)
     assert.are.equal("", result.caller_output, "the calling shell went on after the runner got Ctrl-C")
     assert.are.equal("", result.left, "the runner left temp files or folders behind")
     assert.is_false(result.ended)

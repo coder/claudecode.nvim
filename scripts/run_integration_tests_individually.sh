@@ -33,8 +33,9 @@ trap cleanup_current_file EXIT
 # A Ctrl-C reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
 # `wait` below returns at once when this trap runs. The trap cleans up, then kills the runner with SIGINT, not with
 # `exit 130`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one that exited
-# 130.
-trap 'cleanup_current_file; trap - EXIT INT; kill -INT $$; exit 130' INT
+# 130. A cleanup that fails, such as an rm that cannot remove a folder, must not end the trap early either: with set -e
+# the runner would exit with 1 before the kill, and the calling shell would go on.
+trap 'cleanup_current_file || true; trap - EXIT INT; kill -INT $$; exit 130' INT
 
 echo "=== Running Integration Tests Individually ==="
 
