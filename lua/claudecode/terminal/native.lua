@@ -186,11 +186,7 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
     placement_modifier = "botright "
   end
 
-  -- vsplit returns no id, and it runs the autocmds of the user's (WinNew, WinEnter). With them, the current window
-  -- afterwards would be no proof of the split that this call made: an autocmd can close it, move to another window,
-  -- make a split of its own, or call an entry before Claude has a buffer. With :noautocmd none of that runs, so the
-  -- current window is the split that this call made.
-  vim.cmd("noautocmd " .. placement_modifier .. width .. "vsplit")
+  vim.cmd(placement_modifier .. width .. "vsplit")
   local new_winid = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_height(new_winid, full_height)
 
@@ -293,6 +289,12 @@ end
 
 local function open_terminal(cmd_string, env_table, effective_config, focus)
   focus = utils.normalize_focus(focus)
+  -- A start runs, and one of its autocmds called an entry before Claude had a buffer with a mark (WinLeave, WinNew or
+  -- WinEnter of the split, BufNew or BufAdd of the new buffer). The start makes Claude, and a second start would run
+  -- beside it.
+  if starting then
+    return
+  end
   -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and a
   -- toggle may hide it again. The check below finds that terminal.
   stop_snacks_terminal()
@@ -407,8 +409,11 @@ local function hide_terminal()
       return
     end
     -- An autocmd of yours can have changed bufhidden since the start (a TermEnter autocmd that sets wipe, for one), and
-    -- closing the window would then end Claude. So a hide sets it again.
-    vim.bo[bufnr].bufhidden = "hide"
+    -- closing the window would then end Claude. So a hide sets it again, and only then: a write of the same value fires
+    -- OptionSet too.
+    if vim.bo[bufnr].bufhidden ~= "hide" then
+      vim.bo[bufnr].bufhidden = "hide"
+    end
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
     winid = nil -- Clear window reference

@@ -233,7 +233,12 @@ describe("claudecode.terminal.native toggle behavior", function()
           end
         end,
         nvim_create_buf = function(listed, _scratch)
-          return new_buffer(listed)
+          local bufnr = new_buffer(listed)
+          -- BufNew and BufAdd fire here, before the plugin has marked the buffer.
+          if mock_state.bufnew_autocmd then
+            mock_state.bufnew_autocmd(bufnr)
+          end
+          return bufnr
         end,
         -- Mirrors Neovim: a temporary window when no window shows bufnr, and a raised error comes back rewrapped.
         nvim_buf_call = function(bufnr, fn)
@@ -291,17 +296,14 @@ describe("claudecode.terminal.native toggle behavior", function()
       },
       cmd = function(command)
         -- Handle vsplit and other commands
-        local noautocmd = command:match("^noautocmd ") ~= nil
-        local split = (command:gsub("^noautocmd ", ""))
-        if split:match("^topleft %d+vsplit") or split:match("^botright %d+vsplit") then
+        if command:match("^topleft %d+vsplit") or command:match("^botright %d+vsplit") then
           -- Create new window
           local winid = mock_state.next_winid
           mock_state.next_winid = mock_state.next_winid + 1
           mock_state.windows[winid] = { bufnr = 0 }
           mock_state.current_win = winid
-          -- WinNew and WinEnter fire here, before the plugin has a buffer for the terminal, unless the vsplit is under
-          -- :noautocmd.
-          if mock_state.vsplit_autocmd and not noautocmd then
+          -- WinLeave, WinNew and WinEnter fire here, before the plugin has a buffer for the terminal.
+          if mock_state.vsplit_autocmd then
             mock_state.vsplit_autocmd(winid)
           end
         elseif command == "enew" then
@@ -1588,6 +1590,34 @@ describe("claudecode.terminal.native toggle behavior", function()
       assert.are.equal(1, windows_showing(active))
     end)
 
+    -- A write of the same value fires OptionSet, so a hide writes bufhidden only when it is not hide.
+    it("should not write bufhidden when a hide finds it already hide", function()
+      native_provider.open("claude", {}, config, true)
+      local writes = {}
+      local inner = mock_vim.bo
+      mock_vim.bo = setmetatable({}, {
+        __index = function(_, bufnr)
+          local buffer_options = inner[bufnr]
+          return setmetatable({}, {
+            __index = function(_, option)
+              return buffer_options[option]
+            end,
+            __newindex = function(_, option, value)
+              if option == "bufhidden" then
+                table.insert(writes, value)
+              end
+              buffer_options[option] = value
+            end,
+          })
+        end,
+      })
+
+      native_provider.simple_toggle("claude", {}, config)
+
+      assert.are.same({}, writes)
+      assert.are.equal(0, windows_showing(native_provider.get_active_bufnr()))
+    end)
+
     -- With 'nohidden', a window that closes during the start unloads a buffer that is not bufhidden=hide. Before termopen,
     -- Neovim loads it again, and on 0.8 its term:// reader starts a second terminal in it (a bare `claude`, with no
     -- arguments, no plugin env and no IDE connection, which then gets the sends). In TermOpen the job ends with it.
@@ -1656,10 +1686,10 @@ describe("claudecode.terminal.native toggle behavior", function()
       end)
     end)
 
-    -- The vsplit of a start returns no id, and it runs the autocmds of the user's (WinNew, WinEnter) before the plugin has a
-    -- buffer for Claude. So it runs under :noautocmd: the current window afterwards is the split that the call made, and no
-    -- autocmd can close it, replace it or call an entry in the middle of it. A close() that a BufEnter or TermOpen autocmd
-    -- calls cannot wait in the middle of termopen (on Neovim 0.8 that aborts it).
+    -- The vsplit of a start runs the autocmds of the user's (WinLeave, WinNew, WinEnter) before the plugin has a buffer for
+    -- Claude, and so does creating that buffer (BufNew, BufAdd). An entry that one of them calls must not start a second
+    -- Claude. A close() that a BufEnter or TermOpen autocmd calls cannot wait in the middle of termopen (on Neovim 0.8 that
+    -- aborts it).
     describe("when the split of a start is created", function()
       local mock_state
       local notified
@@ -1691,38 +1721,71 @@ describe("claudecode.terminal.native toggle behavior", function()
         return count
       end
 
-      it("should run no autocmd while the vsplit creates the split", function()
-        local commands = {}
-        local cmd = mock_vim.cmd
-        mock_vim.cmd = function(command)
-          table.insert(commands, command)
-          return cmd(command)
-        end
-        local fired = false
-        mock_state.vsplit_autocmd = function()
-          fired = true
-          native_provider.open("claude", {}, config) -- an entry that a WinNew or WinEnter autocmd calls
-          mock_vim.api.nvim_win_close(mock_state.current_win, false)
-        end
+      -- Before Claude has a buffer with a mark, an entry that an autocmd calls finds no terminal to adopt. The vsplit
+      -- fires WinLeave, WinNew and WinEnter, and creating the buffer fires BufNew and BufAdd. The start makes the one
+      -- Claude, so those entries do nothing.
+      local entries = {
+        {
+          "open",
+          function()
+            native_provider.open("claude", {}, config)
+          end,
+        },
+        {
+          "simple_toggle",
+          function()
+            native_provider.simple_toggle("claude", {}, config)
+          end,
+        },
+        {
+          "focus_toggle",
+          function()
+            native_provider.focus_toggle("claude", {}, config)
+          end,
+        },
+      }
+      local early_autocmds = {
+        {
+          "a WinLeave, WinNew or WinEnter autocmd of the split",
+          function(action)
+            mock_state.vsplit_autocmd = action
+          end,
+        },
+        {
+          "a BufNew or BufAdd autocmd of the new buffer",
+          function(action)
+            mock_state.bufnew_autocmd = action
+          end,
+        },
+      }
+      for _, autocmd in ipairs(early_autocmds) do
+        for _, entry in ipairs(entries) do
+          it("should start one Claude when " .. autocmd[1] .. " calls " .. entry[1], function()
+            local fired = 0
+            autocmd[2](function()
+              fired = fired + 1
+              if fired == 1 then
+                entry[2]()
+              end
+            end)
 
-        native_provider.open("claude", {}, config, true)
+            native_provider.open("claude", {}, config, true)
 
-        assert.is_false(fired, "no WinNew or WinEnter autocmd ran")
-        local vsplits = {}
-        for _, command in ipairs(commands) do
-          if command:match("vsplit") then
-            table.insert(vsplits, command)
-          end
+            assert.are.equal(1, fired)
+            assert.are.equal(1, running_jobs())
+            assert.are.equal(1, terminal_buffers())
+            local active = native_provider.get_active_bufnr()
+            assert.is_not_nil(active)
+            assert.are.equal(1, windows_showing(active))
+            local open_windows = 0
+            for _ in pairs(mock_state.windows) do
+              open_windows = open_windows + 1
+            end
+            assert.are.equal(2, open_windows)
+            assert.are.same({}, notified)
+          end)
         end
-        assert.are.equal(1, #vsplits)
-        assert.is_truthy(vsplits[1]:match("^noautocmd "), vsplits[1])
-        assert.are.equal(1, running_jobs())
-        assert.are.equal(1, terminal_buffers())
-        local active = native_provider.get_active_bufnr()
-        assert.is_not_nil(active)
-        assert.are.equal(1, windows_showing(active))
-        assert.are.equal(active, mock_state.windows[mock_state.current_win].bufnr)
-      end)
+      end
 
       it("should not stay in the start after the vsplit raised", function()
         local original_cmd = mock_vim.cmd
@@ -1814,6 +1877,31 @@ describe("claudecode.terminal.native toggle behavior", function()
         assert.is_false(ok)
         assert.are.equal(0, running_jobs())
         assert.is_nil(native_provider.get_active_bufnr())
+      end)
+
+      -- The start raised and the close that it ran raised too: the caller gets the error of the start, which is the cause.
+      it("should raise the error of the start when the deferred close raises as well", function()
+        from_termopen(function()
+          native_provider.close()
+        end)
+        local set_current_win = mock_vim.api.nvim_set_current_win
+        mock_vim.api.nvim_set_current_win = function(winid)
+          if next(mock_state.running_jobs) then
+            error("the start raised after termopen", 0)
+          end
+          return set_current_win(winid)
+        end
+        local jobstop = mock_vim.fn.jobstop
+        mock_vim.fn.jobstop = function()
+          error("the close raised", 0)
+        end
+
+        local ok, err = pcall(native_provider.open, "claude", {}, config, true)
+        mock_vim.api.nvim_set_current_win = set_current_win
+        mock_vim.fn.jobstop = jobstop
+
+        assert.is_false(ok)
+        assert.are.equal("the start raised after termopen", err)
       end)
 
       local closers = { { "a BufEnter autocmd", from_bufenter }, { "a TermOpen autocmd", from_termopen } }
