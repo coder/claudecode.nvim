@@ -61,10 +61,12 @@ local function buf_hides(buf)
   return bufhidden == "hide" or vim.o.hidden
 end
 
----Whether the code runs inside an autocmd. `<abuf>` is empty outside one, and the call raises in no context.
+---Whether the code runs inside an autocmd. `expand("<abuf>")` gives the buffer number there and "" outside one, except
+---that it raises E496 outside one when 'verbose' is above 0 (`:verbose`, `nvim -V1`). An error means outside.
 ---@return boolean
 local function inside_autocmd()
-  return vim.fn.expand("<abuf>") ~= ""
+  local ok, abuf = pcall(vim.fn.expand, "<abuf>")
+  return ok and abuf ~= ""
 end
 
 ---The value of 'eventignore' with `events` added, and a `-Event` entry of the caller's dropped for each of them, because
@@ -123,7 +125,9 @@ end
 ---window, `BufEnter` and `BufWinEnter`. They run after the autocmds of `BufLeave` are done, also when one of those closed
 ---the other window of the buffer.
 ---Differences from a plain swap: no `OptionSet` event runs while the swap runs, and a change of 'eventignore' that
----an autocmd makes during it is undone afterwards. The swap is a plain `nvim_win_set_buf`, with its redirect from an
+---an autocmd makes during it is undone afterwards. 'eventignore' holds `BufLeave` for every buffer during the swap, as
+---it cannot name the old buffer, so a `++nested` `BufEnter` or `BufWinEnter` autocmd that leaves a buffer during the
+---swap gets no `BufLeave`. The swap is a plain `nvim_win_set_buf`, with its redirect from an
 ---autocmd that enters another window, when `win` is not the current window or shows `buf` already, when the helper runs
 ---inside an autocmd, when a plain swap could refuse to leave the old buffer (it is modified, not hidden and shown in
 ---no other window), and with 'winfixbuf' or in the command-line window.

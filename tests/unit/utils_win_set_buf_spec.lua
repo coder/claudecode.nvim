@@ -76,6 +76,10 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     end)
     stub(vim.fn, "expand", function(what)
       assert.equal("<abuf>", what)
+      if state.verbose and state.abuf == "" then
+        -- Neovim raises this outside an autocmd when 'verbose' is above 0, for any level, on every Neovim we run.
+        error('E496: No autocommand buffer number to substitute for "<abuf>"', 0)
+      end
       return state.abuf
     end)
     stub(vim.api, "nvim_win_set_buf", function(win, buf)
@@ -123,6 +127,18 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     }, log)
     assert.equal(TERMINAL, state.win_bufs[SPLIT])
     assert.equal("", vim.o.eventignore, "the caller's value is not written, :noautocmd sets it again itself")
+  end)
+
+  it("fires BufLeave first, outside an autocmd, when 'verbose' is above 0 and expand of <abuf> raises", function()
+    state.verbose = true
+
+    local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+    assert.is_true(placed)
+    assert.same({
+      "BufLeave",
+      "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet",
+    }, log)
   end)
 
   it("fires no other event itself", function()
@@ -268,6 +284,13 @@ describe("claudecode.utils.win_set_buf_in_split", function()
 
     it("inside an autocmd, where Neovim fires no event of the swap and a fired BufLeave would run alone", function()
       state.abuf = "7"
+
+      expect_plain()
+    end)
+
+    it("inside an autocmd with 'verbose' above 0", function()
+      state.abuf = "7"
+      state.verbose = true
 
       expect_plain()
     end)
