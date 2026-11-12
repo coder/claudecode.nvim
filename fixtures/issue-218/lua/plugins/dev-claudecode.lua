@@ -1,22 +1,23 @@
 -- claudecode.nvim (local checkout) configured exactly like the reporter's
 -- repro.lua for issue #218, plus a deterministic, Claude-free trigger
--- (:Repro218) that recreates the precise state that crashes Neovim.
+-- (:Repro218) that recreates the precise state that crashed Neovim.
 --
--- Root cause (verified): accepting (:w) a NEW-file *markdown* diff that was
--- opened in a NEW TAB (diff_opts.open_in_new_tab = true) tears the diff down via
+-- Root cause found for the report: accepting (:w) a NEW-file *markdown* diff that
+-- was opened in a NEW TAB (diff_opts.open_in_new_tab = true) tears the diff down via
 -- diff.close_diff_by_tab_name -> _cleanup_diff_state, which runs `:tabclose` on
--- the tab whose windows are STILL in diff mode. When render-markdown.nvim is
--- attached to that markdown buffer and the Claude terminal is open in the other
--- tab, that `:tabclose` abnormally terminates Neovim (SIGSEGV / exit 139 for the
+-- the tab whose windows are STILL in diff mode. When render-markdown.nvim was
+-- attached to that markdown buffer and the Claude terminal was open in the other
+-- tab, that `:tabclose` abnormally terminated Neovim (SIGSEGV / exit 139 for the
 -- reporter). Removing render-markdown, or turning diff mode off before the
--- teardown (the reporter's `diffoff` workaround), avoids it.
+-- teardown (the reporter's `diffoff` workaround), avoided it. Whether a given
+-- build still crashes is what scripts/repro_issue_218.sh finds out.
 --
--- :Repro218 reproduces this with NO real Claude needed: it opens a harmless
+-- :Repro218 sets up this state with NO real Claude needed: it opens a harmless
 -- Claude *terminal* (a sleeping process) so the layout matches real usage, then
 -- opens the new-tab markdown diff through the SAME coroutine machinery the
 -- openDiff MCP tool uses (diff.open_diff_blocking), wiring the deferred response
 -- so that accepting the diff simulates Claude writing the file and sending
--- close_tab. Focus is left in the proposed pane: just press `:w` to crash.
+-- close_tab. Focus is left in the proposed pane: press `:w` to accept the diff.
 --
 -- We load eagerly (lazy = false) so the diff module is configured at startup.
 return {
@@ -67,7 +68,7 @@ return {
     end
 
     -- Open a harmless Claude *terminal* (a sleeping process) without stealing
-    -- focus, so the window layout matches real usage. The crash only reproduces
+    -- focus, so the window layout matches real usage. The crash only reproduced
     -- when the Claude terminal is present in the original tab.
     local function ensure_dummy_terminal()
       local term = require("claudecode.terminal")
@@ -128,7 +129,7 @@ return {
           end
           vim.api.nvim_echo({
             {
-              "Repro218 ready. Press :w in the proposed pane to accept (Neovim crashes — issue #218).",
+              "Repro218 ready. Press :w in the proposed pane to accept the diff (issue #218).",
               "WarningMsg",
             },
           }, false, {})
@@ -137,7 +138,7 @@ return {
     end
 
     vim.api.nvim_create_user_command("Repro218", repro_218, {
-      desc = "Set up the issue #218 crash: open a NEW-file markdown diff in a new tab; then :w",
+      desc = "Set up the issue #218 state: open a NEW-file markdown diff in a new tab; then :w",
     })
 
     vim.api.nvim_create_user_command("Repro218Reset", function()
