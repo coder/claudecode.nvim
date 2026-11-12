@@ -5,8 +5,9 @@
 --
 -- The symptom is downstream of ONE thing: the Claude CLI that the plugin launches
 -- never opens a WebSocket connection back to the plugin's server, so every queued
--- @ mention sits in the queue until `connection_timeout` (default 10s) elapses and
--- the queue is cleared with the error above.
+-- @ mention sits in the queue until its deadline, `connection_timeout +
+-- connection_wait_delay` (default 10.6s) after the send, and is cleared with the
+-- error above.
 --
 -- This fixture launches the REAL plugin with the native terminal provider so the
 -- Claude CLI runs inside Neovim. Because it loads the plugin from the repo, the
