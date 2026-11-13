@@ -77,9 +77,15 @@ describe("claudecode.terminal.snacks close", function()
       next_jobid = 7,
       next_win = 1000,
       waited_ms = 0,
+      now = 0,
     }
 
     _G.vim = {
+      loop = {
+        hrtime = function()
+          return state.now
+        end,
+      },
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = function() end,
       schedule = function(fn)
@@ -103,12 +109,17 @@ describe("claudecode.terminal.snacks close", function()
       end,
       bo = setmetatable({}, {
         __index = function(_, bufnr)
+          -- Neovim raises for a buffer that is not valid, and for a name that is not a number.
           local buf = state.buffers[bufnr]
-          return { channel = buf and buf.jobid or 0, buftype = "terminal" }
+          assert(buf, "Invalid buffer id: " .. tostring(bufnr))
+          return { channel = buf.jobid, buftype = "terminal" }
         end,
       }),
       keymap = { set = function() end },
       fn = {
+        getpid = function()
+          return 99999999
+        end,
         maparg = function()
           return {}
         end,
@@ -118,6 +129,13 @@ describe("claudecode.terminal.snacks close", function()
         chansend = function(id, data)
           state.pending_writes[id] = true
           return #data
+        end,
+        -- Neovim raises for a job that exited or was stopped.
+        jobpid = function(id)
+          if not state.running_jobs[id] then
+            error("Vim:E900: Invalid channel id")
+          end
+          return 40000 + id
         end,
         jobwait = function(ids)
           local results = {}
@@ -316,6 +334,84 @@ describe("claudecode.terminal.snacks close", function()
 
     assert.is_false(vim.api.nvim_buf_is_valid(bufnr))
     assert.are.equal(0, state.waited_ms)
+  end)
+
+  -- A job that was just started can still be a fork of Neovim, and a jobstop on it can end Neovim with SIGHUP. The wait
+  -- is owned.wait_for_exec, which native.close uses too: a stand-in records when it runs.
+  describe("a close right after the start", function()
+    local owned
+    local real_wait_for_exec
+    local events
+
+    before_each(function()
+      owned = require("claudecode.terminal.owned")
+      real_wait_for_exec = owned.wait_for_exec
+      events = {}
+      owned.wait_for_exec = function(jobid)
+        table.insert(events, "wait_for_exec " .. jobid)
+      end
+      local jobstop = vim.fn.jobstop
+      vim.fn.jobstop = function(id)
+        table.insert(events, "jobstop " .. id)
+        return jobstop(id)
+      end
+    end)
+
+    after_each(function()
+      owned.wait_for_exec = real_wait_for_exec
+    end)
+
+    it("waits for the child to run exec before it stops the job", function()
+      local bufnr, jobid = open_claude(false)
+
+      snacks_provider.close()
+
+      assert.are.same({ "wait_for_exec " .. jobid, "jobstop " .. jobid }, events)
+      assert.is_false(vim.api.nvim_buf_is_valid(bufnr))
+    end)
+
+    it("does not let an open during the wait adopt the terminal that is closing", function()
+      local old_bufnr, old_jobid = open_claude(false)
+      vim.api.nvim_list_bufs = function()
+        local bufs = {}
+        for bufnr in pairs(state.buffers) do
+          table.insert(bufs, bufnr)
+        end
+        table.sort(bufs)
+        return bufs
+      end
+      owned.wait_for_exec = function(jobid)
+        table.insert(events, "wait_for_exec " .. jobid)
+        snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
+      end
+
+      snacks_provider.close()
+
+      assert.is_nil(state.running_jobs[old_jobid])
+      assert.is_false(vim.api.nvim_buf_is_valid(old_bufnr))
+      local new_bufnr = snacks_provider.get_active_bufnr()
+      assert.is_not_nil(new_bufnr)
+      assert.are_not.equal(old_bufnr, new_bufnr)
+      assert.is_true(state.running_jobs[state.buffers[new_bufnr].jobid])
+    end)
+
+    it("does not wait for a job that started more than 10 s ago", function()
+      local _, jobid = open_claude(false)
+      state.now = state.now + 10 * 1e9
+
+      snacks_provider.close()
+
+      assert.are.same({ "jobstop " .. jobid }, events)
+    end)
+
+    it("does not wait for a job that already exited", function()
+      local _, jobid = open_claude(false)
+      state.running_jobs[jobid] = nil
+
+      snacks_provider.close()
+
+      assert.are.same({}, events)
+    end)
   end)
 
   it("keeps Claude running when the terminal is only hidden", function()

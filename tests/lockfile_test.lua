@@ -28,19 +28,19 @@ if not _G.vim then
     fs = { remove = function() end }, ---@type vim_fs_module
     fn = { ---@type vim_fn_table
       expand = function(path)
-        return select(1, path:gsub("~", home))
+        local expanded = path:gsub("~", function()
+          return home
+        end)
+        return expanded
       end,
       -- Add other vim.fn mocks as needed by lockfile tests
       -- For now, only adding what's explicitly used or causing major type issues
       filereadable = function(path)
-        -- Check if file actually exists
-        local file = io.open(path, "r")
-        if file then
-          file:close()
-          return 1
-        else
-          return 0
-        end
+        -- Neovim gives 1 only for a file that exists, can be read and is not a folder (`:h filereadable()`), and it
+        -- does not open the file. The shell's `test` says the same without opening it: opening a FIFO waits for a
+        -- writer, and `io.open` on a folder gives a handle on Linux.
+        local ok = os.execute("test -r " .. temp_dir.quote(path) .. " && ! test -d " .. temp_dir.quote(path))
+        return (ok == 0 or ok == true) and 1 or 0
       end,
       fnamemodify = function(fname, _)
         return fname
@@ -263,9 +263,58 @@ do
     return true
   end
 
+  -- Mirror libuv's fs_unlink with the unlink(2) call itself, so a folder is refused (EISDIR on Linux, EPERM on macOS)
+  -- as it is for the plugin, and a failure comes back as (nil, "NAME: message: path", "NAME") without raising.
+  local ffi = require("ffi")
+  pcall(ffi.cdef, "int unlink(const char *path);")
+  local unlink_errors = {
+    [1] = { "EPERM", "operation not permitted" },
+    [2] = { "ENOENT", "no such file or directory" },
+    [13] = { "EACCES", "permission denied" },
+    [21] = { "EISDIR", "illegal operation on a directory" },
+    [30] = { "EROFS", "read-only file system" },
+  }
   loop.fs_unlink = function(path)
-    os.remove(path)
-    return true
+    if ffi.C.unlink(path) == 0 then
+      return true
+    end
+    local code = ffi.errno()
+    local known = unlink_errors[code] or { "E" .. code, "error " .. code }
+    return nil, known[1] .. ": " .. known[2] .. ": " .. path, known[1]
+  end
+
+  -- Mirror libuv's fs_stat for a path: nil and an error for a missing path, else a table with the type. The shell's
+  -- `test` follows symlinks as stat does, and it does not need read permission on the file, as stat does not.
+  if not loop.fs_stat then
+    loop.fs_stat = function(path)
+      local function test(flag)
+        local ok = os.execute("test " .. flag .. " " .. temp_dir.quote(path))
+        return ok == 0 or ok == true
+      end
+      if test("-d") then
+        return { type = "directory" }
+      end
+      if test("-f") then
+        return { type = "file" }
+      end
+      if test("-p") then
+        return { type = "fifo" }
+      end
+      if test("-S") then
+        return { type = "socket" }
+      end
+      return nil, "ENOENT: no such file or directory", "ENOENT"
+    end
+  end
+  -- fs_lstat does not follow a link: a link is of type "link", even one that points nowhere.
+  if not loop.fs_lstat then
+    loop.fs_lstat = function(path)
+      local ok = os.execute("test -L " .. temp_dir.quote(path))
+      if ok == 0 or ok == true then
+        return { type = "link" }
+      end
+      return loop.fs_stat(path)
+    end
   end
 
   -- Record chmod calls so tests can assert the lock dir is tightened to 0700.
@@ -280,6 +329,38 @@ do
     hrtime_counter = hrtime_counter + 1
     return hrtime_counter
   end
+end
+
+-- Whether this user is root. Root reads any file and opens any FIFO, whatever its mode.
+local function running_as_root()
+  local pipe = assert(io.popen("id -u"))
+  local uid = pipe:read("*l")
+  pipe:close()
+  return uid == "0"
+end
+
+-- Runs a shell command that a test's setup needs, and fails the test when it exits with a status that is not 0.
+-- `assert(os.execute(...))` never fails here: LuaJIT returns the raw status, 0 for success and 256 for exit status 1, and
+-- every number is truthy. Lua 5.2 and later return true for success.
+local function shell(command)
+  local status = os.execute(command)
+  assert(status == 0 or status == true, "failed: " .. command)
+end
+
+-- Makes a FIFO at `path` with `mode` (as a string such as "600"), or returns false when mkfifo is not there.
+local function make_fifo(path, mode)
+  local ok = os.execute("mkfifo -m " .. mode .. " " .. temp_dir.quote(path) .. " 2>/dev/null")
+  return ok == 0 or ok == true
+end
+
+-- Makes a Unix socket file at `path` (python3 binds one and the file stays when it exits), or returns false.
+local function make_socket(path)
+  local ok = os.execute(
+    "python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "
+      .. temp_dir.quote(path)
+      .. " 2>/dev/null"
+  )
+  return ok == 0 or ok == true
 end
 
 describe("Lockfile Module", function()
@@ -441,14 +522,14 @@ describe("Lockfile Module", function()
   end)
 
   describe("remove()", function()
-    local real_os_remove
+    local real_fs_unlink
 
     before_each(function()
-      real_os_remove = os.remove
+      real_fs_unlink = vim.loop.fs_unlink
     end)
 
     after_each(function()
-      os.remove = real_os_remove
+      vim.loop.fs_unlink = real_fs_unlink
     end)
 
     it("should delete the lock file and report success", function()
@@ -463,43 +544,269 @@ describe("Lockfile Module", function()
       assert(vim.fn.filereadable(lock_path) == 0)
     end)
 
-    it("should report a failure when os.remove returns nil and an error instead of raising", function()
+    it("should report a failure when fs_unlink returns nil and an error instead of raising", function()
       local port = 12351
       local created, lock_path = lockfile.create(port)
       assert(created == true)
 
-      -- os.remove reports a failure such as a read-only folder as (nil, message, errno), without raising.
-      os.remove = function(path)
+      -- fs_unlink reports a failure such as a read-only folder as (nil, message, name), without raising.
+      vim.loop.fs_unlink = function(path)
         assert(path == lock_path)
-        return nil, lock_path .. ": Permission denied", 13
+        return nil, "EACCES: permission denied: " .. lock_path, "EACCES"
       end
 
       local success, err = lockfile.remove(port)
-      os.remove = real_os_remove
+      vim.loop.fs_unlink = real_fs_unlink
 
       -- The file is still there, so remove must not say that it worked.
       local still_there = vim.fn.filereadable(lock_path) == 1
-      real_os_remove(lock_path)
+      os.remove(lock_path)
 
       assert(still_there)
       assert(success == false, "remove returned " .. tostring(success) .. " while the lock file stays")
       assert("string" == type(err))
       assert(err:find("Failed to remove lock file", 1, true))
-      assert(err:find("Permission denied", 1, true))
+      assert(err:find("permission denied", 1, true))
     end)
 
-    it("should report a failure when os.remove raises", function()
+    -- Deleting a file needs write permission on its folder, not read permission on the file.
+    -- Whether a name is there: a link counts, even one that points nowhere.
+    local function exists(path)
+      local ok = os.execute("test -e " .. temp_dir.quote(path) .. " || test -L " .. temp_dir.quote(path))
+      return ok == 0 or ok == true
+    end
+
+    it("should delete a lock file that exists but cannot be read", function()
+      local port = 12353
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+      os.execute("chmod 000 " .. temp_dir.quote(lock_path))
+
+      local probe = io.open(lock_path, "r")
+      if probe then
+        probe:close()
+        os.remove(lock_path)
+        return pending("this user can read a file with mode 000 (root)")
+      end
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      if still_there then
+        os.execute("chmod 600 " .. temp_dir.quote(lock_path))
+        os.remove(lock_path)
+      end
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(err == nil)
+      assert(not still_there, "the lock file stays")
+    end)
+
+    it("should report that a lock file that is missing does not exist", function()
+      local port = 12354
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      assert(not exists(lock_path))
+
+      local success, err = lockfile.remove(port)
+
+      assert(success == false)
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
+    it("should not delete a folder that is named like a lock file", function()
+      local port = 12355
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      shell("mkdir " .. temp_dir.quote(lock_path))
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      os.execute("rmdir " .. temp_dir.quote(lock_path))
+
+      assert(success == false)
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+      assert(still_there, "the folder is gone")
+    end)
+
+    it("should report the fs_unlink error and keep the lock file when the folder is read-only", function()
+      local port = 12356
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+      os.execute("chmod 555 " .. temp_dir.quote(lockfile.lock_dir))
+
+      local probe_path = lockfile.lock_dir .. "/probe"
+      local probe = io.open(probe_path, "w")
+      if probe then
+        probe:close()
+        os.remove(probe_path)
+        os.execute("chmod 755 " .. temp_dir.quote(lockfile.lock_dir))
+        os.remove(lock_path)
+        return pending("this user can write into a folder with mode 555 (root)")
+      end
+
+      local success, err = lockfile.remove(port)
+      os.execute("chmod 755 " .. temp_dir.quote(lockfile.lock_dir))
+      local still_there = exists(lock_path)
+      os.remove(lock_path)
+
+      assert(success == false, "remove returned " .. tostring(success))
+      assert("string" == type(err))
+      assert(err:find("Failed to remove lock file", 1, true), err)
+      assert(err:find(lock_path, 1, true), err)
+      assert(err:lower():find("permission denied", 1, true), err)
+      assert(still_there, "the lock file is gone")
+    end)
+
+    -- Another process of the same user can replace the lock file with a folder between the check and the delete.
+    -- `fs_unlink` refuses a folder, where `os.remove` would delete an empty one. The folder takes the file's place right
+    -- after the first call of fs_stat or fs_lstat that names the lock path, so the test does not depend on which one
+    -- the plugin calls.
+    it("should not delete a folder that takes the place of the lock file after the check", function()
+      for _, mode in ipairs({ "000", "600" }) do
+        local port = 12365
+        local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+        local quoted = temp_dir.quote(lock_path)
+        local file = assert(io.open(lock_path, "w"))
+        file:close()
+        shell("chmod " .. mode .. " " .. quoted)
+
+        local replaced = false
+        local real_stat, real_lstat = vim.loop.fs_stat, vim.loop.fs_lstat
+        local function replace_after(real)
+          return function(path, ...)
+            local stat, err, name = real(path, ...)
+            if path == lock_path and not replaced then
+              replaced = true
+              shell("rm -f " .. quoted .. " && mkdir " .. quoted)
+            end
+            return stat, err, name
+          end
+        end
+        vim.loop.fs_stat, vim.loop.fs_lstat = replace_after(real_stat), replace_after(real_lstat)
+        local called, success, err = pcall(lockfile.remove, port)
+        vim.loop.fs_stat, vim.loop.fs_lstat = real_stat, real_lstat
+
+        local is_folder = os.execute("test -d " .. quoted)
+        local folder_stays = is_folder == 0 or is_folder == true
+        os.execute("rm -rf " .. quoted)
+
+        assert(called, "remove raised: " .. tostring(success))
+        assert(replaced, "mode " .. mode .. ": the folder never took the place of the file")
+        assert(success == false, "mode " .. mode .. ": remove returned " .. tostring(success) .. ": " .. tostring(err))
+        assert(folder_stays, "mode " .. mode .. ": remove deleted the folder")
+        assert(err:find("Failed to remove lock file", 1, true), err)
+      end
+    end)
+
+    -- A link is a name that `remove` can delete. It deletes the link and never its target.
+    local function removes_only_the_name(port, make_name)
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      local still_there = make_name(lock_path)
+
+      local success, err = lockfile.remove(port)
+      local name_stays = exists(lock_path)
+      local target_stays = still_there()
+      os.execute("rm -rf " .. temp_dir.quote(lock_path))
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(not name_stays, "the name stays")
+      assert(target_stays, "the target is gone")
+    end
+
+    it("should remove a link that points nowhere", function()
+      removes_only_the_name(12366, function(lock_path)
+        shell("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
+        return function()
+          return true
+        end
+      end)
+    end)
+
+    it("should remove a link to the lock file of another port and keep that file", function()
+      removes_only_the_name(12367, function(lock_path)
+        local created, other_path = lockfile.create(12368)
+        assert(created == true)
+        shell("ln -s " .. temp_dir.quote(other_path) .. " " .. temp_dir.quote(lock_path))
+        return function()
+          -- The other file is still there, and it still holds its content (the test reads no content: test -s).
+          local ok = os.execute("test -s " .. temp_dir.quote(other_path))
+          os.remove(other_path)
+          return ok == 0 or ok == true
+        end
+      end)
+    end)
+
+    it("should remove one name of a hard link and keep the other name", function()
+      removes_only_the_name(12369, function(lock_path)
+        local created, other_path = lockfile.create(12370)
+        assert(created == true)
+        shell("ln " .. temp_dir.quote(other_path) .. " " .. temp_dir.quote(lock_path))
+        return function()
+          local ok = os.execute("test -s " .. temp_dir.quote(other_path))
+          os.remove(other_path)
+          return ok == 0 or ok == true
+        end
+      end)
+    end)
+
+    it("should remove a link to a folder and keep the folder and what it holds", function()
+      removes_only_the_name(12371, function(lock_path)
+        local folder = lockfile.lock_dir .. "/folder-of-12371"
+        shell("mkdir " .. temp_dir.quote(folder) .. " && touch " .. temp_dir.quote(folder .. "/keep"))
+        shell("ln -s " .. temp_dir.quote(folder) .. " " .. temp_dir.quote(lock_path))
+        return function()
+          local ok = os.execute("test -f " .. temp_dir.quote(folder .. "/keep"))
+          os.execute("rm -rf " .. temp_dir.quote(folder))
+          return ok == 0 or ok == true
+        end
+      end)
+    end)
+
+    -- A FIFO or a socket at the lock path was deleted before, because `filereadable` let it through. It is still.
+    it("should delete a FIFO at the lock path", function()
+      local port = 12358
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      if not make_fifo(lock_path, "600") then
+        return pending("cannot make a FIFO here")
+      end
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      if still_there then
+        os.remove(lock_path)
+      end
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(not still_there, "the FIFO stays")
+    end)
+
+    it("should delete a socket at the lock path", function()
+      local port = 12359
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      if not make_socket(lock_path) then
+        return pending("cannot make a socket here")
+      end
+
+      local success, err = lockfile.remove(port)
+      local still_there = exists(lock_path)
+      if still_there then
+        os.remove(lock_path)
+      end
+
+      assert(success == true, "remove returned " .. tostring(success) .. ": " .. tostring(err))
+      assert(not still_there, "the socket stays")
+    end)
+
+    it("should report a failure when fs_unlink raises", function()
       local port = 12352
       local created, lock_path = lockfile.create(port)
       assert(created == true)
 
-      os.remove = function()
+      vim.loop.fs_unlink = function()
         error("boom")
       end
 
       local success, err = lockfile.remove(port)
-      os.remove = real_os_remove
-      real_os_remove(lock_path)
+      vim.loop.fs_unlink = real_fs_unlink
+      os.remove(lock_path)
 
       assert(success == false)
       assert(err:find("Failed to remove lock file", 1, true))
@@ -577,6 +884,104 @@ describe("Lockfile Module", function()
       assert(token == nil)
       assert("string" == type(error))
       assert(error:find("Lock file does not exist"))
+    end)
+
+    it("should say that a lock file that is missing does not exist", function()
+      local port = 12360
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+
+      local success, token, err = lockfile.get_auth_token(port)
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
+    it("should refuse a lock file that exists but cannot be read, and say that it cannot be read", function()
+      local port = 12361
+      local created, lock_path = lockfile.create(port)
+      assert(created == true)
+      os.execute("chmod 000 " .. temp_dir.quote(lock_path))
+
+      local probe = io.open(lock_path, "r")
+      if probe then
+        probe:close()
+        os.remove(lock_path)
+        return pending("this user can read a file with mode 000 (root)")
+      end
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.execute("chmod 600 " .. temp_dir.quote(lock_path))
+      os.remove(lock_path)
+
+      -- The messages are checked here, never the token or the file's content.
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert("string" == type(err))
+      assert(err:find("Lock file exists but cannot be read: ", 1, true) == 1, err)
+      assert(err:find(lock_path, 1, true), err)
+      assert(err:find("Permission denied", 1, true), err)
+      assert(not err:find("does not exist", 1, true), err)
+    end)
+
+    it("should say that a FIFO that cannot be read exists but cannot be read", function()
+      local port = 12363
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      -- Root opens any FIFO whatever its mode, and the open would wait for a writer.
+      if running_as_root() then
+        return pending("root opens a FIFO with mode 000")
+      end
+      if not make_fifo(lock_path, "000") then
+        return pending("cannot make a FIFO here")
+      end
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.remove(lock_path)
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(tostring(err):find("Lock file exists but cannot be read: ", 1, true) == 1, tostring(err))
+    end)
+
+    it("should say that a socket at the lock path exists but cannot be read", function()
+      local port = 12364
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      if not make_socket(lock_path) then
+        return pending("cannot make a socket here")
+      end
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.remove(lock_path)
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(tostring(err):find("Lock file exists but cannot be read: ", 1, true) == 1, tostring(err))
+    end)
+
+    it("should say that a folder named like a lock file is not a lock file", function()
+      local port = 12362
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      shell("mkdir " .. temp_dir.quote(lock_path))
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.execute("rmdir " .. temp_dir.quote(lock_path))
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
+    end)
+
+    it("should say that a link that points nowhere is no lock file", function()
+      local port = 12372
+      local lock_path = lockfile.lock_dir .. "/" .. port .. ".lock"
+      shell("ln -s " .. temp_dir.quote(lockfile.lock_dir .. "/nowhere") .. " " .. temp_dir.quote(lock_path))
+
+      local success, token, err = lockfile.get_auth_token(port)
+      os.execute("rm -f " .. temp_dir.quote(lock_path))
+
+      assert(success == false)
+      assert(token == nil, "a token came back")
+      assert(err == "Lock file does not exist: " .. lock_path, tostring(err))
     end)
 
     it("should write the lock file with 0600 permissions", function()

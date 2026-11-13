@@ -8,13 +8,6 @@ if vim == nil or vim.fn.has("nvim") ~= 1 then
   return
 end
 
-if vim.fn.has("nvim-0.9") ~= 1 then
-  describe("unified diff window choice", function()
-    pending("the unified layout needs Neovim 0.9")
-  end)
-  return
-end
-
 describe("unified diff window choice", function()
   local diff = require("claudecode.diff")
   local terminal = require("claudecode.terminal")

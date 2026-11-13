@@ -8,6 +8,11 @@ if path:sub(1, #stub_dir + 1) ~= stub_dir .. ":" then
   vim.env.PATH = stub_dir .. (path ~= "" and ":" .. path or "")
 end
 
+-- See tests/helpers/termopen_wait.lua for why termopen waits for exec.
+vim.fn.termopen = dofile(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/helpers/termopen_wait.lua"
+)(vim.fn.termopen)
+
 -- Set up package path
 local package_root = vim.fn.stdpath("data") .. "/site/pack/vendor/start/"
 local install_path = package_root .. "plenary.nvim"
@@ -72,35 +77,5 @@ if not vim.g.loaded_claudecode and should_load then
   require("claudecode").setup({
     auto_start = false,
     log_level = "trace", -- More verbose for tests
-  })
-end
-
--- Global cleanup function for plenary test harness
-_G.claudecode_test_cleanup = function()
-  -- Clear global deferred responses
-  if _G.claude_deferred_responses then
-    _G.claude_deferred_responses = {}
-  end
-
-  -- Stop claudecode if running
-  local ok, claudecode = pcall(require, "claudecode")
-  if ok and claudecode.state and claudecode.state.server then
-    local selection_ok, selection = pcall(require, "claudecode.selection")
-    if selection_ok and selection.disable then
-      selection.disable()
-    end
-
-    if claudecode.stop then
-      claudecode.stop()
-    end
-  end
-end
-
--- Auto-cleanup when using plenary test harness
-if vim.env.PLENARY_TEST_HARNESS then
-  vim.api.nvim_create_autocmd("VimLeavePre", {
-    callback = function()
-      _G.claudecode_test_cleanup()
-    end,
   })
 end

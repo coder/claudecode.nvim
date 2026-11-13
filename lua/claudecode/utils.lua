@@ -28,12 +28,10 @@ function M.map_terminal_suspend(bufnr)
   vim.keymap.set("t", "<C-z>", "<Cmd>suspend<CR>", { buffer = bufnr, desc = "Suspend Neovim" })
 end
 
----Show `buf` in `win` without running BufEnter handlers. A handler of a terminal buffer can queue an insert with
----`startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window the cursor ends in, not in `win`.
----'eventignore' is back to the caller's value afterwards, also when the call raises.
----@param win number
----@param buf number
-function M.win_set_buf_without_bufenter(win, buf)
+---Run `fn` with BufEnter in 'eventignore'. 'eventignore' is back to the caller's value afterwards, also when `fn`
+---raises.
+---@param fn fun()
+local function ignoring_bufenter(fn)
   local saved = vim.o.eventignore
   -- A `-BufEnter` entry wins wherever it stands in the list.
   local ignored = {}
@@ -44,11 +42,168 @@ function M.win_set_buf_without_bufenter(win, buf)
   end
   table.insert(ignored, "BufEnter")
   vim.o.eventignore = table.concat(ignored, ",")
-  local ok, err = pcall(vim.api.nvim_win_set_buf, win, buf)
+  local ok, err = pcall(fn)
   vim.o.eventignore = saved
   if not ok then
     error(err, 0)
   end
+end
+
+---Whether `buf` can be hidden when its window leaves it, as Neovim's `buf_hide` decides it: 'bufhidden' first, then
+---'hidden'.
+---@param buf number
+---@return boolean
+local function buf_hides(buf)
+  local bufhidden = vim.bo[buf].bufhidden
+  if bufhidden == "unload" or bufhidden == "wipe" or bufhidden == "delete" then
+    return false
+  end
+  return bufhidden == "hide" or vim.o.hidden
+end
+
+---Whether the code runs inside an autocmd. `expand("<abuf>")` gives the buffer number there and "" outside one. Outside
+---one with 'verbose' above 0 (`:verbose`, `nvim -V1`) it raises E496, and under `:silent!` it gives "" and sets
+---v:errmsg instead. An error means outside, and v:errmsg is as it was before the call.
+---@return boolean
+local function inside_autocmd()
+  local errmsg = vim.v.errmsg
+  local ok, abuf = pcall(vim.fn.expand, "<abuf>")
+  vim.v.errmsg = errmsg
+  return ok and abuf ~= ""
+end
+
+---The value of 'eventignore' with `events` added, and a `-Event` entry of the caller's dropped for each of them, because
+---that entry wins wherever it stands in the list.
+---@param events string[]
+---@return string
+local function eventignore_with(events)
+  local dropped = {}
+  for _, event in ipairs(events) do
+    dropped["-" .. event:lower()] = true
+  end
+  local kept = {}
+  for entry in vim.o.eventignore:gmatch("[^,]+") do
+    if not dropped[entry:lower()] then
+      table.insert(kept, entry)
+    end
+  end
+  for _, event in ipairs(events) do
+    table.insert(kept, event)
+  end
+  return table.concat(kept, ",")
+end
+
+---Whether the swap with `buffer!` can leave `buf`, the buffer that a window shows, without losing its text. A plain
+---swap refuses (E37) or asks when `buf` is changed, not hidden and shown in no other window, and `buffer!` would skip
+---that check: it unloads or wipes such a buffer when its 'bufhidden' says so.
+---@param buf number
+---@return boolean
+local function can_abandon(buf)
+  return vim.bo[buf].modified == false or buf_hides(buf) or #vim.fn.win_findbuf(buf) > 1
+end
+
+---Whether the BufLeave of the old buffer can be fired before the swap. A plain swap checks first that Neovim may leave the
+---old buffer, and `:buffer!` would skip that check, so when a plain swap could refuse (E37) or ask, the plain swap is
+---the one to make. It is also the one to make when `win` is not current, when it shows `buf` already, inside an autocmd,
+---in the command-line window, and with 'winfixbuf'.
+---@param win number
+---@param buf number
+---@return boolean
+local function can_leave_first(win, buf)
+  if vim.api.nvim_get_current_win() ~= win or inside_autocmd() or vim.fn.getcmdwintype() ~= "" then
+    return false
+  end
+  local old = vim.api.nvim_win_get_buf(win)
+  if old == buf then
+    return false
+  end
+  -- 'winfixbuf' (Neovim 0.10) makes a plain swap fail, and `:buffer!` would override it. Older Neovim has no such option.
+  local known, fixed = pcall(vim.api.nvim_get_option_value, "winfixbuf", { win = win })
+  if known and fixed then
+    return false
+  end
+  return can_abandon(old)
+end
+
+---Show `buf` in `win`, a split that was just made for it and that is the current window. A plain `nvim_win_set_buf`
+---runs the `BufLeave` autocmds of the buffer that `win` showed inside the call, and one that enters another window there
+---makes Neovim load `buf` into that window, even though the call names `win`.
+---This helper fires `BufLeave` for that buffer itself, with `:doautocmd`, while the buffer still shows in `win`. No
+---other event is fired by hand, because Neovim holds the buffer locked while it fires them. When an autocmd moved the
+---cursor, the helper puts it back in `win`, with no event. Then it makes the swap, with 'eventignore' holding the
+---caller's value, `BufLeave` and `OptionSet`, so no leave event of the swap runs twice. `:noautocmd` sets the caller's
+---value of 'eventignore' again after the swap, with no `OptionSet`. Neovim itself fires the events of the swap that
+---follow a `BufLeave`, with its locks: `BufWinLeave`, `BufHidden` and `BufUnload` for a buffer that lost its last
+---window, `BufEnter` and `BufWinEnter`. They run after the autocmds of `BufLeave` are done, also when one of those closed
+---the other window of the buffer.
+---Differences from a plain swap: no `OptionSet` event runs while the swap runs, a change of 'eventignore' that an
+---autocmd makes during it is undone afterwards, and a buffer that an autocmd of `BufLeave` showed in `win` gets
+---`BufWinLeave` and `BufHidden`, which a plain swap does not fire for it. 'eventignore' holds `BufLeave` for every
+---buffer during the swap, as it cannot name the old buffer, so a `++nested` `BufEnter` or `BufWinEnter` autocmd that
+---leaves a buffer during the swap gets no `BufLeave`. The swap is a plain `nvim_win_set_buf`, with its redirect from an
+---autocmd that enters another window, when `win` is not the current window or shows `buf` already, when the helper runs
+---inside an autocmd, when a plain swap could refuse to leave the old buffer (it is modified, not hidden and shown in
+---no other window), and with 'winfixbuf' or in the command-line window.
+---@param win number
+---@param buf number
+---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events. A handler of a terminal
+---buffer can queue an insert with `startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window
+---the cursor ends in, not in `win`. 'eventignore' is back to the caller's value afterwards, also when the call raises.
+---@return boolean placed False when an autocmd of `BufLeave` closed `win` or wiped `buf`, so `buf` shows nowhere.
+function M.win_set_buf_in_split(win, buf, opts)
+  local ignore_bufenter = opts ~= nil and opts.ignore_bufenter == true
+  if not can_leave_first(win, buf) then
+    if ignore_bufenter then
+      ignoring_bufenter(function()
+        vim.api.nvim_win_set_buf(win, buf)
+      end)
+    else
+      vim.api.nvim_win_set_buf(win, buf)
+    end
+    return true
+  end
+
+  local old = vim.api.nvim_win_get_buf(win)
+  vim.cmd("doautocmd <nomodeline> BufLeave")
+  -- A plain swap shows nothing for a buffer that an autocmd wiped, and raises no error. `:buffer!` would raise E86.
+  if not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  -- A plain swap leaves a buffer loaded and hidden that an autocmd of BufLeave showed in `win`, whatever the buffer is: a
+  -- terminal with a running job, a scratch buffer with text, a changed or an unchanged file. `:buffer!` unloads or wipes
+  -- such a buffer when 'hidden' is off or its 'bufhidden' says so. The helper keeps a changed old buffer too, whose other
+  -- window an autocmd closed: a plain swap decided before that autocmd ran, and then unloads or wipes it with its text
+  -- when its 'bufhidden' says so. So the buffer that `win` shows now is hidden for the swap, and gets its 'bufhidden' back
+  -- after it. `:noautocmd` keeps both changes from running OptionSet autocmds, as a plain swap changes no option.
+  local shown = vim.api.nvim_win_get_buf(win)
+  local lost_by_swap = not buf_hides(shown)
+    and #vim.fn.win_findbuf(shown) == 1
+    and (shown ~= old or vim.bo[shown].modified)
+  local bufhidden = lost_by_swap and vim.bo[shown].bufhidden or nil
+  -- A plain swap leaves the cursor in `win`, also when an autocmd entered another window, a window of another tab as
+  -- well, and the code that called this goes on in the tab it was in.
+  if vim.api.nvim_get_current_win() ~= win then
+    vim.cmd(string.format("noautocmd call nvim_set_current_win(%d)", win))
+  end
+  local ignored = { "BufLeave", "OptionSet" }
+  if ignore_bufenter then
+    table.insert(ignored, "BufEnter")
+  end
+  if bufhidden ~= nil then
+    vim.cmd(string.format("noautocmd call setbufvar(%d, '&bufhidden', 'hide')", shown))
+  end
+  local swapped, swap_error = pcall(
+    vim.cmd,
+    string.format("noautocmd lua vim.o.eventignore = %q; vim.cmd(%q)", eventignore_with(ignored), "buffer! " .. buf)
+  )
+  -- An autocmd of the swap can have wiped the buffer.
+  if bufhidden ~= nil and vim.api.nvim_buf_is_valid(shown) then
+    vim.cmd(string.format("noautocmd call setbufvar(%d, '&bufhidden', %q)", shown, bufhidden))
+  end
+  if not swapped then
+    error(swap_error, 0)
+  end
+  return true
 end
 
 local blocked_fn
@@ -304,6 +459,39 @@ function M.valid_utf8(text)
   end
   table.insert(parts, text:sub(valid_from))
   return table.concat(parts)
+end
+
+-- Neovim 0.8 and 0.9 bundle a LuaJIT older than its commit e86990f7f of 2023-09-21, which fixes LuaJIT issue 1066:
+-- after a C function runs Lua on another thread and then raises into a pcall, `cur_L` still names that thread, and
+-- the next exit from a compiled trace crashes (the issue shows a crash in `lj_trace_exit`). The commit sets `cur_L`
+-- again in `err_unwind` (src/lj_err.c). A Neovim API call in a coroutine that runs a Lua callback and then raises
+-- behaves like that C function, and Neovim aborts (exit 134 or 139). We did not read the LuaJIT source for other code
+-- that uses `cur_L`. Measured: with the JIT off and its traces flushed while the coroutine runs, Neovim survives
+-- (tests/integration/diff_tool_coroutine_jit_spec.lua). Rolling releases are numbered 2.1.<unix time of the commit>.
+-- A version that is no string, or does not read that way, counts as affected, which costs only a flush.
+local jit_affected = jit ~= nil and (tonumber(tostring(jit.version):match("^LuaJIT 2%.1%.(%d+)$")) or 0) < 1695261248
+
+---Turns the JIT back on when `was_on`, and passes the other arguments on as they are, trailing nils included.
+local function restore_jit(was_on, ...)
+  if was_on then
+    jit.on()
+  end
+  return ...
+end
+
+---`coroutine.resume` for the coroutine of a tool (`handle_invoke` and the resolution of a blocking diff). On a LuaJIT
+---with issue 1066 it turns the JIT off and flushes its traces before the resume, and gives the JIT back as it was.
+---@param co thread
+---@param ... any Values for the coroutine
+---@return boolean success
+---@return any ... What `coroutine.resume` returns
+function M.resume_tool_coroutine(co, ...)
+  local was_on = jit_affected and jit.status()
+  if jit_affected then
+    jit.off()
+    jit.flush()
+  end
+  return restore_jit(was_on, coroutine.resume(co, ...))
 end
 
 return M

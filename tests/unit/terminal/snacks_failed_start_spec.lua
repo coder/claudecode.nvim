@@ -108,6 +108,11 @@ describe("claudecode.terminal.snacks failed start", function()
     buffers[windows[original_win].buf].buftype = ""
 
     _G.vim = {
+      loop = {
+        hrtime = function()
+          return 0
+        end,
+      },
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = spy.new(function() end),
       inspect = require("tests.mocks.vim").inspect,

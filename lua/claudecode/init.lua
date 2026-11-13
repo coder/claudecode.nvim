@@ -80,13 +80,31 @@ function M.is_claude_connected()
   end
 end
 
+---@return number|nil wait Milliseconds until some connected client completed its handshake connection_wait_delay ms
+---  ago: 0 when one did, nil when no connected client reports when it connected
+local function ms_until_a_client_is_ready()
+  local wait
+  for _, info in ipairs(require("claudecode.server.init").get_status().clients or {}) do
+    if info.state == "connected" and info.handshake_complete == true and info.connected_at then
+      local left = math.max(0, info.connected_at + M.state.config.connection_wait_delay - vim.loop.now())
+      wait = wait and math.min(wait, left) or left
+    end
+  end
+  return wait
+end
+
 -- The @ mention queue. A send that does not go out at once waits in M.state.mention_queue, oldest first. A mention
--- leaves the queue only when a connected Claude took it, when its wait timed out with an error, or when the
--- integration stops. While the queue holds a mention, one of two timers runs:
--- - M.state.mention_timer is the next flush: 50 ms after a send, connection_wait_delay ms after Claude's handshake,
---   or 25 ms after the previous mention went out. A flush sends only the oldest mention, so the order holds.
--- - M.state.connection_timer runs while the mentions wait for Claude to connect. After connection_timeout ms it clears
---   them with an error. Claude's handshake stops it, and a flush that finds no connected Claude starts it.
+-- leaves the queue only when a connected Claude took it, when its deadline passed while no client was ready, or when
+-- the integration stops. Two timers move it on:
+-- - M.state.mention_timer is the next flush, while Claude is connected: 50 ms after a send, connection_wait_delay ms
+--   after Claude's handshake, or 25 ms after the previous mention went out. A flush sends only the oldest mention, so
+--   the order holds, and only once some connected client is ready: it completed its handshake connection_wait_delay
+--   ms ago.
+-- - M.state.connection_timer clears the mentions whose deadline passed, connection_timeout + connection_wait_delay ms
+--   after their send, with an error. No handshake or disconnect moves a deadline. A Claude that completes its
+--   handshake less than connection_timeout ms after the send, and stays connected, is ready before the deadline.
+--   While a ready client is connected, no deadline clears a mention: the queue drains to it, 25 ms apart. A flush that
+--   finds no ready client clears the mentions whose deadline passed meanwhile, and starts the timer again.
 -- A timer's callback runs on the main loop and does nothing once its timer was stopped or replaced, so a stop cancels
 -- every pending flush and timeout.
 local debounce_delay = 50 -- ms from a send to its flush, so a burst of sends goes out as one batch
@@ -141,21 +159,42 @@ end
 
 local schedule_mention_flush
 
----Start the timeout of the mentions that wait for Claude to connect, unless it runs already.
-local function start_connection_timeout_if_needed()
-  if M.state.connection_timer then
+---Clear the queued mentions whose deadline passed, with an error, then wait for the deadline of the oldest one left.
+---The connection_timer callback: the timer may fire for a mention that went out since, and then clears nothing.
+---While a ready client is connected, it clears nothing and stops: the queue drains to that client, and a flush that
+---finds no ready client calls it again.
+local function expire_mentions()
+  if ms_until_a_client_is_ready() == 0 then
+    -- A flush must be due, so that the drain goes on, or finds the client gone and calls this again. The handshake's
+    -- own flush can come later than this: Neovim runs the scheduled callbacks in order, late when its loop was busy.
+    schedule_mention_flush(inter_message_delay)
     return
   end
-  start_timer("connection_timer", M.state.config.connection_timeout, function()
-    local queue = mention_queue()
-    if #queue > 0 and not M.is_claude_connected() then
-      logger.error("queue", "Connection timeout - clearing " .. #queue .. " queued @ mentions")
-      clear_mention_queue()
+  local queue = mention_queue()
+  local now = vim.loop.now()
+  local expired = 0
+  -- Deadlines grow with the queue order, so the mentions whose deadline passed are the oldest ones.
+  while expired < #queue and queue[expired + 1].deadline <= now do
+    expired = expired + 1
+  end
+  if expired > 0 then
+    if M.is_claude_connected() then
+      logger.error(
+        "queue",
+        "Send timeout - clearing " .. expired .. " queued @ mentions that the connected Claude did not take in time"
+      )
     else
-      -- Claude completed its handshake, and the flush that the handshake schedules has not run yet.
-      schedule_mention_flush(M.state.config.connection_wait_delay)
+      logger.error("queue", "Connection timeout - clearing " .. expired .. " queued @ mentions")
     end
-  end)
+    for _ = 1, expired do
+      table.remove(queue, 1)
+    end
+  end
+  if #queue == 0 then
+    clear_mention_queue()
+  else
+    start_timer("connection_timer", queue[1].deadline - now, expire_mentions)
+  end
 end
 
 ---A server.broadcast callback that shows an error when no write of the mention succeeded: the connection failed after
@@ -180,14 +219,25 @@ local function flush_mention_queue()
   end
   -- M.stop clears the queue when it drops the server, and the stop cancels this flush too.
   local server = assert(M.state.server, "the @ mention queue holds mentions while the integration is stopped")
+  -- A mention goes out only once some connected client has been connected for connection_wait_delay ms. The broadcast
+  -- then reaches every connected client, also one that connected later. Another client's handshake cannot postpone it.
+  local wait = ms_until_a_client_is_ready()
+  if wait and wait > 0 then
+    -- A ready client that took the queue may have left: the mentions whose deadline passed meanwhile leave now.
+    expire_mentions()
+    if #mention_queue() > 0 then
+      start_timer("mention_timer", wait, flush_mention_queue)
+    end
+    return
+  end
 
   local mention = queue[1]
   local params = { filePath = mention.file_path, lineStart = mention.start_line, lineEnd = mention.end_line }
   if not server.broadcast("at_mentioned", params, report_unwritten("queue", mention.file_path)) then
     -- No connected client took the frame, as Claude went away since this flush was scheduled. The mention waits for
-    -- Claude's next handshake, or times out with an error.
+    -- Claude's next handshake, or for its deadline. One that passed while a ready client took the queue leaves now.
     logger.debug("queue", "No connected client took queued @ mention: " .. mention.file_path)
-    start_connection_timeout_if_needed()
+    expire_mentions()
     return
   end
   table.remove(queue, 1)
@@ -195,20 +245,15 @@ local function flush_mention_queue()
   schedule_mention_flush(inter_message_delay)
 end
 
----Keep the queue moving. While Claude is connected, a flush is due: in delay ms, unless one is due already. Otherwise
----the connection timeout runs. An empty queue stops both timers.
+---Keep the queue moving. While Claude is connected, a flush is due: in delay ms, unless one is due already. An empty
+---queue stops both timers.
 ---@param delay number Milliseconds to the flush when Claude is connected and no flush is due yet
 schedule_mention_flush = function(delay)
   if #mention_queue() == 0 then
     stop_timer("mention_timer")
     stop_timer("connection_timer")
-  elseif M.is_claude_connected() then
-    stop_timer("connection_timer")
-    if not M.state.mention_timer then
-      start_timer("mention_timer", delay, flush_mention_queue)
-    end
-  else
-    start_connection_timeout_if_needed()
+  elseif M.is_claude_connected() and not M.state.mention_timer then
+    start_timer("mention_timer", delay, flush_mention_queue)
   end
 end
 
@@ -218,17 +263,25 @@ end
 ---@param end_line number|nil Optional end line
 local function queue_mention(file_path, start_line, end_line)
   local queue = mention_queue()
-  table.insert(queue, { file_path = file_path, start_line = start_line, end_line = end_line })
+  -- Claude has connection_timeout ms to complete its handshake, and connection_wait_delay ms after it to get ready.
+  local timeout = M.state.config.connection_timeout + M.state.config.connection_wait_delay
+  local deadline = vim.loop.now() + timeout
+  table.insert(queue, { file_path = file_path, start_line = start_line, end_line = end_line, deadline = deadline })
   logger.debug("queue", "Queued @ mention: " .. file_path .. " (queue size: " .. #queue .. ")")
+  if not M.state.connection_timer then
+    start_timer("connection_timer", timeout, expire_mentions)
+  end
   schedule_mention_flush(debounce_delay)
 end
 
 ---Process the mention queue. Claude completed its WebSocket handshake when from_new_connection is true (the server's
----on_open callback): the queue then flushes connection_wait_delay ms later, so that Claude is ready for the mentions.
----@param from_new_connection boolean|nil true after a handshake; otherwise the oldest mention goes out now
+---on_open callback): a flush is due in connection_wait_delay ms unless one is due already. Without the argument, the
+---flush runs now.
+---Either way, a flush sends the oldest mention only once some connected client has been connected for
+---connection_wait_delay ms, and otherwise waits for that moment (see flush_mention_queue).
+---@param from_new_connection boolean|nil true after a handshake; otherwise the queue flushes now
 function M.process_mention_queue(from_new_connection)
   if from_new_connection then
-    stop_timer("mention_timer")
     schedule_mention_flush(M.state.config.connection_wait_delay)
   else
     flush_mention_queue()
@@ -1324,10 +1377,11 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
   }
 
   -- For tests or when explicitly configured, broadcast immediately without queuing, unless older mentions still wait
-  -- in the queue: this one must not overtake them.
+  -- in the queue (this one must not overtake them), or every connected Claude completed its handshake less than
+  -- connection_wait_delay ms ago and still starts up: the queue then sends it once one of them is ready.
   local immediate = (M.state.config and M.state.config.disable_broadcast_debouncing)
     or (package.loaded["busted"] and not (M.state.config and M.state.config.enable_broadcast_debouncing_in_tests))
-  if immediate and #mention_queue() == 0 then
+  if immediate and #mention_queue() == 0 and (ms_until_a_client_is_ready() or 0) == 0 then
     local broadcast_success =
       M.state.server.broadcast("at_mentioned", params, report_unwritten("command", formatted_path))
     if broadcast_success then
@@ -1343,7 +1397,7 @@ function M._broadcast_at_mention(file_path, start_line, end_line)
   queue_mention(formatted_path, start_line, end_line)
 
   -- Always return success since we're queuing the message. The queue sends it to a connected Claude, or shows an
-  -- error when Claude does not connect within connection_timeout.
+  -- error when no ready Claude took it by its deadline, connection_timeout + connection_wait_delay ms after the send.
   return true, nil, sent
 end
 

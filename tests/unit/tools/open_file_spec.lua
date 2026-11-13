@@ -240,6 +240,20 @@ describe("Tool: open_file", function()
     assert_contains(err.data, "Missing filePath parameter")
   end)
 
+  for _, case in ipairs({
+    { label = "a boolean", value = true },
+    { label = "a number", value = 5 },
+    { label = "a table", value = { "a.txt" } },
+  }) do
+    it("should error if filePath is " .. case.label .. " and not a string", function()
+      local success, err = pcall(open_file_handler, { filePath = case.value })
+      expect(success).to_be_false()
+      expect(err).to_be_table()
+      expect(err.code).to_be(-32602)
+      assert_contains(err.data, "Missing filePath parameter")
+    end)
+  end
+
   it("should error if file is not readable", function()
     local params = { filePath = "non_readable_file.txt" }
     local success, err = pcall(open_file_handler, params)
@@ -408,6 +422,82 @@ describe("Tool: open_file", function()
     expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
     expect(called_win).to_be(2000)
     expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+  end)
+
+  for _, case in ipairs({
+    { name = "a floating window", config = { relative = "editor" } },
+    { name = "a nofile buffer", buftype = "nofile" },
+    { name = "a prompt buffer", buftype = "prompt" },
+    { name = "a neo-tree sidebar", filetype = "neo-tree" },
+    { name = "a neo-tree popup", filetype = "neo-tree-popup" },
+    { name = "an NvimTree sidebar", filetype = "NvimTree" },
+    { name = "an oil buffer", filetype = "oil" },
+    { name = "a mini.files window", filetype = "minifiles" },
+    { name = "a netrw buffer", filetype = "netrw" },
+    { name = "an aerial outline", filetype = "aerial" },
+    { name = "a tagbar outline", filetype = "tagbar" },
+    -- Neovim 0.12 makes these two floats. A float opened relative to the cursor or the mouse is reported as relative
+    -- = "win", so no input has `cursor` or `mouse` (`evidence/p2r2/probe-p2r2-*.txt`, G4 and G5).
+    { name = "a laststatus-relative float", config = { relative = "laststatus" } },
+    { name = "a tabline-relative float", config = { relative = "tabline" } },
+  }) do
+    it("does not open into " .. case.name .. "; picks the plain editor", function()
+      _G.vim.api.nvim_list_wins = spy.new(function()
+        return { 1000, 2000 }
+      end)
+      _G.vim.api.nvim_win_get_buf = spy.new(function(win)
+        return win == 1000 and 10 or 20
+      end)
+      _G.vim.api.nvim_buf_get_option = spy.new(function(buf, option)
+        if buf == 10 and option == "buftype" then
+          return case.buftype or ""
+        elseif buf == 10 and option == "filetype" then
+          return case.filetype or ""
+        end
+        return ""
+      end)
+      _G.vim.api.nvim_win_get_config = spy.new(function(win)
+        return win == 1000 and case.config or { relative = "" }
+      end)
+      local called_win
+      _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+        called_win = win
+        return callback()
+      end)
+
+      expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
+      expect(called_win).to_be(2000)
+      expect(_G.vim.cmd_history[1]).to_be("edit test.txt")
+    end)
+  end
+
+  it("accepts startLine = 1 for an empty file, which opens as one empty line", function()
+    buffer_lines = { "" }
+    _G.vim.fn.readfile = spy.new(function()
+      return {} -- readfile() returns no lines for an empty file
+    end)
+
+    local success, result = pcall(open_file_handler, { filePath = "test.txt", startLine = 1 })
+
+    expect(success).to_be_true()
+    expect(result.content[1].text).to_be("Opened file and selected lines 1 to 1")
+  end)
+
+  it("opens into the first suitable window when several qualify", function()
+    _G.vim.api.nvim_list_wins = spy.new(function()
+      return { 1000, 2000, 3000 }
+    end)
+    _G.vim.api.nvim_win_get_option = spy.new(function(win, option)
+      return option == "diff" and win == 1000
+    end)
+    local called_win
+    _G.vim.api.nvim_win_call = spy.new(function(win, callback)
+      called_win = win
+      return callback()
+    end)
+
+    expect(pcall(open_file_handler, { filePath = "test.txt" })).to_be_true()
+    expect(called_win).to_be(2000)
   end)
 
   describe("with no suitable editor window", function()
@@ -690,6 +780,9 @@ describe("Tool: open_file", function()
       asked, events, autocmds = false, {}, {}
       _G.vim.v = {}
       _G.vim.api.nvim_create_autocmd = spy.new(function(event, opts)
+        if opts.buffer and not buffers[opts.buffer] then
+          error("Invalid buffer id: " .. opts.buffer) -- as in Neovim, for a buffer that was wiped
+        end
         autocmds[#autocmds + 1] = { event = event, buffer = opts.buffer, callback = opts.callback }
         return #autocmds
       end)
@@ -914,7 +1007,7 @@ describe("Tool: open_file", function()
         end
       end)
       _G.vim.api.nvim_buf_is_loaded = spy.new(function(buf)
-        return buffers[buf].loaded == true
+        return buffers[buf] ~= nil and buffers[buf].loaded == true -- false for a wiped buffer, as in Neovim
       end)
       _G.vim.api.nvim_win_set_cursor = spy.new(function(win, pos)
         win = win == 0 and (call_win or current_win) or win
@@ -1023,6 +1116,27 @@ describe("Tool: open_file", function()
         { code = -32000, message = "File operation error", data = "No preview window shows the file" },
         err
       )
+    end)
+
+    it("shows the file in the preview window of the tab page of the editor window it picked", function()
+      -- Windows 2000 and 3000 are in tab page 2, which is not the current one, and 3000 is its preview window.
+      win_buf[2000], win_buf[3000], preview_flag[3000] = 10, 10, true
+      _G.vim.api.nvim_list_wins = spy.new(function()
+        return { 2000 }
+      end)
+      _G.vim.api.nvim_win_get_tabpage = spy.new(function(win)
+        return win == 1000 and 1 or 2
+      end)
+      _G.vim.api.nvim_tabpage_list_wins = spy.new(function(tab)
+        return tab == 2 and { 2000, 3000 } or { 1000 }
+      end)
+
+      open({})
+
+      assert.are.same({ 30, 10 }, { win_buf[3000], win_buf[2000] })
+      for _, command in ipairs(_G.vim.cmd_history) do
+        assert.are_not.equal("12split", command)
+      end
     end)
 
     describe("when the file changed on disk", function()
@@ -1191,6 +1305,115 @@ describe("Tool: open_file", function()
         local success, result = pcall(open_file_handler, { filePath = "test.txt", startLine = 2 })
         expect(success).to_be_true()
         assert.are.same({ "Opened file and selected lines 2 to 2", false }, { result.content[1].text, asked })
+      end)
+
+      -- Neovim accepts a FileChangedShell autocommand for a buffer that is unloaded, so only a wiped buffer is a case.
+      it("shows the file with no FileChangedShell autocommand when an autocommand wipes the buffer", function()
+        local run_cmd, create = _G.vim.cmd, _G.vim.api.nvim_create_autocmd
+        _G.vim.cmd = function(command)
+          if command == "edit test.txt" and not buffers[30] then
+            buffers[30] = { lines = { "fresh" }, filetype = "lua" } -- :edit makes a new buffer for the file
+          end
+          run_cmd(command)
+          if command == "checktime 30" then
+            buffers[30] = nil -- autocmd FileChangedShellPost test.txt bwipeout
+          end
+        end
+        local created_for_missing = {}
+        _G.vim.api.nvim_create_autocmd = function(event, opts)
+          if event == "FileChangedShell" and not buffers[opts.buffer] then
+            table.insert(created_for_missing, opts.buffer)
+          end
+          return create(event, opts)
+        end
+
+        local success = pcall(open_file_handler, { filePath = "test.txt" })
+
+        expect(success).to_be_true()
+        assert.are.same({ 30, {} }, { win_buf[1000], created_for_missing })
+      end)
+    end)
+
+    describe("when the preview window gets a loaded buffer that Neovim does not check", function()
+      before_each(function()
+        buffers[30].loaded = true
+        -- Neovim skips its file check, so openFile turns the check off itself by setting 'buftype' for a moment.
+        _G.vim.o.eventignore = "FileChangedShell"
+      end)
+
+      it("keeps a 'buftype' that an autocommand sets while the buffer is shown", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            buffers[30].buftype = "nofile"
+          end,
+        })
+
+        expect(pcall(open_file_handler, { filePath = "test.txt", preview = true })).to_be_true()
+
+        expect(buffers[30].buftype).to_be("nofile")
+      end)
+
+      it("fails with the error of the autocommand and gives the buffer its 'buftype' back", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            error("user boom")
+          end,
+        })
+
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(success).to_be_false()
+        assert_contains(err, "user boom")
+        expect(buffers[30].buftype or "").to_be("")
+      end)
+
+      it("gives the buffer its 'buftype' back when an autocommand unloads it, as 'bufhidden' unload does", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            buffers[30].loaded = false -- the buffer is still valid
+          end,
+        })
+
+        pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(buffers[30].buftype or "").to_be("")
+      end)
+
+      it("fails with the error of the autocommand when the autocommand wipes the buffer first", function()
+        _G.vim.api.nvim_create_autocmd("BufEnter", {
+          buffer = 30,
+          callback = function()
+            buffers[30] = nil
+            error("user boom")
+          end,
+        })
+
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(success).to_be_false()
+        assert_contains(err, "user boom")
+      end)
+
+      it("does not check the file again when an autocommand closes the preview window as it gets the buffer", function()
+        -- The check would load this text, as :checktime does with 'autoread'.
+        buffers[30].disk = { "alpha", "beta", "fresh" }
+        local set_buf = _G.vim.api.nvim_win_set_buf
+        _G.vim.api.nvim_win_set_buf = spy.new(function(win, buf)
+          set_buf(win, buf)
+          win_buf[win] = nil -- autocmd BufWinEnter * ++nested if &previewwindow | close | endif
+        end)
+
+        local success, err = pcall(open_file_handler, { filePath = "test.txt", preview = true })
+
+        expect(success).to_be_false()
+        assert.are.same(
+          { code = -32000, message = "File operation error", data = "No preview window shows the file" },
+          err
+        )
+        assert.are.same({ "alpha", "beta", "gamma", "delta", "epsilon" }, buffers[30].lines)
       end)
     end)
 

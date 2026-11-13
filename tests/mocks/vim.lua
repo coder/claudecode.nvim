@@ -268,9 +268,16 @@ local vim = {
     end,
 
     nvim_buf_call = function(bufnr, callback)
-      -- Mock implementation - just call the callback
+      -- Mock implementation - just call the callback. It also names the buffer for the calls that act on the current one.
       if vim._buffers[bufnr] then
-        return callback()
+        local outer = vim._buf_call_target
+        vim._buf_call_target = bufnr
+        local ok, result = pcall(callback)
+        vim._buf_call_target = outer
+        if not ok then
+          error(result, 0)
+        end
+        return result
       end
       error("Invalid buffer id: " .. tostring(bufnr))
     end,
@@ -407,12 +414,9 @@ local vim = {
       end
     end,
 
-    nvim_win_call = function(winid, callback)
-      -- Mock implementation - just call the callback
-      if vim._windows[winid] then
-        return callback()
-      end
-      error("Invalid window id: " .. tostring(winid))
+    nvim_win_call = function(_, callback)
+      -- Mock implementation - just call the callback. nvim_set_current_win accepts every id here, and so does this.
+      return callback()
     end,
 
     nvim_win_get_config = function(winid)
@@ -698,6 +702,24 @@ local vim = {
       return "/home/user/project"
     end,
 
+    simplify = function(path)
+      return path
+    end,
+
+    --- Mock of wordcount() for the buffer that nvim_buf_call named, else buffer 1. Every line counts its bytes and a line
+    --- break. A buffer with `empty = true` stands for Neovim's "--No lines in buffer--": its lines are { "" }, as
+    --- nvim_buf_get_lines returns them, and it counts 0 bytes.
+    wordcount = function()
+      local buffer = vim._buffers[vim._buf_call_target or 1]
+      local bytes = 0
+      if buffer and not buffer.empty then
+        for _, line in ipairs(buffer.lines or {}) do
+          bytes = bytes + #line + 1
+        end
+      end
+      return { bytes = bytes }
+    end,
+
     fnamemodify = function(path, modifier)
       if modifier == ":t" then
         return path:match("([^/]+)$") or path
@@ -978,6 +1000,19 @@ local vim = {
     return result
   end,
 
+  -- A table with only number keys is a list. Like Neovim, an empty table is a list too.
+  tbl_islist = function(t)
+    if type(t) ~= "table" then
+      return false
+    end
+    for key in pairs(t) do
+      if type(key) ~= "number" then
+        return false
+      end
+    end
+    return true
+  end,
+
   -- Add tbl_extend function for compatibility
   tbl_extend = function(behavior, ...)
     local tables = { ... }
@@ -1232,6 +1267,9 @@ local vim = {
   v = { echospace = 68 },
 
   loop = {
+    hrtime = function()
+      return 0
+    end,
     new_tcp = function()
       return {
         bind = function(self, host, port)
@@ -1422,7 +1460,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "", fileformats = "unix,dos" }, {
   __index = function(_, k)
     return vim._options[k]
   end,

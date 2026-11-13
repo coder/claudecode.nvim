@@ -988,9 +988,9 @@ describe("The lifecycle of a WebSocket connection", function()
     end)
   end)
 
-  -- Two rules judge a connected client on each ping tick. The pong rule gives a client without a pong one more tick
-  -- (`pong_overdue`) and then drops it. The stall rule drops a client that answers, whose write queue made no progress at
-  -- two observations in a row. The pong rule runs first, so only a client that answers is judged for a stall.
+  -- Two rules judge a connected client on each ping tick. The keepalive drops a client whose oldest ping went unanswered
+  -- for `interval * 2.5` (`judge_silence`). The stall rule drops a client that answers, whose write queue made no progress
+  -- at two observations in a row (`judge_stall`). Only a client that answers is judged for a stall.
   describe("when a client misses a pong and its write queue stalls", function()
     local reply = string.rep("x", 262144)
 
@@ -1682,6 +1682,25 @@ describe("The lifecycle of a WebSocket connection", function()
         assert.spy(callback).was_called(1)
       end)
     end
+
+    it("stops at a piece that libuv refuses at once, and passes its error to the callback once", function()
+      local client, writes, handle = connect_and_upgrade()
+      local queue_write, refused = handle.write, false
+      function handle:write(data, callback)
+        if not refused then -- the first piece: libuv refuses it, and never runs its callback
+          refused = true
+          return nil, "EPIPE: broken pipe"
+        end
+        return queue_write(self, data, callback)
+      end
+      local callback = spy.new(function() end)
+
+      tcp.send_to_client(server, client.id, string.rep("x", 3 * piece), callback)
+
+      assert.equals(1, #writes, "a piece followed the refused one")
+      assert.spy(callback).was_called(1)
+      assert.spy(callback).was_called_with("EPIPE: broken pipe")
+    end)
 
     it("queues a message of one piece or less as one write", function()
       local client, writes = connect_and_upgrade()

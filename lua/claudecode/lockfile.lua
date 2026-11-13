@@ -212,13 +212,20 @@ function M.remove(port)
 
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
-  if vim.fn.filereadable(lock_path) == 0 then
+  -- Deleting a file needs write permission on its folder, not read permission on the file, so a lock file that cannot
+  -- be read (mode 000) is still deleted. `filereadable` would call it missing. `fs_lstat` does not follow a link, so
+  -- a link at this path (even one that points nowhere) is a name that this call can remove, and `fs_unlink` removes
+  -- the link and never its target. A folder with this name is not a lock file, and it is not ours to delete.
+  local stat = vim.loop.fs_lstat(lock_path)
+  if not stat or stat.type == "directory" then
     return false, "Lock file does not exist: " .. lock_path
   end
 
-  -- os.remove reports most failures (such as a read-only folder) as (nil, message, errno) without raising, so
-  -- check the return value as well as the pcall status.
-  local ok, removed, err = pcall(os.remove, lock_path)
+  -- Another process can replace the file with a folder between the check above and the delete. `fs_unlink` refuses a
+  -- folder (EISDIR), where `os.remove` deletes an empty one, so the delete itself never removes a folder. It reports
+  -- most failures (such as a read-only folder) as (nil, message, name) without raising, so check the return value as
+  -- well as the pcall status.
+  local ok, removed, err = pcall(vim.loop.fs_unlink, lock_path)
 
   if not ok then
     return false, "Failed to remove lock file: " .. tostring(removed or "unknown error")
@@ -231,7 +238,8 @@ function M.remove(port)
   return true
 end
 
----Read the authentication token from a lock file
+---Read the authentication token from a lock file. A lock file that exists but cannot be read is refused with an error
+---that says so, not with the error for a missing one.
 ---@param port number The port number of the WebSocket server
 ---@return boolean success Whether the operation was successful
 ---@return string? auth_token The authentication token if successful, or nil if failed
@@ -243,13 +251,18 @@ function M.get_auth_token(port)
 
   local lock_path = M.lock_dir .. "/" .. port .. ".lock"
 
-  if vim.fn.filereadable(lock_path) == 0 then
+  -- `filereadable` is 0 for a file that exists but cannot be read, and it would call that file missing. A folder with
+  -- this name is no lock file, as in `remove`.
+  local stat = vim.loop.fs_stat(lock_path)
+  if not stat or stat.type == "directory" then
     return false, nil, "Lock file does not exist: " .. lock_path
   end
 
-  local file = io.open(lock_path, "r")
+  -- The file existed a moment ago, so a failure here is a refusal to read it, unless another process deleted it since.
+  -- io.open's message names the path and the reason either way ("Permission denied", "No such file or directory").
+  local file, open_error = io.open(lock_path, "r")
   if not file then
-    return false, nil, "Failed to open lock file: " .. lock_path
+    return false, nil, "Lock file exists but cannot be read: " .. (open_error or lock_path)
   end
 
   local content = file:read("*all")
