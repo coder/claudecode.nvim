@@ -79,7 +79,8 @@ describe(".github/workflows/test.yml cache settings", function()
           break
         end
       end
-      if name and indent == 8 then
+      -- Any line at the step-key indent opens a new block, even when no pattern reads its key (`env :`).
+      if indent == 8 and line:match("%S") then
         current = name
       end
       local in_place = (indent == 8 and block == nil) or (indent == 10 and block ~= nil and current == block)
