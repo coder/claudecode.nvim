@@ -151,15 +151,17 @@ description = "Verify formatting without writing (used in CI)"
 # and a plain `treefmt` run the real tools, and treefmt's cache keys on them.
 # The script reads the path of the checkout from $MISE_CONFIG_ROOT, not from a template: a template pastes the path into
 # the shell text, and a quote, `$` or backtick in the path then changes what the shell runs. A colon splits the PATH
-# entry, so the loop checks that each tool resolves to the stand-in before treefmt runs, and the check stops with exit
-# 2 when one does not: treefmt would run the real tool, and the real tool writes.
+# entry, and a missing or non-executable stand-in is skipped by the lookup, so the loop checks that each tool resolves
+# to the stand-in before treefmt runs, and the check stops with exit 2 when one does not: treefmt would run the real
+# tool, and the real tool writes.
 run = '''
 stand_ins="$MISE_CONFIG_ROOT/scripts/format-check-bin"
 PATH="$stand_ins:$PATH"
 for tool in prettier stylua shfmt; do
   if ! [ "$(command -v "$tool")" -ef "$stand_ins/check-mode.sh" ]; then
-    echo "format-check: $tool does not resolve to the stand-in in $stand_ins, so treefmt would run the real $tool" \
-      "and write files. A colon in the path of the checkout does this." >&2
+    echo "format-check: $tool does not resolve to the stand-in in $stand_ins, so treefmt would run another $tool" \
+      "and write files. A stand-in is missing or not executable, or the folder is not first on PATH (a colon in the" \
+      "path of the checkout splits the entry)." >&2
     exit 2
   fi
 done

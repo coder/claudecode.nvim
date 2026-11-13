@@ -16,9 +16,9 @@
 # treefmt must format a file again, with its cache on, under mise's environment and outside it, and a second run with
 # the same version must find the file in the cache (it formats 0 files): the test swaps in a second "version" of stylua
 # (the real one with another quote style) and runs treefmt with a private cache folder. In a checkout whose path holds
-# a `"`, a `$HOME` or a backtick, the check must still write nothing and fail on an unformatted file. In a checkout
-# whose path holds a colon, which splits the PATH entry of the stand-ins, the check must stop with exit 2 and write
-# nothing, and so it must in a checkout that lacks the stand-in of one tool.
+# a `"`, a `'`, a `$HOME` or a backtick, the check must still write nothing and fail on an unformatted file. In a
+# checkout whose path holds a colon, which splits the PATH entry of the stand-ins, the check must stop with exit 2 and
+# write nothing, and so it must in a checkout that lacks the stand-in of one tool.
 # A second run of the test in the same checkout stops with exit 2 at once, because the probes exist. The check runs on
 # the whole tree, so the test needs a formatted tree: its third run expects exit 0.
 # Usage: scripts/test-format-check.sh
@@ -254,7 +254,7 @@ run_in_copy() {
   (cd "$1" && MISE_STATE_DIR="$scratch/mise-state" mise run format-check) >"$scratch/output" 2>&1 || status=$?
 }
 
-for name in 'q"uote' 'd$HOME' 'b`true`b' 'c:olon'; do
+for name in 'q"uote' "s'quote" 'd$HOME' 'b`true`b' 'c:olon'; do
   copy=$scratch/paths/$name
   make_copy "$copy"
 
