@@ -1,0 +1,281 @@
+-- AtMostOneClaude, and a start that an autocmd interrupts. The vsplit of a native start fires WinLeave, WinNew and WinEnter,
+-- and creating the buffer fires BufNew and BufAdd, all before the plugin has marked a buffer for Claude. An entry that such
+-- an autocmd calls found no terminal to adopt and started a second Claude, and a close returned with one still running.
+-- Fixed: open_terminal returns while a start runs, so that start makes the one Claude. The vsplit keeps every autocmd of
+-- yours, so an autosave on WinLeave still saves the file before Claude starts. A close() that a BufEnter or TermOpen autocmd
+-- calls runs when the start returns, because it cannot wait for the job inside termopen (on Neovim 0.8 that aborts the editor).
+-- A hide writes bufhidden=hide when an autocmd of yours changed it, which fires OptionSet inside the hide. An autocmd of that event
+-- can end, hide or show Claude, and the hide must not close a window that it did not read.
+-- The body runs after startup (lib.after_startup): Neovim fires no OptionSet while it starts up, which includes the -c commands
+-- that run.sh uses.
+local lib = dofile(os.getenv("REPLAY_LIB"))
+lib.after_startup(function()
+  local function first_line(text)
+    return (tostring(text):gsub("\n.*", ""))
+  end
+
+  local errors = {}
+  vim.notify = function(msg, level)
+    if level ~= nil and level >= vim.log.levels.WARN then
+      table.insert(errors, first_line(msg))
+    end
+  end
+
+  local function fresh()
+    errors = {}
+    return lib.reload(function()
+      local terminal = require("claudecode.terminal")
+      terminal.setup({ provider = "native", auto_close = true, auto_insert = false }, "sh -c 'sleep 60'")
+      return terminal
+    end)
+  end
+
+  local function clean_up()
+    for _, buf in ipairs(lib.running()) do
+      vim.b[buf].claudecode_native_terminal = nil
+      pcall(vim.fn.jobstop, vim.bo[buf].channel)
+    end
+    lib.wait(300)
+    vim.cmd("silent! only")
+    vim.cmd("silent! %bwipeout!")
+  end
+
+  -- Run `action(term)` once, from the first `event`.
+  local function arm(event, term, action)
+    local group = vim.api.nvim_create_augroup("start_reentry", { clear = true })
+    local fired = 0
+    vim.api.nvim_create_autocmd(event, {
+      group = group,
+      callback = function()
+        if fired == 0 then
+          fired = fired + 1
+          local ok, err = pcall(action, term)
+          if not ok then
+            table.insert(errors, "the autocmd raised: " .. first_line(err))
+          end
+        end
+      end,
+    })
+    return function()
+      vim.api.nvim_del_augroup_by_id(group)
+      return fired
+    end
+  end
+
+  -- An entry that an early autocmd of the start calls does nothing. One Claude, tracked, shown in one window.
+  for _, event in ipairs({ "WinLeave", "WinNew", "WinEnter", "BufNew", "BufAdd" }) do
+    for _, entry in ipairs({ "open", "simple_toggle", "focus_toggle" }) do
+      local label = string.format("native, a %s autocmd that calls %s during the start", event, entry)
+      lib.attempt(label, function()
+        local term = fresh()
+        local disarm = arm(event, term, function(t)
+          t[entry]()
+        end)
+        local opened, open_err = pcall(term.open)
+        lib.settle()
+        local fired = disarm()
+        local running = lib.running()
+        local tracked = term.get_active_terminal_bufnr()
+        local shown = #running >= 1 and lib.windows_showing(running[1]) or 0
+        lib.step(
+          string.format(
+            "%s: open %s, fired %d, %d Claude running, tracked %s, %d window(s) show the first, messages: %s",
+            label,
+            opened and "ok" or ("RAISED " .. first_line(open_err)),
+            fired,
+            #running,
+            tostring(tracked),
+            shown,
+            #errors > 0 and table.concat(errors, " | ") or "none"
+          ),
+          (not opened) or fired ~= 1 or #running ~= 1 or tracked ~= running[1] or shown ~= 1 or #errors > 0
+        )
+        clean_up()
+      end)
+    end
+  end
+
+  -- Your WinLeave autosave runs for the vsplit, so the file on disk has your edit when Claude starts.
+  lib.attempt("native, an autosave on WinLeave saves the file before Claude starts", function()
+    local term = fresh()
+    local path = vim.fn.getcwd() .. "/autosave-file.txt"
+    vim.fn.writefile({ "old text" }, path)
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    vim.api.nvim_buf_set_lines(0, 0, -1, false, { "new text the user typed" })
+    vim.api.nvim_create_autocmd(
+      "WinLeave",
+      { group = vim.api.nvim_create_augroup("start_reentry_save", { clear = true }), command = "silent! update" }
+    )
+    local opened, open_err = pcall(term.open)
+    lib.settle()
+    vim.api.nvim_del_augroup_by_name("start_reentry_save")
+    local on_disk = vim.fn.readfile(path)[1]
+    lib.step(
+      string.format(
+        "native, an autosave on WinLeave saves the file before Claude starts: open %s, on disk [%s], messages: %s",
+        opened and "ok" or ("RAISED " .. first_line(open_err)),
+        tostring(on_disk),
+        #errors > 0 and table.concat(errors, " | ") or "none"
+      ),
+      (not opened) or on_disk ~= "new text the user typed"
+    )
+    vim.fn.delete(path)
+    clean_up()
+  end)
+
+  -- A close() from an autocmd of the start. The start ends, and Claude stops.
+  for _, event in ipairs({ "BufEnter", "TermOpen" }) do
+    local label = string.format("native, a %s autocmd calls close during the start", event)
+    lib.attempt(label, function()
+      local term = fresh()
+      local disarm = arm(event, term, function(t)
+        t.close()
+      end)
+      local opened, open_err = pcall(term.open)
+      lib.wait(1200)
+      local fired = disarm()
+      local running = lib.running()
+      lib.step(
+        string.format(
+          "%s: open %s, fired %d, %d Claude running, messages: %s",
+          label,
+          opened and "ok" or ("RAISED " .. first_line(open_err)),
+          fired,
+          #running,
+          #errors > 0 and table.concat(errors, " | ") or "none"
+        ),
+        (not opened) or fired ~= 1 or #running ~= 0 or #errors > 0
+      )
+      clean_up()
+    end)
+  end
+
+  -- An autocmd of yours changes bufhidden after the start (a TermEnter autocmd that sets wipe). The next hide closes Claude's
+  -- window, which would then end Claude. A hide sets bufhidden=hide again, so Claude runs on and the next toggle shows it.
+  lib.attempt("native, bufhidden is wipe when you hide Claude", function()
+    local term = fresh()
+    local opened, open_err = pcall(term.open)
+    lib.settle()
+    local buf = term.get_active_terminal_bufnr()
+    if buf then
+      vim.bo[buf].bufhidden = "wipe"
+    end
+    local hid, hide_err = pcall(term.simple_toggle)
+    lib.wait(300)
+    local running = lib.running()
+    local still_tracked = term.get_active_terminal_bufnr() == buf
+    local shown_before = #running == 1 and lib.windows_showing(running[1]) or -1
+    pcall(term.simple_toggle)
+    lib.settle()
+    local again = lib.running()
+    local shown_after = #again == 1 and lib.windows_showing(again[1]) or -1
+    lib.step(
+      string.format(
+        "native, bufhidden is wipe when you hide Claude: open %s, hide %s, %d Claude running, %d window(s) show it, tracked: %s, after the next toggle %d window(s) show it, messages: %s",
+        opened and "ok" or ("RAISED " .. first_line(open_err)),
+        hid and "ok" or ("RAISED " .. first_line(hide_err)),
+        #running,
+        shown_before,
+        tostring(still_tracked),
+        shown_after,
+        #errors > 0 and table.concat(errors, " | ") or "none"
+      ),
+      (not opened) or not hid or #running ~= 1 or shown_before ~= 0 or not still_tracked or shown_after ~= 1
+    )
+    clean_up()
+  end)
+
+  -- An OptionSet autocmd of bufhidden runs during the hide (it hides Claude after an autocmd of yours changed bufhidden).
+  for _, action in ipairs({ "close", "simple_toggle", "focus_toggle", "hide and show", "show a file" }) do
+    local label = "native, an OptionSet(bufhidden) autocmd calls " .. action .. " during a hide"
+    lib.attempt(label, function()
+      local term = fresh()
+      pcall(term.open)
+      lib.settle()
+      local buf = term.get_active_terminal_bufnr()
+      vim.bo[buf].bufhidden = "wipe"
+      local group = vim.api.nvim_create_augroup("start_reentry_optionset", { clear = true })
+      local fired = 0
+      local file_win = nil
+      vim.api.nvim_create_autocmd("OptionSet", {
+        group = group,
+        pattern = "bufhidden",
+        callback = function()
+          fired = fired + 1
+          if fired == 1 then
+            if action == "hide and show" then
+              pcall(term.simple_toggle)
+              pcall(term.simple_toggle)
+            elseif action == "show a file" then
+              -- A file of yours replaces Claude in its window. The window id stays, and the window is yours now.
+              file_win = vim.fn.bufwinid(buf)
+              vim.api.nvim_win_set_buf(file_win, vim.api.nvim_create_buf(true, false))
+            else
+              pcall(term[action])
+            end
+          end
+        end,
+      })
+      local hid, hide_err = pcall(term.simple_toggle)
+      lib.wait(500)
+      vim.api.nvim_del_augroup_by_id(group)
+      local running = lib.running()
+      local shown = #running == 1 and lib.windows_showing(running[1]) or 0
+      local wanted_running = action == "close" and 0 or 1
+      lib.step(
+        string.format(
+          "%s: hide %s, fired %d, %d Claude running, %d window(s) show it, messages: %s",
+          label,
+          hid and "ok" or ("RAISED " .. first_line(hide_err)),
+          fired,
+          #running,
+          shown,
+          #errors > 0 and table.concat(errors, " | ") or "none"
+        ),
+        not hid
+          or fired ~= 1
+          or #running ~= wanted_running
+          or (action == "hide and show" and shown ~= 1)
+          or (action == "show a file" and not (file_win and vim.api.nvim_win_is_valid(file_win)))
+          or (action ~= "close" and action ~= "hide and show" and shown ~= 0)
+          or #errors > 0
+      )
+      clean_up()
+    end)
+  end
+
+  -- A close of a job that just started reads the name of its child from /proc/<pid>/comm, or asks `ps` where /proc is missing.
+  -- When neither works (no /proc, no ps), the close goes on to jobstop. It raised before, after it had cleared its state, and
+  -- Claude kept running with no tracking.
+  lib.attempt("native, a close when no process name can be read (no /proc, no ps)", function()
+    local term = fresh()
+    pcall(term.open)
+    lib.settle()
+    local open = io.open
+    local path = vim.env.PATH
+    io.open = function(file, mode)
+      if type(file) == "string" and file:match("^/proc/") then
+        return nil
+      end
+      return open(file, mode)
+    end
+    vim.env.PATH = "/nonexistent"
+    local closed, close_err = pcall(term.close)
+    vim.env.PATH = path
+    io.open = open
+    lib.wait(300)
+    local running = lib.running()
+    lib.step(
+      string.format(
+        "native, a close when no process name can be read: close %s, %d Claude running, tracked: %s, messages: %s",
+        closed and "ok" or ("RAISED " .. first_line(close_err)),
+        #running,
+        tostring(term.get_active_terminal_bufnr()),
+        #errors > 0 and table.concat(errors, " | ") or "none"
+      ),
+      (not closed) or #running ~= 0 or term.get_active_terminal_bufnr() ~= nil or #errors > 0
+    )
+    clean_up()
+  end)
+  lib.finish()
+end)

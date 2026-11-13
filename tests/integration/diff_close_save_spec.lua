@@ -74,7 +74,7 @@ describe("closing and saving a proposed diff", function()
     vim.fn.writefile({ "one", "two" }, dir .. "/existing.txt")
     vim.fn.writefile({ "other" }, dir .. "/other.txt")
     vim.fn.writefile({ "third" }, dir .. "/third.txt")
-    tools.register_all()
+    tools.setup()
     _G.claude_deferred_responses = {}
     answers = {}
     notices = {}
@@ -95,14 +95,7 @@ describe("closing and saving a proposed diff", function()
     _G.claude_deferred_responses = nil
   end)
 
-  local layouts = { "vertical" }
-  if vim.fn.has("nvim-0.9") == 1 then
-    layouts[#layouts + 1] = "unified"
-  else
-    describe("in the unified layout", function()
-      pending("the unified layout needs Neovim 0.9")
-    end)
-  end
+  local layouts = { "vertical", "unified" }
 
   for _, layout in ipairs(layouts) do
     local files = {
@@ -293,21 +286,21 @@ describe("closing and saving a proposed diff", function()
         assert.equal(state.target_window, window_showing(third), "close_tab keeps the user's window")
       end)
 
-      -- `:edit other.txt` turns 'diff' off by itself. Going back to the file's own buffer does not, because that
-      -- buffer is still in diff mode in the other window, so only the cleanup can end the diff mode in the kept window.
-      it("turns off diff mode in a proposal window that :edit # switched back to the file", function()
+      -- The plugin splits the window before it runs `diffthis`, so Neovim saved no diff mode for the file in the
+      -- proposal window, and going back to the file's own buffer there leaves diff mode off.
+      it("has no diff mode in a proposal window that :edit # switched back to the file", function()
         local file = dir .. "/existing.txt"
         vim.cmd("edit " .. vim.fn.fnameescape(file))
         local state = open_diff(layout, file)
         run_in(state.new_window, "edit #")
         wait_for_answers(1)
-        assert.is_true(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "the switch keeps diff mode")
+        assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "the switch ends diff mode")
 
         close_tab()
         settle()
 
         assert.equal(file, vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(state.new_window)), "close_tab keeps it")
-        assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "diff mode ends there")
+        assert.is_false(vim.api.nvim_get_option_value("diff", { win = state.new_window }), "diff mode stays off")
       end)
 
       it(

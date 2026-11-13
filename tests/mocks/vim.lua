@@ -268,9 +268,16 @@ local vim = {
     end,
 
     nvim_buf_call = function(bufnr, callback)
-      -- Mock implementation - just call the callback
+      -- Mock implementation - just call the callback. It also names the buffer for the calls that act on the current one.
       if vim._buffers[bufnr] then
-        return callback()
+        local outer = vim._buf_call_target
+        vim._buf_call_target = bufnr
+        local ok, result = pcall(callback)
+        vim._buf_call_target = outer
+        if not ok then
+          error(result, 0)
+        end
+        return result
       end
       error("Invalid buffer id: " .. tostring(bufnr))
     end,
@@ -407,12 +414,9 @@ local vim = {
       end
     end,
 
-    nvim_win_call = function(winid, callback)
-      -- Mock implementation - just call the callback
-      if vim._windows[winid] then
-        return callback()
-      end
-      error("Invalid window id: " .. tostring(winid))
+    nvim_win_call = function(_, callback)
+      -- Mock implementation - just call the callback. nvim_set_current_win accepts every id here, and so does this.
+      return callback()
     end,
 
     nvim_win_get_config = function(winid)
@@ -698,6 +702,24 @@ local vim = {
       return "/home/user/project"
     end,
 
+    simplify = function(path)
+      return path
+    end,
+
+    --- Mock of wordcount() for the buffer that nvim_buf_call named, else buffer 1. Every line counts its bytes and a line
+    --- break. A buffer with `empty = true` stands for Neovim's "--No lines in buffer--": its lines are { "" }, as
+    --- nvim_buf_get_lines returns them, and it counts 0 bytes.
+    wordcount = function()
+      local buffer = vim._buffers[vim._buf_call_target or 1]
+      local bytes = 0
+      if buffer and not buffer.empty then
+        for _, line in ipairs(buffer.lines or {}) do
+          bytes = bytes + #line + 1
+        end
+      end
+      return { bytes = bytes }
+    end,
+
     fnamemodify = function(path, modifier)
       if modifier == ":t" then
         return path:match("([^/]+)$") or path
@@ -841,16 +863,16 @@ local vim = {
       end
       vim.api.nvim_win_set_buf(vim._current_window, bufnr)
     elseif command:match("^tabclose") then
-      -- Close current tab: remove all its windows and switch to the lowest-numbered remaining tab
-      local curtab = vim._current_tabpage
-      local wins = vim._tab_windows[curtab] or {}
+      local closing_tab = tonumber(command:match("^tabclose%s+(%d+)")) or vim._current_tabpage
+      local closes_current = closing_tab == vim._current_tabpage
+      local wins = vim._tab_windows[closing_tab] or {}
       for _, w in ipairs(wins) do
         if vim._windows[w] then
           vim.api.nvim_win_close(w, true)
         end
       end
-      vim._tab_windows[curtab] = nil
-      vim._tabs[curtab] = nil
+      vim._tab_windows[closing_tab] = nil
+      vim._tabs[closing_tab] = nil
       -- switch to lowest-numbered existing tab
       local new_cur = nil
       for t, _ in pairs(vim._tabs) do
@@ -858,7 +880,7 @@ local vim = {
           new_cur = t
         end
       end
-      if not new_cur then
+      if closes_current and not new_cur then
         -- recreate a default tab and window
         vim._tabs[1] = true
         local bufnr = vim.api.nvim_create_buf(true, false)
@@ -870,7 +892,7 @@ local vim = {
         vim._tab_windows[1] = { winid }
         vim._current_window = winid
         vim._current_tabpage = 1
-      else
+      elseif closes_current then
         vim._current_tabpage = new_cur
         local list = vim._tab_windows[new_cur]
         if list and #list > 0 then
@@ -976,6 +998,19 @@ local vim = {
       end
     end
     return result
+  end,
+
+  -- A table with only number keys is a list. Like Neovim, an empty table is a list too.
+  tbl_islist = function(t)
+    if type(t) ~= "table" then
+      return false
+    end
+    for key in pairs(t) do
+      if type(key) ~= "number" then
+        return false
+      end
+    end
+    return true
   end,
 
   -- Add tbl_extend function for compatibility
@@ -1232,6 +1267,9 @@ local vim = {
   v = { echospace = 68 },
 
   loop = {
+    hrtime = function()
+      return 0
+    end,
     new_tcp = function()
       return {
         bind = function(self, host, port)
@@ -1314,6 +1352,7 @@ local vim = {
     now = function()
       return os.time() * 1000
     end,
+    update_time = function() end,
     timer_stop = function(timer)
       return true
     end,
@@ -1421,7 +1460,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "", fileformats = "unix,dos" }, {
   __index = function(_, k)
     return vim._options[k]
   end,

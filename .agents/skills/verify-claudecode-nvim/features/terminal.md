@@ -26,7 +26,7 @@ The user starts the Claude Code CLI in a terminal split with `:ClaudeCode`, then
 Preconditions:
 
 - The harness never runs `claude`, so the terminal runs a shell that prints its arguments. Launch with `C="sh -c 'echo \"ARGS: \$*\"; exec sh' claude"; VCN_SETUP=$(jq -nc --arg c "$C" '{terminal_cmd:$c,terminal:{provider:"native"}}') $V launch -c 'let g:cc_ft = 0 | autocmd FileType claudecode let g:cc_ft += 1' hello.txt`. `$V doctor` is all `ok`.
-- Set `T="luaeval(\"require('claudecode.terminal').get_active_terminal_bufnr() or 0\")"` in each shell that reads the terminal text. Before each `:` command or `Ctrl+W` typed in the terminal, leave terminal mode with `$V keys 'Ctrl+\' 'Ctrl+N'` and `$V until 'mode()' n`.
+- Set `T="luaeval(\"require('claudecode.terminal').get_active_terminal_bufnr() or 0\")"` in each shell that reads the terminal text. The Send text step also needs `PORT=$(basename "$VCN_STATE"/claude/ide/*.lock .lock)`, the port of the plugin server, which is the `CLAUDE_CODE_SSE_PORT` that the terminal job gets. Before each `:` command or `Ctrl+W` typed in the terminal, leave terminal mode with `$V keys 'Ctrl+\' 'Ctrl+N'` and `$V until 'mode()' n`.
 
 Steps:
 
@@ -49,3 +49,4 @@ Steps:
 - Plain `terminal_cmd = "sh"` cannot test arguments: `sh --model opus` exits at once, and its window closes. Use the `ARGS:` shell.
 - `mode()` prints `n` in terminal-Normal mode too. `mode(1)` prints `nt` there and `n` in a file window.
 - Under `none`, the `:ClaudeCodeSendText` warning is wider than the screen, so Neovim waits at `Press ENTER` and RPC stops answering. Run `$V capture` and then `$V keys Enter`.
+- A terminal job that is stopped right after `termopen` can kill Neovim (`Caught deadly signal 'SIGHUP'`): the forked child still runs Neovim's signal handlers until it runs exec. `:ClaudeCodeClose` of the native terminal waits for the exec of a young job (#544). A direct `jobstop` or `:bwipeout` of the terminal buffer and the Snacks close do not wait, so in a script, wait for the job's output first. `scripts/proof-pty-child-hangup.sh` shows the race.

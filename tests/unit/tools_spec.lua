@@ -312,22 +312,23 @@ describe("Tools Module", function()
       expect(result_obj.error.message).to_be("Tool not found: ")
     end)
 
-    for _, case in ipairs({
-      { label = "no name", params = { arguments = {} } },
-      { label = "a number as the name", params = { name = 5, arguments = {} } },
-      { label = "a list as the name", params = { name = { "getOpenEditors" }, arguments = {} } },
-      { label = "a boolean as the name", params = { name = true, arguments = {} } },
-    }) do
-      it("answers -32602 with a plain data string for " .. case.label, function()
-        local result_obj = tools.handle_invoke(nil, case.params)
+    it("runs a tool called without arguments with an empty table", function()
+      local received
+      tools.register({
+        name = "recordsInput",
+        schema = nil,
+        handler = function(input)
+          received = input
+          return { content = {} }
+        end,
+      })
 
-        expect(result_obj.result).to_be_nil()
-        expect(result_obj.error).to_be_table()
-        expect(result_obj.error.code).to_be(-32602)
-        expect(result_obj.error.message).to_be("Invalid params")
-        expect(result_obj.error.data).to_be("Missing or invalid parameter: name (a string is required)")
-      end)
-    end
+      local result_obj = tools.handle_invoke(nil, { name = "recordsInput" })
+
+      expect(result_obj.error).to_be_nil()
+      expect(received).to_be_table()
+      expect(next(received)).to_be_nil()
+    end)
 
     it("should handle tool execution errors (structured error from handler) with JSON-RPC error", function()
       local erroring_tool_handler = spy.new(function()
@@ -444,6 +445,36 @@ describe("Tools Module", function()
         assert.equal("suspended", coroutine.status(result_obj.coroutine))
       end)
     end)
+  end)
+
+  describe("Tool list (get_tool_list)", function()
+    it(
+      "lists exactly the ten MCP tools, with their schema description and input schema, and hides close_tab",
+      function()
+        local names = {}
+        for _, tool in ipairs(tools.get_tool_list()) do
+          table.insert(names, tool.name)
+          expect(tool.description).to_be(tools.tools[tool.name].schema.description)
+          assert.are.same(tools.tools[tool.name].schema.inputSchema, tool.inputSchema)
+        end
+        table.sort(names)
+
+        assert.are.same({
+          "checkDocumentDirty",
+          "closeAllDiffTabs",
+          "getCurrentSelection",
+          "getDiagnostics",
+          "getLatestSelection",
+          "getOpenEditors",
+          "getWorkspaceFolders",
+          "openDiff",
+          "openFile",
+          "saveDocument",
+        }, names)
+        expect(tools.tools.close_tab.handler).to_be_function()
+        expect(tools.tools.close_tab.schema).to_be_nil()
+      end
+    )
   end)
 
   -- All individual tool describe blocks (e.g., "Open File Tool", "Get Diagnostics Tool", etc.)

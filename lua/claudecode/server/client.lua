@@ -30,13 +30,14 @@ local CLOSE_REASONS = {
 ---@field close_pending boolean|nil True while a Close frame waits to be written: its write callback closes the socket, or its deadline does
 ---@field close_timer table|nil The deadline of the Close frame: a repeating timer that runs while `close_pending` is set
 ---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress, from the server's ping interval
+---@field connected_at number|nil When the WebSocket handshake completed (vim.loop.now())
 ---@field last_ping number Timestamp of last ping sent
 ---@field last_pong number Timestamp of last pong received
 ---@field queued_bytes integer The bytes passed to the socket's write queue since the connection began
 ---@field drained_bytes integer The bytes libuv had written to the socket when `sample_write_progress` last saw progress
 ---@field last_drain number Timestamp of the last `sample_write_progress` check that found the write queue empty or smaller
 ---@field write_stalled boolean|nil True after a ping tick found no write progress. The next such tick asks for a look after the next poll, and only that look drops the client
----@field pong_overdue boolean|nil True after a ping timer tick found no pong for two intervals. The next such tick drops the client
+---@field ping_unanswered_since number|nil Loop time of the oldest ping sent since bytes were last read from the client
 
 ---Create a new WebSocket client
 ---@param tcp_handle table The vim.loop TCP handle
@@ -71,20 +72,29 @@ local WRITE_PIECE_BYTES = 1024 * 1024
 ---Write to the socket of a client. Every write goes through here, so `queued_bytes` counts them all: the bytes still in
 ---libuv's write queue are `queued_bytes - drained_bytes`, and `is_client_reading` tells a stalled queue from a slow one.
 ---A frame of more than `WRITE_PIECE_BYTES` is queued in pieces. libuv finishes the requests of a socket in order, so the
----callback of the last piece says that the whole frame is written, or that a piece failed.
+---callback of the last piece says that the whole frame is written, or that a piece failed. A piece that libuv refuses at
+---once ends the frame there.
 ---@param client WebSocketClient
 ---@param data string
 ---@param callback function? Optional callback: function(err)
+---@return any queued, string|nil err What `tcp_handle:write` returned for the request that carries the callback
 local function write(client, data, callback)
   client.queued_bytes = client.queued_bytes + #data
   if #data <= WRITE_PIECE_BYTES then
-    client.tcp_handle:write(data, callback)
-    return
+    return client.tcp_handle:write(data, callback)
   end
+  local queued, err
   for first = 1, #data, WRITE_PIECE_BYTES do
     local last_piece = first + WRITE_PIECE_BYTES > #data
-    client.tcp_handle:write(data:sub(first, first + WRITE_PIECE_BYTES - 1), last_piece and callback or nil)
+    queued, err =
+      client.tcp_handle:write(data:sub(first, first + WRITE_PIECE_BYTES - 1), last_piece and callback or nil)
+    if not queued and err then
+      -- The frame is cut short, and the callback rides on the last piece: no later piece may follow, and the caller
+      -- hears the error here.
+      return nil, err
+    end
   end
+  return queued, err
 end
 
 ---Stop the deadline of the Close frame. Safe to call when none runs.
@@ -277,9 +287,9 @@ function M.process_data(client, data, on_message, on_close, on_error, auth_token
         end
         client.handshake_complete = true
         client.state = "connected"
-        -- The keepalive window starts now. The ping timer ignores a client that is not connected, so the main loop can
-        -- block between the accept and this point for longer than the timeout, and no ping reached this client yet.
-        client.last_pong = vim.loop.now()
+        -- init.lua sends queued @ mentions only once some connected client has been connected for
+        -- connection_wait_delay ms since this point. The broadcast then also reaches clients that connected later.
+        client.connected_at = vim.loop.now()
         logger.debug("client", "WebSocket connection established for client:", client.id)
         if on_open then
           on_open(client)
@@ -382,7 +392,7 @@ end
 ---Send a text message to a client
 ---@param client WebSocketClient The client object
 ---@param message string The message to send
----@param callback function? Optional callback: function(err)
+---@param callback function? Optional callback: function(err), run once when the write finished or failed
 function M.send_message(client, message, callback)
   if client.state ~= "connected" then
     if callback then
@@ -394,7 +404,12 @@ function M.send_message(client, message, callback)
   -- Every outbound message passes here. A buffer name or path in it can hold any bytes, and the client drops the
   -- connection on a text frame that is not valid UTF-8.
   local text_frame = frame.create_text_frame(utils.valid_utf8(message))
-  write(client, text_frame, callback)
+  -- libuv runs the callback only for a write it queued. A write it refuses at once returns nil and the error, and
+  -- never runs the callback, so the caller hears about that failure here.
+  local queued, err = write(client, text_frame, callback)
+  if not queued and err and callback then
+    callback(err)
+  end
 end
 
 ---Send a ping to a client
@@ -467,21 +482,6 @@ function M.abandon_close_frame(client)
   stop_close_timer(client)
 end
 
----Check if a client connection is alive
----@param client WebSocketClient The client object
----@param timeout number Timeout in milliseconds (default: 30000)
----@return boolean alive True if the client is considered alive
-function M.is_client_alive(client, timeout)
-  timeout = timeout or 30000 -- 30 seconds default
-
-  if client.state ~= "connected" then
-    return false
-  end
-
-  local now = vim.loop.now()
-  return (now - client.last_pong) < timeout
-end
-
 ---Check whether libuv wrote a byte of the write queue of a client since the last check that saw progress, or the queue
 ---is empty. A client that reads slowly makes progress, and so does one that is sent a single large message, however big.
 ---@param client WebSocketClient The client object
@@ -527,6 +527,7 @@ function M.get_client_info(client)
     buffer_size = #client.buffer + (client.pending and client.pending.size or 0),
     last_ping = client.last_ping,
     last_pong = client.last_pong,
+    connected_at = client.connected_at,
   }
 end
 

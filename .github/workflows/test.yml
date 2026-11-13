@@ -31,19 +31,25 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Build deps: PUC Lua builds from source, and the test rocks compile C modules.
-      - name: Install build dependencies
-        run: |
-          sudo apt-get -o Acquire::Retries=3 update
-          sudo apt-get -o Acquire::Retries=3 install -y build-essential libreadline-dev unzip
-
       - name: Set up mise
         uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151 # v4.0.1
+        env:
+          # mise retries a failed download 3 times, with 2.6 to 5.2 s of backoff in total. 6 retries give 25 to 50 s.
+          MISE_HTTP_RETRIES: "6"
         with:
           # --locked installs only tools listed in mise.lock, fails when an entry is missing, and never rewrites it.
           # Without it, `mise install` fills in missing lock data and downloads tools again to do it, so a slow
           # www.lua.org failed this step.
           install_args: --locked
+          # The default cache key hashes every mise config file, so an edit to a task in mise.toml missed the cache and
+          # every tool downloaded again. mise.lock pins the tool set, so this key hashes only it. There are no
+          # restore-keys on purpose: mise does not check an installed tool against mise.lock, so a cache restored from
+          # another lock could keep a tool that the new lock changed. A change that alters an install without changing
+          # mise.lock (a tool option in mise.toml) keeps this key: bump v1 then.
+          cache_key: mise-v1-{{platform}}-{{version}}-${{ hashFiles('mise.lock') }}
+          # Only a push to main saves the cache. A pull request only restores it: mise runs the postinstall hooks of the
+          # PR's own mise.toml before the save, and the key above ignores mise.toml.
+          cache_save: ${{ github.event_name == 'push' }}
           # mise is pinned because `--locked` rules change between releases (2026.11.0 started to require a
           # checksum). sha256 is the linux-x64 mise binary from the v2026.11.5 release.
           version: 2026.11.5
@@ -57,15 +63,25 @@ jobs:
       - name: Run release tooling tests
         run: npm --prefix scripts run test:release-please-runner
 
-      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds.
-      - name: Cache Lua test rocks
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      # Cache the rock tree (rebuilt from luarocks.org otherwise); a miss just rebuilds. After a miss, actions/cache
+      # saves in a post step on a pull request or a merge queue run too, after the PR's own scripts ran. So restore and
+      # save are separate steps, and only a push to main saves.
+      - name: Restore Lua test rocks
+        id: luarocks-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .luarocks
           key: luarocks-${{ runner.os }}-${{ hashFiles('mise.toml') }}
 
       - name: Install Lua test rocks
         run: mise run setup
+
+      - name: Save Lua test rocks
+        if: github.event_name == 'push' && steps.luarocks-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .luarocks
+          key: ${{ steps.luarocks-cache.outputs.cache-primary-key }}
 
       - name: Run luacheck
         run: mise run check
@@ -75,6 +91,9 @@ jobs:
 
       - name: Check formatting
         run: mise run format-check
+
+      - name: Check that format-check writes nothing
+        run: scripts/test-format-check.sh
 
       - name: Generate coverage report
         run: |
@@ -122,6 +141,8 @@ jobs:
         env:
           # plenary.nvim's master head since 2026-04-10, which the unpinned clone fetched until now.
           # Pinned so a new plenary commit cannot change or break CI (for example by dropping 0.8).
+          # Whoever bumps the pin must recheck plenary's per-file timeout (50s, test_harness.lua) against FILE_TIMEOUT
+          # in scripts/run_integration_tests_individually.sh: that limit plus its kill grace must stay below it.
           PLENARY_SHA: 74b06c6c75e4eeb3108ec01852001636d85a932b
         run: |
           plenary=~/.local/share/nvim/site/pack/vendor/start/plenary.nvim
@@ -133,6 +154,25 @@ jobs:
 
       - name: Run integration tests
         run: ./scripts/run_integration_tests_individually.sh
+
+      # A test that hands a temp path to an Ex command without fnameescape fails on a `%` or a space in TMPDIR (E499,
+      # a split path), and no other step has such a TMPDIR.
+      - name: Run integration tests under a TMPDIR with a space and a %
+        run: |
+          odd_tmp="$RUNNER_TEMP/odd tmp 50%"
+          mkdir -p "$odd_tmp"
+          TMPDIR="$odd_tmp" ./scripts/run_integration_tests_individually.sh
+
+      # Only the legacy diff.open_diff writes temp files under stdpath("cache"). diff_legacy_swap_spec.lua points that
+      # at a temp folder, and a spec that uses the real cache folder shows here.
+      - name: Check the integration tests left the real cache folder alone
+        run: |
+          cache="${XDG_CACHE_HOME:-$HOME/.cache}/nvim"
+          if [ -e "$cache" ]; then
+            echo "::error::A test wrote under $cache"
+            find "$cache" | head -20
+            exit 1
+          fi
 
       # Real-Neovim regression gate for issue #238 (reject-with-:q). The unit spec
       # only exercises the WinClosed handler logic against a mock; this drives a

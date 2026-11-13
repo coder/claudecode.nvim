@@ -30,9 +30,9 @@ lockfile = true
 [tools]
 # LuaJIT is the runtime Neovim embeds, and the test suite *requires* it: the
 # blocking-diff tools yield coroutines across pcall/C-call boundaries, which
-# PUC Lua 5.1 cannot do. busted/luacheck/luacov all run under LuaJIT.
+# stock PUC Lua 5.1 cannot do. busted/luacheck/luacov all run under LuaJIT.
 luajit = "2.1.1744318430"
-# PUC Lua 5.1 is installed only for its bundled LuaRocks, which `mise run
+# PUC Lua 5.5.0 is installed only for its bundled LuaRocks, which `mise run
 # setup` uses to build the test rocks *targeting LuaJIT* (luarocks --lua-dir).
 # (The LuaJIT plugin does not ship a LuaRocks.)
 lua = "5.5.0"
@@ -102,7 +102,7 @@ done
 '''
 
 [tasks.check]
-description = "Check Lua syntax and run luacheck"
+description = "Check Lua syntax, run luacheck, and run the static proofs of the verify skill"
 depends = ["setup"]
 run = '''
 echo "Checking Lua files for syntax errors..."
@@ -111,6 +111,8 @@ echo "Checking Lua files for syntax errors..."
 find lua -name "*.lua" -type f -print0 | xargs -0 -I{} luajit -e "assert(loadfile('{}'))"
 echo "Running luacheck..."
 ./.luarocks/bin/luacheck lua/ tests/ --no-unused-args --no-max-line-length
+echo "Running the static proofs of the verify-claudecode-nvim skill..."
+bash .agents/skills/verify-claudecode-nvim/scripts/proof-static.sh
 '''
 
 [tasks.test]
@@ -143,7 +145,28 @@ run = "treefmt"
 
 [tasks.format-check]
 description = "Verify formatting without writing (used in CI)"
-run = "treefmt --ci"
+# `treefmt --ci` has no dry run: with the write flags it rewrites the files it formats and then fails. The folder
+# scripts/format-check-bin/ goes first on PATH, so treefmt finds check-mode stand-ins for prettier, stylua and shfmt
+# there. They run the real tools with their check flags, so a failed check writes nothing to the tree. `mise run format`
+# and a plain `treefmt` run the real tools, and treefmt's cache keys on them.
+# The script reads the path of the checkout from $MISE_CONFIG_ROOT, not from a template: a template pastes the path into
+# the shell text, and a quote, `$` or backtick in the path then changes what the shell runs. A colon splits the PATH
+# entry, and a missing or non-executable stand-in is skipped by the lookup, so the loop checks that each tool resolves
+# to the stand-in before treefmt runs, and the check stops with exit 2 when one does not: treefmt would run the real
+# tool, and the real tool writes.
+run = '''
+stand_ins="$MISE_CONFIG_ROOT/scripts/format-check-bin"
+PATH="$stand_ins:$PATH"
+for tool in prettier stylua shfmt; do
+  if ! [ "$(command -v "$tool")" -ef "$stand_ins/check-mode.sh" ]; then
+    echo "format-check: $tool does not resolve to the stand-in in $stand_ins, so treefmt would run another $tool" \
+      "and write files. A stand-in is missing or not executable, or the folder is not first on PATH (a colon in the" \
+      "path of the checkout splits the entry)." >&2
+    exit 2
+  fi
+done
+exec treefmt --ci
+'''
 
 [tasks.reviewfix]
 description = "Run reviewfixer against PR review findings (see reviewfixer.yaml)"

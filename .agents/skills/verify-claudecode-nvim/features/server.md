@@ -6,7 +6,7 @@ claudecode.nvim runs a WebSocket server on `127.0.0.1` and writes a lock file, `
 
 - `server-status` `:ClaudeCodeStatus` prints `Claude Code integration is running on port <port>` or `Claude Code integration is not running`.
 - `server-lock` the lock file is mode `0600` in a `0700` folder and holds nvim's `pid`, `ideName` `Neovim`, `transport` `ws`, the cwd in `workspaceFolders`, and a 32-character hex `authToken`.
-- `server-stop` `:ClaudeCodeStop` deletes `<port>.lock`, answers each pending openDiff with `DIFF_REJECTED`, closes each client with code 1001, and prints `Claude Code integration stopped`.
+- `server-stop` `:ClaudeCodeStop` deletes `<port>.lock`, answers each openDiff that waits for the user with `DIFF_REJECTED`, closes each client with code 1001, and prints `Claude Code integration stopped`.
 - `server-start` `:ClaudeCodeStart` listens on a new random port, writes a new lock file with a new token, and prints `Claude Code integration started on port <port>`.
 - `server-twice` Start while running warns `Claude Code integration is already running on port <port>`. Stop while stopped warns `Claude Code integration is not running`.
 - `server-exit` quitting Neovim deletes the lock file.
@@ -25,6 +25,7 @@ Preconditions:
 
 - A fresh baseline launch with `hello.txt` open and `$V doctor` all `ok`. Use a fresh launch: the steps expect the rejected client to be `client_2` and start a new client named `b`. After Stop, the run cannot return to the baseline.
 - In each bash call, also set `S=.agents/skills/verify-claudecode-nvim/scripts`, `L=$VCN_STATE/claude/ide`, and `M='split(execute("messages"), "\n")[-1]'`, the last `:messages` line. Wait for each message with `$V until "$M" '<line>'`.
+- The steps use `PORT`, `NVIM_PID` and `NODE_DIR`. Set them with `PORT=$(basename "$L"/*.lock .lock)` (only while the server runs, so before Stop), `NVIM_PID=$($V expr 'getpid()')` and `NODE_DIR=$(dirname "$(mise which node 2>/dev/null || command -v node)")`.
 
 Steps:
 

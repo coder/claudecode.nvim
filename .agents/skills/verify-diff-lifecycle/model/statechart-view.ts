@@ -4,6 +4,8 @@ const first = (seq: any) => (seq && seq[1] !== undefined ? seq[1] : null);
 const call = (v: any, r: string) => {
   const phase = v.phase[r];
   if (phase === "unsent") return "not called";
+  if (phase === "gone")
+    return "cut off by Neovim's exit during setup, nothing can answer";
   const diff = v.active[v.reqTab[r]];
   const shown = diff.req !== r ? "its diff closed" : `diff ${diff.status}`;
   if (phase === "setup") return `opening, ${shown}`;
@@ -43,6 +45,9 @@ const labels: Record<string, string> = {
   ClientIdReused: "a new Claude connection gets the old client id",
   DisconnectCleanupRuns: "the disconnect cleanup runs",
   ServerStops: "the server stops",
+  DiffCleanupAtExit: "Neovim exits (VimLeavePre)",
+  ExitInSetup:
+    "Neovim exits inside a ClaudeCodeDiffOpened handler, during setup",
   DeferredCleanupRuns: "the cleanup that waited for windows to change runs",
 };
 export const step = (action: string) => labels[action] ?? action;

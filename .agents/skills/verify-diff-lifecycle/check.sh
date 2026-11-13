@@ -51,6 +51,7 @@ covered_block setup_deferred "$SERVER" '^function M\._setup_deferred_response\('
 covered_block user_close_all "$MAIN" 'nvim_create_user_command\("ClaudeCodeCloseAllDiffs"'
 covered_block close_active "$DIFF" '^local function close_active_diffs\('
 covered_block cleanup_all "$DIFF" '^function M\._cleanup_all_active_diffs\('
+covered_block exit_cleanup "$DIFF" '^local function cleanup_at_exit\('
 covered_block inline_saved "$INLINE" '^function M\.resolve_inline_as_saved\('
 covered_block inline_rejected "$INLINE" '^function M\.resolve_inline_as_rejected\('
 covered_block handle_invoke "$TOOLS" '^function M\.handle_invoke\('
@@ -79,7 +80,7 @@ fact[GuardRejected]=$(as_bool in_order 'if not diff_data or diff_data\.status ~=
   'diff_data\.status = "rejected"' <<<"$resolve_rejected")
 fact[SenderCleared]=$(as_bool in_order '_G\.claude_deferred_responses\[co_key\]\(' \
   '_G\.claude_deferred_responses\[co_key\] = nil' <<<"$open_blocking")
-fact[ReplaceRejects]=$(as_bool in_order 'if active_diffs\[tab_name\] then' 'existing_diff\.status == "pending"' \
+fact[ReplaceRejects]=$(as_bool in_order 'while existing_diff do' 'existing_diff\.status == "pending"' \
   'M\._resolve_diff_as_rejected\(tab_name\)' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' \
   'coroutine\.running\(\)' <<<"$open_blocking")
 fact[CloseTabRejectsPending]=$(as_bool in_order 'if diff_data\.status == "pending" then' \
@@ -93,7 +94,7 @@ held_for_other_reads_owner() {
 }
 replace_keeps_others_saved() {
   held_for_other_reads_owner &&
-    in_order 'if active_diffs\[tab_name\] then' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
+    in_order 'while existing_diff do' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
       '^ *error\(\{$' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' <<<"$open_blocking"
 }
 fact[ReplaceKeepsOthersSaved]=$(as_bool replace_keeps_others_saved)
@@ -164,6 +165,26 @@ fact[ClientIdsUnique]=$(as_bool client_ids_unique)
 fact[StopRejectsPending]=$(as_bool in_order 'diff\.close_pending_diffs\(' 'tcp_server\.stop_server\(' \
   '_G\.claude_deferred_responses = \{\}' <<<"$server_stop")
 fact[StopPendingOnly]=$(as_bool grep -qE '^ *return diff_data\.status == "pending"$' <<<"$close_pending")
+# The VimLeavePre callback rejects each pending diff before it calls _cleanup_all_active_diffs, so a diff that no
+# BufUnload rejected is rejected before the final cleanup pass.
+FACTS+=(ExitRejectsPending)
+exit_rejects_pending() {
+  in_order '^local function cleanup_at_exit\(\)$' 'diff_data\.status == "pending"' \
+    'pcall\(M\._resolve_diff_as_rejected, entry\.tab_name\)' \
+    '^  M\._cleanup_all_active_diffs\("shutdown"\)$' <<<"$exit_cleanup" &&
+    in_order '^vim\.api\.nvim_create_autocmd\("VimLeavePre", \{$' '^  callback = cleanup_at_exit,$' <"$DIFF"
+}
+fact[ExitRejectsPending]=$(as_bool exit_rejects_pending)
+# A request has no answer until its handler returns, and a blocking tool has no sender before that. When Neovim exits
+# inside the handler, M.stop answers the request, and _handle_request sends nothing after a stop that answered it.
+FACTS+=(ExitAnswersInFlight)
+exit_answers_in_flight() {
+  in_order '^  M\.state\.in_flight\[in_flight\] = true$' 'pcall\(handler, client, params\)' \
+    '^  if not M\.state\.in_flight\[in_flight\] then$' '^    return$' <<<"$handle_request" &&
+    in_order '^  for in_flight in pairs\(M\.state\.in_flight\) do$' 'M\.send_response\(in_flight\.client, in_flight\.id' \
+      'tcp_server\.stop_server\(' <<<"$server_stop"
+}
+fact[ExitAnswersInFlight]=$(as_bool exit_answers_in_flight)
 fact[DisconnectRejects]=$(as_bool in_order 'vim\.schedule\(function\(\)' 'diff\.close_diffs_for_client\(client_id' \
   <<<"$on_disconnect")
 fact[DisconnectPendingOnly]=$(as_bool grep -qE \
@@ -203,7 +224,7 @@ fact[ClientTagged]=$(as_bool client_tagged)
 # the running coroutine, and open_diff_blocking returns that result.
 setup_answer_returned() {
   in_order '^ *local waiting = false$' 'pcall\(M\._setup_blocking_diff' '^ *if not waiting then$' \
-    '^ *setup_result = result$' '^ *return$' 'coroutine\.resume\(co, result\)' '^ *if setup_result then$' \
+    '^ *setup_result = result$' '^ *return$' '^ *local .* = utils\.resume_tool_coroutine\(co, result\)$' '^ *if setup_result then$' \
     '^ *return setup_result$' '^ *waiting = true$' 'coroutine\.yield\(\)' <<<"$open_blocking"
 }
 fact[SetupAnswerReturned]=$(as_bool setup_answer_returned)
@@ -226,7 +247,7 @@ fact[OpenedEventInSetup]=$(as_bool opened_event_in_setup)
 mapfile -t COVERED < <(find lua plugin \( -name '*.lua' -o -name '*.vim' \) | sort)
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 
-RULES=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover)
+RULES=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover ExitedCallsAnswered)
 LIVE=(DisconnectedCallsAnswered DeferredCleanupDone)
 CONSTRAINT=AnswerBound
 
@@ -235,7 +256,7 @@ CONSTRAINT=AnswerBound
 # it. SetupAnswerReturned=FALSE is caught only through that step, so its row also shows that the step is reachable.
 EXPECT=(
   [GuardSaved]=AnswerMatchesDiff [GuardRejected]=AnswerMatchesDiff
-  [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall
+  [ReplaceRejects]=NoStrandedCall [CloseTabRejectsPending]=NoStrandedCall [CloseEachByName]=NoStrandedCall [StopRejectsPending]=NoStrandedCall [ExitRejectsPending]=NoStrandedCall [ExitAnswersInFlight]=ExitedCallsAnswered
   [SetupAnswerReturned]=NoStrandedCall
   [StopPendingOnly]=SavedDiffKept [DisconnectPendingOnly]=SavedDiffKept [UserCloseAllPendingOnly]=SavedDiffKept
   [UserCloseKeepsAcceptedText]=SavedDiffKept
