@@ -548,24 +548,30 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       )
     end
 
-    it("does not pass nil to the swap when an autocmd of the split closes Claude first", function()
-      -- The split's own autocmds (WinNew, WinEnter) run before the swap, and Claude's close clears `term.buf`.
-      local cfg = config()
-      local term = open_then_hide(cfg)
-      local original_cmd = vim.cmd
-      vim.cmd = function(c)
-        original_cmd(c)
-        if c:find("split", 1, true) then
-          wiped_buffers[term.buf] = true
-          term.buf = nil
+    for _, focus in ipairs({ true, false }) do
+      it(
+        "does not pass nil to the swap when an autocmd of the split closes Claude first, with focus " .. tostring(focus),
+        function()
+          -- The split's own autocmds (WinNew, WinEnter) run before the swap, and Claude's close clears `term.buf`.
+          -- The focused and the unfocused show swap in different calls, so each one needs its own case.
+          local cfg = config()
+          local term = open_then_hide(cfg)
+          local original_cmd = vim.cmd
+          vim.cmd = function(c)
+            original_cmd(c)
+            if c:find("split", 1, true) then
+              wiped_buffers[term.buf] = true
+              term.buf = nil
+            end
+          end
+
+          local ok, err = pcall(snacks_provider.open, "claude", {}, cfg, focus)
+
+          assert.is_true(ok, tostring(err))
+          assert.are.same({}, logged)
         end
-      end
-
-      local ok, err = pcall(snacks_provider.open, "claude", {}, cfg, false)
-
-      assert.is_true(ok, tostring(err))
-      assert.are.same({}, logged)
-    end)
+      )
+    end
   end)
 
   it("re-showing an externally closed float without focus keeps the caller's window and queues no insert", function()

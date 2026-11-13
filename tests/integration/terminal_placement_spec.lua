@@ -1109,25 +1109,24 @@ describe("the terminal's placement in its own split", function()
       end
     end
 
-    for _, case in ipairs({
-      { kind = "winnew_close", command = "ClaudeCodeOpen" },
-      { kind = "winenter_close", command = "ClaudeCode" },
-    }) do
-      it(
-        "raises no error when a " .. case.kind .. " autocmd of the split closes Claude, for :" .. case.command,
-        function()
+    for _, kind in ipairs({ "winnew_close", "winenter_close" }) do
+      for _, entry in ipairs({ "ClaudeCodeOpen", "ClaudeCode", "ClaudeCodeFocus", "ensure_visible" }) do
+        it("raises no error when a " .. kind .. " autocmd of the split closes Claude, for " .. entry, function()
           -- The autocmd runs inside the show's `vsplit`, before the swap, and clears the provider's record of the buffer.
+          -- `ensure_visible` shows without focus and the commands show with focus.
           start_child()
           hide_terminal()
-          arm_split_close_from_third_window(case.kind)
+          arm_split_close_from_third_window(kind)
 
-          local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd(...)]], { case.command })
+          local code = entry == "ensure_visible" and [[require("claudecode.terminal").ensure_visible()]]
+            or [[vim.cmd(...)]]
+          local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", code, { entry })
 
           local state = third_window_state()
-          assert.is_true(ok, "the command must not fail: " .. tostring(err))
+          assert.is_true(ok, "the call must not fail: " .. tostring(err))
           assert.same({}, state.notes)
-        end
-      )
+        end)
+      end
     end
 
     it("starts a new terminal that stays hidden, and leaves the user's window alone, with no error", function()
