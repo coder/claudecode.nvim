@@ -170,11 +170,11 @@ function M.win_set_buf_in_split(win, buf, opts)
     return false
   end
   -- A plain swap leaves a buffer loaded and hidden that an autocmd of BufLeave showed in `win`, whatever the buffer is: a
-  -- terminal with a running job, a scratch buffer with text, a changed or an unchanged file. It does the same for the
-  -- buffer that `win` showed before, when an autocmd closed its other window and it is changed. `:buffer!` unloads or wipes
-  -- such a buffer when 'hidden' is off or its 'bufhidden' says so. So the buffer that `win` shows now is hidden for the
-  -- swap, and gets its 'bufhidden' back after it. `:noautocmd` keeps both changes from running OptionSet autocmds, as a
-  -- plain swap changes no option.
+  -- terminal with a running job, a scratch buffer with text, a changed or an unchanged file. `:buffer!` unloads or wipes
+  -- such a buffer when 'hidden' is off or its 'bufhidden' says so. The helper keeps a changed old buffer too, whose other
+  -- window an autocmd closed: a plain swap decided before that autocmd ran, and then unloads or wipes it with its text
+  -- when its 'bufhidden' says so. So the buffer that `win` shows now is hidden for the swap, and gets its 'bufhidden' back
+  -- after it. `:noautocmd` keeps both changes from running OptionSet autocmds, as a plain swap changes no option.
   local shown = vim.api.nvim_win_get_buf(win)
   local lost_by_swap = not buf_hides(shown)
     and #vim.fn.win_findbuf(shown) == 1
