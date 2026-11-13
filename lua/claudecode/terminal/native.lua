@@ -608,7 +608,7 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
     -- Terminal is not visible
     if has_buffer then
       -- Terminal process exists but is hidden, show it
-      -- When it fails, it has said why.
+      -- A false return leaves the terminal hidden. The show logs nothing about it, and neither does this toggle.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
       end
@@ -648,7 +648,7 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- Terminal process exists but is hidden, show it
-      -- When it fails, it has said why.
+      -- A false return leaves the terminal hidden. The show logs nothing about it, and neither does this toggle.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
       end
