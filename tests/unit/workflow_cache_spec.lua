@@ -143,20 +143,6 @@ describe(".github/workflows/test.yml cache settings", function()
   end)
 
   describe("the reader", function()
-    ---@param text string
-    ---@return fun(): string|nil next_line
-    local function split_lines(text)
-      local rows = {}
-      for row in (text .. "\n"):gmatch("(.-)\n") do
-        table.insert(rows, row)
-      end
-      local index = 0
-      return function()
-        index = index + 1
-        return rows[index]
-      end
-    end
-
     ---@param ... string the lines of the keys that follow `with:` in a `jdx/mise-action` step
     ---@return string[] step
     local function mise_step(...)
@@ -167,7 +153,7 @@ describe(".github/workflows/test.yml cache settings", function()
         "          install_args: --locked",
         table.concat({ ... }, "\n"),
       }, "\n")
-      return (parse_workflow(split_lines(text)))[1]
+      return (parse_workflow((text .. "\n"):gmatch("(.-)\n")))[1]
     end
 
     it("ends the with: block at a step key that no key pattern reads", function()
@@ -178,17 +164,32 @@ describe(".github/workflows/test.yml cache settings", function()
       end
     end)
 
+    it("does not read an entry of another block as an input", function()
+      local step = mise_step("        env:", "          cache: false")
+      assert.is_nil(field(step, "cache", "with"))
+      assert.are.equal("false", field(step, "cache", "env"))
+    end)
+
+    it("ends the with: block at a step-key line with no letter or digit", function()
+      -- An explicit YAML key: `?` and `:` sit alone at the step-key indent, so cache: false is an entry of env:.
+      local step = mise_step("        ?", "          env", "        :", "          cache: false")
+      assert.is_nil(field(step, "cache", "with"))
+    end)
+
     it("keeps the with: block open over a line of spaces", function()
       local step = mise_step("        ", "          cache: false")
       assert.are.equal("false", field(step, "cache", "with"))
     end)
 
-    it("does not read a key with a quote on one side only", function()
+    it("does not read a key with a quote on one side only or in a mismatched pair", function()
       local step = mise_step(
         "          cache_save\": ${{ github.event_name == 'push' }}",
         "          cache': false",
         '          "cache_key: a',
-        "          cache_key': b"
+        "          cache_key': b",
+        "          'cache: c",
+        "          \"cache_save': d",
+        "          'cache_key\": e"
       )
       assert.is_nil(field(step, "cache_save", "with"))
       assert.is_nil(field(step, "cache", "with"))
