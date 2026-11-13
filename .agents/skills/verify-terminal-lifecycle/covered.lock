@@ -37,14 +37,14 @@ site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks"
 site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks") @ local function get_provider()
 site lua/claudecode/terminal.lua: return get_provider().get_active_bufnr() @ function M.get_active_terminal_bufnr()
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 11bb5aa406e1da16
+file lua/claudecode/terminal/native.lua 6a1115eec74b7419
 block is_last_window         ca717305ec122468
 block is_valid               d3f215f69bdc28bf
 block forget_exited          2ab5742b54f43e66
 block forget_ended           aec79589d4546ab6
 block adopt                  c89db8a9183c7aff
 block stop_snacks            3b6ad0bb3ca53456
-block start_terminal         4a5167f7b2733904
+block start_terminal         08a67233562a3337
 block open_terminal          588edf5c85e83068
 block close_terminal         60dce05b19512222
 block native_visible         4c17f637808c446a

@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 4cb91407a5215c62
+file lua/claudecode/diff.lua 3c89c1c2256cb3d4
 block resolve_saved          36fd89d5b97f0173
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          13e23b610cab9f40
@@ -172,7 +172,7 @@ file lua/claudecode/terminal.lua 2cb4a5721335543c
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 11bb5aa406e1da16
+file lua/claudecode/terminal/native.lua 6a1115eec74b7419
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/owned.lua
