@@ -36,7 +36,14 @@ command -v "$nvim" >/dev/null || {
   exit 2
 }
 
+# The work folder holds the shim and the probe. LD_PRELOAD splits the shim path at a space or a colon, and `-c "luafile
+# <path>"` ends the name at a space and expands % and #. CI also runs under TMPDIR="odd tmp 50%", so a folder with any
+# other character than these goes to /tmp.
 work=$(mktemp -d) || exit 2
+if [[ ! $work =~ ^[A-Za-z0-9/._+-]+$ ]]; then
+  rmdir -- "$work"
+  work=$(mktemp -d /tmp/claudecode.XXXXXX) || exit 2
+fi
 [[ -n $work && -d $work ]] || exit 2
 
 # reap_job: kills the job's child that the last case saved, when the process with that PID still has the saved start
