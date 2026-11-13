@@ -1287,6 +1287,100 @@ describe("the terminal's placement in its own split", function()
       assert.equal(1, state.windows)
     end)
 
+    ---A BufLeave autocmd of the user's file (once) shows a changed buffer in the split that it runs in, with the given
+    ---'bufhidden'. `buffer!` would unload or wipe that buffer with its text, so the helper leaves it in the split.
+    local function arm_split_shows_other(bufhidden)
+      call(
+        [[
+        local bufhidden = ...
+        _G.notes = {}
+        vim.notify = function(message)
+          table.insert(_G.notes, message)
+        end
+        require("claudecode.logger").setup({ log_level = "info" })
+        _G.original = vim.api.nvim_get_current_win()
+        _G.file = vim.api.nvim_get_current_buf()
+        _G.other = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
+        vim.bo[_G.other].bufhidden = bufhidden
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = _G.file,
+          once = true,
+          callback = function()
+            vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), _G.other)
+          end,
+        })
+      ]],
+        bufhidden
+      )
+    end
+
+    local function shows_other_state()
+      return call([[
+        vim.wait(300)
+        local buf = require("claudecode.terminal").get_active_terminal_bufnr()
+        local loaded = vim.api.nvim_buf_is_valid(_G.other) and vim.api.nvim_buf_is_loaded(_G.other)
+        return {
+          terminal_windows = buf and vim.api.nvim_buf_is_valid(buf) and #vim.fn.win_findbuf(buf) or 0,
+          job_running = buf ~= nil and vim.fn.jobwait({ vim.b[buf].terminal_job_id }, 10)[1] == -1,
+          other_lines = loaded and vim.api.nvim_buf_get_lines(_G.other, 0, -1, false) or {},
+          other_windows = vim.api.nvim_buf_is_valid(_G.other) and #vim.fn.win_findbuf(_G.other) or 0,
+          cursor_original = vim.api.nvim_get_current_win() == _G.original,
+          notes = _G.notes,
+        }
+      ]])
+    end
+
+    for _, bufhidden in ipairs({ "unload", "delete", "wipe" }) do
+      it(
+        "starts a new terminal that stays hidden, with no error, when the autocmd shows a changed buffer in the split, 'bufhidden' "
+          .. bufhidden,
+        function()
+          -- The helper returns false and keeps the buffer. A plain swap to repair the split after termopen would raise E37.
+          start_child()
+          arm_split_shows_other(bufhidden)
+
+          local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd("ClaudeCode")]], {})
+
+          local state = shows_other_state()
+          assert.is_true(ok, "the command must not fail: " .. tostring(err))
+          assert.same({ "unsaved X text" }, state.other_lines)
+          assert.equal(1, state.other_windows, "the buffer stays in the split")
+          assert.equal(0, state.terminal_windows)
+          assert.is_true(state.job_running, "the terminal must still start")
+        end
+      )
+
+      for _, entry in ipairs({ "ClaudeCodeOpen", "ensure_visible" }) do
+        it(
+          "shows a hidden terminal nowhere, with no error and no message, when the autocmd shows a changed buffer in the split, 'bufhidden' "
+            .. bufhidden
+            .. ", for "
+            .. entry,
+          function()
+            start_child()
+            hide_terminal()
+            arm_split_shows_other(bufhidden)
+
+            local code = entry == "ensure_visible" and [[require("claudecode.terminal").ensure_visible()]]
+              or [[vim.cmd(...)]]
+            local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", code, { entry })
+
+            local state = shows_other_state()
+            assert.is_true(ok, "the call must not fail: " .. tostring(err))
+            assert.same({ "unsaved X text" }, state.other_lines)
+            assert.equal(1, state.other_windows, "the buffer stays in the split")
+            assert.equal(0, state.terminal_windows)
+            assert.is_true(state.job_running, "the terminal must keep running")
+            assert.same({}, state.notes)
+            if entry == "ensure_visible" then
+              assert.is_true(state.cursor_original, "a show without focus leaves the cursor where the user was")
+            end
+          end
+        )
+      end
+    end
+
     it("shows the terminal in a split on the next open", function()
       start_child()
       hide_terminal()

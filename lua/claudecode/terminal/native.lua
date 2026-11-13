@@ -204,7 +204,7 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   -- 'nohidden' that would unload a buffer that is not bufhidden=hide. Before termopen, Neovim loads it again, and on
   -- 0.8 its term:// reader starts a second terminal in it. In TermOpen, the unload ends Claude.
   vim.bo[new_bufnr].bufhidden = "hide"
-  utils.win_set_buf_in_split(new_winid, new_bufnr)
+  local placed = utils.win_set_buf_in_split(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
@@ -261,8 +261,9 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   job_started_at = vim.loop.hrtime()
   -- An autocmd of the start can close the split. A focus_toggle from a BufEnter or TermOpen autocmd adopts this
   -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
-  -- terminal, and the next toggle shows it.
-  if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+  -- terminal, and the next toggle shows it. When the first placement returned false, a BufLeave autocmd closed the
+  -- split or left a buffer in it that a swap would lose, and Claude stays hidden: a plain swap here would raise E37.
+  if placed and vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     utils.win_set_buf_in_split(new_winid, new_bufnr)
   end
   winid = new_winid
