@@ -2,7 +2,8 @@ require("tests.busted_setup")
 
 -- actionlint and zizmor check the syntax of .github/workflows/test.yml, not what its cache settings mean, so an edit
 -- that loosens one of them keeps CI green. This spec reads the file as text, with no YAML parser, and checks each
--- setting where it sits in its step. A step that it cannot read, such as one in flow style, makes it fail.
+-- setting where it sits in its step. It also fails when `actions/cache` or `jdx/mise-action` is named on a line that is
+-- not the `uses:` of a block-style step. It does not decode YAML escapes.
 describe(".github/workflows/test.yml cache settings", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
   local push_only = "${{ github.event_name == 'push' }}"
@@ -11,7 +12,8 @@ describe(".github/workflows/test.yml cache settings", function()
   ---Every step is a `- ` item at six spaces. A step ends at the next step or at a line with less indent, and a comment
   ---line is not part of it.
   ---@return string[][] steps the lines of each step
-  ---@return string[] lines every line of the file that is not a comment, without its trailing comment
+  ---@return string[] lines every line of the file that is not a comment line. A trailing comment stays: a ` #` can sit
+  ---inside a quoted value, so cutting there could hide a name in a flow-style step.
   local function read_workflow()
     local path = root .. "/.github/workflows/test.yml"
     local file = assert(
@@ -23,7 +25,7 @@ describe(".github/workflows/test.yml cache settings", function()
     local current
     for line in file:lines() do
       if not line:match("^%s*#") then
-        table.insert(code, (line:gsub("%s+#.*$", "")))
+        table.insert(code, line)
       end
       if line:match("^      %- ") then
         current = {}
@@ -118,10 +120,11 @@ describe(".github/workflows/test.yml cache settings", function()
   end)
 
   describe("the workflow text", function()
-    -- field() reads block style only. A step or a list of steps in flow style (`- { uses: actions/cache@..., with: {
-    -- ... } }`) hides its settings, so the spec fails when an action name sits anywhere but in the `uses:` of a step it
-    -- reads. A name in another spelling of the case also fails: the match here ignores the case, the one in
-    -- uses_action() does not.
+    -- field() reads block style only. This test counts the lines that contain an action name, in any letter case, and
+    -- the steps whose `uses:` starts with the name in lower case. The two counts must be equal. So it fails for a
+    -- flow-style step (`- { uses: actions/cache@..., with: { ... } }`), for another letter case (`Actions/cache@`),
+    -- and for the name on any other line that is not a comment line (a step `name:`, a `run:` line, a trailing
+    -- comment). It does not decode YAML escapes, so `"actions\x2fcache@..."` is not seen.
     it("names actions/cache and jdx/mise-action only in steps it can read", function()
       for _, action in ipairs({ "actions/cache", "jdx/mise-action" }) do
         local named, read = 0, 0
