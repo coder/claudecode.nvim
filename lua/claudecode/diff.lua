@@ -436,7 +436,11 @@ local function display_terminal_in_new_tab()
 
   if not utils.win_set_buf_in_split(terminal_win, terminal_bufnr, { ignore_bufenter = true }) then
     -- A BufLeave autocmd of the user's closed the split or showed a buffer in it that the swap would lose, so the new
-    -- tab has no terminal.
+    -- tab has no terminal. The autocmd can also have entered a window in another tab, and the diff is built in the
+    -- current tab, so the new tab is entered again when it still exists.
+    if vim.api.nvim_tabpage_is_valid(new_tab) then
+      vim.api.nvim_set_current_tabpage(new_tab)
+    end
     return original_tab, nil, had_terminal_in_original, new_tab
   end
 

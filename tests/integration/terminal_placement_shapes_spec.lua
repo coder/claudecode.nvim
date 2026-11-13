@@ -137,12 +137,26 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     -- once the new tab has its two windows.
     local armed = os.getenv("SWAP_ARMED") ~= "0"
     local closes = os.getenv("SWAP_CLOSE") == "1"
+    -- SWAP_ENTER_CLOSE: enter the window in the first tab, then close the split. SWAP_SHOWS_OTHER: show a changed
+    -- buffer with 'bufhidden' wipe in the split, which `buffer!` would wipe with its text.
+    local enters_closes = os.getenv("SWAP_ENTER_CLOSE") == "1"
+    local shows_other = os.getenv("SWAP_SHOWS_OTHER") == "1"
+    local other_buf
     vim.api.nvim_create_autocmd("BufLeave", {
       callback = function()
         if armed and vim.fn.tabpagenr() == 2 and #vim.api.nvim_tabpage_list_wins(0) == 2 then
           armed = false
           if closes then
             vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+          elseif enters_closes then
+            local split = vim.api.nvim_get_current_win()
+            vim.api.nvim_set_current_win(start_win)
+            vim.api.nvim_win_close(split, true)
+          elseif shows_other then
+            other_buf = vim.api.nvim_create_buf(true, false)
+            vim.api.nvim_buf_set_lines(other_buf, 0, -1, false, { "unsaved X text" })
+            vim.bo[other_buf].bufhidden = "wipe"
+            vim.api.nvim_win_set_buf(vim.api.nvim_get_current_win(), other_buf)
           else
             vim.api.nvim_set_current_win(start_win)
           end
@@ -170,7 +184,23 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
         vim.tbl_map(vim.api.nvim_win_get_buf, vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2])),
         terminal_buf
       ),
+      current_tab = vim.fn.tabpagenr(),
+      other_lines = other_buf
+          and vim.api.nvim_buf_is_valid(other_buf)
+          and vim.api.nvim_buf_is_loaded(other_buf)
+          and vim.api.nvim_buf_get_lines(other_buf, 0, -1, false)
+        or {},
     }
+    -- The proposal of the diff is a buffer whose name ends in "(proposed)". Which tab shows it?
+    for index, tab in ipairs(vim.api.nvim_list_tabpages()) do
+      local shows_proposal = false
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+        if vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win)):find("(proposed)", 1, true) then
+          shows_proposal = true
+        end
+      end
+      result["proposal_in_tab_" .. index] = shows_proposal
+    end
     vim.fn.writefile({ vim.json.encode(result) }, os.getenv("SWAP_OUT"))
     vim.cmd("qa!")
   ]]
@@ -298,6 +328,44 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       "no BufEnter autocmd may be left for a window that never showed the terminal"
     )
   end)
+
+  it(
+    "builds the diff in the new tab, with no terminal, when a BufLeave autocmd enters the first tab and closes the split",
+    function()
+      local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_ENTER_CLOSE = "1" })
+
+      assert.equal(0, exit_code, "Neovim must survive (nil is a hang): " .. vim.inspect(result))
+      assert.is_not_nil(result, "the case wrote no result")
+      assert.is_true(result.armed_used, "the autocmd must have run during the swap, or the test proves nothing")
+      assert.is_true(result.deferred, "openDiff must open: " .. result.err)
+      assert.equal(2, result.tabs)
+      assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
+      assert.is_false(
+        result.terminal_in_new_tab,
+        "the terminal's split is closed, so the new tab has no terminal window"
+      )
+      assert.is_true(result.proposal_in_tab_2, "the diff must be built in the new tab")
+      assert.is_false(result.proposal_in_tab_1, "the user's own tab must not get the diff windows")
+      assert.equal(2, result.current_tab)
+    end
+  )
+
+  it(
+    "builds the diff in the new tab, with no terminal, when a BufLeave autocmd shows a changed buffer in the split",
+    function()
+      local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_SHOWS_OTHER = "1" })
+
+      assert.equal(0, exit_code, "Neovim must survive (nil is a hang): " .. vim.inspect(result))
+      assert.is_not_nil(result, "the case wrote no result")
+      assert.is_true(result.armed_used, "the autocmd must have run during the swap, or the test proves nothing")
+      assert.is_true(result.deferred, "openDiff must open: " .. result.err)
+      assert.equal(2, result.tabs)
+      assert.is_false(result.terminal_in_new_tab, "the buffer that the autocmd showed stays in the split")
+      assert.same({ "unsaved X text" }, result.other_lines, "the text of that buffer must be kept")
+      assert.is_true(result.proposal_in_tab_2, "the diff must be built in the new tab")
+      assert.is_false(result.proposal_in_tab_1)
+    end
+  )
 
   it("opens a diff in a new tab without running a BufEnter autocmd of the terminal buffer", function()
     local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_ARMED = "0" })
