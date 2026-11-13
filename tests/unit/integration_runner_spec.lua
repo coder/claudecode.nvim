@@ -126,6 +126,17 @@ local has_proc_fd = (function()
   return status == 0 or status == true
 end)()
 
+-- A process that nohup or a similar launcher started has SIGHUP ignored, and every process below it ignores it too. Bash
+-- cannot trap a signal that was ignored when it started, so a runner there ignores that signal.
+---@param signal string
+---@return boolean ignored
+local function signal_is_ignored(signal)
+  local pipe = assert(io.popen("bash -c 'trap -p " .. signal .. "'"))
+  local trapped = pipe:read("*a")
+  pipe:close()
+  return trapped:find("''", 1, true) ~= nil
+end
+
 -- In some locales a bash regex bracket range such as [0-9] also matches digits like the fullwidth １.
 ---@return string|nil locale A common locale name in which it does, or nil when the host has none
 local function find_wide_digit_locale()
@@ -809,6 +820,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
   for _, case in ipairs({ { "SIGTERM", "TERM", "143" }, { "SIGHUP", "HUP", "129" } }) do
     local name, signal, expected_status = case[1], case[2], case[3]
     it("removes its temp folder when " .. name .. " comes while mkdir makes it", function()
+      if signal_is_ignored(signal) then
+        pending(name .. " is ignored in this environment, so the runner ignores it too")
+      end
       local result = signal_runner(signal, { interrupt = "mkdir" })
 
       assert.are.equal(expected_status, result.status, result.report)
