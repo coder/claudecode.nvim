@@ -574,6 +574,46 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     end
   end)
 
+  describe("when a BufLeave autocmd shows a changed buffer in the new split", function()
+    local OTHER_BUFFER = 900
+
+    -- `buffer!` would wipe this buffer with its text, where a plain swap keeps it, so the helper leaves it in the split.
+    for _, focus in ipairs({ true, false }) do
+      it("shows nothing, and keeps the buffer in the split, with focus " .. tostring(focus), function()
+        local cfg = config()
+        local term = open_then_hide(cfg)
+        local split_window
+        local original_cmd = vim.cmd
+        vim.cmd = function(c)
+          original_cmd(c)
+          if c:find("split", 1, true) then
+            split_window = current_win
+          elseif c == "doautocmd <nomodeline> BufLeave" then
+            windows[split_window].buf = OTHER_BUFFER
+          end
+        end
+        vim.bo = setmetatable({}, {
+          __index = function(_, buf)
+            if buf == OTHER_BUFFER then
+              return { modified = true, bufhidden = "wipe" }
+            end
+            return { modified = false, bufhidden = "" }
+          end,
+        })
+
+        local ok, err = pcall(snacks_provider.open, "claude", {}, cfg, focus)
+
+        assert.is_true(ok, tostring(err))
+        assert.is_nil(term.win)
+        assert.are.equal(OTHER_BUFFER, windows[split_window].buf)
+        assert.are.same({}, logged)
+        if not focus then
+          assert.are.equal(source_win, current_win)
+        end
+      end)
+    end
+  end)
+
   it("re-showing an externally closed float without focus keeps the caller's window and queues no insert", function()
     local cfg = config({ position = "float" })
     snacks_provider.open("claude", {}, cfg, true)
