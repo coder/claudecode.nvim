@@ -10,8 +10,10 @@
 # "snacks" and launch with VCN_RTP=<snacks.nvim dir>. Evidence lands in $OUT as new-tab-diff-close-*.
 set -euo pipefail
 V="$(dirname "${BASH_SOURCE[0]}")/vcn.sh"
-# shellcheck source=/dev/null
-source "$VCN_STATE/run.env"
+# Read OUT and WORK through vcn.sh get, which checks $VCN_STATE first. -z keeps a newline at the end of a path.
+get() { IFS= read -r -d "" "$1" < <("$V" get -z "$1"); }
+get OUT
+get WORK
 
 fail() {
   echo "FAIL: $*" >&2
