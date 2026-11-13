@@ -140,6 +140,7 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
     -- SWAP_ENTER_CLOSE: enter the window in the first tab, then close the split. SWAP_SHOWS_OTHER: show a changed
     -- buffer with 'bufhidden' wipe in the split, which `buffer!` would wipe with its text.
     local enters_closes = os.getenv("SWAP_ENTER_CLOSE") == "1"
+    local closes_tab = os.getenv("SWAP_CLOSE_TAB") == "1"
     local shows_other = os.getenv("SWAP_SHOWS_OTHER") == "1"
     local other_buf
     vim.api.nvim_create_autocmd("BufLeave", {
@@ -148,6 +149,12 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
           armed = false
           if closes then
             vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+          elseif closes_tab then
+            local windows = vim.api.nvim_tabpage_list_wins(0)
+            vim.api.nvim_set_current_win(start_win)
+            for _, win in ipairs(windows) do
+              pcall(vim.api.nvim_win_close, win, true)
+            end
           elseif enters_closes then
             local split = vim.api.nvim_get_current_win()
             vim.api.nvim_set_current_win(start_win)
@@ -180,10 +187,11 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       auto_enter_autocmds = #vim.tbl_filter(function(autocmd)
         return (autocmd.desc or ""):find("Auto-enter terminal mode", 1, true) ~= nil
       end, vim.api.nvim_get_autocmds({ buffer = terminal_buf, event = "BufEnter" })),
-      terminal_in_new_tab = vim.tbl_contains(
-        vim.tbl_map(vim.api.nvim_win_get_buf, vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2])),
-        terminal_buf
-      ),
+      terminal_in_new_tab = vim.api.nvim_list_tabpages()[2] ~= nil
+        and vim.tbl_contains(
+          vim.tbl_map(vim.api.nvim_win_get_buf, vim.api.nvim_tabpage_list_wins(vim.api.nvim_list_tabpages()[2])),
+          terminal_buf
+        ),
       current_tab = vim.fn.tabpagenr(),
       other_lines = other_buf
           and vim.api.nvim_buf_is_valid(other_buf)
@@ -349,6 +357,18 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       assert.equal(2, result.current_tab)
     end
   )
+
+  it("builds the diff in the one tab that is left when a BufLeave autocmd closes the new tab", function()
+    local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_CLOSE_TAB = "1" })
+
+    assert.equal(0, exit_code, "Neovim must survive (nil is a hang): " .. vim.inspect(result))
+    assert.is_not_nil(result, "the case wrote no result")
+    assert.is_true(result.armed_used, "the autocmd must have run during the swap, or the test proves nothing")
+    assert.is_true(result.deferred, "openDiff must open: " .. result.err)
+    assert.equal(1, result.tabs)
+    assert.is_true(result.start_win_shows_file, "the window in the first tab must keep the file")
+    assert.is_true(result.proposal_in_tab_1, "the diff must be built in the tab that is left")
+  end)
 
   it(
     "builds the diff in the new tab, with no terminal, when a BufLeave autocmd shows a changed buffer in the split",
