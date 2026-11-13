@@ -127,8 +127,9 @@ for file in "$md" "$dash" "$lua" "$dashlua" "$sh" "$dashsh"; do
   expect_named "$file"
 done
 
-# 2. `mise run format` formats the probes (and only them).
-if ! mise run format -- "$md" "$lua" "$sh" "./$dash" "./$dashlua" "./$dashsh" >"$scratch/output" 2>&1; then
+# 2. `mise run format` formats the probes (and only them). The dash names come first: shfmt stops reading options at the
+# first name that is no option, so a dash name behind a plain name would not show a missing `--`.
+if ! mise run format -- "./$dashsh" "./$dashlua" "./$dash" "$md" "$lua" "$sh" >"$scratch/output" 2>&1; then
   fail "mise run format failed: $(tail -n 5 "$scratch/output")"
 fi
 expect_text "$md" "$formatted_md" "prettier writes"
