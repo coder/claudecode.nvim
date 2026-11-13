@@ -351,6 +351,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   local dir
   local orphan_pid
   local helper_pids
+  local short_temps
 
   ---@param path string
   ---@param lines string[]
@@ -385,6 +386,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     dir = temp_dir.new()
     orphan_pid = nil
     helper_pids = {}
+    short_temps = {}
     shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
     write(dir .. "/bin/nvim", STUB_NVIM, true)
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
@@ -405,8 +407,28 @@ describe("scripts/run_integration_tests_individually.sh", function()
         os.execute("kill -KILL " .. pid .. " 2> /dev/null")
       end
     end
+    for _, path in ipairs(short_temps) do
+      assert(path:match("^/tmp/ccr%.%w+$"), path)
+      os.execute("rm -rf " .. quote(path))
+    end
     temp_dir.remove(dir)
   end)
+
+  -- The runner moves a work folder with a name over 80 bytes to /tmp, and a check of the TMPDIR would then see nothing.
+  -- A folder for the TMPDIR of the runner is therefore short: the work folder in it is "/tmp.XXXXXXXXXX" more.
+  ---@return string temp A folder that exists, where the runner keeps its work folders
+  local function short_temp()
+    local temp = dir .. "/tmp"
+    if #temp + 15 > 80 then
+      local pipe = assert(io.popen("mktemp -d /tmp/ccr.XXXXXX"))
+      temp = assert(pipe:read("*l"))
+      pipe:close()
+      table.insert(short_temps, temp)
+    end
+    shell("mkdir -p " .. quote(temp))
+    assert(#temp + 15 <= 80, temp)
+    return temp
+  end
 
   ---@class ScriptSpec
   ---@field name string
@@ -784,8 +806,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if run.interrupt_at then
       write(dir .. "/" .. run.interrupt .. ".at", { tostring(run.interrupt_at) })
     end
-    local temp = dir .. "/tmp"
-    shell("mkdir -p " .. quote(temp))
+    local temp = short_temp()
     local runner_out = " > " .. quote(dir .. "/runner.out") .. " 2>&1"
     local job = quote(script) .. runner_out
     local target = "$pid"
@@ -1403,15 +1424,15 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
   it("leaves no temp item behind after a file that failed, the exit status file included", function()
     write(dir .. "/tee.exit", { "3" })
-    shell("mkdir -p " .. quote(dir .. "/tmp"))
+    local temp = short_temp()
     local status, output = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
       { name = "b_spec.lua", exit = 139, output = summary(1, 0, 0) },
-    }, nil, dir .. "/tmp")
+    }, nil, temp)
 
     assert.are.equal("1", status, output)
     assert.is_truthy(output:find("FAILED: b_spec.lua: nvim exit 139, SIGSEGV\n", 1, true), output)
-    local listing = assert(io.popen("ls -A " .. quote(dir .. "/tmp")))
+    local listing = assert(io.popen("ls -A " .. quote(temp)))
     local left = listing:read("*a")
     listing:close()
     assert.are.equal("", left, "the runner left temp items behind")
