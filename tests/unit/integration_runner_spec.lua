@@ -689,6 +689,33 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_true(#seen[1].runtime_dir + 16 <= 107, "a socket path in " .. seen[1].runtime_dir .. " passes 107 bytes")
   end)
 
+  -- A Neovim socket path in the work folder is at most 20 bytes longer than the folder, and libuv allows 107 bytes.
+  for _, case in ipairs({ { 80, false }, { 81, true } }) do
+    local bytes, moves = case[1], case[2]
+    it("puts a work folder name of " .. bytes .. " bytes " .. (moves and "in /tmp" or "where it is"), function()
+      local parent = dir .. "/boundary"
+      if not tmp_is_writable or #parent + 2 > bytes then
+        pending("needs a writable /tmp and a test folder shorter than " .. bytes .. " bytes")
+      end
+      shell("mkdir -p " .. quote(parent))
+      local name = parent .. "/" .. string.rep("w", bytes - #parent - 1)
+      write(dir .. "/mktemp.name", { name })
+      local status, output = run_script({
+        { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+      }, nil, parent)
+
+      assert.are.equal("0", status, output)
+      local seen = env_seen()
+      assert.are.equal(1, #seen)
+      if moves then
+        assert.is_truthy(seen[1].tmpdir:match("^/tmp/tmp%."), "the work folder is in " .. seen[1].tmpdir)
+      else
+        assert.are.equal(name .. "/tmp", seen[1].tmpdir)
+      end
+      shell("test ! -e " .. quote(name) .. " && test ! -e " .. quote(seen[1].tmpdir))
+    end)
+  end
+
   it("starts its own Neovim without a ShaDa file, because the Neovim of plenary shares its folders", function()
     local status, output = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
