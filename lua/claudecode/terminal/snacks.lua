@@ -748,6 +748,7 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
+    term_instance._cc.job_started_at = vim.loop.hrtime()
     vim.b[term_instance.buf][OWNED_MARK] = true
     vim.b[term_instance.buf][AUTO_CLOSE_VAR] = config.auto_close and true or false
     -- The resolved options of the instance (the terminal style, position, size, window options), not the ones passed.
@@ -847,6 +848,10 @@ function M.close()
         exited = true
       end,
     })
+    -- A close of a young job waits for its child to run exec: see owned.wait_for_exec.
+    if owned.is_young(closing._cc.job_started_at) then
+      owned.wait_for_exec(jobid)
+    end
     vim.fn.jobstop(jobid)
     -- The auto_close handler or a user's TermClose autocmd can wipe the buffer first.
     vim.wait(1000, function()

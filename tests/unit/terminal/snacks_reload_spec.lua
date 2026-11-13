@@ -147,6 +147,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
     }
 
     _G.vim = {
+      loop = {
+        hrtime = function()
+          return 0
+        end,
+      },
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = function(message, level)
         table.insert(notices, { message = message, level = level })
@@ -202,6 +207,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
       end,
       keymap = { set = function() end },
       fn = {
+        getpid = function()
+          return 99999999
+        end,
         has = function(feature)
           return feature == "nvim-0.10" and 1 or 0
         end,

@@ -88,6 +88,11 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     end)
 
     _G.vim = {
+      loop = {
+        hrtime = function()
+          return 0
+        end,
+      },
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = spy.new(function() end),
       inspect = function(v)
