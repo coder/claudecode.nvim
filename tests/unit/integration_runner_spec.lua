@@ -50,7 +50,12 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'if [ -f "$STUB_DIR/$name.sleep" ]; then',
   '  if [ -f "$STUB_DIR/$name.deaf_to_term" ]; then trap "" TERM; fi',
   '  : > "$STUB_DIR/$name.started"',
-  '  (sleep 2; mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada") &',
+  '  if [ -f "$STUB_DIR/$name.write_on_cue" ]; then',
+  '    (for tick in $(seq 400); do [ -e "$STUB_DIR/$name.cue" ] && break; sleep 0.05; done;',
+  '      mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada"; : > "$STUB_DIR/$name.written"; sleep 20) &',
+  "  else",
+  '    (sleep 2; mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada") &',
+  "  fi",
   "  wait",
   '  : > "$STUB_DIR/$name.ended"',
   "fi",
@@ -251,6 +256,24 @@ local STUB_MV = {
   "exec " .. quote(real_mv) .. ' "$@"',
 }
 
+local cat_pipe = assert(io.popen("command -v cat 2> /dev/null"))
+local real_cat = assert(cat_pipe:read("*l"), "needs cat")
+cat_pipe:close()
+-- Runs the real cat, except when $STUB_DIR/cat.hold exists: then the call that reads a process id file in a folder that
+-- the cleanup moved (a path that ends in /work/group) notes in $STUB_DIR/cat.held and waits for $STUB_DIR/cat.release,
+-- 20 seconds at most, before the real cat.
+local STUB_CAT = {
+  "#!/bin/sh",
+  'if [ -f "$STUB_DIR/cat.hold" ]; then',
+  '  case "$1" in */work/group)',
+  '    : > "$STUB_DIR/cat.held"',
+  '    for tick in $(seq 400); do [ -e "$STUB_DIR/cat.release" ] && break; sleep 0.05; done',
+  "    ;;",
+  "  esac",
+  "fi",
+  "exec " .. quote(real_cat) .. ' "$@"',
+}
+
 -- BASH_ENV files for the shell that execs timeout. Bash reads such a file first in each non-interactive shell, and only
 -- that shell has CLAUDECODE_MINIMAL_INIT. The first file stops the shell before its first command, as long as
 -- $STUB_DIR/a.release does not exist. The second file wraps echo, which the shell calls to write its process id: the
@@ -370,6 +393,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     write(dir .. "/bin/mktemp", STUB_MKTEMP, true)
     write(dir .. "/bin/mkdir", STUB_MKDIR, true)
     write(dir .. "/bin/mv", STUB_MV, true)
+    write(dir .. "/bin/cat", STUB_CAT, true)
   end)
 
   after_each(function()
@@ -673,6 +697,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   --- signal of that name reaches its process group
   ---@field during_mv boolean|nil The runner's mv, which renames the folder, waits until the shell that execs timeout has
   --- started the file's Neovim
+  ---@field write_before_kill boolean|nil The cleanup waits after it moved the folder and before it kills, and the file's
+  --- Neovim writes into the old folder path then, as a live Neovim does
   ---@field caller_reports boolean|nil Run the runner once in a calling shell, which prints the status of the runner and
   --- the report that bash prints for a child that died of a signal. Send the signal to the runner alone, with `interrupt`
   ---@field mv_fails boolean|nil The runner's mv, which renames the folder, fails
@@ -723,6 +749,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if run.during_mv then
       write(dir .. "/mv.hold", {})
     end
+    if run.write_before_kill then
+      write(dir .. "/cat.hold", {})
+      write(dir .. "/slow_spec.lua.write_on_cue", {})
+    end
     if run.interrupt then
       write(dir .. "/" .. run.interrupt .. ".interrupt", { signal })
     end
@@ -759,6 +789,15 @@ describe("scripts/run_integration_tests_individually.sh", function()
         .. quote(dir .. "/slow_spec.lua.started")
         .. " ] && break; sleep 0.1; done; "
       send = send .. ": > " .. quote(dir .. "/mv.release") .. "; "
+    end
+    if run.write_before_kill then
+      send = send .. "for _ in $(seq 100); do [ -e " .. quote(dir .. "/cat.held") .. " ] && break; sleep 0.1; done; "
+      send = send .. ": > " .. quote(dir .. "/slow_spec.lua.cue") .. "; "
+      send = send
+        .. "for _ in $(seq 100); do [ -e "
+        .. quote(dir .. "/slow_spec.lua.written")
+        .. " ] && break; sleep 0.1; done; "
+      send = send .. ": > " .. quote(dir .. "/cat.release") .. "; "
     end
     if run.during_rm then
       local release = run.during_rm == "tee" and "/tee.go" or "/a.release"
@@ -983,6 +1022,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("130", result.status, result.report)
     assert.are.equal("", result.left, "the file's Neovim ran on and wrote into the folder after the runner died")
     assert.is_false(result.ended, "the file's Neovim ran on after the runner died")
+  end)
+
+  it("removes what a live Neovim wrote into the old folder path after the cleanup moved the folder", function()
+    local result = signal_runner("INT", { write_before_kill = true })
+
+    assert.are.equal("130", result.status, result.report)
+    assert.are.equal("", result.left, "the file's Neovim made a folder at the old path, and the cleanup left it")
+    assert.is_false(result.ended)
   end)
 
   it("stops the file and removes its folder under the old name when the rename of the folder fails", function()

@@ -22,7 +22,8 @@ FILE_TIMEOUT=40s
 # the target of the move. When the grave or the move fails, the folder keeps its old name, and the cleanup works there.
 # The shell that starts the Neovim writes its process id to the file at the old path, then looks for the folder at the
 # old path (the `bash -c` line in run_test_file). So one of them sees the other: a shell that wrote its id too late for
-# the cleanup to read it finds no folder, and starts no Neovim.
+# the cleanup to read it finds no folder, and starts no Neovim. A Neovim that still runs between the move and the kill
+# can make its state folder at the old path again, so the last rm removes the old path as well.
 CURRENT_WORK=""
 CURRENT_FILE_RUNS=""
 # shellcheck disable=SC2329 # The traps below run it.
@@ -39,7 +40,7 @@ cleanup_current_file() {
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  rm -rf "$moved" ${grave:+"$grave"}
+  rm -rf "$moved" ${grave:+"$grave"} "$CURRENT_WORK"
 }
 # A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
 # `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a
