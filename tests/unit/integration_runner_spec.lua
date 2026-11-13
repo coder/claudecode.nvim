@@ -189,10 +189,10 @@ local real_mktemp = assert(mktemp_pipe:read("*l"), "needs mktemp")
 mktemp_pipe:close()
 -- Runs the real mktemp. When $STUB_DIR/mktemp.interrupt exists, its first call sends SIGINT to its process group, which
 -- has the runner in it, after the real mktemp ran and before it prints the name. When $STUB_DIR/mktemp.name exists, a
--- call with -u makes nothing and prints the name in that file.
+-- call with -u and no template makes nothing and prints the name in that file.
 local STUB_MKTEMP = {
   "#!/bin/sh",
-  'if [ -f "$STUB_DIR/mktemp.name" ] && [ "$1" = -u ]; then cat "$STUB_DIR/mktemp.name"; exit 0; fi',
+  'if [ -f "$STUB_DIR/mktemp.name" ] && [ "$1" = -u ] && [ -z "${2:-}" ]; then cat "$STUB_DIR/mktemp.name"; exit 0; fi',
   "path=$(" .. quote(real_mktemp) .. ' "$@") || exit $?',
   'if [ -f "$STUB_DIR/mktemp.interrupt" ] && [ ! -f "$STUB_DIR/mktemp.interrupted" ]; then',
   '  : > "$STUB_DIR/mktemp.interrupted"',

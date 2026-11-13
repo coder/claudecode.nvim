@@ -18,29 +18,37 @@ FILE_TIMEOUT=40s
 # uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM would run
 # on.
 # The cleanup moves the folder into a new folder next to it, the grave, before it reads the process id file, so the old
-# path is gone at once. The grave comes from `mktemp -d`, so a name that exists already, as a folder of the user, is not
-# the target of the move. When the grave or the move fails, the folder keeps its old name, and the cleanup works there.
+# path is gone at once. `mkdir` fails for a name that exists already, so the move never targets a folder of the user.
+# The cleanup stores the name of the grave before it makes the folder, as the runner does for the work folder. A signal
+# can start a second cleanup inside the cleanup of an error exit (the EXIT trap), and the second one then finds and
+# removes the grave of the first. When the grave or the move fails, the folder keeps its old name, and the cleanup
+# works there.
 # The shell that starts the Neovim writes its process id to the file at the old path, then looks for the folder at the
 # old path (the `bash -c` line in run_test_file). So one of them sees the other: a shell that wrote its id too late for
 # the cleanup to read it finds no folder, and starts no Neovim. A Neovim that still runs between the move and the kill
 # can make its state folder at the old path again, so the last rm removes the old path as well.
 CURRENT_WORK=""
+CURRENT_GRAVE=""
 CURRENT_FILE_RUNS=""
 # shellcheck disable=SC2329 # The traps below run it.
 cleanup_current_file() {
-  local grave moved timeout_pid
+  local moved timeout_pid
   [[ -n $CURRENT_WORK ]] || return 0
+  if [[ -z $CURRENT_GRAVE ]]; then
+    CURRENT_GRAVE=$(mktemp -u "$CURRENT_WORK.XXXXXX" 2>/dev/null) || CURRENT_GRAVE=""
+    [[ -z $CURRENT_GRAVE ]] || mkdir -m 700 "$CURRENT_GRAVE" 2>/dev/null || CURRENT_GRAVE=""
+  fi
   moved=$CURRENT_WORK
-  grave=$(mktemp -d "$CURRENT_WORK.XXXXXX" 2>/dev/null) || grave=""
-  if [[ -n $grave ]] && mv "$CURRENT_WORK" "$grave/work" 2>/dev/null; then
-    moved=$grave/work
+  if [[ -n $CURRENT_GRAVE ]]; then
+    mv "$CURRENT_WORK" "$CURRENT_GRAVE/work" 2>/dev/null || true
+    [[ ! -d $CURRENT_GRAVE/work ]] || moved=$CURRENT_GRAVE/work
   fi
   if [[ -n $CURRENT_FILE_RUNS && -s $moved/group ]]; then
     timeout_pid=$(cat "$moved/group")
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  rm -rf ${grave:+"$grave"} "$CURRENT_WORK"
+  rm -rf ${CURRENT_GRAVE:+"$CURRENT_GRAVE"} "$CURRENT_WORK"
 }
 # A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
 # `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a
