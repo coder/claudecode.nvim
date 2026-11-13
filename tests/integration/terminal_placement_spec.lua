@@ -941,7 +941,9 @@ describe("the terminal's placement in its own split", function()
 
     ---A third window W, and a BufLeave autocmd of the user's file (once). The autocmd (`kind`) enters W and closes the
     ---split (nil), or closes the user's window first and then does that ("both"), or wipes the hidden terminal's buffer
-    ---and closes no window ("wipe").
+    ---and closes no window ("wipe"), or closes Claude (`:ClaudeCodeClose` as "close_command", `terminal.close()` as
+    ---"close_api"), which deletes the buffer and clears the provider's record of it. "winnew_close" and
+    ---"winenter_close" arm no BufLeave autocmd: a `WinNew` or `WinEnter` autocmd of the show's own split closes Claude.
     local function arm_split_close_from_third_window(kind)
       call(
         [[
@@ -950,19 +952,36 @@ describe("the terminal's placement in its own split", function()
         vim.notify = function(message)
           table.insert(_G.notes, message)
         end
-        require("claudecode.logger").setup({ log_level = "warn" })
+        require("claudecode.logger").setup({ log_level = "info" })
         _G.original = vim.api.nvim_get_current_win()
         _G.file = vim.api.nvim_get_current_buf()
         vim.cmd("belowright split " .. vim.fn.fnameescape(_G.dir .. "/other.txt"))
         _G.third = vim.api.nvim_get_current_win()
         vim.api.nvim_set_current_win(_G.original)
         _G.term_buf = require("claudecode.terminal").get_active_terminal_bufnr()
+        if kind == "winnew_close" or kind == "winenter_close" then
+          vim.api.nvim_create_autocmd(kind == "winnew_close" and "WinNew" or "WinEnter", {
+            once = true,
+            callback = function()
+              require("claudecode.terminal").close()
+            end,
+          })
+          return
+        end
         vim.api.nvim_create_autocmd("BufLeave", {
           buffer = _G.file,
           once = true,
           callback = function()
             if kind == "wipe" then
               vim.cmd("bwipeout! " .. _G.term_buf)
+              return
+            end
+            if kind == "close_command" then
+              vim.cmd("ClaudeCodeClose")
+              return
+            end
+            if kind == "close_api" then
+              require("claudecode.terminal").close()
               return
             end
             local split = vim.api.nvim_get_current_win()
@@ -980,9 +999,7 @@ describe("the terminal's placement in its own split", function()
 
     local function third_window_state()
       return call([[
-        vim.wait(500, function()
-          return #_G.notes > 0
-        end, 10)
+        vim.wait(300)
         return {
           cursor = vim.api.nvim_get_current_win() == _G.original and "original"
             or (vim.api.nvim_get_current_win() == _G.third and "third" or "other"),
@@ -992,7 +1009,7 @@ describe("the terminal's placement in its own split", function()
       ]])
     end
 
-    it("puts the cursor back in the user's window, and says that the terminal is hidden, without focus", function()
+    it("puts the cursor back in the user's window, and logs nothing, without focus", function()
       start_child()
       hide_terminal()
       arm_split_close_from_third_window()
@@ -1002,12 +1019,11 @@ describe("the terminal's placement in its own split", function()
       local state = third_window_state()
       assert.is_true(ok, "the call must not fail")
       assert.equal("original", state.cursor, "a show without focus leaves the cursor where the user was")
-      assert.equal(1, #state.notes, vim.inspect(state.notes))
-      assert.is_truthy(state.notes[1]:find("A BufLeave autocmd closed the terminal's window.", 1, true))
+      assert.same({}, state.notes)
       assert.equal(0, split_close_state().terminal_windows)
     end)
 
-    it("says that the terminal is hidden, and leaves the cursor where the autocmd put it, with focus", function()
+    it("logs nothing, and leaves the cursor where the autocmd put it, with focus", function()
       start_child()
       hide_terminal()
       arm_split_close_from_third_window()
@@ -1017,34 +1033,29 @@ describe("the terminal's placement in its own split", function()
       local state = third_window_state()
       assert.is_true(ok, "the command must not fail")
       assert.equal("third", state.cursor)
-      assert.equal(1, #state.notes, vim.inspect(state.notes))
-      assert.is_truthy(state.notes[1]:find("A BufLeave autocmd closed the terminal's window.", 1, true))
+      assert.same({}, state.notes)
       assert.equal(0, split_close_state().terminal_windows)
     end)
 
-    it(
-      "does not enter the user's window, and says that the terminal is hidden, when the autocmd closed it too",
-      function()
-        -- The autocmd closes the window that the show started in, then enters W and closes the split.
-        start_child()
-        hide_terminal()
-        arm_split_close_from_third_window("both")
+    it("does not enter the user's window, and logs nothing, when the autocmd closed it too", function()
+      -- The autocmd closes the window that the show started in, then enters W and closes the split.
+      start_child()
+      hide_terminal()
+      arm_split_close_from_third_window("both")
 
-        local ok, err =
-          pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[require("claudecode.terminal").ensure_visible()]], {})
+      local ok, err =
+        pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[require("claudecode.terminal").ensure_visible()]], {})
 
-        local state = third_window_state()
-        assert.is_true(ok, "the call must not fail: " .. tostring(err))
-        assert.is_false(state.original_valid)
-        assert.equal("third", state.cursor)
-        assert.equal(1, #state.notes, vim.inspect(state.notes))
-        assert.is_truthy(state.notes[1]:find("A BufLeave autocmd closed the terminal's window.", 1, true))
-        assert.equal(0, split_close_state().terminal_windows)
-      end
-    )
+      local state = third_window_state()
+      assert.is_true(ok, "the call must not fail: " .. tostring(err))
+      assert.is_false(state.original_valid)
+      assert.equal("third", state.cursor)
+      assert.same({}, state.notes)
+      assert.equal(0, split_close_state().terminal_windows)
+    end)
 
     for _, command in ipairs({ "ClaudeCode", "ClaudeCodeFocus" }) do
-      it("shows one message, the warning, and no error, for :" .. command .. " on a hidden terminal", function()
+      it("logs nothing, and raises no error, for :" .. command .. " on a hidden terminal", function()
         start_child()
         hide_terminal()
         arm_split_close_from_third_window()
@@ -1053,16 +1064,14 @@ describe("the terminal's placement in its own split", function()
 
         local state = third_window_state()
         assert.is_true(ok, "the command must not fail")
-        assert.equal(1, #state.notes, vim.inspect(state.notes))
-        assert.is_truthy(state.notes[1]:find("A BufLeave autocmd closed the terminal's window.", 1, true))
-        assert.is_falsy(state.notes[1]:find("Failed to show hidden terminal", 1, true))
+        assert.same({}, state.notes)
         assert.equal(0, split_close_state().terminal_windows)
       end)
     end
 
     for _, command in ipairs({ "ClaudeCodeOpen", "ClaudeCode", "ClaudeCodeFocus" }) do
       it("says nothing about a closed window when the autocmd wipes the terminal's buffer, for :" .. command, function()
-        -- No window closed, so the message "closed the terminal's window" would be false. Main says nothing either.
+        -- No window closed, and main says nothing either.
         start_child()
         hide_terminal()
         arm_split_close_from_third_window("wipe")
@@ -1073,6 +1082,52 @@ describe("the terminal's placement in its own split", function()
         assert.is_true(ok, "the command must not fail")
         assert.same({}, state.notes)
       end)
+    end
+
+    for _, closer in ipairs({ "close_command", "close_api" }) do
+      for _, entry in ipairs({ "ClaudeCodeOpen", "ClaudeCode", "ClaudeCodeFocus", "ensure_visible" }) do
+        it(
+          "raises no error and logs nothing when the autocmd closes Claude (" .. closer .. "), for " .. entry,
+          function()
+            -- Closing Claude deletes the buffer and clears the provider's record of it, inside the show.
+            start_child()
+            hide_terminal()
+            arm_split_close_from_third_window(closer)
+
+            local code = entry == "ensure_visible" and [[require("claudecode.terminal").ensure_visible()]]
+              or [[vim.cmd(...)]]
+            local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", code, { entry })
+
+            local state = third_window_state()
+            assert.is_true(ok, "the call must not fail: " .. tostring(err))
+            assert.same({}, state.notes)
+            if entry == "ensure_visible" then
+              assert.equal("original", state.cursor, "a show without focus leaves the cursor where the user was")
+            end
+          end
+        )
+      end
+    end
+
+    for _, case in ipairs({
+      { kind = "winnew_close", command = "ClaudeCodeOpen" },
+      { kind = "winenter_close", command = "ClaudeCode" },
+    }) do
+      it(
+        "raises no error when a " .. case.kind .. " autocmd of the split closes Claude, for :" .. case.command,
+        function()
+          -- The autocmd runs inside the show's `vsplit`, before the swap, and clears the provider's record of the buffer.
+          start_child()
+          hide_terminal()
+          arm_split_close_from_third_window(case.kind)
+
+          local ok, err = pcall(vim.rpcrequest, chan, "nvim_exec_lua", [[vim.cmd(...)]], { case.command })
+
+          local state = third_window_state()
+          assert.is_true(ok, "the command must not fail: " .. tostring(err))
+          assert.same({}, state.notes)
+        end
+      )
     end
 
     it("starts a new terminal that stays hidden, and leaves the user's window alone, with no error", function()

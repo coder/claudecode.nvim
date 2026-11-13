@@ -199,7 +199,11 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
           return fn()
         end,
         nvim_buf_is_valid = function(b)
-          return b ~= nil and b >= 1 and not wiped_buffers[b]
+          -- As Neovim does.
+          if type(b) ~= "number" then
+            error("Invalid 'buf': Expected Lua number", 0)
+          end
+          return b >= 1 and not wiped_buffers[b]
         end,
         nvim_buf_get_option = function()
           return "terminal"
@@ -293,11 +297,17 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
     package.loaded["snacks"] = mock_snacks
     package.loaded["claudecode.logger"] = {
       debug = function() end,
-      info = function() end,
-      warn = function() end,
-      error = function() end,
-      one_line = function(level, component, message)
-        table.insert(logged, { level = level, component = component, message = message })
+      info = function(...)
+        table.insert(logged, { level = "info", ... })
+      end,
+      warn = function(...)
+        table.insert(logged, { level = "warn", ... })
+      end,
+      error = function(...)
+        table.insert(logged, { level = "error", ... })
+      end,
+      one_line = function(level, ...)
+        table.insert(logged, { level = level, ... })
       end,
     }
     package.loaded["claudecode.utils"] = nil
@@ -442,7 +452,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       return third_window
     end
 
-    it("puts the cursor back in the caller's window, and says that the terminal is hidden, without focus", function()
+    it("puts the cursor back in the caller's window, and logs nothing, without focus", function()
       local cfg = config()
       local term = open_then_hide(cfg)
       arm_close_from_third_window()
@@ -451,13 +461,10 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
       assert.is_nil(term.win)
       assert.are.equal(source_win, current_win)
-      assert.are.same(
-        { { level = "warn", component = "terminal", message = "A BufLeave autocmd closed the terminal's window." } },
-        logged
-      )
+      assert.are.same({}, logged)
     end)
 
-    it("says that the terminal is hidden, and leaves the cursor where the autocmd put it, with focus", function()
+    it("logs nothing, and leaves the cursor where the autocmd put it, with focus", function()
       local cfg = config()
       local term = open_then_hide(cfg)
       local third_window = arm_close_from_third_window()
@@ -466,7 +473,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
       assert.is_nil(term.win)
       assert.are.equal(third_window, current_win)
-      assert.are.equal(1, #logged)
+      assert.are.same({}, logged)
     end)
 
     it("does not enter the caller's window, which the autocmd closed too, without focus", function()
@@ -490,10 +497,10 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
 
       assert.is_nil(term.win)
       assert.are.equal(third_window, current_win)
-      assert.are.equal(1, #logged)
+      assert.are.same({}, logged)
     end)
 
-    it("says nothing about a closed window when the autocmd wipes the terminal's buffer", function()
+    it("logs nothing when the autocmd wipes the terminal's buffer", function()
       local cfg = config()
       local term = open_then_hide(cfg)
       local original_cmd = vim.cmd
@@ -507,6 +514,56 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
       snacks_provider.open("claude", {}, cfg, false)
 
       assert.is_nil(term.win)
+      assert.are.same({}, logged)
+    end)
+
+    for _, focus in ipairs({ true, false }) do
+      it(
+        "raises no error when the autocmd closes Claude, which clears the record of its buffer, with focus "
+          .. tostring(focus),
+        function()
+          -- Snacks' close deletes the buffer, clears `term.buf` and closes the window that `term.win` names (the new split).
+          local cfg = config()
+          local term = open_then_hide(cfg)
+          local split_window
+          local original_cmd = vim.cmd
+          vim.cmd = function(c)
+            original_cmd(c)
+            if c:find("split", 1, true) then
+              split_window = current_win
+            elseif c == "doautocmd <nomodeline> BufLeave" then
+              wiped_buffers[term.buf] = true
+              term.buf = nil
+              windows[split_window].valid = false
+              current_win = source_win
+            end
+          end
+
+          local ok, err = pcall(snacks_provider.open, "claude", {}, cfg, focus)
+
+          assert.is_true(ok, tostring(err))
+          assert.is_nil(term.win)
+          assert.are.same({}, logged)
+        end
+      )
+    end
+
+    it("does not pass nil to the swap when an autocmd of the split closes Claude first", function()
+      -- The split's own autocmds (WinNew, WinEnter) run before the swap, and Claude's close clears `term.buf`.
+      local cfg = config()
+      local term = open_then_hide(cfg)
+      local original_cmd = vim.cmd
+      vim.cmd = function(c)
+        original_cmd(c)
+        if c:find("split", 1, true) then
+          wiped_buffers[term.buf] = true
+          term.buf = nil
+        end
+      end
+
+      local ok, err = pcall(snacks_provider.open, "claude", {}, cfg, false)
+
+      assert.is_true(ok, tostring(err))
       assert.are.same({}, logged)
     end)
   end)

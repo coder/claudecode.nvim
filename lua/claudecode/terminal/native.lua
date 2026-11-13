@@ -490,6 +490,8 @@ function show_hidden_terminal(effective_config, focus)
   end
 
   local original_win = vim.api.nvim_get_current_win()
+  -- Read before the vsplit and the swap, whose autocmds can close Claude, and that clears `bufnr`.
+  local terminal_buf = bufnr
 
   -- Create a new window for the existing buffer
   local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
@@ -507,13 +509,10 @@ function show_hidden_terminal(effective_config, focus)
   vim.api.nvim_win_set_height(new_winid, full_height)
 
   -- Set the existing buffer in the new window
-  if not utils.win_set_buf_in_split(new_winid, bufnr) then
-    -- A BufLeave autocmd of the user's closed the split, so the terminal shows nowhere and stays hidden. Or it wiped the
-    -- terminal's buffer, which closes no window and says nothing, as on main. Without focus, the cursor goes back to
-    -- the window it was in, as after a show, unless that autocmd closed it.
-    if vim.api.nvim_buf_is_valid(bufnr) then
-      logger.one_line("warn", "terminal", "A BufLeave autocmd closed the terminal's window.")
-    end
+  if not utils.win_set_buf_in_split(new_winid, terminal_buf) then
+    -- A BufLeave autocmd of the user's closed the split, or wiped the terminal's buffer, so the terminal shows nowhere
+    -- and stays hidden. Nothing is logged. Without focus, the cursor goes back to the window it was in, as after a
+    -- show, unless that autocmd closed it.
     if not focus and vim.api.nvim_win_is_valid(original_win) then
       vim.api.nvim_set_current_win(original_win)
     end

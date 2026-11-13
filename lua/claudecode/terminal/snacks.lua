@@ -399,6 +399,8 @@ local function cc_show(term, focus, config)
   end
 
   local original_win = vim.api.nvim_get_current_win()
+  -- Read before the split and the swap, whose autocmds can close Claude, and that clears `term.buf`.
+  local term_buf = term.buf
   local horizontal = position == "top" or position == "bottom"
   local lead = (position == "top" or position == "left") and "topleft " or "botright "
   local new_win
@@ -418,18 +420,15 @@ local function cc_show(term, focus, config)
   term.win = new_win
   local placed
   if focus then
-    placed = utils.win_set_buf_in_split(new_win, term.buf)
+    placed = utils.win_set_buf_in_split(new_win, term_buf)
   else
-    placed = utils.win_set_buf_in_split(new_win, term.buf, { ignore_bufenter = true })
+    placed = utils.win_set_buf_in_split(new_win, term_buf, { ignore_bufenter = true })
   end
   if not placed then
-    -- A BufLeave autocmd of the user's closed the split, so the terminal shows nowhere and stays hidden. Or it wiped the
-    -- terminal's buffer, which closes no window and says nothing, as on main. Without focus, the cursor goes back to
-    -- the window it was in, as after a show, unless that autocmd closed it.
+    -- A BufLeave autocmd of the user's closed the split, or wiped the terminal's buffer, so the terminal shows nowhere
+    -- and stays hidden. Nothing is logged. Without focus, the cursor goes back to the window it was in, as after a
+    -- show, unless that autocmd closed it.
     term.win = nil
-    if vim.api.nvim_buf_is_valid(term.buf) then
-      logger.one_line("warn", "terminal", "A BufLeave autocmd closed the terminal's window.")
-    end
     if not focus and vim.api.nvim_win_is_valid(original_win) then
       vim.api.nvim_set_current_win(original_win)
     end
