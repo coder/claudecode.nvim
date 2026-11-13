@@ -370,6 +370,31 @@ describe("claudecode.terminal.snacks close", function()
       assert.is_false(vim.api.nvim_buf_is_valid(bufnr))
     end)
 
+    it("does not let an open during the wait adopt the terminal that is closing", function()
+      local old_bufnr, old_jobid = open_claude(false)
+      vim.api.nvim_list_bufs = function()
+        local bufs = {}
+        for bufnr in pairs(state.buffers) do
+          table.insert(bufs, bufnr)
+        end
+        table.sort(bufs)
+        return bufs
+      end
+      owned.wait_for_exec = function(jobid)
+        table.insert(events, "wait_for_exec " .. jobid)
+        snacks_provider.open("claude", {}, { cwd = "/w", split_side = "right", auto_close = false }, true)
+      end
+
+      snacks_provider.close()
+
+      assert.is_nil(state.running_jobs[old_jobid])
+      assert.is_false(vim.api.nvim_buf_is_valid(old_bufnr))
+      local new_bufnr = snacks_provider.get_active_bufnr()
+      assert.is_not_nil(new_bufnr)
+      assert.are_not.equal(old_bufnr, new_bufnr)
+      assert.is_true(state.running_jobs[state.buffers[new_bufnr].jobid])
+    end)
+
     it("does not wait for a job that started more than 10 s ago", function()
       local _, jobid = open_claude(false)
       state.now = state.now + 10 * 1e9

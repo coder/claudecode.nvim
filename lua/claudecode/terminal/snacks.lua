@@ -835,11 +835,10 @@ function M.close()
   -- An exited Claude (auto_close = false) has nothing to wait for.
   if jobid > 0 and vim.fn.jobwait({ jobid }, 0)[1] == -1 then
     closing._cc.closing = true
-    if closing.adopted then
-      -- The TermClose handler belongs to the instance that started this Claude, and it cannot see `closing` on this
-      -- one. Without the mark it does not report the stop as a failure.
-      vim.b[closing_bufnr][OWNED_MARK] = nil
-    end
+    -- The wait for the exec below runs scheduled callbacks while the job still runs, and an open() among them must not
+    -- adopt this terminal by its mark. The TermClose handler of the instance that started this Claude cannot see
+    -- `closing` on an adopted one. Without the mark it does not report the stop as a failure.
+    vim.b[closing_bufnr][OWNED_MARK] = nil
     local exited = false
     vim.api.nvim_create_autocmd("TermClose", {
       buffer = closing_bufnr,

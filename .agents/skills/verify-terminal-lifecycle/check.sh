@@ -225,7 +225,7 @@ owned_stop_other_stops() {
   in_order '^  if not M\.find\(mark\) then$' '^    return false$' '^  local buf = M\.find\(mark\)$' '^  while buf do$' \
     '^    if not stop_buffer\(buf, mark\) then$' '^      return false$' '^    buf = M\.find\(mark\)$' '^  return true$' \
     <<<"$owned_stop_other" &&
-    in_order '^  vim\.b\[buf\]\[mark\] = nil$' 'vim\.fn\.jobstop\(vim\.bo\[buf\]\.channel\) == 1' \
+    in_order '^  vim\.b\[buf\]\[mark\] = nil$' '^  M\.wait_for_exec\(channel\)$' 'vim\.fn\.jobstop\(channel\) == 1' \
       '^    vim\.wait\(1000, function\(\)$' '^    vim\.api\.nvim_buf_delete\(buf, \{ force = true \}\)$' \
       '^  return not vim\.api\.nvim_buf_is_valid\(buf\)$' <<<"$owned_stop_buffer"
 }

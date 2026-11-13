@@ -99,9 +99,11 @@ local function stop_buffer(buf, mark)
       exited = true
     end,
   })
-  -- The start time of this job is unknown here, so the child may be a fork of Neovim that has not run exec.
-  M.wait_for_exec(vim.bo[buf].channel)
-  if vim.fn.jobstop(vim.bo[buf].channel) == 1 then
+  -- The start time of this job is unknown here, so the child may be a fork of Neovim that has not run exec. The wait
+  -- runs scheduled callbacks, and one of them can delete the buffer.
+  local channel = vim.bo[buf].channel
+  M.wait_for_exec(channel)
+  if vim.api.nvim_buf_is_valid(buf) and vim.fn.jobstop(channel) == 1 then
     -- A user's TermClose autocmd can delete the buffer first, and that also removes this buffer-local autocmd.
     vim.wait(1000, function()
       return exited or not vim.api.nvim_buf_is_valid(buf)

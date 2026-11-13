@@ -174,7 +174,8 @@ describe("claudecode.terminal.owned wait_for_exec", function()
         end,
       })
       _G.vim.bo = setmetatable({}, {
-        __index = function()
+        __index = function(_, buf)
+          assert(state.buffers[buf], "Invalid buffer id: " .. tostring(buf))
           return { channel = 7 }
         end,
       })
@@ -212,6 +213,17 @@ describe("claudecode.terminal.owned wait_for_exec", function()
       assert.is_true(owned.stop_other(owned.SNACKS_MARK, "snacks"))
 
       assert.are.same({ "wait_for_exec 7", "jobstop", "delete" }, events)
+    end)
+
+    it("leaves a buffer alone that a callback deleted during the wait", function()
+      owned.wait_for_exec = function(id)
+        table.insert(events, "wait_for_exec " .. id)
+        state.buffers[3] = nil
+      end
+
+      assert.is_true(owned.stop_other(owned.SNACKS_MARK, "snacks"))
+
+      assert.are.same({ "wait_for_exec 7" }, events)
     end)
   end)
 end)
