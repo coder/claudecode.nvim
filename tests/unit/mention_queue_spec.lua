@@ -506,6 +506,42 @@ describe("The @ mention queue", function()
     assert.matches("connection failed while the @ mention /project/src/a%.lua was sent", errors[1])
   end)
 
+  it("D: with debouncing off, a send right after the handshake still waits for connection_wait_delay", function()
+    claudecode.state.config.disable_broadcast_debouncing = true
+    local claude = claude_connects()
+    claude.handshake()
+    run(100)
+    send("/project/a.lua")
+    -- Claude is not ready yet, so the send waits in the queue, as it does with the debounce on.
+    assert.equals(1, #claudecode.state.mention_queue)
+    run(490)
+
+    assert.same({}, claude.received())
+    run(20)
+
+    assert.same({ "a.lua" }, names(claude.received()))
+    assert.same({}, errors)
+  end)
+
+  it("D: with debouncing off, a send 1 ms before Claude is ready still waits in the queue", function()
+    claudecode.state.config.disable_broadcast_debouncing = true
+    local claude = claude_connects()
+    claude.handshake()
+    run(599)
+    send("/project/a.lua")
+    -- 1 ms of connection_wait_delay is left, so the send queues. The 50 ms debounce then sends it 649 ms after the
+    -- handshake, when Claude is ready. The fake clock makes the 1 ms exact.
+    assert.equals(1, #claudecode.state.mention_queue)
+    assert.same({}, claude.received())
+    run(40)
+
+    assert.same({}, claude.received())
+    run(20)
+
+    assert.same({ "a.lua" }, names(claude.received()))
+    assert.same({}, errors)
+  end)
+
   it("D: handshakes of other clients do not postpone a flush that is due for a connected Claude", function()
     local claude = claude_connects()
     claude.handshake()
@@ -540,6 +576,44 @@ describe("The @ mention queue", function()
       assert.same({}, errors)
     end
   )
+
+  -- The flush comes 50 ms after the send and waits out the rest of connection_wait_delay: 150 ms after a send at 400 ms,
+  -- 10 ms after a send at 540 ms. A flush that sent while some of the wait was left would send by 590 ms.
+  for _, send_at in ipairs({ 400, 540 }) do
+    it(
+      ("D: a send %d ms after the handshake waits until connection_wait_delay has passed since the handshake"):format(
+        send_at
+      ),
+      function()
+        local claude = claude_connects()
+        claude.handshake()
+        run(send_at)
+        send("/project/a.lua")
+        run(590 - send_at)
+        assert.same({}, claude.received(), "nothing goes out before 600 ms after the handshake")
+
+        run(20)
+        assert.same({ "a.lua" }, names(claude.received()))
+        assert.same({}, errors)
+      end
+    )
+  end
+
+  it("D: the first ready client sends the queue, though a second client connected later is not ready yet", function()
+    local first = claude_connects()
+    first.handshake()
+    run(500)
+    local second = claude_connects()
+    second.handshake()
+    run(200)
+    send("/project/a.lua")
+    -- The first client is ready since 600 ms, the second only at 1100 ms: the flush 50 ms after the send goes out.
+    run(60)
+
+    assert.same({ "a.lua" }, names(first.received()))
+    assert.same({ "a.lua" }, names(second.received()))
+    assert.same({}, errors)
+  end)
 
   it("D: a Claude whose handshake came 700 ms after its TCP connect still gets connection_wait_delay", function()
     local claude = claude_connects()

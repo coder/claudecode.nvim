@@ -12,7 +12,9 @@ describe("temp_dir", function()
   setup(function()
     outer = temp_dir.new()
     parent = outer .. "/dir it's"
-    assert(os.execute("mkdir -p " .. quote(parent .. "/back\\slash")))
+    local odd = parent .. "/back\\slash"
+    local made = os.execute("mkdir -p " .. quote(odd))
+    assert(made == 0 or made == true, "cannot create " .. odd)
   end)
 
   teardown(function()

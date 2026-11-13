@@ -16,7 +16,8 @@ local M = {}
 ---@field keepalive_timeout number|nil The window in milliseconds for a pong and for write progress: twice the ping interval, set by `start_ping_timer`
 ---@field pending_polls table<table, boolean>|nil The check and idle handles of each stall judgement that waits for the next poll: closed by `stop_server`
 
--- Seed Lua's PRNG exactly once per process. #282 removed the implicit seeding
+-- Seed Lua's PRNG once per load of this module: `rng_seeded` is a module local, so a reload seeds again. Neovim loads
+-- the module once, so a fresh Neovim seeds once. #282 removed the implicit seeding
 -- that used to happen via utils.shuffle_array (math.randomseed(os.time())), which
 -- left LuaJIT's fixed default seed in place -- so every fresh Neovim picked the
 -- *same* starting port and parallel instances always collided (#283). Mixing in a
@@ -506,10 +507,16 @@ end
 ---Start a periodic ping task to keep connections alive.
 ---A tick pings every connected client and never drops one. A client whose oldest ping is `interval * 2.5` old is dropped
 ---at the first read of its socket after a tick [judge_silence], if the loop ran that read within `interval * 1.5` of the
----tick. A block longer than that restarts the count (the next tick is a wake). Any bytes read from a client clear its
----stamp, so a Claude that sends anything, also a large message before its pong, is not dropped. A Claude that sends
----nothing is dropped after the third tick that follows its first unanswered ping: the half interval keeps timer jitter
----from moving the drop. A client that answered is also judged for a stall of its write queue [judge_stall].
+---tick. A tick more than `interval * 1.5` after the tick before it is a wake: it clears every stamp and restarts the
+---count (a block of more than half an interval that starts just before a tick is enough). Any bytes read from a client
+---clear its stamp, so a Claude that sends anything, also a large message before its pong, is not dropped. A Claude that
+---answers each ping before the next tick is not dropped by any block or sleep. A pong that comes later than one
+---interval can wait unread when a callback blocks inside the poll phase and refreshes the loop time, and the client is
+---then dropped once its ping is `interval * 2.5` old. A Claude that sends nothing is dropped by the first check that
+---finds its oldest ping `interval * 2.5` old: 3 intervals after that ping when the ticks come on time. A late tick moves the ticks after
+---it back, so one late tick delays the drop. Two late ticks in a row, or a poll that a block delays after a tick, can
+---bring it as early as 2.5 intervals, and never earlier. A client that answered is also judged for a stall of its write
+---queue [judge_stall].
 ---@param server TCPServer The server object
 ---@param interval number Ping interval in milliseconds (default: 30000)
 ---@return table? timer The timer handle, or nil if creation failed

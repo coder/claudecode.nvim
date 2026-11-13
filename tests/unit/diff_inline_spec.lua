@@ -278,6 +278,45 @@ describe("Inline diff module", function()
     end)
   end)
 
+  describe("the accepted text", function()
+    -- Claude gets this text back as the file's new contents, so it must match the proposal byte for byte.
+    local old_texts = { "old\n", "a\n", "" }
+    local proposals = {
+      { name = "one blank line after the last line", text = "a\n\n" },
+      { name = "two blank lines after the last line", text = "a\n\n\n" },
+      { name = "a final line without a line break", text = "a" },
+      { name = "a single final line break", text = "a\n" },
+      { name = "a blank line only", text = "\n" },
+      { name = "two blank lines only", text = "\n\n" },
+      { name = "a blank line inside and one after the last line", text = "a\n\nb\n\n" },
+      { name = "no text", text = "" },
+    }
+
+    for _, old_text in ipairs(old_texts) do
+      for _, proposal in ipairs(proposals) do
+        it(("matches a proposal with %s, against %s"):format(proposal.name, vim.inspect(old_text)), function()
+          local lines, types = diff_inline.compute_inline_diff(old_text, proposal.text)
+          local callback_result = nil
+          local diff_data = {
+            lines = lines,
+            line_types = types,
+            new_file_contents = proposal.text,
+            status = "pending",
+            resolution_callback = function(result)
+              callback_result = result
+            end,
+          }
+
+          diff_inline.resolve_inline_as_saved("test_tab", diff_data)
+
+          assert.is_not_nil(callback_result)
+          -- vim.inspect shows a lost or added line break in the failure message
+          assert.are.equal(vim.inspect(proposal.text), vim.inspect(callback_result.content[2].text))
+        end)
+      end
+    end
+  end)
+
   describe("new-tab inline placement", function()
     it("should pick editor window from current tab, not global search", function()
       -- Set up two tabs: tab 1 (original) and tab 2 (new tab for diff)
@@ -323,6 +362,19 @@ describe("Inline diff module", function()
       -- Should pick the editor window from tab 2, NOT tab 1's window
       assert.are.equal(new_tab_editor_win, editor_win)
       assert.are_not.equal(old_win, editor_win)
+    end)
+  end)
+
+  describe("setup_inline_diff", function()
+    it("names the missing diff function, not a Neovim version, when there is none", function()
+      local saved_diff, saved_text = vim.diff, vim.text
+      vim.diff, vim.text = nil, nil
+      local ok, err = pcall(diff_inline.setup_inline_diff, { tab_name = "no-diff-function" }, function() end, {})
+      vim.diff, vim.text = saved_diff, saved_text
+
+      assert.is_false(ok)
+      assert.are.equal(-32000, err.code)
+      assert.are.equal("The unified layout needs vim.text.diff or vim.diff, and this Neovim has neither", err.message)
     end)
   end)
 

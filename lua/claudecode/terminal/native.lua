@@ -12,15 +12,25 @@ local winid = nil
 local jobid = nil
 -- The auto_close of the config that started (or adopted) the tracked job. Its exit handling uses this one.
 local job_auto_close = nil
+-- When the tracked job started (vim.loop.hrtime, ns). Only a close of a young job looks at its child (see close_terminal).
+local job_started_at = nil
 local tip_shown = false
 -- Whether get_active_bufnr already looked for a terminal to adopt. After a reload, its first call looks. Later calls
 -- need not: this module copy starts every terminal it tracks, and the entry points adopt for themselves.
 local adoption_checked = false
+-- Whether a start runs, from its split to the state that it records.
+local starting = false
+-- A close() that an autocmd of a start called. It runs when the start returns, because a close waits for the job to
+-- exit, and that wait cannot run inside termopen (on Neovim 0.8 it aborts the editor).
+local close_after_start = false
 
 -- Set on each terminal buffer this provider starts. Unlike the state above, a buffer variable survives a reload
 -- of this module, so the next module instance can adopt the terminal.
 local OWNED_MARK = owned.NATIVE_MARK
 local job_ended = owned.job_ended
+
+-- A close looks at the child of a job that started less than this long ago (10 s).
+local YOUNG_JOB_NS = 10 * 1e9
 
 ---@type ClaudeCodeTerminalConfig
 local config = require("claudecode.terminal").defaults
@@ -30,6 +40,7 @@ local function cleanup_state()
   winid = nil
   jobid = nil
   job_auto_close = nil
+  job_started_at = nil
 end
 
 -- nvim_win_close raises E444 for the only window of the only tab page. Floating windows do not count.
@@ -165,28 +176,11 @@ end
 
 -- Defined below. The safeguard in open_terminal shows a hidden terminal with it.
 local show_hidden_terminal
+-- Defined below. A start runs the close that an autocmd of it asked for.
+local close_terminal
 
-local function open_terminal(cmd_string, env_table, effective_config, focus)
-  focus = utils.normalize_focus(focus)
-  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and a
-  -- toggle may hide it again. The check below finds that terminal.
-  stop_snacks_terminal()
-
-  if is_valid() then -- Should not happen if called correctly, but as a safeguard
-    if not winid then
-      -- A callback hid the terminal after it started
-      show_hidden_terminal(effective_config, focus)
-    elseif focus then
-      -- Focus existing terminal: switch to terminal window and enter insert mode
-      vim.api.nvim_set_current_win(winid)
-      if effective_config.auto_insert ~= false then
-        vim.cmd("startinsert")
-      end
-    end
-    -- If focus=false, preserve user context by staying in current window
-    return
-  end
-
+---The start of Claude, from the split to the state that it records. open_terminal runs it.
+local function start_terminal(cmd_string, env_table, effective_config, focus)
   local original_win = vim.api.nvim_get_current_win()
   local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
   local full_height = vim.o.lines
@@ -206,6 +200,10 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   local new_bufnr = vim.api.nvim_create_buf(true, false)
   -- Marked before termopen, so an open() from a TermOpen autocmd adopts this terminal instead of starting another.
   vim.b[new_bufnr][OWNED_MARK] = true
+  -- Hidden when its window closes, as soon as it has one. An autocmd of the start can close the split, and with
+  -- 'nohidden' that would unload a buffer that is not bufhidden=hide. Before termopen, Neovim loads it again, and on
+  -- 0.8 its term:// reader starts a second terminal in it. In TermOpen, the unload ends Claude.
+  vim.bo[new_bufnr].bufhidden = "hide"
   vim.api.nvim_win_set_buf(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
@@ -260,18 +258,26 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 
   jobid = termopen_result
-  if vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
+  job_started_at = vim.loop.hrtime()
+  -- An autocmd of the start can close the split. A focus_toggle from a BufEnter or TermOpen autocmd adopts this
+  -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
+  -- terminal, and the next toggle shows it.
+  if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
     vim.api.nvim_win_set_buf(new_winid, new_bufnr)
   end
   winid = new_winid
   bufnr = new_bufnr
+  -- A later autocmd of the start can show the terminal in another window. Look for the window that shows it now.
+  is_valid()
   job_auto_close = effective_config.auto_close
+  -- Again, after the autocmds of the start: one of them can have changed it (to wipe, for example), and a hide must keep
+  -- the job.
   vim.bo[bufnr].bufhidden = "hide"
   utils.map_terminal_suspend(bufnr)
   vim.bo[bufnr].filetype = "claudecode"
   -- buftype=terminal is set by termopen
 
-  if focus then
+  if focus and winid then
     -- Focus the terminal: switch to terminal window and enter insert mode
     vim.api.nvim_set_current_win(winid)
     if effective_config.auto_insert ~= false then
@@ -288,13 +294,77 @@ local function open_terminal(cmd_string, env_table, effective_config, focus)
   end
 end
 
-local function close_terminal()
+local function open_terminal(cmd_string, env_table, effective_config, focus)
+  focus = utils.normalize_focus(focus)
+  -- A start runs, and one of its autocmds called an entry before Claude had a buffer with a mark (WinLeave, WinNew or
+  -- WinEnter of the split, BufNew or BufAdd of the new buffer). The start makes Claude, and a second start would run
+  -- beside it.
+  if starting then
+    return
+  end
+  -- The stop waits for the job to exit, which runs scheduled callbacks. An open() among them starts Claude, and a
+  -- toggle may hide it again. The check below finds that terminal.
+  stop_snacks_terminal()
+
+  if is_valid() then -- Should not happen if called correctly, but as a safeguard
+    if not winid then
+      -- A callback hid the terminal after it started
+      show_hidden_terminal(effective_config, focus)
+    elseif focus then
+      -- Focus existing terminal: switch to terminal window and enter insert mode
+      vim.api.nvim_set_current_win(winid)
+      if effective_config.auto_insert ~= false then
+        vim.cmd("startinsert")
+      end
+    end
+    -- If focus=false, preserve user context by staying in current window
+    return
+  end
+
+  starting = true
+  -- pcall, so that an error of the start cannot leave the flag set, which would defer every close.
+  local started, start_error = pcall(start_terminal, cmd_string, env_table, effective_config, focus)
+  starting = false
+  local close_requested = close_after_start
+  close_after_start = false
+  if close_requested then
+    -- Also when the start raised: the job may run and be tracked then, and the close was asked for.
+    local closed, close_error = pcall(close_terminal)
+    if started and not closed then
+      error(close_error, 0)
+    end
+  end
+  if not started then
+    error(start_error, 0)
+  end
+end
+
+-- The name of a process, or nil when it is gone or its name cannot be read. Linux has it in /proc, a read of a few bytes. Where
+-- /proc is missing (macOS, the BSDs), nvim_get_proc asks `ps`, which takes ~100 ms and raises when `ps` is missing.
+local function process_name(pid)
+  local own = io.open("/proc/self/comm", "r")
+  if own then
+    own:close()
+    local file = io.open("/proc/" .. pid .. "/comm", "r")
+    if not file then
+      return nil
+    end
+    local name = file:read("*l")
+    file:close()
+    return name
+  end
+  local ok, info = pcall(vim.api.nvim_get_proc, pid)
+  return ok and info and info.name or nil
+end
+
+function close_terminal()
   if not is_valid() and not adopt_existing_terminal() then
     -- A Claude that the other provider started before a reload runs on, and nothing else stops it.
     stop_snacks_terminal()
     return
   end
   local closing_bufnr, closing_jobid = bufnr, jobid
+  local closing_young = job_started_at ~= nil and vim.loop.hrtime() - job_started_at < YOUNG_JOB_NS
   cleanup_state()
   -- The wait below runs scheduled callbacks. An open() among them must start a new terminal, not adopt this one.
   vim.b[closing_bufnr][OWNED_MARK] = nil
@@ -314,6 +384,20 @@ local function close_terminal()
       exited = true
     end,
   })
+  -- A job that was just started can still be a fork of Neovim: its child has not run exec yet. A jobstop then ends
+  -- Neovim (SIGHUP), or the buffer delete below hangs. After the exec the child has the name of its command, so a close of
+  -- a young job waits (up to 1 s) for that. A job that already exited has no pid. When the names cannot be read, the close
+  -- goes on to jobstop.
+  if closing_young then
+    local has_pid, child_pid = pcall(vim.fn.jobpid, closing_jobid)
+    local own_name = has_pid and process_name(vim.fn.getpid())
+    if own_name then
+      vim.wait(1000, function()
+        local child_name = process_name(child_pid)
+        return child_name == nil or child_name ~= own_name
+      end, 5)
+    end
+  end
   -- jobstop returns 0 for a job that already exited, for example when close runs from a TermClose autocmd.
   -- TermClose has fired then, so waiting for it would block for the full timeout.
   if vim.fn.jobstop(closing_jobid) == 1 then
@@ -363,6 +447,24 @@ local function hide_terminal()
     if is_last_window(winid) then
       logger.debug("terminal", "Terminal window is the last window, not hiding it")
       return
+    end
+    -- An autocmd of yours can have changed bufhidden since the start (a TermEnter autocmd that sets wipe, for one), and
+    -- closing the window would then end Claude. So a hide sets it again, and only then: a write of the same value fires
+    -- OptionSet too.
+    if vim.bo[bufnr].bufhidden ~= "hide" then
+      local hiding_winid = winid
+      vim.bo[bufnr].bufhidden = "hide"
+      -- OptionSet fires inside the write, and an autocmd of it can have ended, hidden or shown the terminal, or shown a
+      -- file of yours in its window. Then winid is gone, names another window, or shows another buffer, and there is no
+      -- window of this hide left to close.
+      if
+        winid ~= hiding_winid
+        or not vim.api.nvim_win_is_valid(winid)
+        or vim.api.nvim_win_get_buf(winid) ~= bufnr
+        or is_last_window(winid)
+      then
+        return
+      end
     end
     -- Close the window - this preserves the buffer and job
     vim.api.nvim_win_close(winid, false)
@@ -471,6 +573,10 @@ function M.open(cmd_string, env_table, effective_config, focus)
 end
 
 function M.close()
+  if starting then
+    close_after_start = true
+    return
+  end
   close_terminal()
 end
 
