@@ -206,6 +206,35 @@ function M.win_set_buf_in_split(win, buf, opts)
   return true
 end
 
+local blocked_fn
+
+---Called by `:noautocmd` in `without_autocmds`.
+function M._run_blocked_fn()
+  blocked_fn()
+end
+
+---Run `fn` with every autocmd blocked (`:noautocmd`), so no autocmd of the user's can run while it does. Unlike a change
+---of 'eventignore', it fires no OptionSet event and leaves no option to restore, also when `fn` raises.
+---@param fn fun()
+function M.without_autocmds(fn)
+  local saved = blocked_fn
+  blocked_fn = fn
+  local ok, err = pcall(vim.cmd, 'noautocmd lua require("claudecode.utils")._run_blocked_fn()')
+  blocked_fn = saved
+  if not ok then
+    error(err, 0)
+  end
+end
+
+---Close the tab page `tab` without making it the current tab page. Entering it first runs the BufEnter handlers of
+---the buffer in its current window. A Claude terminal there can queue an insert with `startinsert` (the diff's own
+---handler, Snacks' auto_insert, #423), and the close then moves the cursor to the user's file, where the insert starts.
+---When `tab` is the current tab page, the close moves the cursor as `:tabclose` does.
+---@param tab number A valid tab page handle
+function M.close_tabpage_without_entering(tab)
+  pcall(vim.cmd, "tabclose " .. vim.api.nvim_tabpage_get_number(tab))
+end
+
 local held_for_windows = {}
 
 local function windows_allowed()

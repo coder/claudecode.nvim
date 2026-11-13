@@ -377,6 +377,8 @@ end
 ---@return number? terminal_win Terminal window in new tab
 ---@return boolean had_terminal_in_original True if terminal was visible in original tab
 ---@return number? new_tab The handle of the newly created tab
+---@return number? terminal_buffer The terminal buffer shown in `terminal_win`
+---@return number? enter_handler The id of the terminal's BufEnter handler, when it has one
 local function display_terminal_in_new_tab()
   local original_tab = vim.api.nvim_get_current_tabpage()
 
@@ -448,8 +450,9 @@ local function display_terminal_in_new_tab()
 
   -- Set up autocmd to enter terminal mode when focusing this terminal window
   local terminal_auto_insert = not config or not config.terminal or config.terminal.auto_insert ~= false
+  local auto_enter_id
   if terminal_auto_insert then
-    local auto_enter_id = vim.api.nvim_create_autocmd("BufEnter", {
+    auto_enter_id = vim.api.nvim_create_autocmd("BufEnter", {
       buffer = terminal_bufnr,
       group = get_autocmd_group(),
       callback = function()
@@ -476,7 +479,7 @@ local function display_terminal_in_new_tab()
 
   vim.cmd("wincmd " .. (split_side == "right" and "h" or "l"))
 
-  return original_tab, terminal_win, had_terminal_in_original, new_tab
+  return original_tab, terminal_win, had_terminal_in_original, new_tab, terminal_bufnr, auto_enter_id
 end
 
 ---Check if a buffer has unsaved changes (is dirty).
@@ -1526,6 +1529,124 @@ local function end_diff_mode_in_windows_that_show_the_file(diff_data)
   end
 end
 
+---`:tabclose` can leave the tab of a diff open: it refuses the last tab page (E784), and with 'nohidden' it stops at a
+---modified buffer of the user's in that tab (E37). Remove what the diff put in the tab, as closing it would: the Claude
+---terminal window, which takes its `BufEnter` handler along and keeps the cursor out of the terminal, the proposal window
+---of a split diff, and the diff mode of the windows that show the file. A window of the diff, the proposal or the
+---terminal, is only touched while it still shows the buffer the diff put there: a window that the user switched to a file
+---of their own stays as it is, and the terminal handler goes either way. The terminal window also stays when it is the
+---only one that shows the terminal and the cleanup shows the terminal again afterwards: the provider's new window fires
+---`BufLeave`, and an autocmd of the user's that enters a window then makes the provider put the terminal into it. A
+---cursor in a window that closes goes to the window the diff stored for the file, which a unified diff gives an empty
+---buffer. The caller deletes the proposal buffer.
+---An autocmd of the user's can run inside any call that changes a window or a buffer, after the check that made the call
+---safe, and switch a window of the diff to a file of their own, enter the terminal, or close the tab. So the whole release
+---runs with every autocmd blocked (`utils.without_autocmds`), after a check that the tab page is still there. Afterwards,
+---once every close is done, it fires `WinEnter` and `BufEnter` for the window and the buffer the cursor ends in, if they
+---changed.
+---@param diff_data table
+local function release_surviving_diff_tab(diff_data)
+  local tab = diff_data.new_tab_number
+  if not vim.api.nvim_tabpage_is_valid(tab) then
+    return
+  end
+
+  local function in_tab(win)
+    return win ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_tabpage(win) == tab
+  end
+  local function shows(win, buffer)
+    return buffer ~= nil and in_tab(win) and vim.api.nvim_win_get_buf(win) == buffer
+  end
+  local function proposal_window()
+    return shows(diff_data.new_window, diff_data.new_buffer) and diff_data.new_window or nil
+  end
+  local function terminal_window()
+    return shows(diff_data.terminal_win_in_new_tab, diff_data.terminal_buffer_in_new_tab)
+        and diff_data.terminal_win_in_new_tab
+      or nil
+  end
+  local function file_window()
+    return in_tab(diff_data.target_window) and diff_data.target_window or nil
+  end
+  ---`ensure_visible` runs after the release when the terminal was shown in the original tab, and it opens a window when no
+  ---other one shows the terminal on screen (a float that Snacks parked with `hide` still lists the buffer).
+  local function close_would_reopen_terminal(win)
+    if not diff_data.had_terminal_in_original then
+      return false
+    end
+    for _, other in ipairs(vim.fn.win_findbuf(diff_data.terminal_buffer_in_new_tab)) do
+      if other ~= win and vim.api.nvim_win_get_config(other).hide ~= true then
+        return false
+      end
+    end
+    return true
+  end
+
+  if diff_data.terminal_enter_handler then
+    pcall(vim.api.nvim_del_autocmd, diff_data.terminal_enter_handler)
+  end
+
+  local start_win = vim.api.nvim_get_current_win()
+  local start_buf = vim.api.nvim_get_current_buf()
+
+  utils.without_autocmds(function()
+    local emptied_win, empty_buffer
+    local proposal_win = proposal_window()
+    local file_win = file_window()
+    if proposal_win and (file_win == nil or file_win == proposal_win) then
+      local buffer = vim.api.nvim_create_buf(true, false)
+      if pcall(vim.api.nvim_win_set_buf, proposal_win, buffer) then
+        emptied_win, empty_buffer = proposal_win, buffer
+      else
+        pcall(vim.api.nvim_buf_delete, buffer, { force = true })
+      end
+    end
+
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+      if
+        vim.api.nvim_win_get_buf(win) == diff_data.original_buffer
+        and vim.api.nvim_get_option_value("diff", { win = win })
+      then
+        pcall(vim.api.nvim_win_call, win, function()
+          vim.cmd("diffoff")
+        end)
+      end
+    end
+
+    local cursor_win = vim.api.nvim_get_current_win()
+    if cursor_win == terminal_window() or cursor_win == proposal_window() then
+      local destination = file_window() or (shows(emptied_win, empty_buffer) and emptied_win or nil)
+      if destination then
+        pcall(vim.api.nvim_set_current_win, destination)
+      end
+    end
+
+    local terminal_win = terminal_window()
+    if terminal_win and not close_would_reopen_terminal(terminal_win) then
+      if pcall(vim.api.nvim_win_close, terminal_win, false) then
+        pcall(vim.api.nvim_clear_autocmds, {
+          group = get_autocmd_group(),
+          event = "WinClosed",
+          pattern = tostring(terminal_win),
+        })
+      end
+    end
+    local remaining_proposal_win = proposal_window()
+    if remaining_proposal_win then
+      pcall(vim.api.nvim_win_close, remaining_proposal_win, true)
+    end
+  end)
+
+  local end_win = vim.api.nvim_get_current_win()
+  local end_buf = vim.api.nvim_get_current_buf()
+  if end_win ~= start_win or end_buf ~= start_buf then
+    local events = end_win ~= start_win and { "WinEnter", "BufEnter" } or { "BufEnter" }
+    vim.api.nvim_exec_autocmds(events, { buffer = end_buf, modeline = false })
+  end
+end
+
+M._release_surviving_diff_tab = release_surviving_diff_tab
+
 ---Clean up diff state and resources
 ---@param tab_name string The diff identifier
 ---@param reason string Reason for cleanup
@@ -1562,12 +1683,13 @@ function M._cleanup_diff_state(tab_name, reason)
 
     -- Prefer closing the specific new tab we created, if we tracked its handle/number
     if diff_data.new_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
-      -- Prefer closing by switching to the new tab then executing :tabclose
-      pcall(vim.api.nvim_set_current_tabpage, diff_data.new_tab_number)
-      pcall(vim.cmd, "tabclose")
+      utils.close_tabpage_without_entering(diff_data.new_tab_number)
       -- Restore original tab focus if still valid
       if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
         pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
+      end
+      if vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
+        release_surviving_diff_tab(diff_data)
       end
     else
       -- Fallback: close the previously current tab if it's still around and not the original
@@ -1731,6 +1853,7 @@ function M._setup_blocking_diff(params, resolution_callback)
     local original_tab_number = vim.api.nvim_get_current_tabpage()
     local created_new_tab = false
     local terminal_win_in_new_tab = nil
+    local terminal_buffer_in_new_tab, terminal_enter_handler
     local existing_buffer = nil
     local target_window = nil
     -- new_tab_handle is hoisted above the pcall (issue #262) so the error handler can reach it;
@@ -1742,7 +1865,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       -- error handler can still refocus it if that helper throws partway (Lua then leaves
       -- new_tab_handle unassigned -- see the error branch below). Issue #262.
       original_tab_handle = vim.api.nvim_get_current_tabpage()
-      original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
+      original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle, terminal_buffer_in_new_tab, terminal_enter_handler =
         display_terminal_in_new_tab()
       created_new_tab = true
 
@@ -1814,7 +1937,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       -- not in another tab that they would stay in.
       if tabpage_has_diff_window(dest_tab) or tabpage_has_diff_window(current_tab) then
         original_tab_handle = vim.api.nvim_get_current_tabpage()
-        original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle =
+        original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle, terminal_buffer_in_new_tab, terminal_enter_handler =
           display_terminal_in_new_tab()
         created_new_tab = true
         target_window = nil
@@ -1912,6 +2035,8 @@ function M._setup_blocking_diff(params, resolution_callback)
       new_tab_number = new_tab_handle,
       had_terminal_in_original = had_terminal_in_original,
       terminal_win_in_new_tab = terminal_win_in_new_tab,
+      terminal_buffer_in_new_tab = terminal_buffer_in_new_tab,
+      terminal_enter_handler = terminal_enter_handler,
       autocmd_ids = autocmd_ids,
       created_at = vim.fn.localtime(),
       status = "pending",

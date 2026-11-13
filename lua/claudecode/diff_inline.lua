@@ -4,6 +4,7 @@
 local M = {}
 
 local logger = require("claudecode.logger")
+local utils = require("claudecode.utils")
 
 local ns = vim.api.nvim_create_namespace("claudecode_inline_diff")
 
@@ -316,6 +317,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   local original_tab_number = vim.api.nvim_get_current_tabpage()
   local created_new_tab = false
   local terminal_win_in_new_tab = nil
+  local terminal_buffer_in_new_tab, terminal_enter_handler
   local new_tab_handle = nil
   local had_terminal_in_original = false
 
@@ -348,7 +350,7 @@ function M.setup_inline_diff(params, resolution_callback, config)
   end
 
   if config and config.diff_opts and config.diff_opts.open_in_new_tab then
-    original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle = guard_inline_setup(
+    original_tab_number, terminal_win_in_new_tab, had_terminal_in_original, new_tab_handle, terminal_buffer_in_new_tab, terminal_enter_handler = guard_inline_setup(
       function()
         return diff._display_terminal_in_new_tab()
       end
@@ -512,6 +514,8 @@ function M.setup_inline_diff(params, resolution_callback, config)
       new_tab_number = new_tab_handle,
       had_terminal_in_original = had_terminal_in_original,
       terminal_win_in_new_tab = terminal_win_in_new_tab,
+      terminal_buffer_in_new_tab = terminal_buffer_in_new_tab,
+      terminal_enter_handler = terminal_enter_handler,
       term_win = term_win,
       term_width = term_width,
     })
@@ -591,10 +595,12 @@ function M.cleanup_inline_diff(tab_name, diff_data)
     end
 
     if diff_data.new_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
-      pcall(vim.api.nvim_set_current_tabpage, diff_data.new_tab_number)
-      pcall(vim.cmd, "tabclose")
+      utils.close_tabpage_without_entering(diff_data.new_tab_number)
       if diff_data.original_tab_number and vim.api.nvim_tabpage_is_valid(diff_data.original_tab_number) then
         pcall(vim.api.nvim_set_current_tabpage, diff_data.original_tab_number)
+      end
+      if vim.api.nvim_tabpage_is_valid(diff_data.new_tab_number) then
+        diff._release_surviving_diff_tab(diff_data)
       end
     end
 
