@@ -55,25 +55,7 @@ reap_job() {
 }
 trap 'reap_job; rm -rf -- "$work"' EXIT
 
-cat >"$work/shim.c" <<'C'
-#define _GNU_SOURCE
-#include <dlfcn.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
-
-static pid_t main_pid;
-__attribute__((constructor)) static void remember_main(void) { main_pid = getpid(); }
-
-/* init_child() calls setsid() first, then signal(SIGCHLD, SIG_DFL) and the other resets. This waits in the first reset. */
-sighandler_t signal(int sig, sighandler_t handler) {
-  static sighandler_t (*real)(int, sighandler_t);
-  if (!real) real = (sighandler_t (*)(int, sighandler_t))dlsym(RTLD_NEXT, "signal");
-  if (getpid() != main_pid && sig == SIGCHLD && handler == SIG_DFL) usleep(400000);
-  return real(sig, handler);
-}
-C
-"$cc" -shared -fPIC -o "$work/shim.so" "$work/shim.c" -ldl || {
+"$cc" -shared -fPIC -o "$work/shim.so" "$here/../../../../tests/helpers/hold_pty_child.c" -ldl || {
   echo "SKIP: the shim did not compile"
   exit 2
 }
