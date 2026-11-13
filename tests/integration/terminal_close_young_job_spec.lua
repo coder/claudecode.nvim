@@ -29,7 +29,14 @@ describe("closing a Claude terminal right after it started", function()
 
   before_each(function()
     dir = vim.fn.tempname()
-    vim.fn.mkdir(dir, "p")
+    -- LD_PRELOAD splits its value at spaces and colons, so a TMPDIR with either one (CI also runs the suite under
+    -- "odd tmp 50%") cannot hold the shim.
+    if dir:find("[%s:]") then
+      dir = vim.trim(vim.fn.system({ "mktemp", "-d", "/tmp/claudecode.XXXXXX" }))
+      assert.equal(0, vim.v.shell_error)
+    else
+      vim.fn.mkdir(dir, "p")
+    end
     shim = dir .. "/hold_pty_child.so"
     local output =
       vim.fn.system({ compiler, "-shared", "-fPIC", "-o", shim, root .. "/tests/helpers/hold_pty_child.c", "-ldl" })
