@@ -3,11 +3,11 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 40f062bdf52efb45
+file lua/claudecode/diff.lua 52b6b2ea165915b8
 block resolve_saved          36fd89d5b97f0173
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          ea7ee1ae348cad65
-block setup_blocking         2dc7835cec40f258
+block setup_blocking         e65f4743397905ba
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
@@ -23,7 +23,7 @@ block cleanup_all            43e7b595cf106229
 block exit_cleanup           8bc9fbded77d818f
 block accept_current         7577efa33506569e
 block fire_event             ef778bb39419d91a
-block register_state         8cf78b6711a9ecc6
+block register_state         5c7f2b661c1dbb79
 block cleanup_state          2ff77c6e3ecddf07
 block diff_autocmds          01fff2946c5a2149
 block write_proposal         9baeff1cd3273193
@@ -63,6 +63,7 @@ site lua/claudecode/diff.lua: diff_data.status = "saved" @ function M._resolve_d
 site lua/claudecode/diff.lua: existing_diff = active_diffs[tab_name] @ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
 site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ function M.close_saved_diffs(reason)
+site lua/claudecode/diff.lua: for _, diff_data in pairs(active_diffs) do @ local function rename_orphaned_diff_buffers(tab_name, old_file_path)
 site lua/claudecode/diff.lua: for _, other in pairs(active_diffs) do @ local function save_window_sizes(tab)
 site lua/claudecode/diff.lua: for tab_name, _ in pairs(active_diffs) do @ function M._cleanup_all_active_diffs(reason)
 site lua/claudecode/diff.lua: for tab_name, diff_data in pairs(active_diffs) do @ local function cleanup_at_exit()
