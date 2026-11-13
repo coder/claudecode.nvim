@@ -38,14 +38,15 @@ mkdir -p "$home"/{config,data,state,cache,claude,work}
 cd "$home/work"
 # The paths go to Neovim through the environment and a Lua call, not through `set rtp^=` and `luafile`: a path with a space,
 # a comma, a backslash or a | would be split or cut by those Ex commands. 'runtimepath' needs a comma and a backslash escaped.
-# lib.finish quits with 0 or 1. A replay that raises before it gets there runs on to `cquit 2`, a setup error, and one
-# that hangs is stopped by timeout (124), which is a setup error too.
+# lib.finish quits with 0 or 1. A replay that raises, or that returns without calling lib.after_startup (which sets
+# vim.g.replay_after_startup and runs its body later, from the main loop), gets `cquit 2`, a setup error. One that hangs is
+# stopped by timeout (124), which is a setup error too.
 code=0
 XDG_CONFIG_HOME=$home/config XDG_DATA_HOME=$home/data XDG_STATE_HOME=$home/state XDG_CACHE_HOME=$home/cache \
   CLAUDE_CONFIG_DIR=$home/claude REPLAY_LIB=$here/lib.lua REPLAY_REPO=$repo REPLAY_SNACKS=$snacks_rtp \
   REPLAY_FILE=$here/$replay timeout 60 "$nvim" --headless -u NONE -i NONE \
   --cmd 'lua for _, dir in ipairs({ os.getenv("REPLAY_SNACKS"), os.getenv("REPLAY_REPO") }) do if dir ~= "" then vim.o.runtimepath = (dir:gsub("[\\,]", "\\%0")) .. "," .. vim.o.runtimepath end end' \
-  -c 'lua dofile(os.getenv("REPLAY_FILE"))' -c "cquit 2" 2>&1 || code=$?
+  -c 'lua local ok, err = pcall(dofile, os.getenv("REPLAY_FILE")); if not ok then io.stderr:write(tostring(err) .. "\n") end; if not ok or not vim.g.replay_after_startup then vim.cmd("cquit 2") end' 2>&1 || code=$?
 if [[ $code -eq 124 ]]; then
   echo "ERROR: $replay did not finish within 60 s" >&2
   exit 2

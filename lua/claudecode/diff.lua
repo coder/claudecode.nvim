@@ -721,9 +721,11 @@ local function setup_new_buffer(
   terminal_win_in_new_tab,
   target_win_for_meta
 )
+  -- Split first: a split copies the window's options, and a copy made after `diffthis` would hand diff mode to the
+  -- proposal window for the original buffer, so that `:edit` of the file back there turns it on again after the diff.
+  -- The original window gets its `diffthis` in `nvim_win_call`, which fires no WinEnter or BufEnter for a handler to
+  -- move the focus.
   vim.api.nvim_set_current_win(original_win)
-  vim.cmd("diffthis")
-
   create_split()
   local new_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(new_win, new_buf)
@@ -733,6 +735,9 @@ local function setup_new_buffer(
     vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buf })
   end
   vim.cmd("diffthis")
+  vim.api.nvim_win_call(original_win, function()
+    vim.cmd("diffthis")
+  end)
 
   vim.cmd("wincmd =")
 
@@ -843,7 +848,7 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file)
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  vim.cmd("diffthis")
+  local original_win = vim.api.nvim_get_current_win()
   create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
@@ -864,6 +869,9 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file)
   vim.api.nvim_set_option_value("swapfile", false, { buf = new_buf })
 
   vim.cmd("diffthis")
+  vim.api.nvim_win_call(original_win, function()
+    vim.cmd("diffthis")
+  end)
 
   local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
   local cleaned_up = false
@@ -1110,7 +1118,9 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
-  local final_content = table.concat(content_lines, "\n")
+  -- :w ends each line with the line break of the buffer's 'fileformat': LF, CRLF for dos, CR for mac.
+  local line_break = ({ dos = "\r\n", mac = "\r" })[vim.api.nvim_buf_get_option(buffer_id, "fileformat")] or "\n"
+  local final_content = table.concat(content_lines, line_break)
   -- Add trailing newline if the buffer has one, as :w does. :w writes nothing for an empty buffer, whatever 'eol' is.
   -- Such a buffer has no lines, but nvim_buf_get_lines still returns one empty string for it, so the count of bytes tells
   -- it from a buffer with one empty line.
@@ -1118,7 +1128,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return vim.fn.wordcount().bytes
   end)
   if byte_count > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
-    final_content = final_content .. "\n"
+    final_content = final_content .. line_break
   end
 
   -- Do not modify windows/tabs here; wait for explicit close_tab tool call to clean up UI
@@ -1835,12 +1845,22 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
     vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    local lines = vim.split(params.new_file_contents, "\n")
+    -- A proposal that has a line break, and only CRLF line breaks, takes 'fileformat' dos, as the same text read from
+    -- a file does, when the user's 'fileformats' includes dos. The buffer then holds the lines without their CRs, as
+    -- the file's own buffer does, and the save gives a line that the user types a CRLF, as :w does. Any other text is
+    -- unix, with its CRs inside the lines, which :w writes back unchanged. 'fileformat' is set in both cases, because
+    -- a new buffer takes the first entry of 'fileformats', and that entry can be dos.
+    local proposal = params.new_file_contents
+    local is_dos = vim.o.fileformats:find("dos", 1, true) ~= nil
+      and proposal:find("\n", 1, true) ~= nil
+      and not proposal:gsub("\r\n", ""):find("\n", 1, true)
+    local lines = vim.split(proposal, is_dos and "\r\n" or "\n", { plain = true })
     -- Remove trailing empty line if content ended with \n
     if #lines > 0 and lines[#lines] == "" then
       table.remove(lines, #lines)
     end
     vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(new_buffer, "fileformat", is_dos and "dos" or "unix")
     -- A new buffer has 'eol' on, and the saved text ends with a line break exactly when 'eol' is on. So the buffer takes
     -- the ending of the proposal, and a proposal without a final line break is saved without one.
     vim.api.nvim_buf_set_option(new_buffer, "eol", params.new_file_contents:sub(-1) == "\n")
@@ -2098,7 +2118,9 @@ end
 ---The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
 ---its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
 ---buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
----pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre.
+---pending. SIGKILL, a crash, `:noautocmd qa!`, `os.exit()` and a quit from inside an autocmd that is not `nested` run
+---no VimLeavePre, and a quit or a signal that Neovim handles while such an autocmd is still running can skip it too
+---(for example one that waits in `vim.wait`).
 ---The reject pass runs first. It resolves each diff whose status is `pending` as rejected, oldest first, each under
 ---`pcall`, so one diff that fails to reject cannot leave the others waiting. A diff with another status is skipped. A
 ---reject can remove its own diff (`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a
