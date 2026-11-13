@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Proves the hangup race of Neovim's pty jobs that the termopen wrapper in tests/minimal_init.lua guards against. Neovim
-# forks a pty job's child with its own signal handlers. The child runs setsid() first and resets the handlers in the
-# calls after it, so for a moment it is a copy of Neovim. A hangup in that gap runs libuv's handler in the child,
-# which writes into the signal pipe that it shares with Neovim, so Neovim reads a SIGHUP of its own and exits. A shim
-# loaded with LD_PRELOAD holds the child in that gap, in the signal(SIGCHLD, SIG_DFL) call that follows setsid(), so
-# the case is not a matter of luck.
+# Proves the hangup race of Neovim's pty jobs that the termopen wrapper in tests/helpers/termopen_wait.lua guards
+# against (tests/minimal_init.lua installs it). Neovim forks a pty job's child with its own signal handlers. The child
+# runs setsid() first and resets the handlers in the calls after it, so for a moment it is a copy of Neovim. A hangup in
+# that gap runs libuv's handler in the child, which writes into the signal pipe that it shares with Neovim, so Neovim
+# reads a SIGHUP of its own and exits. A shim loaded with LD_PRELOAD holds the child in that gap, in the
+# signal(SIGCHLD, SIG_DFL) call that follows setsid(), so the case is not a matter of luck.
 # Usage: proof-pty-child-hangup.sh [tree]     tree: a checkout with tests/minimal_init.lua (default: this checkout)
 # VCN_NVIM=<path> runs that Neovim (0.8 or newer). It must be the Neovim binary itself, not a shim of a version manager.
 # Cases, each one headless Neovim that starts `sleep` in a terminal job and stops it 50 ms later:
