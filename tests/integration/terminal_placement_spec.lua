@@ -974,6 +974,37 @@ describe("the terminal's placement in its own split", function()
           assert.equal("terminal", result.split)
         end
       )
+
+      -- An unchanged file is the third kind that the helper hides: a normal file with no change, 'hidden' off.
+      it(
+        "keeps an unchanged file that an autocmd showed in the split loaded, 'hidden' off, 'bufhidden' '"
+          .. bufhidden
+          .. "'",
+        function()
+          local result = run(new_buffer_shape(
+            bufhidden,
+            "vim.o.hidden = false",
+            [[
+              local path = vim.fn.tempname()
+              vim.fn.writefile({ "file X text" }, path)
+              _G.other = vim.fn.bufadd(path)
+              vim.bo[_G.other].buflisted = true
+              vim.fn.bufload(_G.other)
+            ]]
+          ))
+
+          assert.same({
+            valid = true,
+            loaded = true,
+            lines = { "file X text" },
+            windows = 0,
+            bufhidden = bufhidden,
+            optionset = 0,
+          }, other_buffer())
+          assert.is_true(result.placed)
+          assert.equal("terminal", result.split)
+        end
+      )
     end
 
     it("gives nothing back, and raises no error, when an autocmd of the swap wipes the buffer", function()
