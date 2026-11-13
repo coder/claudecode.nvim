@@ -12,29 +12,56 @@ set -o pipefail
 # selection_held_spec.lua sleeps 21.6s in 77 vim.wait calls, so 30s left each of them 0.1s of slack under load.
 FILE_TIMEOUT=40s
 
-# The temp files and folders of the file that runs, and the file that holds the process id of its `timeout` while it
-# runs. The cleanup stops the file's Neovims before it removes the folders, because one that ends later writes ShaDa and
-# makes its state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs
-# yet. It uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM
-# would run on. SIGTERM and SIGHUP kill bash, which runs the EXIT trap first.
-CURRENT_TEMP=()
-CURRENT_GROUP_FILE=""
-# shellcheck disable=SC2329 # The two traps below run it.
+# The temp folder of the file that runs, and the file in it that holds the process id of its `timeout` while it runs. The
+# cleanup stops the file's Neovims before it removes the folder, because one that ends later writes ShaDa and makes its
+# state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs yet. It
+# uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM would run
+# on.
+# The cleanup moves the folder into a new folder next to it, the grave, before it reads the process id file, so the old
+# path is gone at once. The grave comes from `mktemp -d`, so a name that exists already, as a folder of the user, is not
+# the target of the move. When the grave or the move fails, the folder keeps its old name, and the cleanup works there.
+# The shell that starts the Neovim writes its process id to the file at the old path, then looks for the folder at the
+# old path (the `bash -c` line in run_test_file). So one of them sees the other: a shell that wrote its id too late for
+# the cleanup to read it finds no folder, and starts no Neovim. A Neovim that still runs between the move and the kill
+# can make its state folder at the old path again, so the last rm removes the old path as well.
+CURRENT_WORK=""
+CURRENT_FILE_RUNS=""
+# shellcheck disable=SC2329 # The traps below run it.
 cleanup_current_file() {
-  local timeout_pid
-  if [[ -s $CURRENT_GROUP_FILE ]]; then
-    timeout_pid=$(cat "$CURRENT_GROUP_FILE")
+  local grave moved timeout_pid
+  [[ -n $CURRENT_WORK ]] || return 0
+  moved=$CURRENT_WORK
+  grave=$(mktemp -d "$CURRENT_WORK.XXXXXX" 2>/dev/null) || grave=""
+  if [[ -n $grave ]] && mv "$CURRENT_WORK" "$grave/work" 2>/dev/null; then
+    moved=$grave/work
+  fi
+  if [[ -n $CURRENT_FILE_RUNS && -s $moved/group ]]; then
+    timeout_pid=$(cat "$moved/group")
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  rm -rf "${CURRENT_TEMP[@]}"
+  rm -rf ${grave:+"$grave"} "$CURRENT_WORK"
+}
+# A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
+# `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a
+# signal that comes while mkdir makes the folder finds the folder. The handler cleans up, then kills the runner with the
+# signal, not with `exit`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one
+# that exited 130. A cleanup that fails, such as an rm that cannot remove a folder, must not end the handler early
+# either: with set -e the runner would exit with 1 before the kill, and the calling shell would go on. The handler
+# ignores INT, TERM and HUP from its first line on, and so does its rm: a second Ctrl-C reaches the rm too and stops it
+# half way, and bash 3.2 (the macOS /bin/bash) then dies with 130 and leaves the renamed folder.
+# shellcheck disable=SC2329 # The traps below run it.
+die_by_signal() {
+  trap '' INT TERM HUP
+  cleanup_current_file || true
+  trap - EXIT INT TERM HUP
+  kill -"$1" $$
+  exit "$2"
 }
 trap cleanup_current_file EXIT
-# A Ctrl-C reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
-# `wait` below returns at once when this trap runs. The trap cleans up, then kills the runner with SIGINT, not with
-# `exit 130`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one that exited
-# 130.
-trap 'cleanup_current_file; trap - EXIT INT; kill -INT $$; exit 130' INT
+trap 'die_by_signal INT 130' INT
+trap 'die_by_signal TERM 143' TERM
+trap 'die_by_signal HUP 129' HUP
 
 echo "=== Running Integration Tests Individually ==="
 
@@ -61,14 +88,31 @@ run_test_file() {
   echo ""
   echo "Running: $basename"
 
-  local temp_output group_file state_dir config_dir status_file
-  temp_output=$(mktemp)
-  group_file=$(mktemp)
-  state_dir=$(mktemp -d)
-  config_dir=$(mktemp -d)
+  # All temp items of the file live in one folder. The runner picks the name of the folder and stores it before it makes
+  # the folder, so that no signal finds a folder that the runner made but does not know yet. `mktemp -u` makes nothing
+  # and prints a random name. mkdir fails when that name exists, and the runner then drops the name. Only a signal that
+  # comes before it drops the name can make it remove a folder that it did not make.
+  local work_dir temp_output group_file state_dir config_dir tmp_dir status_file
+  work_dir=$(mktemp -u)
+  # A Neovim binds its socket at $work_dir/tmp/nvim.<pid>.<n>, which is at most 20 characters more than the work folder.
+  # A socket path over 107 bytes is cut by libuv, and the cut name can be a file in the developer's TMPDIR, outside the
+  # work folder. So a work folder with a name over 80 characters goes to /tmp, where its name is short.
+  if [[ ${#work_dir} -gt 80 && -d /tmp && -w /tmp ]]; then
+    work_dir=$(mktemp -u /tmp/tmp.XXXXXXXXXX)
+  fi
+  CURRENT_WORK=$work_dir
+  mkdir -m 700 "$work_dir" || {
+    CURRENT_WORK=""
+    false
+  }
+  temp_output=$work_dir/output
+  group_file=$work_dir/group
+  state_dir=$work_dir/state
+  config_dir=$work_dir/config
+  tmp_dir=$work_dir/tmp
   status_file=$state_dir/exit_statuses
-  CURRENT_TEMP=("$temp_output" "$group_file" "$state_dir" "$config_dir")
-  CURRENT_GROUP_FILE=$group_file
+  mkdir -m 700 "$state_dir" "$config_dir" "$tmp_dir"
+  CURRENT_FILE_RUNS=1
   exec 9>"$status_file"
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
@@ -79,6 +123,8 @@ run_test_file() {
   # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
   # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
+  # TMPDIR and XDG_RUNTIME_DIR name the temp folder in the work folder: a Neovim that the cleanup kills does not remove
+  # its socket folder, and the folder goes away with the work folder instead of staying in the developer's TMPDIR.
   # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
   # subshell has no pipefail, because with it bash prints a job report ("Killed", two lines) when the cleanup above
   # kills `timeout`. It writes the exit statuses of nvim and of `tee` to a file in the state folder, so that the reason
@@ -93,8 +139,9 @@ run_test_file() {
     set +e
     VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
       CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
-      XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
-      bash -c 'echo $$ > "$1"; shift; exec timeout -k 5s "$@"' _ "$group_file" "$FILE_TIMEOUT" \
+      XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" TMPDIR="$tmp_dir" XDG_RUNTIME_DIR="$tmp_dir" \
+      bash -c 'echo $$ 2> /dev/null > "$1" && [ -d "$2" ] || exit 1; shift 2; exec timeout -k 5s "$@"' \
+      _ "$group_file" "$work_dir" "$FILE_TIMEOUT" \
       nvim --headless -i NONE -u tests/minimal_init.lua \
       -c "lua require('plenary.test_harness').test_file('$test_file')" \
       9>&- 2>&1 | tee "$temp_output" 9>&-
@@ -107,7 +154,7 @@ run_test_file() {
   else
     EXIT_CODE=$?
   fi
-  CURRENT_GROUP_FILE=""
+  CURRENT_FILE_RUNS=""
   exec 9>&-
   local tee_status=0 status_line
   if status_line=$(cat "$status_file" 2>/dev/null) && [[ $status_line =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
@@ -158,7 +205,7 @@ run_test_file() {
   # nvim busy in a Lua loop ignores SIGTERM and outlives timeout, and when the nvim started here died, the one that
   # plenary started for the spec runs on.
   if [[ $EXIT_CODE -ne 0 ]]; then
-    kill -KILL -- "-$(cat "$group_file")" 2>/dev/null || true
+    kill -KILL -- "-$(cat "$group_file" 2>/dev/null)" 2>/dev/null || true
   fi
 
   # A file whose nvim exited non-zero gets a line with a reason: the no-summary line, the TIMEOUT line, or this one. A
@@ -176,8 +223,8 @@ run_test_file() {
   fi
 
   # Cleanup
-  rm -rf "$temp_output" "$group_file" "$state_dir" "$config_dir"
-  CURRENT_TEMP=()
+  rm -rf "$work_dir"
+  CURRENT_WORK=""
 }
 
 for test_file in tests/integration/*_spec.lua; do

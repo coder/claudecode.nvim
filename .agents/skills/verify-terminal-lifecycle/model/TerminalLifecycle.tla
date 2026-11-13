@@ -67,6 +67,7 @@ CONSTANTS
   SnacksExitForgets,             \* snacks.lua TermClose handler (auto_close) forgets the instance at once
   SnacksForgetChecksInstance,    \* snacks.lua forget() clears `terminal` only for its own instance
   SnacksCloseForgetsFirst,       \* snacks.lua M.close sets terminal = nil before vim.wait
+  SnacksCloseClearsMark,         \* snacks.lua M.close clears the mark before the wait for the exec and jobstop
   SnacksHideKeepsLastWindow,     \* snacks.lua cc_hide pcalls nvim_win_close
   SnacksFailCleansUp,            \* snacks.lua M.open closes the window Snacks showed for a failed start
   SnacksStopsNativeClaude,       \* snacks.lua stops the native provider's Claude before a start and in close
@@ -369,7 +370,8 @@ CloseBegin(w0, p) ==
      ELSE LET w1 == IF p = "native"
                     THEN [wb EXCEPT !.ntrack = IF NativeCloseForgetsFirst THEN None ELSE @,
                                     !.mark[t] = IF NativeCloseClearsMark THEN FALSE ELSE @]
-                    ELSE [wb EXCEPT !.strack = IF SnacksCloseForgetsFirst THEN None ELSE @]
+                    ELSE [wb EXCEPT !.strack = IF SnacksCloseForgetsFirst THEN None ELSE @,
+                                    !.mark[t] = IF SnacksCloseClearsMark THEN FALSE ELSE @]
           IN [w |-> w1, t |-> t, wait |-> w.job[t] = "running"] \* jobstop returns 1, jobwait gives -1
 
 (* After the wait: native deletes the buffer, snacks' closing:close() wipes *)

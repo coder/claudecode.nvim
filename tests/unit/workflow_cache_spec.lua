@@ -3,7 +3,8 @@ require("tests.busted_setup")
 -- actionlint and zizmor check the syntax of .github/workflows/test.yml, not what its cache settings mean, so an edit
 -- that loosens one of them keeps CI green. This spec reads the file as text, with no YAML parser, and checks each
 -- setting where it sits in its step. It also fails when `actions/cache` or `jdx/mise-action` is named on a line that is
--- not the `uses:` of a block-style step. It does not decode YAML escapes.
+-- not the `uses:` of a block-style step. It skips full-line comments, so a comment can name an action (the one above
+-- the rock cache steps does). It does not decode YAML escapes.
 describe(".github/workflows/test.yml cache settings", function()
   local root = require("pl.path").abspath(debug.getinfo(1, "S").source:sub(2)):match("^(.*)/tests/unit/[^/]+$")
   local push_only = "${{ github.event_name == 'push' }}"
@@ -11,19 +12,15 @@ describe(".github/workflows/test.yml cache settings", function()
 
   ---Every step is a `- ` item at six spaces. A step ends at the next step or at a line with less indent, and a comment
   ---line is not part of it.
+  ---@param next_line fun(): string|nil an iterator over the lines of a workflow
   ---@return string[][] steps the lines of each step
-  ---@return string[] lines every line of the file that is not a comment line. A trailing comment stays: a ` #` can sit
+  ---@return string[] lines every line of the text that is not a comment line. A trailing comment stays: a ` #` can sit
   ---inside a quoted value, so cutting there could hide a name in a flow-style step.
-  local function read_workflow()
-    local path = root .. "/.github/workflows/test.yml"
-    local file = assert(
-      io.open(path, "r"),
-      "cannot read " .. path .. " (a `git archive` tree has no .github folder: .gitattributes export-ignores it)"
-    )
+  local function parse_workflow(next_line)
     local found = {}
     local code = {}
     local current
-    for line in file:lines() do
+    for line in next_line do
       if not line:match("^%s*#") then
         table.insert(code, line)
       end
@@ -37,6 +34,18 @@ describe(".github/workflows/test.yml cache settings", function()
         table.insert(current, line)
       end
     end
+    return found, code
+  end
+
+  ---@return string[][] steps
+  ---@return string[] lines
+  local function read_workflow()
+    local path = root .. "/.github/workflows/test.yml"
+    local file = assert(
+      io.open(path, "r"),
+      "cannot read " .. path .. " (a `git archive` tree has no .github folder: .gitattributes export-ignores it)"
+    )
+    local found, code = parse_workflow(file:lines())
     file:close()
     assert(#found > 0, "no steps found in " .. path)
     return found, code
@@ -59,7 +68,7 @@ describe(".github/workflows/test.yml cache settings", function()
   ---Finds a setting by its place in the step: a key of the step itself sits at eight spaces (the `- name:` line
   ---counts), and an entry of its `with:` or `env:` block sits at ten.
   ---@param step string[]
-  ---@param key string the key, which the file may write with a quote around it
+  ---@param key string the key, which the file may write bare or in a matching pair of quotes
   ---@param block string|nil `"with"` or `"env"`, the step key whose block holds `key`. nil for a key of the step
   ---@return string|nil value the text after `key:`, without a trailing YAML comment and without quotes around it
   local function field(step, key, block)
@@ -67,8 +76,20 @@ describe(".github/workflows/test.yml cache settings", function()
     for _, text in ipairs(step) do
       local line = text:gsub("^      %- ", "        ", 1)
       local indent = #line:match("^ *")
-      local name, value = line:match("^ *[\"']?([%w_%-]+)[\"']?:%s*(.-)%s*$")
-      if name and indent == 8 then
+      local name, value
+      for _, pattern in ipairs({
+        '^ *"([%w_%-]+)":%s*(.-)%s*$',
+        "^ *'([%w_%-]+)':%s*(.-)%s*$",
+        "^ *([%w_%-]+):%s*(.-)%s*$",
+      }) do
+        name, value = line:match(pattern)
+        if name then
+          break
+        end
+      end
+      -- Any non-blank line at the step-key indent opens a new block, even when no pattern reads its key (`env :`). A
+      -- line of spaces only does not.
+      if indent == 8 and line:match("%S") then
         current = name
       end
       local in_place = (indent == 8 and block == nil) or (indent == 10 and block ~= nil and current == block)
@@ -121,12 +142,75 @@ describe(".github/workflows/test.yml cache settings", function()
     steps, lines = read_workflow()
   end)
 
+  describe("the reader", function()
+    ---@param ... string the lines of the keys that follow `with:` in a `jdx/mise-action` step
+    ---@return string[] step
+    local function mise_step(...)
+      local text = table.concat({
+        "      - name: Set up more mise tools",
+        "        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151",
+        "        with:",
+        "          install_args: --locked",
+        table.concat({ ... }, "\n"),
+      }, "\n")
+      return (parse_workflow((text .. "\n"):gmatch("(.-)\n")))[1]
+    end
+
+    it("ends the with: block at a step key that no key pattern reads", function()
+      for _, env in ipairs({ "env :", '"env" :' }) do
+        local step = mise_step("        " .. env, "          cache: false")
+        assert.are.equal("--locked", field(step, "install_args", "with"))
+        assert.is_nil(field(step, "cache", "with"), "cache: false sits under " .. env .. ", not under with:")
+      end
+    end)
+
+    it("does not read an entry of another block as an input", function()
+      local step = mise_step("        env:", "          cache: false")
+      assert.is_nil(field(step, "cache", "with"))
+      assert.are.equal("false", field(step, "cache", "env"))
+    end)
+
+    it("ends the with: block at a step-key line with no letter or digit", function()
+      -- An explicit YAML key: `?` and `:` sit alone at the step-key indent, so cache: false is an entry of env:.
+      local step = mise_step("        ?", "          env", "        :", "          cache: false")
+      assert.is_nil(field(step, "cache", "with"))
+    end)
+
+    it("keeps the with: block open over a line of spaces", function()
+      local step = mise_step("        ", "          cache: false")
+      assert.are.equal("false", field(step, "cache", "with"))
+    end)
+
+    it("does not read a key with a quote on one side only or in a mismatched pair", function()
+      local step = mise_step(
+        "          cache_save\": ${{ github.event_name == 'push' }}",
+        "          cache': false",
+        '          "cache_key: a',
+        "          cache_key': b",
+        "          'cache: c",
+        "          \"cache_save': d",
+        "          'cache_key\": e"
+      )
+      assert.is_nil(field(step, "cache_save", "with"))
+      assert.is_nil(field(step, "cache", "with"))
+      assert.is_nil(field(step, "cache_key", "with"))
+    end)
+
+    it("reads a bare key and a key in a matching pair of quotes", function()
+      local step = mise_step("          cache_key: bare", '          "cache_save": double', "          'cache': single")
+      assert.are.equal("bare", field(step, "cache_key", "with"))
+      assert.are.equal("double", field(step, "cache_save", "with"))
+      assert.are.equal("single", field(step, "cache", "with"))
+      assert.are.equal("jdx/mise-action@1648a7812b9aeae629881980618f079932869151", field(step, "uses"))
+    end)
+  end)
+
   describe("the workflow text", function()
     -- field() reads block style only. This test counts the lines that contain an action name, in any letter case, and
-    -- the steps whose `uses:` starts with the name in lower case. The two counts must be equal. So it fails for a
-    -- flow-style step (`- { uses: actions/cache@..., with: { ... } }`), for another letter case (`Actions/cache@`),
-    -- and for the name on any other line that is not a comment line (a step `name:`, a `run:` line, a trailing
-    -- comment). It does not decode YAML escapes, so `"actions\x2fcache@..."` is not seen.
+    -- the steps whose `uses:` is the name in lower case followed by `@` or `/`. The two counts must be equal. So it
+    -- fails for a flow-style step (`- { uses: actions/cache@..., with: { ... } }`), for another letter case
+    -- (`Actions/cache@`), and for the name on any other line that is not a comment line (a step `name:`, a `run:`
+    -- line, a trailing comment). It does not decode YAML escapes, so `"actions\x2fcache@..."` is not seen.
     it("names actions/cache and jdx/mise-action only in steps it can read", function()
       for _, action in ipairs({ "actions/cache", "jdx/mise-action" }) do
         local named, read = 0, 0

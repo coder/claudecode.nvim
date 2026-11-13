@@ -2021,9 +2021,10 @@ end
 function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, tab_name, client_id)
   -- Absolute from here on, so a later :cd cannot point this diff at another file.
   old_file_path = vim.fn.fnamemodify(old_file_path, ":p")
-  -- Check for existing diff with same tab_name
-  if active_diffs[tab_name] then
-    local existing_diff = active_diffs[tab_name]
+  -- Check for existing diff with same tab_name. A ClaudeCodeDiffClosed handler that runs the event loop lets a queued
+  -- openDiff register for this tab name while the old diff closes, so replace what is registered until nothing is.
+  local existing_diff = active_diffs[tab_name]
+  while existing_diff do
     if holds_edits_for_other_client(existing_diff, client_id) then
       error({
         code = -32000,
@@ -2035,8 +2036,13 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     if existing_diff.status == "pending" then
       M._resolve_diff_as_rejected(tab_name)
     end
-    -- Always clean up any leftover UI/state so we don't leak windows when reusing tab_names.
-    M._cleanup_diff_state(tab_name, "replaced by new diff")
+    -- Always clean up any leftover UI/state so we don't leak windows when reusing tab_names. Clean up only the diff
+    -- that this pass handled: a diff that registered meanwhile has not been answered yet.
+    if active_diffs[tab_name] == existing_diff then
+      M._cleanup_diff_state(tab_name, "replaced by new diff")
+    end
+    assert(active_diffs[tab_name] ~= existing_diff, "the replaced diff is still registered")
+    existing_diff = active_diffs[tab_name]
   end
 
   -- Set up blocking diff operation
