@@ -1,14 +1,16 @@
 # treefmt configuration — replaces the former Nix flake `nix fmt` (treefmt-nix).
 #
-# Run via `mise run format` (treefmt) or `mise run format-check` (`treefmt --ci` with FORMAT_CHECK=1, which writes
-# nothing to the tree). The three formatters that write files (stylua, prettier, shfmt) run through
-# scripts/treefmt-formatter.sh, which holds their write flags and their check flags. Their includes and excludes stay
-# here, so both modes format the same files. treefmt keys its cache on that wrapper, not on the tool, so mise.toml sets
-# TREEFMT_NO_CACHE (a version bump of a tool must make treefmt format the files again).
+# Run via `mise run format` (treefmt) or `mise run format-check` (`treefmt --ci` with the check-mode stand-ins of
+# scripts/format-check-bin/ first on PATH, which writes nothing to the tree; see mise.toml). The formatters here are
+# the real tools with their write flags, so treefmt's cache keys on them.
 # Every formatter/linter referenced here is provisioned by mise (see mise.toml).
+# treefmt puts the paths after the options, and a tool reads a path that starts with a dash (-Pname.sh) as an option,
+# so the options of stylua, prettier, shfmt and shellcheck end with `--`. The stand-ins need that `--` to tell the
+# options from the paths. actionlint and zizmor only get paths under .github/workflows/, and those never start with a
+# dash.
 # The tree root is the folder of this file. By default it is the root of the git repository, so a checkout without its
-# own .git (a vendored copy inside another repository) would get the outer repository as its tree root. Then treefmt
-# would not find scripts/treefmt-formatter.sh, and the excludes below would anchor at the outer root.
+# own .git (a vendored copy inside another repository) would get the outer repository as its tree root, and the
+# excludes below would anchor at the outer root.
 tree-root-file = "treefmt.toml"
 # treefmt's git walker already skips git-ignored paths; these also guard `--walk filesystem`.
 excludes = [
@@ -17,13 +19,13 @@ excludes = [
 ]
 
 [formatter.stylua]
-command = "scripts/treefmt-formatter.sh"
-options = ["stylua"]
+command = "stylua"
+options = ["--"]
 includes = ["*.lua"]
 
 [formatter.prettier]
-command = "scripts/treefmt-formatter.sh"
-options = ["prettier"]
+command = "prettier"
+options = ["--write", "--"]
 includes = [
   "*.css",
   "*.html",
@@ -46,13 +48,10 @@ includes = [
 excludes = ["fixtures/*/lazy-lock.json"]
 
 [formatter.shfmt]
-command = "scripts/treefmt-formatter.sh"
-options = ["shfmt"]
+command = "shfmt"
+options = ["-i", "2", "-w", "--"]
 includes = ["*.sh"]
 
-# treefmt puts the paths after the options, and shellcheck reads a path that starts with a dash (-Pname.sh) as an
-# option, so the options end with `--`. The wrapper does the same for stylua, prettier and shfmt. actionlint and zizmor
-# only get paths under .github/workflows/, and those never start with a dash.
 [formatter.shellcheck]
 command = "shellcheck"
 options = ["--exclude=SC1091,SC2016", "--"]

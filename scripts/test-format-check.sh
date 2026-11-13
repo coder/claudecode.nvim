@@ -13,8 +13,9 @@
 # a source path and lints nothing of that name. In a vendored copy of the repo (a folder with no .git inside
 # another git repository, made in a temporary folder) the check must pass on a formatted probe and fail on an
 # unformatted one, so treefmt must take the vendored folder as its tree root. After a version bump of a formatter,
-# treefmt must format a file again: the test swaps in a second "version" of stylua (the real one with another quote
-# style) and runs treefmt with a private cache folder.
+# treefmt must format a file again, with its cache on, under mise's environment and outside it, and a second run with
+# the same version must find the file in the cache (it formats 0 files): the test swaps in a second "version" of stylua
+# (the real one with another quote style) and runs treefmt with a private cache folder.
 # A second run of the test in the same checkout stops with exit 2 at once, because the probes exist. The check runs on
 # the whole tree, so the test needs a formatted tree: its third run expects exit 0.
 # Usage: scripts/test-format-check.sh
@@ -159,20 +160,20 @@ run_check
 expect_named "$dashlint"
 
 # 5. A vendored copy: the folder has no .git, and a git repository holds it. treefmt.toml's tree-root-file makes the
-# folder the tree root, so treefmt finds the wrapper, and the excludes apply (the lock file below is unformatted on
-# purpose, and an exclude of treefmt.toml skips it). The folder is in a temporary folder, with mise's tools on PATH.
+# folder the tree root, so the excludes apply (the lock file below is unformatted on purpose, and an exclude of
+# treefmt.toml skips it). The folder is in a temporary folder, with the stand-ins first on PATH and mise's tools after.
 tool_path=$(mise exec -- printenv PATH 2>/dev/null | tail -n 1)
 vendor=$scratch/outer/vendor/copy
 mkdir -p "$vendor/scripts" "$vendor/fixtures/probe"
 cp treefmt.toml "$vendor/treefmt.toml"
-cp scripts/treefmt-formatter.sh "$vendor/scripts/treefmt-formatter.sh"
+cp -R scripts/format-check-bin "$vendor/scripts/format-check-bin"
 printf '{"a":1,   "b":2}\n' >"$vendor/fixtures/probe/lazy-lock.json"
 git init -q "$scratch/outer"
 
 # Runs the check in the vendored copy. Sets `status`, and leaves the output in "$scratch/output".
 run_vendored() {
   status=0
-  (cd "$vendor" && FORMAT_CHECK=1 PATH="$tool_path" treefmt --ci) >"$scratch/output" 2>&1 || status=$?
+  (cd "$vendor" && PATH="$vendor/scripts/format-check-bin:$tool_path" treefmt --ci) >"$scratch/output" 2>&1 || status=$?
 }
 
 printf '%b' "$formatted_md" >"$vendor/probe.md"
@@ -183,28 +184,41 @@ run_vendored
 [ "$status" -ne 0 ] || fail "format-check passed an unformatted probe in a vendored copy"
 grep -qF -- "probe.md" "$scratch/output" || fail "format-check does not name probe.md in a vendored copy"
 
-# 6. A version bump of a formatter. treefmt keys its cache on the command of a formatter, and for stylua that command is
-# the wrapper, so a bump of stylua would not make treefmt format a file again. The two "versions" are the real stylua,
-# and the real stylua with another quote style. The first leaves the probe as it is, and the second rewrites it. The
-# runs use plain treefmt under mise's environment, with a private cache folder.
+# 6. A version bump of a formatter. treefmt keys its cache on the command of each formatter, so a bump of stylua must
+# make treefmt format a file again, and an unchanged stylua must find the file in the cache. The two "versions" are the
+# real stylua, and the real stylua with another quote style. treefmt runs in two ways, each with its own private cache
+# folder: under mise's environment (`mise exec`), and outside it (a bare environment with the tools on PATH). In each
+# way the test runs version 1 (it formats the probe, which stays as it is), version 1 again (the cache has the probe:
+# treefmt formats 0 files), and version 2 (it rewrites the probe).
 real_stylua=$(mise which stylua)
 mkdir -p "$scratch/stylua-1" "$scratch/stylua-2"
 printf '#!/bin/sh\nexec "%s" "$@"\n' "$real_stylua" >"$scratch/stylua-1/stylua"
 printf '#!/bin/sh\nexec "%s" --quote-style ForceSingle "$@"\n' "$real_stylua" >"$scratch/stylua-2/stylua"
 chmod +x "$scratch/stylua-1/stylua" "$scratch/stylua-2/stylua"
 
-# Runs treefmt on the bump probe with the stylua in the folder $1 first on PATH.
+# Runs treefmt on the bump probe, in the way $1 (inside or outside), with the stylua in the folder $2 first on PATH.
 run_stylua_version() {
-  if ! XDG_CACHE_HOME="$scratch/cache" mise exec -- sh -c 'PATH=$1:$PATH exec treefmt "$2"' sh "$1" "$bump" \
-    >"$scratch/output" 2>&1; then
-    fail "treefmt failed with $1: $(tail -n 5 "$scratch/output")"
+  status=0
+  if [ "$1" = inside ]; then
+    XDG_CACHE_HOME="$scratch/cache-$1" mise exec -- sh -c 'PATH=$1:$PATH exec treefmt "$2"' sh "$2" "$bump" \
+      >"$scratch/output" 2>&1 || status=$?
+  else
+    env -i HOME="${HOME:-/}" PATH="$2:$tool_path" XDG_CACHE_HOME="$scratch/cache-$1" treefmt "$bump" \
+      >"$scratch/output" 2>&1 || status=$?
   fi
+  [ "$status" -eq 0 ] || fail "treefmt failed ($1 mise, $2): $(tail -n 5 "$scratch/output")"
 }
 
-printf 'local s = "x"\n' >"$bump"
-run_stylua_version "$scratch/stylua-1"
-expect_text "$bump" 'local s = "x"\n' "the first stylua version leaves"
-run_stylua_version "$scratch/stylua-2"
-expect_text "$bump" "local s = 'x'\\n" "the second stylua version writes (treefmt used its cache after a version bump)"
+for way in inside outside; do
+  printf 'local s = "x"\n' >"$bump"
+  run_stylua_version "$way" "$scratch/stylua-1"
+  expect_text "$bump" 'local s = "x"\n' "the first stylua version leaves ($way mise)"
+  run_stylua_version "$way" "$scratch/stylua-1"
+  grep -q "formatted 0 files" "$scratch/output" ||
+    fail "treefmt did not find the probe in its cache on a second run ($way mise): $(tail -n 2 "$scratch/output")"
+  run_stylua_version "$way" "$scratch/stylua-2"
+  expect_text "$bump" "local s = 'x'\\n" \
+    "the second stylua version writes ($way mise: treefmt used its cache after a version bump)"
+done
 
 echo "test-format-check: ok"

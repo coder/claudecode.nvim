@@ -64,11 +64,6 @@ fzf = "0.73.1"
 communique = "1.1.3"
 
 [env]
-# treefmt keys its cache on the size and modification time of the command of each formatter. For stylua, prettier and
-# shfmt that command is scripts/treefmt-formatter.sh, so a version bump of a tool would not make treefmt format the
-# files again, and `mise run format` would write nothing while `mise run format-check` fails. No cache means every run
-# formats every file (about 20 s, where a warm cache takes 0.2 s).
-TREEFMT_NO_CACHE = "1"
 # Lua test rocks (busted/luacheck/luacov) live in a project-local tree that
 # `mise run setup` populates. fixtures/bin holds the nvim-config helpers
 # (vv/vve/list-configs/repro). Both go on PATH when mise is active.
@@ -150,11 +145,11 @@ run = "treefmt"
 
 [tasks.format-check]
 description = "Verify formatting without writing (used in CI)"
-# `treefmt --ci` has no dry run: with the write flags it rewrites the files it formats and then fails. FORMAT_CHECK=1
-# makes scripts/treefmt-formatter.sh run stylua, prettier and shfmt in check mode, so a failed check writes nothing to
-# the tree.
-env = { FORMAT_CHECK = "1" }
-run = "treefmt --ci"
+# `treefmt --ci` has no dry run: with the write flags it rewrites the files it formats and then fails. The folder
+# scripts/format-check-bin/ goes first on PATH, so treefmt finds check-mode stand-ins for prettier, stylua and shfmt
+# there. They run the real tools with their check flags, so a failed check writes nothing to the tree. `mise run format`
+# and a plain `treefmt` run the real tools, and treefmt's cache keys on them.
+run = 'PATH="{{config_root}}/scripts/format-check-bin:$PATH" treefmt --ci'
 
 [tasks.reviewfix]
 description = "Run reviewfixer against PR review findings (see reviewfixer.yaml)"
