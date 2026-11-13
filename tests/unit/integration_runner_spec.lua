@@ -157,10 +157,11 @@ local real_tee = assert(tee_pipe:read("*l"), "needs tee")
 tee_pipe:close()
 -- Copies its input like tee, then exits with the status in $STUB_DIR/tee.exit when that file exists, after the seconds
 -- in $STUB_DIR/tee.delay when that file exists. When $STUB_DIR/tee.hold exists, it notes in $STUB_DIR/tee.held and waits
--- for $STUB_DIR/tee.go before it starts the real tee, which opens its output file.
+-- for $STUB_DIR/tee.go before it starts the real tee, which opens its output file. The wait ends after 20 seconds at
+-- most, so a runner that never releases it fails its test and does not hang it.
 local STUB_TEE = {
   "#!/bin/sh",
-  'if [ -f "$STUB_DIR/tee.hold" ]; then : > "$STUB_DIR/tee.held"; while [ ! -e "$STUB_DIR/tee.go" ]; do sleep 0.05; done; fi',
+  'if [ -f "$STUB_DIR/tee.hold" ]; then : > "$STUB_DIR/tee.held"; for tick in $(seq 400); do [ -e "$STUB_DIR/tee.go" ] && break; sleep 0.05; done; fi',
   quote(real_tee) .. ' "$@"',
   "status=$?",
   -- After the real tee, so that the output file is opened as early as it is for the real tee.
@@ -245,18 +246,19 @@ local STUB_MV = {
 -- BASH_ENV files for the shell that execs timeout. Bash reads such a file first in each non-interactive shell, and only
 -- that shell has CLAUDECODE_MINIMAL_INIT. The first file stops the shell before its first command, as long as
 -- $STUB_DIR/a.release does not exist. The second file wraps echo, which the shell calls to write its process id: the
--- redirection of the call has made the file by then, and the wrapper stops the shell before the write.
+-- redirection of the call has made the file by then, and the wrapper stops the shell before the write. Both stop it for
+-- 20 seconds at most.
 local HOLD_START = {
   'if [ -n "${CLAUDECODE_MINIMAL_INIT:-}" ]; then',
   '  : > "$STUB_DIR/a.held"',
-  '  while [ ! -e "$STUB_DIR/a.release" ]; do sleep 0.05; done',
+  '  for tick in $(seq 400); do [ -e "$STUB_DIR/a.release" ] && break; sleep 0.05; done',
   "fi",
 }
 local HOLD_WRITE = {
   'if [ -n "${CLAUDECODE_MINIMAL_INIT:-}" ]; then',
   "  echo() {",
   '    : > "$STUB_DIR/a.held"',
-  '    while [ ! -e "$STUB_DIR/a.release" ]; do sleep 0.05; done',
+  '    for tick in $(seq 400); do [ -e "$STUB_DIR/a.release" ] && break; sleep 0.05; done',
   '    builtin echo "$@"',
   "  }",
   "fi",
@@ -273,7 +275,8 @@ rm_pipe:close()
 -- $STUB_DIR/rm.slow or $STUB_DIR/rm.hold exists: then it walks the way rm -rf does, but slowly. It lists the folders,
 -- deletes the files, waits, and only then removes the listed folders, so a file or a folder that something makes
 -- meanwhile stops the removal of its parent ("Directory not empty"), as it does for a slow rm -rf under strace. It waits
--- the seconds in rm.slow, or with rm.hold it notes in $STUB_DIR/rm.held and waits for $STUB_DIR/rm.release.
+-- the seconds in rm.slow, or with rm.hold it notes in $STUB_DIR/rm.held and waits for $STUB_DIR/rm.release, 20 seconds
+-- at most.
 local STUB_RM = {
   "#!/bin/sh",
   "for fd in /proc/$$/fd/*; do",
@@ -292,7 +295,7 @@ local STUB_RM = {
   'for path in "$@"; do find "$path" -depth -type d >> "$STUB_DIR/rm.dirs"; find "$path" -type f -delete; done 2> /dev/null',
   'if [ -f "$STUB_DIR/rm.hold" ]; then',
   '  : > "$STUB_DIR/rm.held"',
-  '  while [ ! -e "$STUB_DIR/rm.release" ]; do sleep 0.05; done',
+  '  for tick in $(seq 400); do [ -e "$STUB_DIR/rm.release" ] && break; sleep 0.05; done',
   "else",
   '  sleep "$(cat "$STUB_DIR/rm.slow")"',
   "fi",
