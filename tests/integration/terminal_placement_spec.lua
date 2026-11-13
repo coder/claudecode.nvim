@@ -913,6 +913,20 @@ describe("the terminal's placement in its own split", function()
       )
     end
 
+    it("gives nothing back, and raises no error, when an autocmd of the swap wipes the buffer", function()
+      -- A BufEnter autocmd of the terminal buffer runs in the swap, after the other buffer was left.
+      local result = run(
+        new_buffer_shape(
+          "wipe",
+          [[vim.api.nvim_create_autocmd("BufEnter", { buffer = terminal, callback = function() pcall(vim.api.nvim_buf_delete, _G.other, { force = true }) end })]]
+        )
+      )
+
+      assert.is_true(result.placed)
+      assert.equal("terminal", result.split)
+      assert.is_false(other_buffer().valid, "the autocmd must have wiped the buffer, or the test proves nothing")
+    end)
+
     it("gives the 'bufhidden' back, and raises the error, when an autocmd of the swap raises", function()
       -- The swap hides the buffer, so its BufHidden autocmd runs inside the swap.
       local ok = pcall(
