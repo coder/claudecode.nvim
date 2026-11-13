@@ -21,7 +21,7 @@ describe("a diff tab that :tabclose cannot close because of a modified buffer of
     child.call(
       [[
       local at_right = ...
-      vim.cmd((at_right and "botright vsplit " or "split ") .. _G.dir .. "/b.txt")
+      vim.cmd((at_right and "botright vsplit " or "split ") .. vim.fn.fnameescape(_G.dir .. "/b.txt"))
       vim.api.nvim_buf_set_lines(0, 0, 1, false, { "one!" })
     ]],
       modified_window_at_right or false
