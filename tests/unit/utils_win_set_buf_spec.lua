@@ -363,9 +363,11 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       show_other({ modified = true, bufhidden = "wipe" })
       state.raise_on_buffer_swap = true
 
-      assert.has_error(function()
-        utils.win_set_buf_in_split(SPLIT, TERMINAL)
-      end, "USER ERROR")
+      local ok, err = pcall(utils.win_set_buf_in_split, SPLIT, TERMINAL)
+
+      assert.is_false(ok)
+      -- The error comes through as it is, with no position of the helper in front of it.
+      assert.equal("USER ERROR", err)
       assert.same({ "BufLeave", HIDE_FIRST, SWAP, "noautocmd bufhidden 9 wipe" }, log)
     end)
 
