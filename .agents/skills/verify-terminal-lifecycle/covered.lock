@@ -116,20 +116,20 @@ site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = nil @ lo
 site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = true @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ function close_terminal()
 == lua/claudecode/terminal/owned.lua
-file lua/claudecode/terminal/owned.lua aa8edccace3eb75c
+file lua/claudecode/terminal/owned.lua a7a29f9f0cbde8eb
 block owned_job_ended        30418e22d097d6da
 block owned_is_live          23b894bb3039eb49
 block owned_find             040ba4e1a08ede20
-block owned_stop_buffer      5094ee9e7769ecb5
+block owned_stop_buffer      25ea1194de3993b5
 block owned_stop_other       3d9b8f033d0ab40c
 site lua/claudecode/terminal/owned.lua: function M.stop_other(mark, provider_name) @ function M.stop_other(mark, provider_name)
 site lua/claudecode/terminal/owned.lua: if not stop_buffer(buf, mark) then @ function M.stop_other(mark, provider_name)
-site lua/claudecode/terminal/owned.lua: if vim.fn.jobstop(vim.bo[buf].channel) == 1 then @ local function stop_buffer(buf, mark)
+site lua/claudecode/terminal/owned.lua: if vim.api.nvim_buf_is_valid(buf) and vim.fn.jobstop(channel) == 1 then @ local function stop_buffer(buf, mark)
 site lua/claudecode/terminal/owned.lua: local function stop_buffer(buf, mark) @ local function stop_buffer(buf, mark)
 site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ function M.wait_for_exec(jobid)
 site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ local function stop_buffer(buf, mark)
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua 48ab2ea5140bd44b
+file lua/claudecode/terminal/snacks.lua e485db291da18aab
 block snacks_available       4023f2a3d4a90e0e
 block snacks_events          6db7bed40172cc23
 block cc_is_visible          8790d471872e649b
@@ -147,7 +147,7 @@ block snacks_adopted_config  34dc397ccedfb0a9
 block snacks_adopt           f1b5635b51fc6ec8
 block snacks_stop_native     4eb23f341fda78b3
 block snacks_open            07270833be7691d1
-block snacks_close           b375a6342344c650
+block snacks_close           aa433d2d616b97da
 block snacks_simple_toggle   01830b5ae73c3329
 block snacks_focus_toggle    00d61258c50dd894
 block snacks_active          7c480f7b7fb7ed7d

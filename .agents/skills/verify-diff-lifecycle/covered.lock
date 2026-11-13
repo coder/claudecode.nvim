@@ -172,15 +172,15 @@ file lua/claudecode/terminal.lua 2cb4a5721335543c
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 645d40105bbcdb0c
+file lua/claudecode/terminal/native.lua 499ff3c0dccd4a1b
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/owned.lua
-file lua/claudecode/terminal/owned.lua f64571d98221176c
+file lua/claudecode/terminal/owned.lua a7a29f9f0cbde8eb
 == lua/claudecode/terminal/paste_fix.lua
 file lua/claudecode/terminal/paste_fix.lua a6b8220a9665763f
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua db7debdd7dfe1486
+file lua/claudecode/terminal/snacks.lua e485db291da18aab
 == lua/claudecode/tools/check_document_dirty.lua
 file lua/claudecode/tools/check_document_dirty.lua 8aae0e85c2f4d383
 == lua/claudecode/tools/close_all_diff_tabs.lua
