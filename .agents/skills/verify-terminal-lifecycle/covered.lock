@@ -37,7 +37,7 @@ site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks"
 site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks") @ local function get_provider()
 site lua/claudecode/terminal.lua: return get_provider().get_active_bufnr() @ function M.get_active_terminal_bufnr()
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 645d40105bbcdb0c
+file lua/claudecode/terminal/native.lua 499ff3c0dccd4a1b
 block is_last_window         ca717305ec122468
 block is_valid               d3f215f69bdc28bf
 block forget_exited          2ab5742b54f43e66
@@ -46,7 +46,7 @@ block adopt                  c89db8a9183c7aff
 block stop_snacks            3b6ad0bb3ca53456
 block start_terminal         254e75ec3b15afc6
 block open_terminal          588edf5c85e83068
-block close_terminal         60dce05b19512222
+block close_terminal         58ef17ed38295567
 block native_visible         4c17f637808c446a
 block hide_terminal          2e97ed454c3e46a0
 block show_hidden            875f91703794172d
@@ -115,21 +115,21 @@ site lua/claudecode/terminal/native.lua: vim.b[closing_bufnr][OWNED_MARK] = nil 
 site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = nil @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = true @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ function close_terminal()
-site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ function close_terminal()
 == lua/claudecode/terminal/owned.lua
-file lua/claudecode/terminal/owned.lua f64571d98221176c
+file lua/claudecode/terminal/owned.lua a7a29f9f0cbde8eb
 block owned_job_ended        30418e22d097d6da
 block owned_is_live          23b894bb3039eb49
 block owned_find             040ba4e1a08ede20
-block owned_stop_buffer      ae1288f144f32e2f
+block owned_stop_buffer      25ea1194de3993b5
 block owned_stop_other       3d9b8f033d0ab40c
 site lua/claudecode/terminal/owned.lua: function M.stop_other(mark, provider_name) @ function M.stop_other(mark, provider_name)
 site lua/claudecode/terminal/owned.lua: if not stop_buffer(buf, mark) then @ function M.stop_other(mark, provider_name)
-site lua/claudecode/terminal/owned.lua: if vim.fn.jobstop(vim.bo[buf].channel) == 1 then @ local function stop_buffer(buf, mark)
+site lua/claudecode/terminal/owned.lua: if vim.api.nvim_buf_is_valid(buf) and vim.fn.jobstop(channel) == 1 then @ local function stop_buffer(buf, mark)
 site lua/claudecode/terminal/owned.lua: local function stop_buffer(buf, mark) @ local function stop_buffer(buf, mark)
+site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ function M.wait_for_exec(jobid)
 site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ local function stop_buffer(buf, mark)
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua db7debdd7dfe1486
+file lua/claudecode/terminal/snacks.lua e485db291da18aab
 block snacks_available       4023f2a3d4a90e0e
 block snacks_events          6db7bed40172cc23
 block cc_is_visible          8790d471872e649b
@@ -146,8 +146,8 @@ block snacks_upgrade_wrapper a0f108ee3a1c5ada
 block snacks_adopted_config  34dc397ccedfb0a9
 block snacks_adopt           f1b5635b51fc6ec8
 block snacks_stop_native     4eb23f341fda78b3
-block snacks_open            28bb9590189f4a80
-block snacks_close           0b3e0103c84d8ed4
+block snacks_open            07270833be7691d1
+block snacks_close           aa433d2d616b97da
 block snacks_simple_toggle   01830b5ae73c3329
 block snacks_focus_toggle    00d61258c50dd894
 block snacks_active          7c480f7b7fb7ed7d
