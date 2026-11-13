@@ -768,6 +768,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   --- started the file's Neovim
   ---@field exit_path "mv"|"rm"|nil The runner takes an error exit, because the state folder is gone when it opens its
   --- status file, and the cleanup of that exit waits at its mv or at its rm until the signal has been sent
+  ---@field error_exit boolean|nil The runner takes an error exit, because the state folder is gone when it opens its
+  --- status file
   ---@field kill_before_rm boolean|nil The runner's rm waits half way, and the test notes whether the file's Neovim still
   --- runs then
   ---@field write_before_kill boolean|nil The cleanup waits after it moved the folder and before it kills, and the file's
@@ -825,8 +827,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if run.kill_before_rm then
       write(dir .. "/rm.hold", {})
     end
-    if run.exit_path then
+    if run.exit_path or run.error_exit then
       write(dir .. "/mkdir.drop_state", {})
+    end
+    if run.exit_path then
       write(dir .. "/" .. run.exit_path .. ".hold", {})
     end
     if run.write_before_kill then
@@ -1151,6 +1155,13 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("130", result.status, result.report)
     assert.are.equal("", result.left, result.report)
     assert.is_nil(io.open(dir .. "/alive_at_rm"), "the file's Neovim still ran while the cleanup deleted the folder")
+  end)
+
+  it("removes the grave of the cleanup of an error exit when SIGINT comes right after its mkdir made it", function()
+    local result = signal_runner("INT", { interrupt = "mkdir", interrupt_at = 3, error_exit = true })
+
+    assert.are.equal("130", result.status, result.report)
+    assert.are.equal("", result.left, "the first cleanup made a grave that the second cleanup did not know")
   end)
 
   it("stops the file and removes its folder under the old name when the rename of the folder fails", function()
