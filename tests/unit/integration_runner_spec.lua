@@ -265,9 +265,10 @@ local HOLD_WRITE = {
 local rm_pipe = assert(io.popen("command -v rm 2> /dev/null"))
 local real_rm = assert(rm_pipe:read("*l"), "needs rm")
 rm_pipe:close()
--- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. When $STUB_DIR/rm.die exists, its first
--- call deletes the files, sends SIGINT to its process group, which has the runner in it, and dies of it, as an rm does
--- that a second Ctrl-C stops. Runs the real rm and then exits with 1
+-- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. When $STUB_DIR/rm.second_sigint exists,
+-- its first call deletes the files and sends SIGINT to its process group, which has the runner in it, as a second
+-- Ctrl-C does. An rm that does not ignore SIGINT dies of it. A call that lives on notes it in $STUB_DIR/rm.survived and
+-- goes on as below. Runs the real rm and then exits with 1
 -- when $STUB_DIR/rm.fail exists, as rm does when a folder is not empty. Runs the real rm, except when
 -- $STUB_DIR/rm.slow or $STUB_DIR/rm.hold exists: then it walks the way rm -rf does, but slowly. It lists the folders,
 -- deletes the files, waits, and only then removes the listed folders, so a file or a folder that something makes
@@ -279,12 +280,11 @@ local STUB_RM = {
   '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/rm.holds_status_file" ;; esac',
   "done",
   'if [ -f "$STUB_DIR/rm.fail" ]; then ' .. quote(real_rm) .. ' "$@"; exit 1; fi',
-  'if [ -f "$STUB_DIR/rm.die" ] && [ ! -f "$STUB_DIR/rm.died" ]; then',
-  '  : > "$STUB_DIR/rm.died"',
-  "  shift",
-  '  for path in "$@"; do find "$path" -type f -delete; done 2> /dev/null',
+  'if [ -f "$STUB_DIR/rm.second_sigint" ] && [ ! -f "$STUB_DIR/rm.sent" ]; then',
+  '  : > "$STUB_DIR/rm.sent"',
+  '  (shift; for path in "$@"; do find "$path" -type f -delete; done) 2> /dev/null',
   "  kill -s INT 0",
-  "  sleep 5",
+  '  : > "$STUB_DIR/rm.survived"',
   "fi",
   'if [ ! -f "$STUB_DIR/rm.slow" ] && [ ! -f "$STUB_DIR/rm.hold" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
   "shift",
@@ -638,7 +638,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   --- sends only SIGINT
   ---@field interrupt_at integer|nil The number of the mkdir call that sends the signal, 1 by default
   ---@field rm_holds boolean|nil The runner's rm stops in the middle, as with `during_rm`, until that mkdir call ends
-  ---@field rm_dies boolean|nil The first rm of the runner deletes the files and then dies by a second SIGINT
+  ---@field second_sigint boolean|nil The first rm of the runner deletes the files and then gets a second SIGINT
   ---@field mv_fails boolean|nil The runner's mv, which renames the folder, fails
 
   ---@param signal string The signal to send
@@ -677,8 +677,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if run.during_rm or run.rm_holds then
       write(dir .. "/rm.hold", {})
     end
-    if run.rm_dies then
-      write(dir .. "/rm.die", {})
+    if run.second_sigint then
+      write(dir .. "/rm.second_sigint", {})
     end
     if run.mv_fails then
       write(dir .. "/mv.fail", {})
@@ -885,11 +885,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.is_false(result.ended)
   end)
 
-  it("removes its folder when a second SIGINT stops the rm of the first cleanup", function()
-    local result = signal_runner("INT", { rm_dies = true })
+  it("finishes its cleanup when a second SIGINT comes while its rm runs", function()
+    local result = signal_runner("INT", { second_sigint = true })
 
     assert.are.equal("130", result.status, result.report)
-    assert.are.equal("", result.left, "the second cleanup left the folder that the first cleanup renamed")
+    assert.are.equal("", result.left, "the runner left the folder that its cleanup renamed")
+    local survived = io.open(dir .. "/rm.survived")
+    assert.is_not_nil(survived, "the second SIGINT stopped the rm of the cleanup")
+    survived:close()
   end)
 
   it("stops the file and removes its folder under the old name when the rename of the folder fails", function()

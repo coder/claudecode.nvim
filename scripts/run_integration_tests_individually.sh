@@ -18,8 +18,8 @@ FILE_TIMEOUT=40s
 # uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM would run
 # on.
 # The cleanup renames the folder before it reads the process id file, so the old path is gone at once. It removes both
-# names, so a second signal that stops the first cleanup leaves nothing to the second. The shell that starts the Neovim
-# writes its process id to the file at the old path, then looks for the folder at the old path (the `bash -c` line in
+# names, because the rename can fail, and then the folder keeps the old name. The shell that starts the Neovim writes
+# its process id to the file at the old path, then looks for the folder at the old path (the `bash -c` line in
 # run_test_file). So one of them sees the other: a shell that wrote its id too late for the cleanup to read it finds no
 # folder, and starts no Neovim.
 CURRENT_WORK=""
@@ -43,9 +43,12 @@ cleanup_current_file() {
 # signal that comes while mkdir makes the folder finds the folder. The handler cleans up, then kills the runner with the
 # signal, not with `exit`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one
 # that exited 130. A cleanup that fails, such as an rm that cannot remove a folder, must not end the handler early
-# either: with set -e the runner would exit with 1 before the kill, and the calling shell would go on.
+# either: with set -e the runner would exit with 1 before the kill, and the calling shell would go on. The handler
+# ignores INT, TERM and HUP from its first line on, and so does its rm: a second Ctrl-C reaches the rm too and stops it
+# half way, and bash 3.2 (the macOS /bin/bash) then dies with 130 and leaves the renamed folder.
 # shellcheck disable=SC2329 # The traps below run it.
 die_by_signal() {
+  trap '' INT TERM HUP
   cleanup_current_file || true
   trap - EXIT INT TERM HUP
   kill -"$1" $$
