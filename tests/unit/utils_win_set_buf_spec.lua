@@ -410,8 +410,40 @@ describe("claudecode.utils.win_set_buf_in_split", function()
       assert.same({ "BufLeave", SWAP }, log)
     end)
 
-    it("leaves the options of a buffer with no change alone, whatever its 'bufhidden'", function()
-      show_other({ modified = false, bufhidden = "wipe" })
+    -- A plain swap leaves any buffer that an autocmd showed in the split, changed or not: a terminal with a running job
+    -- and a scratch buffer have no change to refuse for, and `:buffer!` would unload or wipe them.
+    for _, bufhidden in ipairs({ "unload", "delete", "wipe" }) do
+      it("hides a buffer with no change that an autocmd showed for the swap, with 'bufhidden' " .. bufhidden, function()
+        show_other({ modified = false, bufhidden = bufhidden })
+        vim.o.hidden = true
+
+        assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+        assert.same({ "BufLeave", HIDE_FIRST, SWAP, "noautocmd bufhidden 9 " .. bufhidden }, log)
+        assert.equal("hide", state.bufhidden_at_swap)
+      end)
+    end
+
+    it(
+      "hides a buffer with no change that an autocmd showed when 'hidden' is off and its 'bufhidden' is empty",
+      function()
+        show_other({ modified = false, bufhidden = "" })
+        vim.o.hidden = false
+
+        assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+        assert.same({ "BufLeave", HIDE_FIRST, SWAP, "noautocmd bufhidden 9 " }, log)
+      end
+    )
+
+    it("leaves the options of a buffer with no change that 'hidden' hides alone", function()
+      show_other({ modified = false, bufhidden = "" })
+      vim.o.hidden = true
+
+      assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+      assert.same({ "BufLeave", SWAP }, log)
+    end)
+
+    it("leaves the options of the buffer of the split with no change alone, as a plain swap does", function()
+      state.bo[OLD] = { modified = false, bufhidden = "wipe" }
       vim.o.hidden = false
 
       assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))

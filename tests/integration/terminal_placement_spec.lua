@@ -807,13 +807,13 @@ describe("the terminal's placement in its own split", function()
       ]])
     end
 
-    ---An autocmd of BufLeave shows a new, changed buffer in the split. `extra` is more Lua for the arrangement.
-    local function new_buffer_shape(bufhidden, extra)
+    ---An autocmd of BufLeave shows a new buffer in the split: a changed one, unless `create` makes another in
+    ---`_G.other`. `extra` is more Lua for the arrangement.
+    local function new_buffer_shape(bufhidden, extra, create)
       return string.format(
         [[
         local file, terminal, split = ...
-        _G.other = vim.api.nvim_create_buf(true, false)
-        vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
+        %s
         vim.bo[_G.other].bufhidden = %q
         _G.optionset = 0
         vim.api.nvim_create_autocmd("OptionSet", {
@@ -831,6 +831,11 @@ describe("the terminal's placement in its own split", function()
           end,
         })
         return {}
+      ]],
+        create
+          or [[
+        _G.other = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
       ]],
         bufhidden,
         extra or ""
@@ -907,6 +912,64 @@ describe("the terminal's placement in its own split", function()
             bufhidden = bufhidden,
             optionset = 0,
           }, other_buffer())
+          assert.is_true(result.placed)
+          assert.equal("terminal", result.split)
+        end
+      )
+    end
+
+    -- A plain swap leaves a buffer that an autocmd showed in the split, whatever it is. `:buffer!` would unload or wipe a
+    -- buffer with no change when 'hidden' is off or its 'bufhidden' is `unload`, `delete` or `wipe`: a scratch buffer
+    -- loses its text, and a terminal loses its running job.
+    for _, bufhidden in ipairs({ "", "unload", "delete", "wipe" }) do
+      it(
+        "keeps the text of a scratch buffer that an autocmd showed in the split, 'hidden' off, 'bufhidden' '"
+          .. bufhidden
+          .. "'",
+        function()
+          local result = run(new_buffer_shape(
+            bufhidden,
+            "vim.o.hidden = false",
+            [[
+              _G.other = vim.api.nvim_create_buf(false, true)
+              vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "scratch X text" })
+            ]]
+          ))
+
+          assert.same({
+            valid = true,
+            loaded = true,
+            lines = { "scratch X text" },
+            windows = 0,
+            bufhidden = bufhidden,
+            optionset = 0,
+          }, other_buffer())
+          assert.is_true(result.placed)
+          assert.equal("terminal", result.split)
+        end
+      )
+
+      it(
+        "keeps the running job of a terminal that an autocmd showed in the split, 'hidden' off, 'bufhidden' '"
+          .. bufhidden
+          .. "'",
+        function()
+          local result = run(new_buffer_shape(
+            bufhidden,
+            "vim.o.hidden = false",
+            [[
+              _G.other = vim.api.nvim_create_buf(true, false)
+              vim.api.nvim_buf_call(_G.other, function()
+                _G.job = vim.fn.termopen("sleep 3600")
+              end)
+            ]]
+          ))
+
+          local other = other_buffer()
+          assert.is_true(other.valid and other.loaded, "the terminal buffer must stay loaded")
+          assert.equal(-1, call([[return vim.fn.jobwait({ _G.job }, 0)[1] ]]), "the job of the terminal must run")
+          assert.equal(bufhidden, other.bufhidden)
+          assert.equal(0, other.optionset)
           assert.is_true(result.placed)
           assert.equal("terminal", result.split)
         end

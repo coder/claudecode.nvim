@@ -136,10 +136,11 @@ end
 ---follow a `BufLeave`, with its locks: `BufWinLeave`, `BufHidden` and `BufUnload` for a buffer that lost its last
 ---window, `BufEnter` and `BufWinEnter`. They run after the autocmds of `BufLeave` are done, also when one of those closed
 ---the other window of the buffer.
----Differences from a plain swap: no `OptionSet` event runs while the swap runs, and a change of 'eventignore' that
----an autocmd makes during it is undone afterwards. 'eventignore' holds `BufLeave` for every buffer during the swap, as
----it cannot name the old buffer, so a `++nested` `BufEnter` or `BufWinEnter` autocmd that leaves a buffer during the
----swap gets no `BufLeave`. The swap is a plain `nvim_win_set_buf`, with its redirect from an
+---Differences from a plain swap: no `OptionSet` event runs while the swap runs, a change of 'eventignore' that an
+---autocmd makes during it is undone afterwards, and a buffer that an autocmd of `BufLeave` showed in `win` gets
+---`BufWinLeave` and `BufHidden`, which a plain swap does not fire for it. 'eventignore' holds `BufLeave` for every
+---buffer during the swap, as it cannot name the old buffer, so a `++nested` `BufEnter` or `BufWinEnter` autocmd that
+---leaves a buffer during the swap gets no `BufLeave`. The swap is a plain `nvim_win_set_buf`, with its redirect from an
 ---autocmd that enters another window, when `win` is not the current window or shows `buf` already, when the helper runs
 ---inside an autocmd, when a plain swap could refuse to leave the old buffer (it is modified, not hidden and shown in
 ---no other window), and with 'winfixbuf' or in the command-line window.
@@ -162,17 +163,23 @@ function M.win_set_buf_in_split(win, buf, opts)
     return true
   end
 
+  local old = vim.api.nvim_win_get_buf(win)
   vim.cmd("doautocmd <nomodeline> BufLeave")
   -- A plain swap shows nothing for a buffer that an autocmd wiped, and raises no error. `:buffer!` would raise E86.
   if not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_buf_is_valid(buf) then
     return false
   end
-  -- A plain swap leaves a changed buffer loaded and hidden, also when an autocmd of BufLeave showed it in `win`, or closed
-  -- its other window, after the swap had decided that it can leave. `:buffer!` unloads or wipes such a buffer with its text
-  -- when its 'bufhidden' says so. So the buffer that `win` shows now is hidden for the swap, and gets its 'bufhidden' back
-  -- after it. `:noautocmd` keeps both changes from running OptionSet autocmds, as a plain swap changes no option.
+  -- A plain swap leaves a buffer loaded and hidden that an autocmd of BufLeave showed in `win`, whatever the buffer is: a
+  -- terminal with a running job, a scratch buffer with text, a changed or an unchanged file. It does the same for the
+  -- buffer that `win` showed before, when an autocmd closed its other window and it is changed. `:buffer!` unloads or wipes
+  -- such a buffer when 'hidden' is off or its 'bufhidden' says so. So the buffer that `win` shows now is hidden for the
+  -- swap, and gets its 'bufhidden' back after it. `:noautocmd` keeps both changes from running OptionSet autocmds, as a
+  -- plain swap changes no option.
   local shown = vim.api.nvim_win_get_buf(win)
-  local bufhidden = not can_abandon(shown) and vim.bo[shown].bufhidden or nil
+  local lost_by_swap = not buf_hides(shown)
+    and #vim.fn.win_findbuf(shown) == 1
+    and (shown ~= old or vim.bo[shown].modified)
+  local bufhidden = lost_by_swap and vim.bo[shown].bufhidden or nil
   -- A plain swap leaves the cursor in `win`, also when an autocmd entered another window, a window of another tab as
   -- well, and the code that called this goes on in the tab it was in.
   if vim.api.nvim_get_current_win() ~= win then
