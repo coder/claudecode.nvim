@@ -83,7 +83,7 @@ run_test_file() {
   # the folder, so that no signal finds a folder that the runner made but does not know yet. `mktemp -u` makes nothing
   # and prints a random name. mkdir fails when that name exists, and the runner then drops the name. Only a signal that
   # comes before it drops the name can make it remove a folder that it did not make.
-  local work_dir temp_output group_file state_dir config_dir status_file
+  local work_dir temp_output group_file state_dir config_dir tmp_dir status_file
   work_dir=$(mktemp -u)
   CURRENT_WORK=$work_dir
   mkdir -m 700 "$work_dir" || {
@@ -94,8 +94,9 @@ run_test_file() {
   group_file=$work_dir/group
   state_dir=$work_dir/state
   config_dir=$work_dir/config
+  tmp_dir=$work_dir/tmp
   status_file=$state_dir/exit_statuses
-  mkdir -m 700 "$state_dir" "$config_dir"
+  mkdir -m 700 "$state_dir" "$config_dir" "$tmp_dir"
   CURRENT_FILE_RUNS=1
   exec 9>"$status_file"
 
@@ -107,6 +108,8 @@ run_test_file() {
   # State and config folders in temp folders keep a run out of ~/.local/state/nvim (ShaDa, log, swap files) and out of
   # the developer's ftplugin and after files. plenary lives under XDG_DATA_HOME, which stays. Both Neovims share the
   # folders, so the one started here takes -i NONE: two ShaDa writers made the first fail with E886 after a timeout.
+  # TMPDIR and XDG_RUNTIME_DIR name the temp folder in the work folder: a Neovim that the cleanup kills does not remove
+  # its socket folder, and the folder goes away with the work folder instead of staying in the developer's TMPDIR.
   # The file runs in the background and the runner waits for it: `wait` ends at once when the INT trap runs. The
   # subshell has no pipefail, because with it bash prints a job report ("Killed", two lines) when the cleanup above
   # kills `timeout`. It writes the exit statuses of nvim and of `tee` to a file in the state folder, so that the reason
@@ -121,7 +124,7 @@ run_test_file() {
     set +e
     VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
       CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
-      XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
+      XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" TMPDIR="$tmp_dir" XDG_RUNTIME_DIR="$tmp_dir" \
       bash -c 'echo $$ 2> /dev/null > "$1" && [ -d "$2" ] || exit 1; shift 2; exec timeout -k 5s "$@"' \
       _ "$group_file" "$work_dir" "$FILE_TIMEOUT" \
       nvim --headless -i NONE -u tests/minimal_init.lua \
