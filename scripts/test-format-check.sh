@@ -18,7 +18,7 @@
 # (the real one with another quote style) and runs treefmt with a private cache folder. In a checkout whose path holds
 # a `"`, a `$HOME` or a backtick, the check must still write nothing and fail on an unformatted file. In a checkout
 # whose path holds a colon, which splits the PATH entry of the stand-ins, the check must stop with exit 2 and write
-# nothing.
+# nothing, and so it must in a checkout that lacks the stand-in of one tool.
 # A second run of the test in the same checkout stops with exit 2 at once, because the probes exist. The check runs on
 # the whole tree, so the test needs a formatted tree: its third run expects exit 0.
 # Usage: scripts/test-format-check.sh
@@ -229,7 +229,18 @@ done
 # backtick changes the folder name, so treefmt finds no stand-in and runs the real tools, which write. A colon splits
 # the PATH entry in the same way, so the task must stop with exit 2 before treefmt runs. Each checkout is a small copy
 # (the task, the tool settings and the stand-ins) with one Markdown probe. mise trusts it through a private state
-# folder, because MISE_TRUSTED_CONFIG_PATHS cannot hold a colon.
+# folder, because MISE_TRUSTED_CONFIG_PATHS cannot hold a colon. Then a copy without the stand-in of one tool: the task
+# must stop with exit 2 and name that tool, so a missing symlink cannot let the real tool write.
+
+# Makes the folder $1: a small copy of the checkout that mise trusts.
+make_copy() {
+  mkdir -p "$1/scripts"
+  cp mise.toml mise.lock treefmt.toml .stylua.toml "$1/"
+  cp -R scripts/format-check-bin "$1/scripts/format-check-bin"
+  (cd "$1" && MISE_STATE_DIR="$scratch/mise-state" mise trust "$1/mise.toml") >"$scratch/output" 2>&1 ||
+    fail "mise did not trust the copy in $1: $(tail -n 3 "$scratch/output")"
+}
+
 copy_hashes() {
   (cd "$1" && find . -type f | LC_ALL=C sort | while IFS= read -r file; do
     printf '%s ' "$file"
@@ -245,11 +256,7 @@ run_in_copy() {
 
 for name in 'q"uote' 'd$HOME' 'b`true`b' 'c:olon'; do
   copy=$scratch/paths/$name
-  mkdir -p "$copy/scripts"
-  cp mise.toml mise.lock treefmt.toml .stylua.toml "$copy/"
-  cp -R scripts/format-check-bin "$copy/scripts/format-check-bin"
-  (cd "$copy" && MISE_STATE_DIR="$scratch/mise-state" mise trust "$copy/mise.toml") >"$scratch/output" 2>&1 ||
-    fail "mise did not trust the copy in $copy: $(tail -n 3 "$scratch/output")"
+  make_copy "$copy"
 
   printf '%b' "$formatted_md" >"$copy/probe.md"
   run_in_copy "$copy"
@@ -275,6 +282,17 @@ for name in 'q"uote' 'd$HOME' 'b`true`b' 'c:olon'; do
       fail "format-check exited $status on an unformatted probe in $copy (expected 1): $(tail -n 3 "$scratch/output")"
     expect_named probe.md
   fi
+done
+
+for tool in prettier stylua shfmt; do
+  copy=$scratch/paths/no-$tool
+  make_copy "$copy"
+  rm -- "$copy/scripts/format-check-bin/$tool"
+  printf '%b' "$formatted_md" >"$copy/probe.md"
+  run_in_copy "$copy"
+  [ "$status" -eq 2 ] || fail "format-check exited $status in a copy without the stand-in of $tool (expected 2)"
+  grep -qF "$tool does not resolve to the stand-in" "$scratch/output" ||
+    fail "format-check does not name $tool in a copy without its stand-in: $(tail -n 3 "$scratch/output")"
 done
 
 echo "test-format-check: ok"
