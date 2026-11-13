@@ -702,6 +702,10 @@ local vim = {
       return "/home/user/project"
     end,
 
+    resolve = function(path)
+      return path
+    end,
+
     simplify = function(path)
       return path
     end,

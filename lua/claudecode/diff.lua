@@ -1076,12 +1076,61 @@ local function hide_terminal_float_for_diff(diff_win)
   end
 end
 
+---Tab names whose setup has started but has not registered its diff yet. A user handler that runs the event loop inside
+---a setup lets a second openDiff for the same tab name start before that. The table lives in `_G`: a plugin reload
+---inside the setup gives the new module a fresh local, which would not see the running setup.
+local SETUPS_IN_FLIGHT = "claudecode_diff_setups_in_flight"
+_G[SETUPS_IN_FLIGHT] = _G[SETUPS_IN_FLIGHT] or {}
+local setups_in_flight = _G[SETUPS_IN_FLIGHT]
+
+---Free the buffer names that a diff of `tab_name` for `old_file_path` is about to take, and unbind `tab_name` from every
+---buffer that no active diff owns. Such buffers are left by a reload, which drops `active_diffs`, or by a setup that
+---failed in the command-line window. They keep their windows and text, but not their tab name, so that
+---`:ClaudeCodeDiffAccept` in their windows cannot resolve a new diff.
+---Neovim stores a name with the symlinks of its folder resolved, so both spellings count.
+---@param tab_name string
+---@param old_file_path string
+local function rename_orphaned_diff_buffers(tab_name, old_file_path)
+  local owned = {}
+  for _, diff_data in pairs(active_diffs) do
+    if diff_data.new_buffer then
+      owned[diff_data.new_buffer] = true
+    end
+    if diff_data.original_buffer then
+      owned[diff_data.original_buffer] = true
+    end
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if not owned[buf] and vim.b[buf].claudecode_diff_tab_name == tab_name then
+      vim.b[buf].claudecode_diff_tab_name = nil
+    end
+  end
+  local orphan_names = {
+    { name = tab_name .. " (proposed)", buftype = "acwrite" },
+    { name = tab_name .. " (NEW FILE - proposed)", buftype = "acwrite" },
+    { name = tab_name .. " (unified diff)", buftype = "acwrite" },
+    { name = old_file_path .. " (NEW FILE)", buftype = "nofile" },
+  }
+  for _, orphan in ipairs(orphan_names) do
+    local full = vim.fn.fnamemodify(orphan.name, ":p")
+    local folder = vim.fn.resolve(vim.fn.fnamemodify(full, ":h"))
+    local stored = { [full] = true, [folder .. "/" .. vim.fn.fnamemodify(full, ":t")] = true }
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      local name = vim.api.nvim_buf_get_name(buf)
+      if not owned[buf] and stored[name] and vim.bo[buf].buftype == orphan.buftype and not vim.bo[buf].buflisted then
+        pcall(vim.api.nvim_buf_set_name, buf, name .. " (orphaned " .. buf .. ")")
+      end
+    end
+  end
+end
+
 local diffs_registered = 0
 
 ---Register diff state for tracking
 ---@param tab_name string Unique identifier for the diff
 ---@param diff_data table Diff state data
 function M._register_diff_state(tab_name, diff_data)
+  setups_in_flight[tab_name] = nil
   diffs_registered = diffs_registered + 1
   diff_data.open_order = diffs_registered
   active_diffs[tab_name] = diff_data
@@ -1669,6 +1718,14 @@ function M._setup_blocking_diff(params, resolution_callback)
   local tab_name = params.tab_name
   logger.debug("diff", "Setting up diff for:", params.old_file_path)
 
+  if setups_in_flight[tab_name] then
+    error({
+      code = -32000,
+      message = "Diff tab in use",
+      data = "tab_name " .. tab_name .. " is being set up by another openDiff",
+    })
+  end
+
   -- Hoisted so the error handler can clean them up if setup fails before the diff state is
   -- registered: otherwise the terminal-only fallback split and the proposed buffer are stranded
   -- (the state-based cleanup is gated on a registered diff). Issue #231.
@@ -1681,6 +1738,8 @@ function M._setup_blocking_diff(params, resolution_callback)
   -- we came from, to refocus) so the error handler can close it and switch back. Issue #262.
   local new_tab_handle = nil
   local original_tab_handle = nil
+
+  setups_in_flight[tab_name] = true
 
   -- Wrap the setup in error handling to ensure cleanup on failure
   local setup_success, setup_error = pcall(function()
@@ -1697,6 +1756,8 @@ function M._setup_blocking_diff(params, resolution_callback)
         })
       end
     end
+
+    rename_orphaned_diff_buffers(tab_name, params.old_file_path)
 
     -- Dispatch to unified diff if configured
     if config and config.diff_opts and config.diff_opts.layout == "unified" then
@@ -1929,6 +1990,7 @@ function M._setup_blocking_diff(params, resolution_callback)
       tab_number = created_new_tab and new_tab_handle or nil,
     })
   end) -- End of pcall
+  setups_in_flight[tab_name] = nil
 
   -- Handle setup errors
   if not setup_success then
