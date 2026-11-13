@@ -13,15 +13,26 @@ end
 -- child shares with Neovim, so Neovim reads a SIGHUP of its own and exits ("Caught deadly signal 'SIGHUP'").
 -- Closing a job soon after termopen (a spec's after_each, or the quit that ends the file) can hit it, and under host
 -- load a spec died that way. So termopen returns only once its child has run exec, and the child then has no
--- handler of Neovim's. This needs /proc (Linux). Without it the window stays open.
+-- handler of Neovim's. Until exec the child's executable and its command line are Neovim's own. A program that is
+-- Neovim again still has another command line. This needs /proc (Linux). Without it the window stays open.
+local function read_proc(pid, name)
+  local file = io.open("/proc/" .. pid .. "/" .. name, "rb")
+  local text = file and file:read("*a")
+  if file then
+    file:close()
+  end
+  return text
+end
+
 local self_exe = vim.loop.fs_readlink("/proc/self/exe")
+local self_cmdline = read_proc("self", "cmdline")
 local real_termopen = vim.fn.termopen
 vim.fn.termopen = function(...)
   local job = real_termopen(...)
   local ok, pid = pcall(vim.fn.jobpid, job)
-  if self_exe and ok then
+  if self_exe and self_cmdline and ok then
     local deadline = vim.loop.hrtime() + 10e9
-    while vim.loop.fs_readlink("/proc/" .. pid .. "/exe") == self_exe do
+    while vim.loop.fs_readlink("/proc/" .. pid .. "/exe") == self_exe and read_proc(pid, "cmdline") == self_cmdline do
       assert(vim.loop.hrtime() < deadline, "the terminal job's child did not run exec within 10 s")
       vim.loop.sleep(1)
     end
