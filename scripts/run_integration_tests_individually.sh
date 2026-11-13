@@ -17,26 +17,29 @@ FILE_TIMEOUT=40s
 # state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs yet. It
 # uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM would run
 # on.
-# The cleanup renames the folder before it reads the process id file, so the old path is gone at once. It removes both
-# names, because the rename can fail, and then the folder keeps the old name. The shell that starts the Neovim writes
-# its process id to the file at the old path, then looks for the folder at the old path (the `bash -c` line in
-# run_test_file). So one of them sees the other: a shell that wrote its id too late for the cleanup to read it finds no
-# folder, and starts no Neovim.
+# The cleanup moves the folder into a new folder next to it, the grave, before it reads the process id file, so the old
+# path is gone at once. The grave comes from `mktemp -d`, so a name that exists already, as a folder of the user, is not
+# the target of the move. When the grave or the move fails, the folder keeps its old name, and the cleanup works there.
+# The shell that starts the Neovim writes its process id to the file at the old path, then looks for the folder at the
+# old path (the `bash -c` line in run_test_file). So one of them sees the other: a shell that wrote its id too late for
+# the cleanup to read it finds no folder, and starts no Neovim.
 CURRENT_WORK=""
 CURRENT_FILE_RUNS=""
 # shellcheck disable=SC2329 # The traps below run it.
 cleanup_current_file() {
-  local group timeout_pid
+  local grave moved timeout_pid
   [[ -n $CURRENT_WORK ]] || return 0
-  mv "$CURRENT_WORK" "$CURRENT_WORK.gone" 2>/dev/null || true
-  group=$CURRENT_WORK.gone/group
-  [[ -s $group ]] || group=$CURRENT_WORK/group
-  if [[ -n $CURRENT_FILE_RUNS && -s $group ]]; then
-    timeout_pid=$(cat "$group")
+  moved=$CURRENT_WORK
+  grave=$(mktemp -d "$CURRENT_WORK.XXXXXX" 2>/dev/null) || grave=""
+  if [[ -n $grave ]] && mv "$CURRENT_WORK" "$grave/work" 2>/dev/null; then
+    moved=$grave/work
+  fi
+  if [[ -n $CURRENT_FILE_RUNS && -s $moved/group ]]; then
+    timeout_pid=$(cat "$moved/group")
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  rm -rf "$CURRENT_WORK.gone" "$CURRENT_WORK"
+  rm -rf "$moved" ${grave:+"$grave"}
 }
 # A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
 # `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a
@@ -90,6 +93,12 @@ run_test_file() {
   # comes before it drops the name can make it remove a folder that it did not make.
   local work_dir temp_output group_file state_dir config_dir tmp_dir status_file
   work_dir=$(mktemp -u)
+  # A Neovim binds its socket at $work_dir/tmp/nvim.<pid>.<n>, which is at most 20 characters more than the work folder.
+  # A socket path over 107 bytes is cut by libuv, and the cut name can be a file in the developer's TMPDIR, outside the
+  # work folder. So a work folder with a name over 80 characters goes to /tmp, where its name is short.
+  if [[ ${#work_dir} -gt 80 && -d /tmp && -w /tmp ]]; then
+    work_dir=$(mktemp -u /tmp/tmp.XXXXXXXXXX)
+  fi
   CURRENT_WORK=$work_dir
   mkdir -m 700 "$work_dir" || {
     CURRENT_WORK=""
