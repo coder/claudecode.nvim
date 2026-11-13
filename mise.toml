@@ -149,7 +149,22 @@ description = "Verify formatting without writing (used in CI)"
 # scripts/format-check-bin/ goes first on PATH, so treefmt finds check-mode stand-ins for prettier, stylua and shfmt
 # there. They run the real tools with their check flags, so a failed check writes nothing to the tree. `mise run format`
 # and a plain `treefmt` run the real tools, and treefmt's cache keys on them.
-run = 'PATH="{{config_root}}/scripts/format-check-bin:$PATH" treefmt --ci'
+# The script reads the path of the checkout from $MISE_CONFIG_ROOT, not from a template: a template pastes the path into
+# the shell text, and a quote, `$` or backtick in the path then changes what the shell runs. A colon splits the PATH
+# entry, so the loop checks that each tool resolves to the stand-in before treefmt runs, and the check stops with exit
+# 2 when one does not: treefmt would run the real tool, and the real tool writes.
+run = '''
+stand_ins="$MISE_CONFIG_ROOT/scripts/format-check-bin"
+PATH="$stand_ins:$PATH"
+for tool in prettier stylua shfmt; do
+  if ! [ "$(command -v "$tool")" -ef "$stand_ins/check-mode.sh" ]; then
+    echo "format-check: $tool does not resolve to the stand-in in $stand_ins, so treefmt would run the real $tool" \
+      "and write files. A colon in the path of the checkout does this." >&2
+    exit 2
+  fi
+done
+exec treefmt --ci
+'''
 
 [tasks.reviewfix]
 description = "Run reviewfixer against PR review findings (see reviewfixer.yaml)"

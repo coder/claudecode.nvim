@@ -15,7 +15,10 @@
 # unformatted one, so treefmt must take the vendored folder as its tree root. After a version bump of a formatter,
 # treefmt must format a file again, with its cache on, under mise's environment and outside it, and a second run with
 # the same version must find the file in the cache (it formats 0 files): the test swaps in a second "version" of stylua
-# (the real one with another quote style) and runs treefmt with a private cache folder.
+# (the real one with another quote style) and runs treefmt with a private cache folder. In a checkout whose path holds
+# a `"`, a `$HOME` or a backtick, the check must still write nothing and fail on an unformatted file. In a checkout
+# whose path holds a colon, which splits the PATH entry of the stand-ins, the check must stop with exit 2 and write
+# nothing.
 # A second run of the test in the same checkout stops with exit 2 at once, because the probes exist. The check runs on
 # the whole tree, so the test needs a formatted tree: its third run expects exit 0.
 # Usage: scripts/test-format-check.sh
@@ -219,6 +222,59 @@ for way in inside outside; do
   run_stylua_version "$way" "$scratch/stylua-2"
   expect_text "$bump" "local s = 'x'\\n" \
     "the second stylua version writes ($way mise: treefmt used its cache after a version bump)"
+done
+
+# 7. Checkouts with an odd path. The task reads the path of the checkout from $MISE_CONFIG_ROOT. A template
+# (`{{config_root}}`) pastes the path into the shell text instead: a quote then makes a syntax error, and `$HOME` or a
+# backtick changes the folder name, so treefmt finds no stand-in and runs the real tools, which write. A colon splits
+# the PATH entry in the same way, so the task must stop with exit 2 before treefmt runs. Each checkout is a small copy
+# (the task, the tool settings and the stand-ins) with one Markdown probe. mise trusts it through a private state
+# folder, because MISE_TRUSTED_CONFIG_PATHS cannot hold a colon.
+copy_hashes() {
+  (cd "$1" && find . -type f | LC_ALL=C sort | while IFS= read -r file; do
+    printf '%s ' "$file"
+    cksum <"$file"
+  done)
+}
+
+# Runs the check in the folder $1. Sets `status`, and leaves the output in "$scratch/output".
+run_in_copy() {
+  status=0
+  (cd "$1" && MISE_STATE_DIR="$scratch/mise-state" mise run format-check) >"$scratch/output" 2>&1 || status=$?
+}
+
+for name in 'q"uote' 'd$HOME' 'b`true`b' 'c:olon'; do
+  copy=$scratch/paths/$name
+  mkdir -p "$copy/scripts"
+  cp mise.toml mise.lock treefmt.toml .stylua.toml "$copy/"
+  cp -R scripts/format-check-bin "$copy/scripts/format-check-bin"
+  (cd "$copy" && MISE_STATE_DIR="$scratch/mise-state" mise trust "$copy/mise.toml") >"$scratch/output" 2>&1 ||
+    fail "mise did not trust the copy in $copy: $(tail -n 3 "$scratch/output")"
+
+  printf '%b' "$formatted_md" >"$copy/probe.md"
+  run_in_copy "$copy"
+  if [ "$name" = 'c:olon' ]; then
+    [ "$status" -eq 2 ] || fail "format-check exited $status on a formatted probe in $copy (expected 2)"
+  else
+    [ "$status" -eq 0 ] ||
+      fail "format-check exited $status on a formatted probe in $copy: $(tail -n 3 "$scratch/output")"
+  fi
+
+  printf '%b' "$unformatted_md" >"$copy/probe.md"
+  copy_hashes "$copy" >"$scratch/copy-before"
+  run_in_copy "$copy"
+  copy_hashes "$copy" >"$scratch/copy-after"
+  cmp -s "$scratch/copy-before" "$scratch/copy-after" ||
+    fail "format-check changed the files in $copy: $(diff "$scratch/copy-before" "$scratch/copy-after" | head -n 4)"
+  if [ "$name" = 'c:olon' ]; then
+    [ "$status" -eq 2 ] || fail "format-check exited $status on an unformatted probe in $copy (expected 2)"
+    grep -qF "does not resolve to the stand-in" "$scratch/output" ||
+      fail "format-check does not say that the stand-ins are missing in $copy: $(tail -n 3 "$scratch/output")"
+  else
+    [ "$status" -eq 1 ] ||
+      fail "format-check exited $status on an unformatted probe in $copy (expected 1): $(tail -n 3 "$scratch/output")"
+    expect_named probe.md
+  fi
 done
 
 echo "test-format-check: ok"

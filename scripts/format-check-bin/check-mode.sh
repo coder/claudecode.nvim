@@ -13,7 +13,8 @@ set -euo pipefail
 
 tool=$(basename -- "$0")
 if [ -n "${FORMAT_CHECK_STAND_IN:-}" ]; then
-  echo "format-check: $tool found this stand-in again, so no real $tool is on PATH" >&2
+  echo "format-check: $tool found this stand-in again, so no real $tool is on PATH, or FORMAT_CHECK_STAND_IN is set" \
+    "in the environment (unset it)" >&2
   exit 2
 fi
 export FORMAT_CHECK_STAND_IN=1
