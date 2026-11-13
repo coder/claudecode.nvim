@@ -12,19 +12,15 @@ describe(".github/workflows/test.yml cache settings", function()
 
   ---Every step is a `- ` item at six spaces. A step ends at the next step or at a line with less indent, and a comment
   ---line is not part of it.
+  ---@param next_line fun(): string|nil an iterator over the lines of a workflow
   ---@return string[][] steps the lines of each step
-  ---@return string[] lines every line of the file that is not a comment line. A trailing comment stays: a ` #` can sit
+  ---@return string[] lines every line of the text that is not a comment line. A trailing comment stays: a ` #` can sit
   ---inside a quoted value, so cutting there could hide a name in a flow-style step.
-  local function read_workflow()
-    local path = root .. "/.github/workflows/test.yml"
-    local file = assert(
-      io.open(path, "r"),
-      "cannot read " .. path .. " (a `git archive` tree has no .github folder: .gitattributes export-ignores it)"
-    )
+  local function parse_workflow(next_line)
     local found = {}
     local code = {}
     local current
-    for line in file:lines() do
+    for line in next_line do
       if not line:match("^%s*#") then
         table.insert(code, line)
       end
@@ -38,6 +34,18 @@ describe(".github/workflows/test.yml cache settings", function()
         table.insert(current, line)
       end
     end
+    return found, code
+  end
+
+  ---@return string[][] steps
+  ---@return string[] lines
+  local function read_workflow()
+    local path = root .. "/.github/workflows/test.yml"
+    local file = assert(
+      io.open(path, "r"),
+      "cannot read " .. path .. " (a `git archive` tree has no .github folder: .gitattributes export-ignores it)"
+    )
+    local found, code = parse_workflow(file:lines())
     file:close()
     assert(#found > 0, "no steps found in " .. path)
     return found, code
@@ -79,7 +87,8 @@ describe(".github/workflows/test.yml cache settings", function()
           break
         end
       end
-      -- Any line at the step-key indent opens a new block, even when no pattern reads its key (`env :`).
+      -- Any non-blank line at the step-key indent opens a new block, even when no pattern reads its key (`env :`). A
+      -- line of spaces only does not.
       if indent == 8 and line:match("%S") then
         current = name
       end
@@ -131,6 +140,68 @@ describe(".github/workflows/test.yml cache settings", function()
 
   before_each(function()
     steps, lines = read_workflow()
+  end)
+
+  describe("the reader", function()
+    ---@param text string
+    ---@return fun(): string|nil next_line
+    local function split_lines(text)
+      local rows = {}
+      for row in (text .. "\n"):gmatch("(.-)\n") do
+        table.insert(rows, row)
+      end
+      local index = 0
+      return function()
+        index = index + 1
+        return rows[index]
+      end
+    end
+
+    ---@param ... string the lines of the keys that follow `with:` in a `jdx/mise-action` step
+    ---@return string[] step
+    local function mise_step(...)
+      local text = table.concat({
+        "      - name: Set up more mise tools",
+        "        uses: jdx/mise-action@1648a7812b9aeae629881980618f079932869151",
+        "        with:",
+        "          install_args: --locked",
+        table.concat({ ... }, "\n"),
+      }, "\n")
+      return (parse_workflow(split_lines(text)))[1]
+    end
+
+    it("ends the with: block at a step key that no key pattern reads", function()
+      for _, env in ipairs({ "env :", '"env" :' }) do
+        local step = mise_step("        " .. env, "          cache: false")
+        assert.are.equal("--locked", field(step, "install_args", "with"))
+        assert.is_nil(field(step, "cache", "with"), "cache: false sits under " .. env .. ", not under with:")
+      end
+    end)
+
+    it("keeps the with: block open over a line of spaces", function()
+      local step = mise_step("        ", "          cache: false")
+      assert.are.equal("false", field(step, "cache", "with"))
+    end)
+
+    it("does not read a key with a quote on one side only", function()
+      local step = mise_step(
+        "          cache_save\": ${{ github.event_name == 'push' }}",
+        "          cache': false",
+        '          "cache_key: a',
+        "          cache_key': b"
+      )
+      assert.is_nil(field(step, "cache_save", "with"))
+      assert.is_nil(field(step, "cache", "with"))
+      assert.is_nil(field(step, "cache_key", "with"))
+    end)
+
+    it("reads a bare key and a key in a matching pair of quotes", function()
+      local step = mise_step("          cache_key: bare", '          "cache_save": double', "          'cache': single")
+      assert.are.equal("bare", field(step, "cache_key", "with"))
+      assert.are.equal("double", field(step, "cache_save", "with"))
+      assert.are.equal("single", field(step, "cache", "with"))
+      assert.are.equal("jdx/mise-action@1648a7812b9aeae629881980618f079932869151", field(step, "uses"))
+    end)
   end)
 
   describe("the workflow text", function()
