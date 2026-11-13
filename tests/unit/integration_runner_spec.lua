@@ -181,15 +181,25 @@ local real_mkdir = assert(mkdir_pipe:read("*l"), "needs mkdir")
 mkdir_pipe:close()
 -- Runs the real mkdir. When $STUB_DIR/mkdir.drop_state exists, it then removes each folder named state that it made, so
 -- that the folder does not exist when the runner opens the status file in it. When $STUB_DIR/mkdir.interrupt exists,
--- its first call sends SIGINT to its process group, which has the runner in it, after the real mkdir ran.
+-- its first call sends the signal named in that file. SIGINT goes to its process group, which has the runner in it,
+-- after the real mkdir ran. Any other signal goes to the runner alone, before the real mkdir runs, and the stub then
+-- waits up to 3 seconds for the runner to end, so a runner that dies at once is gone before the folder exists.
 local STUB_MKDIR = {
   "#!/bin/sh",
+  "sig=",
+  'if [ -f "$STUB_DIR/mkdir.interrupt" ] && [ ! -f "$STUB_DIR/mkdir.interrupted" ]; then',
+  '  : > "$STUB_DIR/mkdir.interrupted"',
+  '  sig=$(cat "$STUB_DIR/mkdir.interrupt")',
+  '  if [ "$sig" != INT ]; then',
+  '    kill -s "$sig" "$PPID"',
+  '    for _ in $(seq 60); do kill -0 "$PPID" 2> /dev/null || break; sleep 0.05; done',
+  "  fi",
+  "fi",
   quote(real_mkdir) .. ' "$@" || exit $?',
   'if [ -f "$STUB_DIR/mkdir.drop_state" ]; then',
   '  for path in "$@"; do case "$path" in */state) rmdir "$path" ;; esac; done',
   "fi",
-  'if [ -f "$STUB_DIR/mkdir.interrupt" ] && [ ! -f "$STUB_DIR/mkdir.interrupted" ]; then',
-  '  : > "$STUB_DIR/mkdir.interrupted"',
+  'if [ "$sig" = INT ]; then',
   '  trap "" INT',
   "  kill -s INT 0",
   "fi",
@@ -207,23 +217,27 @@ local HOLD_SHELL = {
 local rm_pipe = assert(io.popen("command -v rm 2> /dev/null"))
 local real_rm = assert(rm_pipe:read("*l"), "needs rm")
 rm_pipe:close()
--- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Notes in $STUB_DIR/rm.held and waits for
--- $STUB_DIR/rm.release when $STUB_DIR/rm.hold exists. Runs the real rm and then exits with 1
+-- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Runs the real rm and then exits with 1
 -- when $STUB_DIR/rm.fail exists, as rm does when a folder is not empty. Runs the real rm, except when
--- $STUB_DIR/rm.slow exists: then it walks the way rm -rf does, but slowly. It deletes the
--- files, waits the seconds in that file, and only then removes the folders, so a file that something makes meanwhile in
--- a folder stops the removal of the folder ("Directory not empty"), as it does for a slow rm -rf under strace.
+-- $STUB_DIR/rm.slow or $STUB_DIR/rm.hold exists: then it walks the way rm -rf does, but slowly. It deletes the
+-- files, waits, and only then removes the folders, so a file that something makes meanwhile in a folder stops the
+-- removal of the folder ("Directory not empty"), as it does for a slow rm -rf under strace. It waits the seconds in
+-- rm.slow, or with rm.hold it notes in $STUB_DIR/rm.held and waits for $STUB_DIR/rm.release.
 local STUB_RM = {
   "#!/bin/sh",
   "for fd in /proc/$$/fd/*; do",
   '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/rm.holds_status_file" ;; esac',
   "done",
-  'if [ -f "$STUB_DIR/rm.hold" ]; then : > "$STUB_DIR/rm.held"; while [ ! -e "$STUB_DIR/rm.release" ]; do sleep 0.05; done; fi',
   'if [ -f "$STUB_DIR/rm.fail" ]; then ' .. quote(real_rm) .. ' "$@"; exit 1; fi',
-  'if [ ! -f "$STUB_DIR/rm.slow" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
+  'if [ ! -f "$STUB_DIR/rm.slow" ] && [ ! -f "$STUB_DIR/rm.hold" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
   "shift",
   'for path in "$@"; do find "$path" -type f -delete; done',
-  'sleep "$(cat "$STUB_DIR/rm.slow")"',
+  'if [ -f "$STUB_DIR/rm.hold" ]; then',
+  '  : > "$STUB_DIR/rm.held"',
+  '  while [ ! -e "$STUB_DIR/rm.release" ]; do sleep 0.05; done',
+  "else",
+  '  sleep "$(cat "$STUB_DIR/rm.slow")"',
+  "fi",
   'for path in "$@"; do find "$path" -depth -type d -exec rmdir {} +; done',
 }
 
@@ -550,8 +564,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field rm_fails boolean|nil The runner's rm removes what it is told to and then exits with 1
   ---@field hold boolean|nil Send the signal while the shell that execs timeout waits before its first command, and let it
   --- go after the runner is gone
-  ---@field hold_cleanup boolean|nil With `hold`, let the shell go while the runner's rm waits, with the folder still there
-  ---@field interrupt "mktemp"|"mkdir"|nil The first call of that command sends SIGINT itself, and `signal` goes unused
+  ---@field hold_cleanup boolean|nil With `hold`, let the shell go while the runner's rm waits, after it deleted the files
+  --- and before it removed the folders
+  ---@field interrupt "mktemp"|"mkdir"|nil The first call of that command sends the signal itself, and nothing else does.
+  --- A mktemp sends only SIGINT
 
   ---@param signal string The signal to send
   ---@param run SignalRun
@@ -586,7 +602,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       write(dir .. "/rm.hold", {})
     end
     if run.interrupt then
-      write(dir .. "/" .. run.interrupt .. ".interrupt", {})
+      write(dir .. "/" .. run.interrupt .. ".interrupt", { signal })
     end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
@@ -624,7 +640,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       .. job
       .. " & pid=$!; "
       .. send
-      .. "wait $pid; echo status=$?; "
+      .. "wait $pid 2> /dev/null; echo status=$?; "
       .. (run.hold and not run.hold_cleanup and ": > " .. quote(dir .. "/a.release") .. "; " or "")
       .. "sleep 3"
     local pipe = assert(io.popen("bash -c " .. quote(inner)))
@@ -790,6 +806,17 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end)
   end
 
+  for _, case in ipairs({ { "SIGTERM", "TERM", "143" }, { "SIGHUP", "HUP", "129" } }) do
+    local name, signal, expected_status = case[1], case[2], case[3]
+    it("removes its temp folder when " .. name .. " comes while mkdir makes it", function()
+      local result = signal_runner(signal, { interrupt = "mkdir" })
+
+      assert.are.equal(expected_status, result.status, result.report)
+      assert.are.equal("", result.left, "mkdir made the folder after the runner had cleaned up")
+      assert.is_nil(io.open(dir .. "/ran"), "the file's Neovim started after the runner died")
+    end)
+  end
+
   for _, case in ipairs({ { "SIGTERM", "TERM", "143" }, { "SIGINT", "INT", "130" } }) do
     local name, signal, expected_status = case[1], case[2], case[3]
     it("starts no Neovim when " .. name .. " comes before the shell of the file wrote its process id", function()
@@ -801,7 +828,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end)
   end
 
-  it("starts no Neovim when SIGINT comes while the cleanup runs, after it looked for the process id", function()
+  it("starts no Neovim when SIGINT comes while its rm has deleted the files and not yet the folders", function()
     local result = signal_runner("INT", { hold = true, hold_cleanup = true })
 
     assert.are.equal("130", result.status, result.report)

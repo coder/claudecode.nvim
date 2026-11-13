@@ -16,34 +16,43 @@ FILE_TIMEOUT=40s
 # cleanup stops the file's Neovims before it removes the folder, because one that ends later writes ShaDa and makes its
 # state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs yet. It
 # uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM would run
-# on. SIGTERM and SIGHUP kill bash, which runs the EXIT trap first.
-# The cleanup makes `cancel` in the folder before it reads the process id file, and the shell that starts the Neovim
-# writes its process id to that file before it looks for `cancel` and for the folder (see below). So one of them sees
-# the other: a shell that wrote its id too late for the cleanup finds `cancel` or no folder, and starts no Neovim.
+# on.
+# The cleanup renames the folder before it reads the process id file, so the old path is gone at once, and rm removes
+# the renamed folder. The shell that starts the Neovim writes its process id to the file at the old path, then looks for
+# the folder at the old path (the `bash -c` line in run_test_file). So one of them sees the other: a shell that wrote
+# its id too late for the cleanup to read it finds no folder, and starts no Neovim.
 CURRENT_WORK=""
-CURRENT_GROUP_FILE=""
-# shellcheck disable=SC2329 # The two traps below run it.
+CURRENT_FILE_RUNS=""
+# shellcheck disable=SC2329 # The traps below run it.
 cleanup_current_file() {
-  local timeout_pid
-  if [[ -n $CURRENT_WORK ]]; then
-    : >"$CURRENT_WORK/cancel" 2>/dev/null || true
-  fi
-  if [[ -s $CURRENT_GROUP_FILE ]]; then
-    timeout_pid=$(cat "$CURRENT_GROUP_FILE")
+  local gone timeout_pid
+  [[ -n $CURRENT_WORK ]] || return 0
+  gone=$CURRENT_WORK.gone
+  mv "$CURRENT_WORK" "$gone" 2>/dev/null || gone=$CURRENT_WORK
+  if [[ -n $CURRENT_FILE_RUNS && -s $gone/group ]]; then
+    timeout_pid=$(cat "$gone/group")
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  if [[ -n $CURRENT_WORK ]]; then
-    rm -rf "$CURRENT_WORK"
-  fi
+  rm -rf "$gone"
+}
+# A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
+# `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a
+# signal that comes while mkdir makes the folder finds the folder. The handler cleans up, then kills the runner with the
+# signal, not with `exit`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one
+# that exited 130. A cleanup that fails, such as an rm that cannot remove a folder, must not end the handler early
+# either: with set -e the runner would exit with 1 before the kill, and the calling shell would go on.
+# shellcheck disable=SC2329 # The traps below run it.
+die_by_signal() {
+  cleanup_current_file || true
+  trap - EXIT INT TERM HUP
+  kill -"$1" $$
+  exit "$2"
 }
 trap cleanup_current_file EXIT
-# A Ctrl-C reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
-# `wait` below returns at once when this trap runs. The trap cleans up, then kills the runner with SIGINT, not with
-# `exit 130`: a calling shell stops its own loop after a child that died by SIGINT, and goes on after one that exited
-# 130. A cleanup that fails, such as an rm that cannot remove a folder, must not end the trap early either: with set -e
-# the runner would exit with 1 before the kill, and the calling shell would go on.
-trap 'cleanup_current_file || true; trap - EXIT INT; kill -INT $$; exit 130' INT
+trap 'die_by_signal INT 130' INT
+trap 'die_by_signal TERM 143' TERM
+trap 'die_by_signal HUP 129' HUP
 
 echo "=== Running Integration Tests Individually ==="
 
@@ -87,7 +96,7 @@ run_test_file() {
   config_dir=$work_dir/config
   status_file=$state_dir/exit_statuses
   mkdir -m 700 "$state_dir" "$config_dir"
-  CURRENT_GROUP_FILE=$group_file
+  CURRENT_FILE_RUNS=1
   exec 9>"$status_file"
 
   # timeout runs nvim in a process group named after its own pid, which is this shell's pid until it execs timeout.
@@ -113,7 +122,7 @@ run_test_file() {
     VIMINIT='lua local f = vim.env.CLAUDECODE_MINIMAL_INIT if f then dofile(f) end' \
       CLAUDECODE_MINIMAL_INIT="$PWD/tests/minimal_init.lua" \
       XDG_STATE_HOME="$state_dir" XDG_CONFIG_HOME="$config_dir" \
-      bash -c 'echo $$ 2> /dev/null > "$1" && [ -d "$2" ] && [ ! -e "$2/cancel" ] || exit 1; shift 2; exec timeout -k 5s "$@"' \
+      bash -c 'echo $$ 2> /dev/null > "$1" && [ -d "$2" ] || exit 1; shift 2; exec timeout -k 5s "$@"' \
       _ "$group_file" "$work_dir" "$FILE_TIMEOUT" \
       nvim --headless -i NONE -u tests/minimal_init.lua \
       -c "lua require('plenary.test_harness').test_file('$test_file')" \
@@ -127,7 +136,7 @@ run_test_file() {
   else
     EXIT_CODE=$?
   fi
-  CURRENT_GROUP_FILE=""
+  CURRENT_FILE_RUNS=""
   exec 9>&-
   local tee_status=0 status_line
   if status_line=$(cat "$status_file" 2>/dev/null) && [[ $status_line =~ ^([0-9]+)\ ([0-9]+)$ ]]; then
