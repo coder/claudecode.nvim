@@ -17,24 +17,26 @@ FILE_TIMEOUT=40s
 # state folder again. It kills `timeout` itself first: until timeout has made its own group, no Neovim runs yet. It
 # uses KILL for both, because with `timeout` dead its -k grace never starts, and a Neovim that ignores TERM would run
 # on.
-# The cleanup renames the folder before it reads the process id file, so the old path is gone at once, and rm removes
-# the renamed folder. The shell that starts the Neovim writes its process id to the file at the old path, then looks for
-# the folder at the old path (the `bash -c` line in run_test_file). So one of them sees the other: a shell that wrote
-# its id too late for the cleanup to read it finds no folder, and starts no Neovim.
+# The cleanup renames the folder before it reads the process id file, so the old path is gone at once. It removes both
+# names, so a second signal that stops the first cleanup leaves nothing to the second. The shell that starts the Neovim
+# writes its process id to the file at the old path, then looks for the folder at the old path (the `bash -c` line in
+# run_test_file). So one of them sees the other: a shell that wrote its id too late for the cleanup to read it finds no
+# folder, and starts no Neovim.
 CURRENT_WORK=""
 CURRENT_FILE_RUNS=""
 # shellcheck disable=SC2329 # The traps below run it.
 cleanup_current_file() {
-  local gone timeout_pid
+  local group timeout_pid
   [[ -n $CURRENT_WORK ]] || return 0
-  gone=$CURRENT_WORK.gone
-  mv "$CURRENT_WORK" "$gone" 2>/dev/null || gone=$CURRENT_WORK
-  if [[ -n $CURRENT_FILE_RUNS && -s $gone/group ]]; then
-    timeout_pid=$(cat "$gone/group")
+  mv "$CURRENT_WORK" "$CURRENT_WORK.gone" 2>/dev/null || true
+  group=$CURRENT_WORK.gone/group
+  [[ -s $group ]] || group=$CURRENT_WORK/group
+  if [[ -n $CURRENT_FILE_RUNS && -s $group ]]; then
+    timeout_pid=$(cat "$group")
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  rm -rf "$gone"
+  rm -rf "$CURRENT_WORK.gone" "$CURRENT_WORK"
 }
 # A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
 # `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a

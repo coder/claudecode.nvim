@@ -255,7 +255,9 @@ local HOLD_WRITE = {
 local rm_pipe = assert(io.popen("command -v rm 2> /dev/null"))
 local real_rm = assert(rm_pipe:read("*l"), "needs rm")
 rm_pipe:close()
--- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Runs the real rm and then exits with 1
+-- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. When $STUB_DIR/rm.die exists, its first
+-- call deletes the files, sends SIGINT to its process group, which has the runner in it, and dies of it, as an rm does
+-- that a second Ctrl-C stops. Runs the real rm and then exits with 1
 -- when $STUB_DIR/rm.fail exists, as rm does when a folder is not empty. Runs the real rm, except when
 -- $STUB_DIR/rm.slow or $STUB_DIR/rm.hold exists: then it walks the way rm -rf does, but slowly. It lists the folders,
 -- deletes the files, waits, and only then removes the listed folders, so a file or a folder that something makes
@@ -267,10 +269,17 @@ local STUB_RM = {
   '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/rm.holds_status_file" ;; esac',
   "done",
   'if [ -f "$STUB_DIR/rm.fail" ]; then ' .. quote(real_rm) .. ' "$@"; exit 1; fi',
+  'if [ -f "$STUB_DIR/rm.die" ] && [ ! -f "$STUB_DIR/rm.died" ]; then',
+  '  : > "$STUB_DIR/rm.died"',
+  "  shift",
+  '  for path in "$@"; do find "$path" -type f -delete; done 2> /dev/null',
+  "  kill -s INT 0",
+  "  sleep 5",
+  "fi",
   'if [ ! -f "$STUB_DIR/rm.slow" ] && [ ! -f "$STUB_DIR/rm.hold" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
   "shift",
   ': > "$STUB_DIR/rm.dirs"',
-  'for path in "$@"; do find "$path" -depth -type d >> "$STUB_DIR/rm.dirs"; find "$path" -type f -delete; done',
+  'for path in "$@"; do find "$path" -depth -type d >> "$STUB_DIR/rm.dirs"; find "$path" -type f -delete; done 2> /dev/null',
   'if [ -f "$STUB_DIR/rm.hold" ]; then',
   '  : > "$STUB_DIR/rm.held"',
   '  while [ ! -e "$STUB_DIR/rm.release" ]; do sleep 0.05; done',
@@ -618,6 +627,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   --- sends only SIGINT
   ---@field interrupt_at integer|nil The number of the mkdir call that sends the signal, 1 by default
   ---@field rm_holds boolean|nil The runner's rm stops in the middle, as with `during_rm`, until that mkdir call ends
+  ---@field rm_dies boolean|nil The first rm of the runner deletes the files and then dies by a second SIGINT
 
   ---@param signal string The signal to send
   ---@param run SignalRun
@@ -654,6 +664,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     if run.during_rm or run.rm_holds then
       write(dir .. "/rm.hold", {})
+    end
+    if run.rm_dies then
+      write(dir .. "/rm.die", {})
     end
     if run.interrupt then
       write(dir .. "/" .. run.interrupt .. ".interrupt", { signal })
@@ -855,6 +868,13 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("", result.caller_output, "the calling shell went on after the runner got Ctrl-C")
     assert.are.equal("", result.left, "the runner left temp files or folders behind")
     assert.is_false(result.ended)
+  end)
+
+  it("removes its folder when a second SIGINT stops the rm of the first cleanup", function()
+    local result = signal_runner("INT", { rm_dies = true })
+
+    assert.are.equal("130", result.status, result.report)
+    assert.are.equal("", result.left, "the second cleanup left the folder that the first cleanup renamed")
   end)
 
   for _, case in ipairs({ { "mktemp", 1 }, { "mkdir", 1 }, { "mkdir", 2 } }) do
