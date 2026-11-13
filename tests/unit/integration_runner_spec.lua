@@ -232,6 +232,16 @@ local STUB_MKDIR = {
   'exit "$status"',
 }
 
+local mv_pipe = assert(io.popen("command -v mv 2> /dev/null"))
+local real_mv = assert(mv_pipe:read("*l"), "needs mv")
+mv_pipe:close()
+-- Runs the real mv, except when $STUB_DIR/mv.fail exists: then it fails and moves nothing.
+local STUB_MV = {
+  "#!/bin/sh",
+  'if [ -f "$STUB_DIR/mv.fail" ]; then exit 1; fi',
+  "exec " .. quote(real_mv) .. ' "$@"',
+}
+
 -- BASH_ENV files for the shell that execs timeout. Bash reads such a file first in each non-interactive shell, and only
 -- that shell has CLAUDECODE_MINIMAL_INIT. The first file stops the shell before its first command, as long as
 -- $STUB_DIR/a.release does not exist. The second file wraps echo, which the shell calls to write its process id: the
@@ -348,6 +358,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     write(dir .. "/bin/rm", STUB_RM, true)
     write(dir .. "/bin/mktemp", STUB_MKTEMP, true)
     write(dir .. "/bin/mkdir", STUB_MKDIR, true)
+    write(dir .. "/bin/mv", STUB_MV, true)
   end)
 
   after_each(function()
@@ -628,6 +639,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field interrupt_at integer|nil The number of the mkdir call that sends the signal, 1 by default
   ---@field rm_holds boolean|nil The runner's rm stops in the middle, as with `during_rm`, until that mkdir call ends
   ---@field rm_dies boolean|nil The first rm of the runner deletes the files and then dies by a second SIGINT
+  ---@field mv_fails boolean|nil The runner's mv, which renames the folder, fails
 
   ---@param signal string The signal to send
   ---@param run SignalRun
@@ -667,6 +679,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     end
     if run.rm_dies then
       write(dir .. "/rm.die", {})
+    end
+    if run.mv_fails then
+      write(dir .. "/mv.fail", {})
     end
     if run.interrupt then
       write(dir .. "/" .. run.interrupt .. ".interrupt", { signal })
@@ -875,6 +890,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
 
     assert.are.equal("130", result.status, result.report)
     assert.are.equal("", result.left, "the second cleanup left the folder that the first cleanup renamed")
+  end)
+
+  it("stops the file and removes its folder under the old name when the rename of the folder fails", function()
+    local result = signal_runner("INT", { mv_fails = true })
+
+    assert.are.equal("130", result.status, result.report)
+    assert.are.equal("", result.left, "the runner left its folder, or its Neovim's grandchild ran on")
+    assert.is_false(result.ended)
   end)
 
   for _, case in ipairs({ { "mktemp", 1 }, { "mkdir", 1 }, { "mkdir", 2 } }) do
