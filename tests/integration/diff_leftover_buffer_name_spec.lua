@@ -27,7 +27,7 @@ describe("openDiff with a leftover diff buffer under its name", function()
       diff_opts = { layout = layout or "vertical" },
     })
     local tools = require("claudecode.tools.init")
-    tools.register_all()
+    tools.setup()
     return require("claudecode.diff"), tools
   end
 
@@ -272,6 +272,22 @@ describe("openDiff with a leftover diff buffer under its name", function()
     assert.is_not_nil(diff._get_active_diffs()[tab_name])
   end)
 
+  it("opens a new-file diff in a folder that does not exist yet under a symlinked parent, after a reload", function()
+    vim.fn.mkdir(dir .. "/real", "p")
+    assert(vim.loop.fs_symlink(dir .. "/real", dir .. "/link"))
+    path = dir .. "/link/newdir/missing.txt"
+    local _, tools = load_plugin()
+    assert.is_true(open_diff(tools, "first\n")._deferred)
+    close_old_diff_windows()
+
+    local diff
+    diff, tools = load_plugin()
+    local call = open_diff(tools, "second\n")
+
+    assert.is_true(call._deferred, vim.inspect(call.error))
+    assert.is_not_nil(diff._get_active_diffs()[tab_name])
+  end)
+
   it("closes no window when the original buffer of a new file cannot take its name", function()
     path = dir .. "/missing.txt"
     local _, tools = load_plugin()
@@ -408,6 +424,45 @@ describe("openDiff with a leftover diff buffer under its name", function()
         assert.equal("saved", state.status, "the user's accept in the first diff's window resolves it")
       end
     )
+  end
+
+  for _, layout in ipairs({ "vertical", "unified" }) do
+    it("opens an openDiff for another tab name that runs inside a setup: " .. layout, function()
+      local diff, tools = load_plugin(layout)
+      local other_tab_name = "✻ [Claude Code] other.txt ⧉"
+      local other_file = dir .. "/other.txt"
+      vim.fn.writefile({ "other" }, other_file)
+      local suffix = layout == "unified" and "(unified diff)" or "(proposed)"
+      local nested
+      local fired = false
+      local group = vim.api.nvim_create_augroup("LeftoverOtherTab", { clear = true })
+      vim.api.nvim_create_autocmd("BufEnter", {
+        group = group,
+        callback = function(event)
+          if fired or not vim.api.nvim_buf_get_name(event.buf):find(tab_name .. " " .. suffix, 1, true) then
+            return
+          end
+          fired = true
+          vim.schedule(function()
+            nested = open_diff(tools, "other two\n", other_tab_name, other_file)
+          end)
+          vim.wait(200, function()
+            return nested ~= nil
+          end, 10)
+        end,
+      })
+      local first
+      silence_notify(function()
+        first = open_diff(tools, "alpha one\n")
+      end)
+      vim.api.nvim_del_augroup_by_id(group)
+
+      assert.is_true(fired, "the second openDiff ran inside the first setup")
+      assert.is_true(first._deferred, vim.inspect(first.error))
+      assert.is_true(nested._deferred, vim.inspect(nested.error))
+      assert.is_not_nil(diff._get_active_diffs()[tab_name])
+      assert.is_not_nil(diff._get_active_diffs()[other_tab_name])
+    end)
   end
 
   it_when(
