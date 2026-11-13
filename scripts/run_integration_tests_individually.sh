@@ -40,7 +40,7 @@ cleanup_current_file() {
     kill -KILL "$timeout_pid" 2>/dev/null || true
     kill -KILL -- "-$timeout_pid" 2>/dev/null || true
   fi
-  rm -rf "$moved" ${grave:+"$grave"} "$CURRENT_WORK"
+  rm -rf ${grave:+"$grave"} "$CURRENT_WORK"
 }
 # A signal reaches the runner's own process group, and timeout leaves that group, so the file runs in the background and
 # `wait` below returns at once when a trap runs. Bash runs a trap after the foreground command that it waits for, so a
