@@ -1495,8 +1495,9 @@ function M._close_proposal_window(diff_data)
 end
 
 ---A diff needs a partner window. A window that is the only one in diff mode in its tab page has nothing to compare, so
----the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. Neovim refuses
----`:diffoff` in some states (E11 in the command-line window), and then the window keeps its diff mode.
+---the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. When Neovim
+---refuses `:diffoff`, the window keeps its diff mode. The cleanup does not run in the command-line window or under
+---textlock, where Neovim refuses it (see `M._cleanup_diff_state`).
 ---@param win number
 local function end_diff_mode_if_alone(win)
   if not vim.api.nvim_get_option_value("diff", { win = win }) then

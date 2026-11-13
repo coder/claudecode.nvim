@@ -294,17 +294,18 @@ describe("diff mode in a window that left a split diff", function()
     end)
 
     it(
-      "answers close_tab from the command-line window, where Neovim refuses diffoff, and leaves the copy as it is",
+      "answers close_tab from the command-line window, and ends the copy's diff mode once that window is closed",
       function()
         local state = open_diff()
         run_in(state.target_window, "split " .. vim.fn.fnameescape(file))
         local copy = vim.api.nvim_get_current_win()
         run_in(state.target_window, "edit " .. vim.fn.fnameescape(dir .. "/third.txt"))
-        local outcome
+        local outcome, while_open
         vim.api.nvim_create_autocmd("CmdwinEnter", {
           once = true,
           callback = function()
             outcome = { pcall(close_tab) }
+            while_open = { registered = diff._get_active_diffs()[tab] ~= nil, copy_diff = option(copy, "diff") }
           end,
         })
 
@@ -312,8 +313,13 @@ describe("diff mode in a window that left a split diff", function()
 
         assert.is_true(outcome[1], "close_tab did not raise")
         assert.equal("TAB_CLOSED", outcome[2].result.content[1].text)
-        assert.is_nil(diff._get_active_diffs()[tab], "the diff is closed")
-        assert.is_true(option(copy, "diff"), "Neovim refused diffoff in the command-line window")
+        assert.is_true(while_open.registered, "the diff waits while Neovim refuses window changes")
+        assert.is_true(while_open.copy_diff, "Neovim refused diffoff in the command-line window")
+        local closed = vim.wait(2000, function()
+          return diff._get_active_diffs()[tab] == nil
+        end, 10)
+        assert.is_true(closed, "the diff closes once the command-line window is closed")
+        assert.is_false(option(copy, "diff"), "the cleanup ends diff mode in the copy once Neovim allows it")
       end
     )
   end)
