@@ -8,37 +8,10 @@ if path:sub(1, #stub_dir + 1) ~= stub_dir .. ":" then
   vim.env.PATH = stub_dir .. (path ~= "" and ":" .. path or "")
 end
 
--- Neovim forks a pty job's child with its own signal handlers and resets them a few system calls after the fork.
--- A hangup in that window runs libuv's handler in the child. That handler writes into the signal pipe that the
--- child shares with Neovim, so Neovim reads a SIGHUP of its own and exits ("Caught deadly signal 'SIGHUP'").
--- Closing a job soon after termopen (a spec's after_each, or the quit that ends the file) can hit it, and under host
--- load a spec died that way. So termopen returns only once its child has run exec, and the child then has no
--- handler of Neovim's. Until exec the child's executable and its command line are Neovim's own. A program that is
--- Neovim again still has another command line. This needs /proc (Linux). Without it the window stays open.
-local function read_proc(pid, name)
-  local file = io.open("/proc/" .. pid .. "/" .. name, "rb")
-  local text = file and file:read("*a")
-  if file then
-    file:close()
-  end
-  return text
-end
-
-local self_exe = vim.loop.fs_readlink("/proc/self/exe")
-local self_cmdline = read_proc("self", "cmdline")
-local real_termopen = vim.fn.termopen
-vim.fn.termopen = function(...)
-  local job = real_termopen(...)
-  local ok, pid = pcall(vim.fn.jobpid, job)
-  if self_exe and self_cmdline and ok then
-    local deadline = vim.loop.hrtime() + 10e9
-    while vim.loop.fs_readlink("/proc/" .. pid .. "/exe") == self_exe and read_proc(pid, "cmdline") == self_cmdline do
-      assert(vim.loop.hrtime() < deadline, "the terminal job's child did not run exec within 10 s")
-      vim.loop.sleep(1)
-    end
-  end
-  return job
-end
+-- See tests/helpers/termopen_wait.lua for why termopen waits for exec.
+vim.fn.termopen = dofile(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/helpers/termopen_wait.lua"
+)(vim.fn.termopen)
 
 -- Set up package path
 local package_root = vim.fn.stdpath("data") .. "/site/pack/vendor/start/"

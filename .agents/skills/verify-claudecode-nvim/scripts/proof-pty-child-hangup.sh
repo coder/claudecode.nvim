@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Proves the hangup race of Neovim's pty jobs that the termopen wrapper in tests/minimal_init.lua guards against. Neovim
-# forks a pty job's child with its own signal handlers and resets them a few system calls later. A hangup in that gap
-# runs libuv's handler in the child, which writes into the signal pipe that it shares with Neovim, so Neovim reads a
-# SIGHUP of its own and exits. A shim loaded with LD_PRELOAD holds the child in that gap, so the case is not a matter of luck.
+# forks a pty job's child with its own signal handlers. The child runs setsid() first and resets the handlers in the
+# calls after it, so for a moment it is a copy of Neovim. A hangup in that gap runs libuv's handler in the child,
+# which writes into the signal pipe that it shares with Neovim, so Neovim reads a SIGHUP of its own and exits. A shim
+# loaded with LD_PRELOAD holds the child in that gap, in the signal(SIGCHLD, SIG_DFL) call that follows setsid(), so
+# the case is not a matter of luck.
 # Usage: proof-pty-child-hangup.sh [tree]     tree: a checkout with tests/minimal_init.lua (default: this checkout)
 # VCN_NVIM=<path> runs that Neovim (0.8 or newer). It must be the Neovim binary itself, not a shim of a version manager.
 # Cases, each one headless Neovim that starts `sleep` in a terminal job and stops it 50 ms later:
@@ -18,7 +20,7 @@ tree=$(cd "${1:-$here/../../../..}" && pwd -P) || exit 2
 nvim=${VCN_NVIM:-nvim}
 
 [[ $(uname -s) == Linux ]] || {
-  echo "SKIP: the shim needs glibc on Linux"
+  echo "SKIP: the shim and /proc need Linux"
   exit 2
 }
 cc=$(command -v cc || command -v gcc) || {
@@ -36,7 +38,22 @@ command -v "$nvim" >/dev/null || {
 
 work=$(mktemp -d) || exit 2
 [[ -n $work && -d $work ]] || exit 2
-trap 'rm -rf -- "$work"' EXIT
+
+# reap_job: kills the job's child that the last case saved, when the process with that PID still has the saved start
+# time. A child that Neovim did not get to stop can be alive after the case, as `sleep 60`.
+reap_job() {
+  local pid start line rest fields
+  [[ -s $work/job.pid ]] || return 0
+  read -r pid start <"$work/job.pid"
+  rm -f -- "$work/job.pid"
+  [[ $pid =~ ^[0-9]+$ && $start =~ ^[0-9]+$ ]] || return 0
+  line=$(cat "/proc/$pid/stat" 2>/dev/null) || return 0
+  rest=${line##*) }
+  read -r -a fields <<<"$rest"
+  [[ ${fields[19]:-} == "$start" ]] && kill -KILL "$pid"
+  return 0
+}
+trap 'reap_job; rm -rf -- "$work"' EXIT
 
 cat >"$work/shim.c" <<'C'
 #define _GNU_SOURCE
@@ -48,7 +65,7 @@ cat >"$work/shim.c" <<'C'
 static pid_t main_pid;
 __attribute__((constructor)) static void remember_main(void) { main_pid = getpid(); }
 
-/* init_child() calls signal(SIGCHLD, SIG_DFL) first, after login_tty() made the child the session leader. */
+/* init_child() calls setsid() first, then signal(SIGCHLD, SIG_DFL) and the other resets. This waits in the first reset. */
 sighandler_t signal(int sig, sighandler_t handler) {
   static sighandler_t (*real)(int, sighandler_t);
   if (!real) real = (sighandler_t (*)(int, sighandler_t))dlsym(RTLD_NEXT, "signal");
@@ -63,6 +80,13 @@ C
 
 cat >"$work/probe.lua" <<'LUA'
 local job = vim.fn.termopen({ "sleep", "60" })
+local pid = vim.fn.jobpid(job)
+local stat = assert(io.open("/proc/" .. pid .. "/stat", "rb")):read("*a")
+-- Field 22 of stat is the start time. The fields after the command name begin with field 3.
+local fields = vim.split(stat:match("^.*%) (.*)$"), " ", { plain = true })
+local saved = assert(io.open(vim.env.PTY_PROOF_PIDFILE, "w"))
+saved:write(pid, " ", fields[20], "\n")
+saved:close()
 vim.wait(50)
 vim.fn.jobstop(job)
 vim.wait(300)
@@ -80,6 +104,7 @@ run_case() {
   [[ $2 == yes ]] && shim=(LD_PRELOAD="$work/shim.so")
   (cd "$tree" && env -i PATH="$PATH" HOME="$work/home" TMPDIR="$work/tmp" XDG_DATA_HOME="$work/home/.local/share" \
     XDG_STATE_HOME="$work/home/state" XDG_CONFIG_HOME="$work/home/config" XDG_CACHE_HOME="$work/home/cache" TERM=dumb \
+    PTY_PROOF_PIDFILE="$work/job.pid" \
     timeout -k 3 30 env "${shim[@]}" "$nvim" --headless -u "$init_arg" -i NONE -n -c "luafile $work/probe.lua" 2>&1 </dev/null)
 }
 
@@ -93,6 +118,7 @@ verdict() { # <name> <ok|bad> <detail>
 }
 
 out=$(run_case none no)
+reap_job
 if [[ $out == *SURVIVED* ]]; then
   verdict control ok "Neovim survived a job that was stopped after 50 ms"
 else
@@ -100,6 +126,7 @@ else
 fi
 
 out=$(run_case none yes)
+reap_job
 if [[ $out == *"Caught deadly signal 'SIGHUP'"* && $out != *SURVIVED* ]]; then
   verdict window ok "Neovim exited on a SIGHUP of the stopped job's child"
 else
@@ -107,6 +134,7 @@ else
 fi
 
 out=$(run_case minimal yes)
+reap_job
 if [[ $out == *SURVIVED* ]]; then
   verdict wrapper ok "Neovim survived: termopen returned after the child ran exec"
 else
