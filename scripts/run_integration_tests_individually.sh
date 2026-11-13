@@ -96,8 +96,9 @@ run_test_file() {
   work_dir=$(mktemp -u)
   # A Neovim binds its socket at $work_dir/tmp/nvim.<pid>.<n>, which is at most 20 characters more than the work folder.
   # A socket path over 107 bytes is cut by libuv, and the cut name can be a file in the developer's TMPDIR, outside the
-  # work folder. So a work folder with a name over 80 characters goes to /tmp, where its name is short.
-  if [[ ${#work_dir} -gt 80 && -d /tmp && -w /tmp ]]; then
+  # work folder. So a work folder with a name over 80 bytes (not characters, for a multibyte TMPDIR) goes to /tmp, where
+  # its name is short.
+  if [[ $(LC_ALL=C && echo ${#work_dir}) -gt 80 && -d /tmp && -w /tmp ]]; then
     work_dir=$(mktemp -u /tmp/tmp.XXXXXXXXXX)
   fi
   CURRENT_WORK=$work_dir

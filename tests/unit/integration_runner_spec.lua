@@ -648,6 +648,25 @@ describe("scripts/run_integration_tests_individually.sh", function()
     shell('test -z "$(ls -A ' .. quote(long) .. ')"')
   end)
 
+  it("counts the temp folder name in bytes, so a TMPDIR of multibyte characters goes to /tmp too", function()
+    local probe = assert(io.popen("LC_ALL=C.utf8 bash -c 'x=\195\169; echo ${#x}' 2> /dev/null"))
+    local characters = probe:read("*l")
+    probe:close()
+    if not tmp_is_writable or characters ~= "1" then
+      pending("needs a writable /tmp and the locale C.utf8")
+    end
+    local long = dir .. "/" .. string.rep("\195\169", 30)
+    shell("mkdir -p " .. quote(long))
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    }, "C.utf8", long)
+
+    assert.are.equal("0", status, output)
+    local seen = env_seen()
+    assert.are.equal(1, #seen)
+    assert.is_true(#seen[1].runtime_dir + 16 <= 107, "a socket path in " .. seen[1].runtime_dir .. " passes 107 bytes")
+  end)
+
   it("starts its own Neovim without a ShaDa file, because the Neovim of plenary shares its folders", function()
     local status, output = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
@@ -769,7 +788,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
       job = job .. " " .. quote(script) .. " > " .. quote(dir .. "/caller.out") .. " 2>&1"
       target = "-- -$pid"
     elseif run.caller_reports then
-      job = "bash -c " .. quote('"$0" > ' .. quote(dir .. "/runner.out") .. " 2>&1; echo runner_status=$?")
+      job = "LC_ALL=C bash -c " .. quote('"$0" > ' .. quote(dir .. "/runner.out") .. " 2>&1; echo runner_status=$?")
       job = job .. " " .. quote(script) .. " > " .. quote(dir .. "/caller.out") .. " 2>&1"
     end
     local gate = run.window and "/slow_spec.lua.timeout_started"
