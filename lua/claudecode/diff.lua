@@ -435,7 +435,8 @@ local function display_terminal_in_new_tab()
   end
 
   if not utils.win_set_buf_in_split(terminal_win, terminal_bufnr, { ignore_bufenter = true }) then
-    -- A BufLeave autocmd of the user's closed the split, so the new tab has no terminal.
+    -- A BufLeave autocmd of the user's closed the split or showed a buffer in it that the swap would lose, so the new
+    -- tab has no terminal.
     return original_tab, nil, had_terminal_in_original, new_tab
   end
 

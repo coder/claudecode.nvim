@@ -282,6 +282,96 @@ describe("claudecode.utils.win_set_buf_in_split", function()
     end)
   end)
 
+  describe("when an autocmd of BufLeave showed another buffer in the split", function()
+    local SHOWN = 9
+
+    ---The autocmd puts `SHOWN` in the split, with the options in `bo`. No other window shows it.
+    local function show_other(bo)
+      state.on_bufleave = function()
+        state.win_bufs[SPLIT] = SHOWN
+        state.bo[SHOWN] = bo
+      end
+    end
+
+    -- `:buffer!` skips the E37 check of a plain swap, and unloads or wipes a changed buffer with these values of
+    -- 'bufhidden', where a plain swap keeps the text.
+    for _, bufhidden in ipairs({ "unload", "delete", "wipe" }) do
+      it("shows nothing, and returns false, for a changed buffer whose 'bufhidden' is " .. bufhidden, function()
+        show_other({ modified = true, bufhidden = bufhidden })
+        vim.o.hidden = true
+
+        local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+        assert.is_false(placed)
+        assert.same({ "BufLeave" }, log)
+        assert.equal(SHOWN, state.win_bufs[SPLIT])
+      end)
+    end
+
+    it("shows nothing, and returns false, for a changed buffer that is not hidden when 'hidden' is off", function()
+      show_other({ modified = true, bufhidden = "" })
+      vim.o.hidden = false
+
+      local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)
+
+      assert.is_false(placed)
+      assert.same({ "BufLeave" }, log)
+    end)
+
+    it("swaps for a changed buffer that 'hidden' hides", function()
+      show_other({ modified = true, bufhidden = "" })
+      vim.o.hidden = true
+
+      assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+      assert.same({ "BufLeave", "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet" }, log)
+    end)
+
+    it("swaps for a changed buffer whose 'bufhidden' is hide", function()
+      show_other({ modified = true, bufhidden = "hide" })
+      vim.o.hidden = false
+
+      assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+      assert.same({ "BufLeave", "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet" }, log)
+    end)
+
+    it("swaps for a changed buffer that another window shows too", function()
+      show_other({ modified = true, bufhidden = "wipe" })
+      vim.o.hidden = true
+      local show = state.on_bufleave
+      state.on_bufleave = function()
+        show()
+        state.win_bufs[OTHER] = SHOWN
+      end
+
+      assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+      assert.same({ "BufLeave", "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet" }, log)
+    end)
+
+    it("swaps for a buffer with no change, whatever its 'bufhidden'", function()
+      show_other({ modified = false, bufhidden = "wipe" })
+      vim.o.hidden = false
+
+      assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+      assert.same({ "BufLeave", "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet" }, log)
+    end)
+
+    it(
+      "swaps when the split still shows the buffer that was checked, and an autocmd closed its other window",
+      function()
+        -- The checked buffer is changed, not hidden, and a second window shows it, so the first check passes. A plain swap
+        -- would act the same after the autocmd, and the helper has not changed the buffer that it checked.
+        state.bo[OLD] = { modified = true, bufhidden = "" }
+        vim.o.hidden = false
+        state.on_bufleave = function()
+          state.win_bufs[OTHER] = nil
+        end
+
+        assert.is_true(utils.win_set_buf_in_split(SPLIT, TERMINAL))
+        assert.same({ "BufLeave", "noautocmd swap 1001 8 eventignore=BufLeave,OptionSet" }, log)
+      end
+    )
+  end)
+
   describe("makes a plain swap, with no BufLeave of its own,", function()
     local function expect_plain()
       local placed = utils.win_set_buf_in_split(SPLIT, TERMINAL)

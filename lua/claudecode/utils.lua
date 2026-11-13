@@ -93,6 +93,15 @@ local function eventignore_with(events)
   return table.concat(kept, ",")
 end
 
+---Whether the swap with `buffer!` can leave `buf`, the buffer that a window shows, without losing its text. A plain
+---swap refuses (E37) or asks when `buf` is changed, not hidden and shown in no other window, and `buffer!` would skip
+---that check: it unloads or wipes such a buffer when its 'bufhidden' says so.
+---@param buf number
+---@return boolean
+local function can_abandon(buf)
+  return vim.bo[buf].modified == false or buf_hides(buf) or #vim.fn.win_findbuf(buf) > 1
+end
+
 ---Whether the BufLeave of the old buffer can be fired before the swap. A plain swap checks first that Neovim may leave the
 ---old buffer, and `:buffer!` would skip that check, so when a plain swap could refuse (E37) or ask, the plain swap is
 ---the one to make. It is also the one to make when `win` is not current, when it shows `buf` already, inside an autocmd,
@@ -113,7 +122,7 @@ local function can_leave_first(win, buf)
   if known and fixed then
     return false
   end
-  return vim.bo[old].modified == false or buf_hides(old) or #vim.fn.win_findbuf(old) > 1
+  return can_abandon(old)
 end
 
 ---Show `buf` in `win`, a split that was just made for it and that is the current window. A plain `nvim_win_set_buf`
@@ -139,7 +148,8 @@ end
 ---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events. A handler of a terminal
 ---buffer can queue an insert with `startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window
 ---the cursor ends in, not in `win`. 'eventignore' is back to the caller's value afterwards, also when the call raises.
----@return boolean placed False when an autocmd of `BufLeave` closed `win` or wiped `buf`, so `buf` shows nowhere.
+---@return boolean placed False when an autocmd of `BufLeave` closed `win`, wiped `buf`, or showed another buffer in `win`
+---that the swap would lose, so `buf` shows nowhere. The other buffer stays in `win`.
 function M.win_set_buf_in_split(win, buf, opts)
   local ignore_bufenter = opts ~= nil and opts.ignore_bufenter == true
   if not can_leave_first(win, buf) then
@@ -153,9 +163,16 @@ function M.win_set_buf_in_split(win, buf, opts)
     return true
   end
 
+  local old = vim.api.nvim_win_get_buf(win)
   vim.cmd("doautocmd <nomodeline> BufLeave")
   -- A plain swap shows nothing for a buffer that an autocmd wiped, and raises no error. `:buffer!` would raise E86.
   if not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_buf_is_valid(buf) then
+    return false
+  end
+  -- An autocmd of BufLeave can show another buffer in `win`. `can_leave_first` checked only `old`, and `:buffer!` would
+  -- unload or wipe that other buffer with its text when its 'bufhidden' says so, where a plain swap keeps it.
+  local shown = vim.api.nvim_win_get_buf(win)
+  if shown ~= old and not can_abandon(shown) then
     return false
   end
   -- A plain swap leaves the cursor in `win`, also when an autocmd entered another window, a window of another tab as

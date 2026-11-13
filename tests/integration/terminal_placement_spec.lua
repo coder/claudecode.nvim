@@ -768,7 +768,7 @@ describe("the terminal's placement in its own split", function()
         vim.cmd("vsplit")
         local split = vim.api.nvim_get_current_win()
         local reported = arrange(file, terminal, split)
-        utils.win_set_buf_in_split(split, terminal)
+        local placed = utils.win_set_buf_in_split(split, terminal)
         local function classify(win)
           if not vim.api.nvim_win_is_valid(win) then
             return "closed"
@@ -776,13 +776,123 @@ describe("the terminal's placement in its own split", function()
           local buf = vim.api.nvim_win_get_buf(win)
           return buf == terminal and "terminal" or (buf == file and "file" or "other")
         end
-        local result = { split = classify(split), current_is_split = vim.api.nvim_get_current_win() == split }
+        local result = {
+          split = classify(split),
+          current_is_split = vim.api.nvim_get_current_win() == split,
+          placed = placed,
+        }
         for name, win in pairs(reported) do
           result[name] = classify(win)
         end
         return result
       ]],
         arrange
+      )
+    end
+
+    ---The state of the buffer `_G.other` that an autocmd of BufLeave showed in the split: the helper must not lose its text.
+    local function other_buffer()
+      return call([[
+        local buf = _G.other
+        local loaded = vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)
+        return { valid = vim.api.nvim_buf_is_valid(buf), loaded = loaded, lines = loaded and vim.api.nvim_buf_get_lines(buf, 0, -1, false) or {} }
+      ]])
+    end
+
+    -- A BufLeave autocmd shows another buffer in the split. `:buffer!` skips the E37 check of a plain swap, and it unloads
+    -- or wipes a changed buffer with these values of 'bufhidden'. A plain swap keeps the text.
+    for _, bufhidden in ipairs({ "unload", "delete", "wipe" }) do
+      it(
+        "keeps the text of a new buffer that an autocmd showed in the split, with 'bufhidden' " .. bufhidden,
+        function()
+          local result = run(string.format(
+            [[
+          local file, terminal, split = ...
+          _G.other = vim.api.nvim_create_buf(true, false)
+          vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
+          vim.bo[_G.other].bufhidden = %q
+          vim.api.nvim_create_autocmd("BufLeave", {
+            buffer = file,
+            once = true,
+            callback = function()
+              vim.api.nvim_win_set_buf(split, _G.other)
+            end,
+          })
+          return {}
+        ]],
+            bufhidden
+          ))
+
+          local other = other_buffer()
+          assert.same({ valid = true, loaded = true, lines = { "unsaved X text" } }, other)
+          assert.is_false(result.placed)
+          assert.equal("other", result.split)
+        end
+      )
+
+      it(
+        "keeps the unsaved text of a file that an autocmd moved into the split, with 'bufhidden' " .. bufhidden,
+        function()
+          -- The file shows in a window W, and the autocmd shows it in the split and closes W.
+          local result = run(string.format(
+            [[
+          local file, terminal, split = ...
+          vim.cmd("belowright split")
+          local window = vim.api.nvim_get_current_win()
+          _G.other = vim.api.nvim_create_buf(true, false)
+          vim.api.nvim_win_set_buf(window, _G.other)
+          vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "user typed this, unsaved" })
+          vim.bo[_G.other].bufhidden = %q
+          vim.api.nvim_set_current_win(split)
+          vim.api.nvim_create_autocmd("BufLeave", {
+            buffer = file,
+            once = true,
+            callback = function()
+              vim.api.nvim_win_set_buf(split, _G.other)
+              vim.api.nvim_win_close(window, true)
+            end,
+          })
+          return {}
+        ]],
+            bufhidden
+          ))
+
+          local other = other_buffer()
+          assert.same({ valid = true, loaded = true, lines = { "user typed this, unsaved" } }, other)
+          assert.is_false(result.placed)
+          assert.equal("other", result.split)
+        end
+      )
+    end
+
+    for _, bufhidden in ipairs({ "", "hide" }) do
+      it(
+        "shows the buffer, and keeps the text of the other buffer, when it can be hidden, with 'bufhidden' '"
+          .. bufhidden
+          .. "'",
+        function()
+          local result = run(string.format(
+            [[
+          local file, terminal, split = ...
+          _G.other = vim.api.nvim_create_buf(true, false)
+          vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
+          vim.bo[_G.other].bufhidden = %q
+          vim.api.nvim_create_autocmd("BufLeave", {
+            buffer = file,
+            once = true,
+            callback = function()
+              vim.api.nvim_win_set_buf(split, _G.other)
+            end,
+          })
+          return {}
+        ]],
+            bufhidden
+          ))
+
+          assert.same({ valid = true, loaded = true, lines = { "unsaved X text" } }, other_buffer())
+          assert.is_true(result.placed)
+          assert.equal("terminal", result.split)
+        end
       )
     end
 
