@@ -3,11 +3,11 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua a1c57f34e79b17ce
-block resolve_saved          4d34b0c7e34d561f
+file lua/claudecode/diff.lua 391facd8a645f9ba
+block resolve_saved          36fd89d5b97f0173
 block resolve_rejected       c7a620816abff9a1
-block open_blocking          92067df7f9d4d4d9
-block setup_blocking         b96c84e0961817fc
+block open_blocking          13e23b610cab9f40
+block setup_blocking         2dc7835cec40f258
 block close_by_name          cc40c0d2ffdf7946
 block close_pending          31bc827d1065da70
 block close_for_client       330cc91666bc7884
@@ -164,7 +164,7 @@ site lua/claudecode/server/init.lua: if not _G.claude_deferred_responses then @ 
 == lua/claudecode/server/mock.lua
 file lua/claudecode/server/mock.lua def1248d2793d559
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 8be1dd96671223ea
+file lua/claudecode/server/tcp.lua 610f324845bca7b5
 == lua/claudecode/server/utils.lua
 file lua/claudecode/server/utils.lua 2915ae87b48f04ca
 == lua/claudecode/terminal.lua
@@ -172,7 +172,7 @@ file lua/claudecode/terminal.lua 2cb4a5721335543c
 == lua/claudecode/terminal/external.lua
 file lua/claudecode/terminal/external.lua 88d2a1111fd604bc
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 0e9b890a642c84f7
+file lua/claudecode/terminal/native.lua 645d40105bbcdb0c
 == lua/claudecode/terminal/none.lua
 file lua/claudecode/terminal/none.lua b00f2118deba82f9
 == lua/claudecode/terminal/owned.lua
@@ -204,8 +204,8 @@ file lua/claudecode/tools/get_open_editors.lua 96392f05d7af7521
 == lua/claudecode/tools/get_workspace_folders.lua
 file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 == lua/claudecode/tools/init.lua
-file lua/claudecode/tools/init.lua 76b2b584a0799874
-block handle_invoke          d70cbd96c9ab5655
+file lua/claudecode/tools/init.lua a8ff3ef7cd3c9df9
+block handle_invoke          5c2422dfe7e2ea93
 == lua/claudecode/tools/open_diff.lua
 file lua/claudecode/tools/open_diff.lua d4050352cb09dfb9
 block open_diff_tool         1a0e157e8e0a9452
@@ -216,7 +216,7 @@ file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua
 file lua/claudecode/types.lua 69e2907853403759
 == lua/claudecode/utils.lua
-file lua/claudecode/utils.lua c4a21fe74858afe2
+file lua/claudecode/utils.lua 33fe91b68063b71d
 == lua/claudecode/visual_commands.lua
 file lua/claudecode/visual_commands.lua f396dd26cc0c1050
 == plugin/claudecode.lua

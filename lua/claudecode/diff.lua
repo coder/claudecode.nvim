@@ -721,9 +721,11 @@ local function setup_new_buffer(
   terminal_win_in_new_tab,
   target_win_for_meta
 )
+  -- Split first: a split copies the window's options, and a copy made after `diffthis` would hand diff mode to the
+  -- proposal window for the original buffer, so that `:edit` of the file back there turns it on again after the diff.
+  -- The original window gets its `diffthis` in `nvim_win_call`, which fires no WinEnter or BufEnter for a handler to
+  -- move the focus.
   vim.api.nvim_set_current_win(original_win)
-  vim.cmd("diffthis")
-
   create_split()
   local new_win = vim.api.nvim_get_current_win()
   vim.api.nvim_win_set_buf(new_win, new_buf)
@@ -733,6 +735,9 @@ local function setup_new_buffer(
     vim.api.nvim_set_option_value("filetype", original_ft, { buf = new_buf })
   end
   vim.cmd("diffthis")
+  vim.api.nvim_win_call(original_win, function()
+    vim.cmd("diffthis")
+  end)
 
   vim.cmd("wincmd =")
 
@@ -782,19 +787,51 @@ local function setup_new_buffer(
   return new_win
 end
 
----Open diff using native Neovim functionality
----@param old_file_path string Path to the original file
----@param new_file_path string Path to the new file (used for naming)
----@param new_file_contents string Contents of the new file
----@param tab_name string Name for the diff tab/view
----@return table res Result with provider, tab_name, and success status
-function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
-  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
-  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
-  if not tmp_file then
-    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+---The buffer that has this name, if there is one. Neovim resolves symbolic links in the name of a buffer, so a path
+---through a linked folder (a cache folder that is a link) is found by its real path too. A path can also have other
+---separators than the one the plugin built (backslashes on Windows), and Windows ignores case.
+---@param name string
+---@return integer? buf
+local function buffer_named(name)
+  local function plain(path)
+    path = path:gsub("\\", "/")
+    return vim.fn.has("win32") == 1 and path:lower() or path
   end
+  local wanted = { [plain(name)] = true }
+  local ok, real = pcall(function()
+    return (vim.uv or vim.loop).fs_realpath(name)
+  end)
+  if ok and real then
+    wanted[plain(real)] = true
+  end
+  for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+    if wanted[plain(vim.api.nvim_buf_get_name(buf))] then
+      return buf
+    end
+  end
+end
 
+---Remove what a legacy diff that failed halfway made of its own: the temp file, and the buffer that has the temp
+---file's name, unless the buffer has unsaved changes or a window shows it. This is all it does. It moves no focus,
+---turns no diff mode off and closes no window, so the windows that the diff had split stay, as they did before.
+---Neovim closes the windows that show a buffer when the buffer is wiped, so a buffer that a window shows stays, and a
+---window that an autocmd moved to the temp file stays with it.
+---Every step is protected, so an error in one cannot stop the next or replace the error that made the diff fail.
+---@param tmp_file string
+local function remove_failed_proposal(tmp_file)
+  local buf = buffer_named(tmp_file)
+  if buf and not vim.api.nvim_get_option_value("modified", { buf = buf }) and #vim.fn.win_findbuf(buf) == 0 then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+  pcall(cleanup_temp_file, tmp_file)
+end
+
+---Open the original and the proposal side by side, in diff mode. Raises when a step fails: a swap file for the
+---original (E325), a buffer that already has the proposal's name (E95), an autocmd that errors.
+---@param old_file_path string
+---@param new_file_path string
+---@param tmp_file string
+local function show_native_diff(old_file_path, new_file_path, tmp_file)
   local target_win = find_main_editor_window()
 
   if target_win then
@@ -811,7 +848,7 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   end
 
   vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
-  vim.cmd("diffthis")
+  local original_win = vim.api.nvim_get_current_win()
   create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
   vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
@@ -832,6 +869,9 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
   vim.api.nvim_set_option_value("swapfile", false, { buf = new_buf })
 
   vim.cmd("diffthis")
+  vim.api.nvim_win_call(original_win, function()
+    vim.cmd("diffthis")
+  end)
 
   local cleanup_group = vim.api.nvim_create_augroup("ClaudeCodeDiffCleanup", { clear = false })
   local cleaned_up = false
@@ -847,6 +887,27 @@ function M._open_native_diff(old_file_path, new_file_path, new_file_contents, ta
     end,
     once = true,
   })
+end
+
+---Open diff using native Neovim functionality
+---@param old_file_path string Path to the original file
+---@param new_file_path string Path to the new file (used for naming)
+---@param new_file_contents string Contents of the new file
+---@param tab_name string Name for the diff tab/view
+---@return table res Result with provider, tab_name, and success status
+function M._open_native_diff(old_file_path, new_file_path, new_file_contents, tab_name)
+  local new_filename = vim.fn.fnamemodify(new_file_path, ":t") .. ".new"
+  local tmp_file, err = create_temp_file(new_file_contents, new_filename)
+  if not tmp_file then
+    return { provider = "native", tab_name = tab_name, success = false, error = err, temp_file = nil }
+  end
+
+  local ok, failure = pcall(show_native_diff, old_file_path, new_file_path, tmp_file)
+  if not ok then
+    -- The cleanup autocmd of a finished diff is registered last, so nothing else would remove the temp file.
+    remove_failed_proposal(tmp_file)
+    error(failure, 0)
+  end
 
   return {
     provider = "native",
@@ -1057,7 +1118,9 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
 
   -- Get content from buffer
   local content_lines = vim.api.nvim_buf_get_lines(buffer_id, 0, -1, false)
-  local final_content = table.concat(content_lines, "\n")
+  -- :w ends each line with the line break of the buffer's 'fileformat': LF, CRLF for dos, CR for mac.
+  local line_break = ({ dos = "\r\n", mac = "\r" })[vim.api.nvim_buf_get_option(buffer_id, "fileformat")] or "\n"
+  local final_content = table.concat(content_lines, line_break)
   -- Add trailing newline if the buffer has one, as :w does. :w writes nothing for an empty buffer, whatever 'eol' is.
   -- Such a buffer has no lines, but nvim_buf_get_lines still returns one empty string for it, so the count of bytes tells
   -- it from a buffer with one empty line.
@@ -1065,7 +1128,7 @@ function M._resolve_diff_as_saved(tab_name, buffer_id)
     return vim.fn.wordcount().bytes
   end)
   if byte_count > 0 and vim.api.nvim_buf_get_option(buffer_id, "eol") then
-    final_content = final_content .. "\n"
+    final_content = final_content .. line_break
   end
 
   -- Do not modify windows/tabs here; wait for explicit close_tab tool call to clean up UI
@@ -1782,12 +1845,22 @@ function M._setup_blocking_diff(params, resolution_callback)
 
     local new_unique_name = is_new_file and (tab_name .. " (NEW FILE - proposed)") or (tab_name .. " (proposed)")
     vim.api.nvim_buf_set_name(new_buffer, new_unique_name)
-    local lines = vim.split(params.new_file_contents, "\n")
+    -- A proposal that has a line break, and only CRLF line breaks, takes 'fileformat' dos, as the same text read from
+    -- a file does, when the user's 'fileformats' includes dos. The buffer then holds the lines without their CRs, as
+    -- the file's own buffer does, and the save gives a line that the user types a CRLF, as :w does. Any other text is
+    -- unix, with its CRs inside the lines, which :w writes back unchanged. 'fileformat' is set in both cases, because
+    -- a new buffer takes the first entry of 'fileformats', and that entry can be dos.
+    local proposal = params.new_file_contents
+    local is_dos = vim.o.fileformats:find("dos", 1, true) ~= nil
+      and proposal:find("\n", 1, true) ~= nil
+      and not proposal:gsub("\r\n", ""):find("\n", 1, true)
+    local lines = vim.split(proposal, is_dos and "\r\n" or "\n", { plain = true })
     -- Remove trailing empty line if content ended with \n
     if #lines > 0 and lines[#lines] == "" then
       table.remove(lines, #lines)
     end
     vim.api.nvim_buf_set_lines(new_buffer, 0, -1, false, lines)
+    vim.api.nvim_buf_set_option(new_buffer, "fileformat", is_dos and "dos" or "unix")
     -- A new buffer has 'eol' on, and the saved text ends with a line break exactly when 'eol' is on. So the buffer takes
     -- the ending of the proposal, and a proposal without a final line break is saved without one.
     vim.api.nvim_buf_set_option(new_buffer, "eol", params.new_file_contents:sub(-1) == "\n")
@@ -1911,13 +1984,6 @@ function M._setup_blocking_diff(params, resolution_callback)
       end
     end
 
-    -- A raising handler of the user (autocmd callback) makes the cleanup above fail inside Neovim API calls. A LuaJIT
-    -- older than September 2023 (bundled by Neovim 0.8 and 0.9) then keeps pointing at the main Lua thread, while this
-    -- code runs in the coroutine of tools.handle_invoke. The next JIT trace exit corrupts the stack of the main thread
-    -- and Neovim aborts or crashes, exit 134 or 139 (LuaJIT issue #1066). An API call that returns normally points
-    -- LuaJIT at the running coroutine again. Make one before the error leaves the coroutine.
-    vim.api.nvim_get_current_tabpage()
-
     -- Re-throw the error for MCP compliance
     error({
       code = -32000,
@@ -1996,7 +2062,7 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
       return
     end
     -- Resume the coroutine with the result
-    local resume_success, resume_result, resume_err = coroutine.resume(co, result)
+    local resume_success, resume_result, resume_err = utils.resume_tool_coroutine(co, result)
     if not resume_success then
       logger.error("diff", "Coroutine failed:", tostring(resume_result))
     end
@@ -2052,7 +2118,9 @@ end
 ---The reject of a new-file diff with `on_new_file_reject = "keep_empty"`, in a tab that the diff did not open, deletes
 ---its proposal buffer, and another plugin's buffer can delete itself in its own BufUnload. The diffs behind that
 ---buffer then reach this point pending. SIGTERM and SIGHUP run VimLeavePre without the loop, so every diff reaches it
----pending. SIGKILL, a crash, or a quit from inside an autocmd that is not `nested` runs no VimLeavePre.
+---pending. SIGKILL, a crash, `:noautocmd qa!`, `os.exit()` and a quit from inside an autocmd that is not `nested` run
+---no VimLeavePre, and a quit or a signal that Neovim handles while such an autocmd is still running can skip it too
+---(for example one that waits in `vim.wait`).
 ---The reject pass runs first. It resolves each diff whose status is `pending` as rejected, oldest first, each under
 ---`pcall`, so one diff that fails to reject cannot leave the others waiting. A diff with another status is skipped. A
 ---reject can remove its own diff (`keep_empty`), so a diff can be gone before the next one is rejected. The reject of a

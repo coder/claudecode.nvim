@@ -12,7 +12,7 @@ Claude proposes new file contents with the `openDiff` tool. Neovim shows the cur
 - `diff-reject-quit` answers `DIFF_REJECTED` plus the tab name when the user closes the proposal with `:q`.
 - `diff-reject-command` answers `DIFF_REJECTED` when the user runs `:ClaudeCodeDiffDeny`.
 - `diff-reject-leave` answers `DIFF_REJECTED` plus the tab name when the user switches the proposal window to another buffer, for example with `:b hello.txt`. The window and its buffer stay, also after `close_tab`, out of diff mode and with its own sign column, one the user set after the switch included.
-- `diff-file-returns` keeps diff mode off in the last window when the user shows the proposal in the original window with `:b proposed` and `close_tab` deletes it. A file that comes back into a window that left the diff later keeps the options that Neovim saved, as on main.
+- `diff-file-returns` keeps diff mode off in the last window when the user shows the proposal in the original window with `:b proposed` and `close_tab` deletes it. The file comes back into the proposal window with diff mode off, because the plugin splits before `diffthis`. In the original-side window (`:e third.txt`, then `:e #`) it keeps the options that Neovim saved, as on main.
 - `diff-quit-all` leaves no modified buffer once the diff has its answer, so `:qa` quits before `close_tab` instead of stopping with E37 or E162.
 - `diff-finalize` closes the diff windows on `close_tab` and shows the file as Claude wrote it.
 - `diff-new-file` shows a proposal for a path that does not exist as `<tab_name> (NEW FILE - proposed)` next to an empty `<path> (NEW FILE)` buffer. A reject closes it without `close_tab`, and no file is created.

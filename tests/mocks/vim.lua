@@ -414,12 +414,9 @@ local vim = {
       end
     end,
 
-    nvim_win_call = function(winid, callback)
-      -- Mock implementation - just call the callback
-      if vim._windows[winid] then
-        return callback()
-      end
-      error("Invalid window id: " .. tostring(winid))
+    nvim_win_call = function(_, callback)
+      -- Mock implementation - just call the callback. nvim_set_current_win accepts every id here, and so does this.
+      return callback()
     end,
 
     nvim_win_get_config = function(winid)
@@ -1270,6 +1267,9 @@ local vim = {
   v = { echospace = 68 },
 
   loop = {
+    hrtime = function()
+      return 0
+    end,
     new_tcp = function()
       return {
         bind = function(self, host, port)
@@ -1460,7 +1460,7 @@ vim._tab_windows[1] = { 1000 }
 vim._current_window = 1000
 
 -- Global options table (minimal)
-vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "" }, {
+vim.o = setmetatable({ columns = 120, lines = 40, eventignore = "", fileformats = "unix,dos" }, {
   __index = function(_, k)
     return vim._options[k]
   end,
