@@ -716,6 +716,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   --- signal of that name reaches its process group
   ---@field during_mv boolean|nil The runner's mv, which renames the folder, waits until the shell that execs timeout has
   --- started the file's Neovim
+  ---@field exit_path "mv"|"rm"|nil The runner takes an error exit, because the state folder is gone when it opens its
+  --- status file, and the cleanup of that exit waits at its mv or at its rm until the signal has been sent
   ---@field write_before_kill boolean|nil The cleanup waits after it moved the folder and before it kills, and the file's
   --- Neovim writes into the old folder path then, as a live Neovim does
   ---@field caller_reports boolean|nil Run the runner once in a calling shell, which prints the status of the runner and
@@ -768,6 +770,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if run.during_mv then
       write(dir .. "/mv.hold", {})
     end
+    if run.exit_path then
+      write(dir .. "/mkdir.drop_state", {})
+      write(dir .. "/" .. run.exit_path .. ".hold", {})
+    end
     if run.write_before_kill then
       write(dir .. "/cat.hold", {})
       write(dir .. "/slow_spec.lua.write_on_cue", {})
@@ -794,11 +800,15 @@ describe("scripts/run_integration_tests_individually.sh", function()
     local gate = run.window and "/slow_spec.lua.timeout_started"
       or hold and "/a.held"
       or run.during_rm == "tee" and "/tee.held"
+      or run.exit_path and "/" .. run.exit_path .. ".held"
       or "/slow_spec.lua.started"
     local send = ""
     if not run.interrupt then
       send = "for _ in $(seq 100); do [ -e " .. quote(dir .. gate) .. " ] && break; sleep 0.1; done; "
       send = send .. "kill -" .. signal .. " " .. target .. "; "
+    end
+    if run.exit_path then
+      send = send .. "sleep 0.3; : > " .. quote(dir .. "/" .. run.exit_path .. ".release") .. "; "
     end
     if run.during_mv then
       send = send .. "for _ in $(seq 100); do [ -e " .. quote(dir .. "/mv.held") .. " ] && break; sleep 0.1; done; "
@@ -1050,6 +1060,30 @@ describe("scripts/run_integration_tests_individually.sh", function()
     assert.are.equal("", result.left, "the file's Neovim made a folder at the old path, and the cleanup left it")
     assert.is_false(result.ended)
   end)
+
+  -- The cleanup of an error exit runs as the EXIT trap and ignores no signal. A signal that comes while it runs starts a
+  -- second cleanup in the handler, and that one must remove what the first one made as well. INT goes to the process
+  -- group of a calling loop, as Ctrl-C does, and the loop must stop.
+  for _, stop in ipairs({ "mv", "rm" }) do
+    for _, case in ipairs({ { "INT", "130" }, { "TERM", "143" }, { "HUP", "129" } }) do
+      local signal, expected_status = case[1], case[2]
+      it(
+        "removes its folders when " .. signal .. " comes while the cleanup of an error exit is at its " .. stop,
+        function()
+          if signal_is_ignored(signal) then
+            pending(signal .. " is ignored in this environment, so the runner ignores it too")
+          end
+          local result = signal_runner(signal, { exit_path = stop, caller_loop = signal == "INT" })
+
+          assert.are.equal(expected_status, result.status, result.report)
+          assert.are.equal("", result.left, "the runner left its folder or the grave of its first cleanup behind")
+          if signal == "INT" then
+            assert.are.equal("", result.caller_output, "the calling shell went on after the runner got Ctrl-C")
+          end
+        end
+      )
+    end
+  end
 
   it("stops the file and removes its folder under the old name when the rename of the folder fails", function()
     local result = signal_runner("INT", { mv_fails = true })
