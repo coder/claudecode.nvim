@@ -510,9 +510,9 @@ function show_hidden_terminal(effective_config, focus)
 
   -- Set the existing buffer in the new window
   if not utils.win_set_buf_in_split(new_winid, terminal_buf) then
-    -- A BufLeave autocmd of the user's closed the split, or wiped the terminal's buffer, so the terminal shows nowhere
-    -- and stays hidden. Nothing is logged. Without focus, the cursor goes back to the window it was in, as after a
-    -- show, unless that autocmd closed it.
+    -- A BufLeave autocmd of the user's closed the split, wiped the terminal's buffer or closed Claude, so nothing
+    -- shows. The terminal stays hidden, or is gone when its buffer is gone. Nothing is logged. Without focus, the
+    -- cursor goes back to the window it was in, as after a show, unless that autocmd closed it.
     if not focus and vim.api.nvim_win_is_valid(original_win) then
       vim.api.nvim_set_current_win(original_win)
     end
@@ -608,7 +608,8 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
     -- Terminal is not visible
     if has_buffer then
       -- Terminal process exists but is hidden, show it
-      -- A false return leaves the terminal hidden. The show logs nothing about it, and neither does this toggle.
+      -- A false return shows nothing. The terminal stays hidden, or is gone when a BufLeave autocmd wiped its buffer
+      -- or closed Claude, and the next toggle then starts a new one. Neither the show nor this toggle logs anything.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
       end
@@ -648,7 +649,8 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- Terminal process exists but is hidden, show it
-      -- A false return leaves the terminal hidden. The show logs nothing about it, and neither does this toggle.
+      -- A false return shows nothing. The terminal stays hidden, or is gone when a BufLeave autocmd wiped its buffer
+      -- or closed Claude, and the next toggle then starts a new one. Neither the show nor this toggle logs anything.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
       end
