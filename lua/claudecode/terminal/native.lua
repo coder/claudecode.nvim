@@ -201,7 +201,7 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   -- 'nohidden' that would unload a buffer that is not bufhidden=hide. Before termopen, Neovim loads it again, and on
   -- 0.8 its term:// reader starts a second terminal in it. In TermOpen, the unload ends Claude.
   vim.bo[new_bufnr].bufhidden = "hide"
-  vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+  utils.win_set_buf_in_split(new_winid, new_bufnr)
 
   -- Shell-aware split + leading-tilde expansion so quoted args and "~/..."
   -- paths survive, while no shell touches bracketed model aliases like
@@ -260,7 +260,7 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
   -- terminal while it starts and hides its focused window, for example. Claude then runs in no window, like any hidden
   -- terminal, and the next toggle shows it.
   if vim.api.nvim_win_is_valid(new_winid) and vim.api.nvim_win_get_buf(new_winid) ~= new_bufnr then
-    vim.api.nvim_win_set_buf(new_winid, new_bufnr)
+    utils.win_set_buf_in_split(new_winid, new_bufnr)
   end
   winid = new_winid
   bufnr = new_bufnr
@@ -280,8 +280,9 @@ local function start_terminal(cmd_string, env_table, effective_config, focus)
     if effective_config.auto_insert ~= false then
       vim.cmd("startinsert")
     end
-  else
-    -- Preserve user context: return to the window they were in before terminal creation
+  elseif vim.api.nvim_win_is_valid(original_win) then
+    -- Preserve user context: return to the window they were in before terminal creation. A BufLeave autocmd that wiped
+    -- the user's file has closed it, and the terminal stays hidden then.
     vim.api.nvim_set_current_win(original_win)
   end
 
@@ -458,6 +459,8 @@ function show_hidden_terminal(effective_config, focus)
   end
 
   local original_win = vim.api.nvim_get_current_win()
+  -- Read before the vsplit and the swap, whose autocmds can close Claude, and that clears `bufnr`.
+  local terminal_buf = bufnr
 
   -- Create a new window for the existing buffer
   local width = math.floor(vim.o.columns * effective_config.split_width_percentage)
@@ -475,7 +478,15 @@ function show_hidden_terminal(effective_config, focus)
   vim.api.nvim_win_set_height(new_winid, full_height)
 
   -- Set the existing buffer in the new window
-  vim.api.nvim_win_set_buf(new_winid, bufnr)
+  if not utils.win_set_buf_in_split(new_winid, terminal_buf) then
+    -- A BufLeave autocmd of the user's closed the split, wiped the terminal's buffer or closed Claude, so nothing
+    -- shows. The terminal stays hidden, or is gone when its buffer is gone. Nothing is logged. Without focus, the
+    -- cursor goes back to the window it was in, as after a show, unless that autocmd closed it.
+    if not focus and vim.api.nvim_win_is_valid(original_win) then
+      vim.api.nvim_set_current_win(original_win)
+    end
+    return false
+  end
   winid = new_winid
 
   if focus then
@@ -566,10 +577,10 @@ function M.simple_toggle(cmd_string, env_table, effective_config)
     -- Terminal is not visible
     if has_buffer then
       -- Terminal process exists but is hidden, show it
+      -- A false return shows nothing. The terminal stays hidden, or is gone when a BufLeave autocmd wiped its buffer
+      -- or closed Claude, and the next toggle then starts a new one. Neither the show nor this toggle logs anything.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
-      else
-        logger.error("terminal", "Failed to show hidden terminal")
       end
     else
       -- No terminal process exists, check if there's an existing one we lost track of
@@ -607,10 +618,10 @@ function M.focus_toggle(cmd_string, env_table, effective_config)
       end
     else
       -- Terminal process exists but is hidden, show it
+      -- A false return shows nothing. The terminal stays hidden, or is gone when a BufLeave autocmd wiped its buffer
+      -- or closed Claude, and the next toggle then starts a new one. Neither the show nor this toggle logs anything.
       if show_hidden_terminal(effective_config, true) then
         logger.debug("terminal", "Showing hidden terminal")
-      else
-        logger.error("terminal", "Failed to show hidden terminal")
       end
     end
   else

@@ -120,6 +120,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     package.loaded["claudecode.terminal.snacks"] = nil
     package.loaded["claudecode.terminal.owned"] = nil
     snacks_provider = require("claudecode.terminal.snacks")
+    require("tests.helpers.plain_placement").install()
   end
 
   before_each(function()
@@ -452,6 +453,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
   end)
 
   after_each(function()
+    require("tests.helpers.plain_placement").restore()
     _G.vim = original_vim
     package.loaded["snacks"] = nil
     package.loaded["claudecode.utils"] = nil

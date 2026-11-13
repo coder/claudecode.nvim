@@ -399,6 +399,8 @@ local function cc_show(term, focus, config)
   end
 
   local original_win = vim.api.nvim_get_current_win()
+  -- Read before the split and the swap, whose autocmds can close Claude, and that clears `term.buf`.
+  local term_buf = term.buf
   local horizontal = position == "top" or position == "bottom"
   local lead = (position == "top" or position == "left") and "topleft " or "botright "
   local new_win
@@ -416,10 +418,21 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
+  local placed
   if focus then
-    vim.api.nvim_win_set_buf(new_win, term.buf)
+    placed = utils.win_set_buf_in_split(new_win, term_buf)
   else
-    utils.win_set_buf_without_bufenter(new_win, term.buf)
+    placed = utils.win_set_buf_in_split(new_win, term_buf, { ignore_bufenter = true })
+  end
+  if not placed then
+    -- A BufLeave autocmd of the user's closed the split, wiped the terminal's buffer or closed Claude, so nothing
+    -- shows. The terminal stays hidden, or is gone when its buffer is gone. Nothing is logged. Without focus, the
+    -- cursor goes back to the window it was in, as after a show, unless that autocmd closed it.
+    term.win = nil
+    if not focus and vim.api.nvim_win_is_valid(original_win) then
+      vim.api.nvim_set_current_win(original_win)
+    end
+    return false
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native

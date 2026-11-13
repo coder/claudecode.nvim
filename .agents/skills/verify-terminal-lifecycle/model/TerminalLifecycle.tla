@@ -306,7 +306,7 @@ HasFresh(w) == \E t \in Terms : w.by[t] = None
 FreshT(w) == CHOOSE t \in Terms : w.by[t] = None
 
 (* A start up to termopen. native.lua open_terminal: vsplit, a new buffer, *)
-(* the mark, nvim_win_set_buf. snacks: Snacks.terminal.open shows its      *)
+(* the mark, win_set_buf_in_split. snacks: Snacks.terminal.open shows its *)
 (* window and scratch buffer before it calls termopen.                     *)
 Split(w, p, t) ==
   [w EXCEPT !.by[t] = p, !.gen[t] = "cur", !.buf[t] = TRUE, !.win[t] = TRUE,

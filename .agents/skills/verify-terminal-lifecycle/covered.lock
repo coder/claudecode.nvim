@@ -37,23 +37,23 @@ site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks"
 site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks") @ local function get_provider()
 site lua/claudecode/terminal.lua: return get_provider().get_active_bufnr() @ function M.get_active_terminal_bufnr()
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 499ff3c0dccd4a1b
+file lua/claudecode/terminal/native.lua f7e0fb030c0c487d
 block is_last_window         ca717305ec122468
 block is_valid               d3f215f69bdc28bf
 block forget_exited          2ab5742b54f43e66
 block forget_ended           aec79589d4546ab6
 block adopt                  c89db8a9183c7aff
 block stop_snacks            3b6ad0bb3ca53456
-block start_terminal         254e75ec3b15afc6
+block start_terminal         4a5167f7b2733904
 block open_terminal          588edf5c85e83068
 block close_terminal         58ef17ed38295567
 block native_visible         4c17f637808c446a
 block hide_terminal          2e97ed454c3e46a0
-block show_hidden            875f91703794172d
+block show_hidden            9fbb7027cd800388
 block focus_adopted          579c004bde4a34d3
 block native_open            1cc698999c199996
-block native_simple_toggle   5def423db2692fc0
-block native_focus_toggle    79f16bb8bcf0663b
+block native_simple_toggle   02774804fa59ce33
+block native_focus_toggle    25837c821d84f407
 block native_active          c01277ba06b3891c
 site lua/claudecode/terminal/native.lua: adopt_existing_terminal() @ function M.get_active_bufnr()
 site lua/claudecode/terminal/native.lua: cleanup_state() -- Clear our managed state first @ local function forget_exited_job(job_id, auto_close)
@@ -129,12 +129,12 @@ site lua/claudecode/terminal/owned.lua: local function stop_buffer(buf, mark) @ 
 site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ function M.wait_for_exec(jobid)
 site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ local function stop_buffer(buf, mark)
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua e485db291da18aab
+file lua/claudecode/terminal/snacks.lua 154059961dfa8a1a
 block snacks_available       4023f2a3d4a90e0e
 block snacks_events          6db7bed40172cc23
 block cc_is_visible          8790d471872e649b
 block cc_hide                f180c5a98143f116
-block cc_show                04067f53deba36c3
+block cc_show                97b2f08a6f72c602
 block snacks_forget_ended    c7d2db0114e9d0bf
 block snacks_remember_backdrop 806a2a1326965830
 block snacks_register_events 84f1e908c74c2195

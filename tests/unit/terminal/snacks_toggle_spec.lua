@@ -235,9 +235,11 @@ describe("claudecode.terminal.snacks hide/show/toggle", function()
     package.loaded["claudecode.utils"] = nil
     package.loaded["claudecode.terminal.snacks"] = nil
     snacks_provider = require("claudecode.terminal.snacks")
+    require("tests.helpers.plain_placement").install()
   end)
 
   after_each(function()
+    require("tests.helpers.plain_placement").restore()
     _G.vim = original_vim
     package.loaded["snacks"] = nil
     package.loaded["claudecode.utils"] = nil
