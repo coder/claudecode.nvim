@@ -202,7 +202,10 @@ describe("paths that tear a diff down while Neovim refuses window changes", func
           reply = fresh.inbox
         end)
 
-        assert.is_truthy(reply:find('"error"', 1, true), "the new call got an error answer while windows were locked")
+        assert.is_truthy(
+          reply:find("Diff setup failed", 1, true),
+          "the new call got the setup error that every openDiff gets while windows are locked"
+        )
         assert.same({ tab_shared = "rejected" }, in_lock, "the old call has its answer and its diff waits")
         assert_closed_after_the_lock(windows_before)
         assert.is_nil(vim.v.errmsg:find("diffoff", 1, true), "the cleanup of the old diff raised: " .. vim.v.errmsg)
