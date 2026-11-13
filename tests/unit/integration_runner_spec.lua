@@ -353,6 +353,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   local orphan_pid
   local helper_pids
   local short_temps
+  local short_temp_path
 
   ---@param path string
   ---@param lines string[]
@@ -388,6 +389,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     orphan_pid = nil
     helper_pids = {}
     short_temps = {}
+    short_temp_path = nil
     shell("mkdir -p " .. quote(dir .. "/bin") .. " " .. quote(dir .. "/tests/integration"))
     write(dir .. "/bin/nvim", STUB_NVIM, true)
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
@@ -415,20 +417,30 @@ describe("scripts/run_integration_tests_individually.sh", function()
     temp_dir.remove(dir)
   end)
 
+  ---@return string folder A new folder /tmp/ccr.XXXXXX, 15 bytes long, that after_each removes
+  local function ccr_folder()
+    local pipe = assert(io.popen("mktemp -d /tmp/ccr.XXXXXX"))
+    local folder = assert(pipe:read("*l"))
+    pipe:close()
+    table.insert(short_temps, folder)
+    return folder
+  end
+
   -- The runner moves a work folder with a name over 80 bytes to /tmp, and a check of the TMPDIR would then see nothing.
-  -- A folder for the TMPDIR of the runner is therefore short: the work folder in it is "/tmp.XXXXXXXXXX" more.
+  -- A test that depends on the length of the work folder name, or that names the work folder through the mktemp stub,
+  -- builds it in this folder. It is short: the work folder in it is "/tmp.XXXXXXXXXX" more. The same folder serves the
+  -- whole test.
   ---@return string temp A folder that exists, where the runner keeps its work folders
   local function short_temp()
-    local temp = dir .. "/tmp"
-    if #temp + 15 > 80 then
-      local pipe = assert(io.popen("mktemp -d /tmp/ccr.XXXXXX"))
-      temp = assert(pipe:read("*l"))
-      pipe:close()
-      table.insert(short_temps, temp)
+    if not short_temp_path then
+      short_temp_path = dir .. "/tmp"
+      if #short_temp_path + 15 > 80 then
+        short_temp_path = ccr_folder()
+      end
+      shell("mkdir -p " .. quote(short_temp_path))
+      assert(#short_temp_path + 15 <= 80, short_temp_path)
     end
-    shell("mkdir -p " .. quote(temp))
-    assert(#temp + 15 <= 80, temp)
-    return temp
+    return short_temp_path
   end
 
   ---@class ScriptSpec
@@ -678,7 +690,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if not tmp_is_writable or characters ~= "1" then
       pending("needs a writable /tmp and the locale C.utf8")
     end
-    local long = dir .. "/" .. string.rep("\195\169", 30)
+    local long = ccr_folder() .. "/" .. string.rep("\195\169", 30)
     shell("mkdir -p " .. quote(long))
     local status, output = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
@@ -694,11 +706,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
   for _, case in ipairs({ { 80, false }, { 81, true } }) do
     local bytes, moves = case[1], case[2]
     it("puts a work folder name of " .. bytes .. " bytes " .. (moves and "in /tmp" or "where it is"), function()
-      local parent = dir .. "/boundary"
-      if not tmp_is_writable or #parent + 2 > bytes then
-        pending("needs a writable /tmp and a test folder shorter than " .. bytes .. " bytes")
+      if not tmp_is_writable then
+        pending("needs a /tmp that the test can write to")
       end
-      shell("mkdir -p " .. quote(parent))
+      local parent = short_temp()
       local name = parent .. "/" .. string.rep("w", bytes - #parent - 1)
       write(dir .. "/mktemp.name", { name })
       local status, output = run_script({
@@ -1173,7 +1184,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   end)
 
   it("leaves a folder alone that is named like its temp folder with .gone added", function()
-    local work = dir .. "/tmp/fixed"
+    local work = short_temp() .. "/fixed"
     shell("mkdir -p " .. quote(work .. ".gone") .. " && : > " .. quote(work .. ".gone/keep"))
     write(dir .. "/mktemp.name", { work })
     local result = signal_runner("INT", {})
@@ -1260,15 +1271,16 @@ describe("scripts/run_integration_tests_individually.sh", function()
   end)
 
   it("does not remove a folder that it did not make, when the name that mktemp printed exists", function()
-    shell("mkdir " .. quote(dir .. "/taken") .. " && : > " .. quote(dir .. "/taken/keep"))
-    write(dir .. "/mktemp.name", { dir .. "/taken" })
+    local taken = short_temp() .. "/taken"
+    shell("mkdir " .. quote(taken) .. " && : > " .. quote(taken .. "/keep"))
+    write(dir .. "/mktemp.name", { taken })
     local status, output, ran = run_script({
       { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
     })
 
     assert.are_not.equal("0", status, output)
     assert.are.same({}, ran)
-    assert.is_not_nil(io.open(dir .. "/taken/keep"), "the runner removed a folder that it did not make: " .. output)
+    assert.is_not_nil(io.open(taken .. "/keep"), "the runner removed a folder that it did not make: " .. output)
   end)
 
   it("shortens only the kill grace of the file that ignores SIGTERM", function()
