@@ -92,6 +92,9 @@ jobs:
       - name: Check formatting
         run: mise run format-check
 
+      - name: Check that format-check writes nothing
+        run: scripts/test-format-check.sh
+
       - name: Generate coverage report
         run: |
           if [ -f "luacov.stats.out" ]; then
