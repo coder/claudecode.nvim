@@ -49,6 +49,23 @@ bin() {
   mise which "$1" 2>/dev/null || command -v "$1" || die "$1 not found on PATH"
 }
 
+# launch calls this for the tools that it resolves (nvim, node, setsid and jq), and no other command does, so a tool that
+# cannot run never stops the cleanup of a run that exists.
+# A tool that is found but cannot run, such as a mise shim in a checkout that mise does not trust, stops launch here and is
+# named. Left to a later step, it would fail there and name another cause (a jq that cannot run reads as "no agent-tty passes
+# doctor"). The message takes the tool's name from its path, so no code line of this function holds the word jq or setsid.
+# The no-bare-tools case of proof-static.sh fails on a code line that names either as a bare call or as the default of a
+# parameter expansion, except the two resolutions, and it skips a line that is only a comment.
+# The message gives no remedy: the fix that works depends on whether mise or PATH supplied the tool (bin() asks mise first).
+runs_or_die() {
+  local why first tool=${1##*/}
+  why=$("$1" --version 2>&1 >/dev/null </dev/null) || {
+    first=${why%%$'\n'*}
+    die "$tool at $1 does not run: ${first:-it printed no error}
+If it is a mise shim, mise may not trust this checkout."
+  }
+}
+
 env_line() { printf '%s=%q\n' "$1" "$2"; }
 
 # load sources run.env, so $VCN_STATE must be a dir that only this user can write, in a place where no other user can swap
@@ -105,7 +122,8 @@ load() {
     why=$(bad_node_dir "$NODE_DIR")
     [[ -z $why ]] || die "NODE_DIR=$NODE_DIR in $VCN_STATE/run.env is not usable: $why. No command, cleanup included, runs agent-tty with it. To stop this run by hand, stop its nvim and agent-tty processes, then remove its state dir: rm -rf $(printf %q "$VCN_STATE")"
   fi
-  # A run that an older vcn.sh started has no JQ_BIN.
+  # A run that an older vcn.sh started has no JQ_BIN, and cleanup needs one, as on main. It has no SETSID_BIN either: start_client
+  # resolves that, because only a command that starts a client needs setsid.
   [[ -n ${JQ_BIN-} ]] || JQ_BIN=$(bin jq)
 }
 
@@ -472,6 +490,8 @@ start_client() {
   : >>"$OUT/ws-in$ch.jsonl"
   # setsid: an agent's bash tool kills the background jobs of a call when the call ends, and the
   # client must outlive it. The client reads the token from the lock file, so it is not in argv.
+  # A run that an older vcn.sh started has no SETSID_BIN: connect, the only command that gets here for such a run, resolves it.
+  [[ -n ${SETSID_BIN-} ]] || SETSID_BIN=$(bin setsid)
   VCN_RUN_TAG=$VCN_STATE "$SETSID_BIN" "$NODE_DIR/node" "$SKILL_DIR/scripts/ws-client.mjs" \
     "$VCN_STATE/claude/ide/$PORT.lock" "$OUT/ws-out$ch.jsonl" "$OUT/ws-in$ch.jsonl" \
     </dev/null >/dev/null 2>>"$OUT/ws-client$ch.log" &
@@ -490,7 +510,6 @@ cmd_connect() {
   [[ -n ${VCN_CLIENT-} ]] || die "connect needs VCN_CLIENT=<name> for the new client"
   var=$(client_pid_var)
   [[ -z ${!var-} ]] || die "client $VCN_CLIENT was already started in this run"
-  SETSID_BIN=$(bin setsid)
   start_client
   echo "client $VCN_CLIENT connected; its messages are in $OUT/ws-out$(chan).jsonl and $OUT/ws-in$(chan).jsonl"
 }
@@ -535,17 +554,21 @@ cmd_launch() {
   else
     nvim_exe=$(bin nvim)
   fi
+  runs_or_die "$nvim_exe"
   [[ $("$nvim_exe" --version | head -n 1) != "NVIM v0.8."* ]] || nvim_08=1
   att_cands=$(agent_tty_candidates)
   [[ -n $att_cands ]] || no_agent_tty "agent-tty not found on PATH or through mise"
   mapfile -t att_cands <<<"$att_cands"
   VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
+  runs_or_die "$node_exe"
   why=$(bad_node_dir "$(dirname -- "$node_exe")")
   [[ -z $why ]] || die "node is at $node_exe, and its dir is not usable: $why"
   # Every call runs these paths, not the bare names: another setsid or jq earlier on PATH could differ or fail.
   SETSID_BIN=$(bin setsid)
+  runs_or_die "$SETSID_BIN"
   JQ_BIN=$(bin jq)
+  runs_or_die "$JQ_BIN"
   [[ -f $REPO/lua/claudecode/init.lua ]] || die "$REPO is not a claudecode.nvim checkout"
   if [[ -n ${VERIFY_OUT-} ]]; then
     # A trailing slash would make -L test the symlink's target.
@@ -661,6 +684,7 @@ cmd_launch() {
     env_line NVIM_08 "$nvim_08"
     env_line NODE_DIR "$(dirname "$node_exe")"
     env_line JQ_BIN "$JQ_BIN"
+    env_line SETSID_BIN "$SETSID_BIN"
   } >"$state/run.env"
   export VCN_STATE=$state
   # load refuses a state dir that is not its own resolved path or that others can reach, before launch has a teardown to run,
