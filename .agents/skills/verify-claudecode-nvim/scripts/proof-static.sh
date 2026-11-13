@@ -343,7 +343,7 @@ get_misuse() {
 # doc_get_exact_case: the first list holds a line for each shape that the check must flag, the second the lines that it must pass,
 # and the recipe of features/README.md and some changes of it are tried too. A line that starts with ## names a shape and is skipped.
 doc_get_exact_case() {
-  local name=doc-get-exact file recipe hits line sample dflag=" -d ''" ifs="IFS= "
+  local name=doc-get-exact file recipe hits line sample units docs seen dflag=" -d ''" ifs="IFS= "
   local -a joined=() changed=()
   need_docs "$name"
   recipe=$(code_units "$skill/features/README.md" | grep -F 'getz()' || true)
@@ -416,6 +416,8 @@ $(echo ${x%)}; "$V" get OUT)
 ge\t OUT
 g'e't OUT
 x;get OUT
+## a get of a name that holds no path before a get of a path on one line: the check must go on to the second get
+PORT=$("$V" get PORT); OUT=$("$V" get OUT)
 SAMPLES
   joined=(
     $'OUT=$("$V" get \\\n  -z OUT)'
@@ -468,10 +470,15 @@ get
 x=$(forget OUT)
 getz OUT && getz WORK || exit 1
 SAMPLES
+  docs=0 seen=0
   for file in "$skill"/SKILL.md "$skill"/features/*.md; do
-    hits=$(code_units "$file" | get_misuse "$recipe")
+    units=$(code_units "$file")
+    docs=$((docs + 1))
+    seen=$((seen + $(grep -cxF -- "$recipe" <<<"$units" || true)))
+    hits=$(get_misuse "$recipe" <<<"$units")
     [[ -z $hits ]] || fail "$name" "${file#"$skill"/} has a get of a path word in a line that is not the recipe of features/README.md: $(tr '\n' ' ' <<<"$hits")"
   done
+  ((docs == $(find "$skill" -name '*.md' | wc -l) && seen >= 2)) || fail "$name" "the scan read $docs docs and saw the recipe $seen times, wanted every .md file of the skill and the recipe in SKILL.md and in features/README.md"
   echo "ok $name: no code block or span of SKILL.md and features/*.md has a get of OUT, WORK or another path word outside the one recipe line of features/README.md, which SKILL.md repeats byte for byte"
   cases=$((cases + 1))
 }
