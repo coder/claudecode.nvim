@@ -4,7 +4,9 @@
 --- SIGHUP of its own and exits ("Caught deadly signal 'SIGHUP'"). A job that a spec closes soon after termopen can hit
 --- it. After exec the child has no handler of Neovim's. Until exec the child's executable and its command line are
 --- Neovim's own. A job that runs Neovim again has another command line, except one that repeats the command line of
---- the test Neovim: termopen raises for it after 10 s. This needs /proc (Linux). Without it the window stays open.
+--- the test Neovim: its executable and command line do not change at exec, so termopen blocks until that job exits and
+--- raises when the job lives 10 s. A poll can also land inside exec, where the command line reads empty, and return
+--- before exec has ended. This needs /proc (Linux). Without it the window stays open.
 --- A TermOpen autocmd runs inside termopen, before this wait, so a job that it stops stays outside the wrapper. The
 --- autocmd can also stop the job or wipe its buffer, and jobpid then raises.
 
