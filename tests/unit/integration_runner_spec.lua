@@ -50,6 +50,7 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'if [ -f "$STUB_DIR/$name.sleep" ]; then',
   '  if [ -f "$STUB_DIR/$name.deaf_to_term" ]; then trap "" TERM; fi',
   '  : > "$STUB_DIR/$name.started"',
+  '  echo $$ > "$STUB_DIR/$name.pid"',
   '  if [ -f "$STUB_DIR/$name.write_on_cue" ]; then',
   '    (for tick in $(seq 400); do [ -e "$STUB_DIR/$name.cue" ] && break; sleep 0.05; done;',
   '      mkdir -p "$XDG_STATE_HOME/nvim" && : > "$XDG_STATE_HOME/nvim/shada"; : > "$STUB_DIR/$name.written"; sleep 20) &',
@@ -767,6 +768,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   --- started the file's Neovim
   ---@field exit_path "mv"|"rm"|nil The runner takes an error exit, because the state folder is gone when it opens its
   --- status file, and the cleanup of that exit waits at its mv or at its rm until the signal has been sent
+  ---@field kill_before_rm boolean|nil The runner's rm waits half way, and the test notes whether the file's Neovim still
+  --- runs then
   ---@field write_before_kill boolean|nil The cleanup waits after it moved the folder and before it kills, and the file's
   --- Neovim writes into the old folder path then, as a live Neovim does
   ---@field caller_reports boolean|nil Run the runner once in a calling shell, which prints the status of the runner and
@@ -819,6 +822,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if run.during_mv then
       write(dir .. "/mv.hold", {})
     end
+    if run.kill_before_rm then
+      write(dir .. "/rm.hold", {})
+    end
     if run.exit_path then
       write(dir .. "/mkdir.drop_state", {})
       write(dir .. "/" .. run.exit_path .. ".hold", {})
@@ -854,6 +860,12 @@ describe("scripts/run_integration_tests_individually.sh", function()
     if not run.interrupt then
       send = "for _ in $(seq 100); do [ -e " .. quote(dir .. gate) .. " ] && break; sleep 0.1; done; "
       send = send .. "kill -" .. signal .. " " .. target .. "; "
+    end
+    if run.kill_before_rm then
+      send = send .. "for _ in $(seq 100); do [ -e " .. quote(dir .. "/rm.held") .. " ] && break; sleep 0.1; done; "
+      send = send .. 'state=$(ps -o stat= -p "$(cat ' .. quote(dir .. "/slow_spec.lua.pid") .. ')" 2> /dev/null); '
+      send = send .. 'case "$state" in ""|Z*) ;; *) : > ' .. quote(dir .. "/alive_at_rm") .. " ;; esac; "
+      send = send .. ": > " .. quote(dir .. "/rm.release") .. "; "
     end
     if run.exit_path then
       send = send .. "sleep 0.3; : > " .. quote(dir .. "/" .. run.exit_path .. ".release") .. "; "
@@ -1132,6 +1144,14 @@ describe("scripts/run_integration_tests_individually.sh", function()
       )
     end
   end
+
+  it("kills the file's Neovim before its rm deletes the folder", function()
+    local result = signal_runner("INT", { kill_before_rm = true })
+
+    assert.are.equal("130", result.status, result.report)
+    assert.are.equal("", result.left, result.report)
+    assert.is_nil(io.open(dir .. "/alive_at_rm"), "the file's Neovim still ran while the cleanup deleted the folder")
+  end)
 
   it("stops the file and removes its folder under the old name when the rename of the folder fails", function()
     local result = signal_runner("INT", { mv_fails = true })
