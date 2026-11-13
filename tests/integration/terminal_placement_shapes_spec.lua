@@ -193,6 +193,7 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
           terminal_buf
         ),
       current_tab = vim.fn.tabpagenr(),
+      other_windows = other_buf and vim.api.nvim_buf_is_valid(other_buf) and #vim.fn.win_findbuf(other_buf) or 0,
       other_lines = other_buf
           and vim.api.nvim_buf_is_valid(other_buf)
           and vim.api.nvim_buf_is_loaded(other_buf)
@@ -371,7 +372,7 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
   end)
 
   it(
-    "builds the diff in the new tab, with no terminal, when a BufLeave autocmd shows a changed buffer in the split",
+    "builds the diff in the new tab, with the terminal, and keeps the changed buffer that a BufLeave autocmd showed in the split",
     function()
       local exit_code, result = run_child(DIFF_SCRIPT, { SWAP_SHOWS_OTHER = "1" })
 
@@ -380,8 +381,9 @@ describe("the terminal swap when a BufLeave autocmd enters another window, in ot
       assert.is_true(result.armed_used, "the autocmd must have run during the swap, or the test proves nothing")
       assert.is_true(result.deferred, "openDiff must open: " .. result.err)
       assert.equal(2, result.tabs)
-      assert.is_false(result.terminal_in_new_tab, "the buffer that the autocmd showed stays in the split")
+      assert.is_true(result.terminal_in_new_tab, "the terminal must be in a window of the new tab")
       assert.same({ "unsaved X text" }, result.other_lines, "the text of that buffer must be kept")
+      assert.equal(0, result.other_windows, "that buffer is hidden")
       assert.is_true(result.proposal_in_tab_2, "the diff must be built in the new tab")
       assert.is_false(result.proposal_in_tab_1)
     end

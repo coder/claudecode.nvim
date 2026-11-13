@@ -131,7 +131,10 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         c = tostring(c)
         local ignored, swap_buf = c:match('^noautocmd lua vim%.o%.eventignore = "(.-)"; vim%.cmd%("buffer! (%d+)"%)$')
         local enter_win = c:match("^noautocmd call nvim_set_current_win%((%d+)%)$")
-        if c == "startinsert" then
+        local hide_buf, hide_value = c:match("^noautocmd call setbufvar%((%d+), '&bufhidden', (.-)%)$")
+        if hide_buf then
+          table.insert(cmd_log, "bufhidden " .. hide_buf .. " " .. hide_value:gsub("['\"]", ""))
+        elseif c == "startinsert" then
           pending_insert = true
         elseif c == "doautocmd <nomodeline> BufLeave" then
           table.insert(cmd_log, "BufLeave")
@@ -577,11 +580,12 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
   describe("when a BufLeave autocmd shows a changed buffer in the new split", function()
     local OTHER_BUFFER = 900
 
-    -- `buffer!` would wipe this buffer with its text, where a plain swap keeps it, so the helper leaves it in the split.
+    -- `buffer!` would wipe this buffer with its text, where a plain swap keeps it, so the helper hides it for the swap.
     for _, focus in ipairs({ true, false }) do
-      it("shows nothing, and keeps the buffer in the split, with focus " .. tostring(focus), function()
+      it("shows the terminal, and gives the 'bufhidden' of the buffer back, with focus " .. tostring(focus), function()
         local cfg = config()
         local term = open_then_hide(cfg)
+        local terminal_buffer = term.buf
         local split_window
         local original_cmd = vim.cmd
         vim.cmd = function(c)
@@ -590,6 +594,7 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
             split_window = current_win
           elseif c == "doautocmd <nomodeline> BufLeave" then
             windows[split_window].buf = OTHER_BUFFER
+            cmd_log = {}
           end
         end
         vim.bo = setmetatable({}, {
@@ -604,8 +609,9 @@ describe("claudecode.terminal.snacks show without focus (#423)", function()
         local ok, err = pcall(snacks_provider.open, "claude", {}, cfg, focus)
 
         assert.is_true(ok, tostring(err))
-        assert.is_nil(term.win)
-        assert.are.equal(OTHER_BUFFER, windows[split_window].buf)
+        assert.are.equal(split_window, term.win)
+        assert.are.equal(terminal_buffer, windows[split_window].buf)
+        assert.are.same({ "bufhidden 900 hide", "swap", "bufhidden 900 wipe" }, cmd_log)
         assert.are.same({}, logged)
         if not focus then
           assert.are.equal(source_win, current_win)

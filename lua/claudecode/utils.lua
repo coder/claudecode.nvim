@@ -148,8 +148,7 @@ end
 ---@param opts? { ignore_bufenter: boolean? } `ignore_bufenter` keeps `BufEnter` out of the events. A handler of a terminal
 ---buffer can queue an insert with `startinsert` (Snacks' auto_insert, #423), and the insert then starts in the window
 ---the cursor ends in, not in `win`. 'eventignore' is back to the caller's value afterwards, also when the call raises.
----@return boolean placed False when an autocmd of `BufLeave` closed `win`, wiped `buf`, or showed another buffer in `win`
----that the swap would lose, so `buf` shows nowhere. The other buffer stays in `win`.
+---@return boolean placed False when an autocmd of `BufLeave` closed `win` or wiped `buf`, so `buf` shows nowhere.
 function M.win_set_buf_in_split(win, buf, opts)
   local ignore_bufenter = opts ~= nil and opts.ignore_bufenter == true
   if not can_leave_first(win, buf) then
@@ -163,18 +162,17 @@ function M.win_set_buf_in_split(win, buf, opts)
     return true
   end
 
-  local old = vim.api.nvim_win_get_buf(win)
   vim.cmd("doautocmd <nomodeline> BufLeave")
   -- A plain swap shows nothing for a buffer that an autocmd wiped, and raises no error. `:buffer!` would raise E86.
   if not vim.api.nvim_win_is_valid(win) or not vim.api.nvim_buf_is_valid(buf) then
     return false
   end
-  -- An autocmd of BufLeave can show another buffer in `win`. `can_leave_first` checked only `old`, and `:buffer!` would
-  -- unload or wipe that other buffer with its text when its 'bufhidden' says so, where a plain swap keeps it.
+  -- A plain swap leaves a changed buffer loaded and hidden, also when an autocmd of BufLeave showed it in `win`, or closed
+  -- its other window, after the swap had decided that it can leave. `:buffer!` unloads or wipes such a buffer with its text
+  -- when its 'bufhidden' says so. So the buffer that `win` shows now is hidden for the swap, and gets its 'bufhidden' back
+  -- after it. `:noautocmd` keeps both changes from running OptionSet autocmds, as a plain swap changes no option.
   local shown = vim.api.nvim_win_get_buf(win)
-  if shown ~= old and not can_abandon(shown) then
-    return false
-  end
+  local bufhidden = not can_abandon(shown) and vim.bo[shown].bufhidden or nil
   -- A plain swap leaves the cursor in `win`, also when an autocmd entered another window, a window of another tab as
   -- well, and the code that called this goes on in the tab it was in.
   if vim.api.nvim_get_current_win() ~= win then
@@ -184,9 +182,20 @@ function M.win_set_buf_in_split(win, buf, opts)
   if ignore_bufenter then
     table.insert(ignored, "BufEnter")
   end
-  vim.cmd(
+  if bufhidden ~= nil then
+    vim.cmd(string.format("noautocmd call setbufvar(%d, '&bufhidden', 'hide')", shown))
+  end
+  local swapped, swap_error = pcall(
+    vim.cmd,
     string.format("noautocmd lua vim.o.eventignore = %q; vim.cmd(%q)", eventignore_with(ignored), "buffer! " .. buf)
   )
+  -- An autocmd of the swap can have wiped the buffer.
+  if bufhidden ~= nil and vim.api.nvim_buf_is_valid(shown) then
+    vim.cmd(string.format("noautocmd call setbufvar(%d, '&bufhidden', %q)", shown, bufhidden))
+  end
+  if not swapped then
+    error(swap_error, 0)
+  end
   return true
 end
 

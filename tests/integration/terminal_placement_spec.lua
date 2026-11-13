@@ -790,111 +790,144 @@ describe("the terminal's placement in its own split", function()
       )
     end
 
-    ---The state of the buffer `_G.other` that an autocmd of BufLeave showed in the split: the helper must not lose its text.
+    ---The state of the buffer `_G.other` that an autocmd of BufLeave showed in the split. The helper keeps its text,
+    ---leaves it hidden, gives its 'bufhidden' back, and runs no OptionSet autocmd for its own changes of that option.
     local function other_buffer()
       return call([[
         local buf = _G.other
         local loaded = vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)
-        return { valid = vim.api.nvim_buf_is_valid(buf), loaded = loaded, lines = loaded and vim.api.nvim_buf_get_lines(buf, 0, -1, false) or {} }
+        return {
+          valid = vim.api.nvim_buf_is_valid(buf),
+          loaded = loaded,
+          lines = loaded and vim.api.nvim_buf_get_lines(buf, 0, -1, false) or {},
+          windows = loaded and #vim.fn.win_findbuf(buf) or 0,
+          bufhidden = loaded and vim.bo[buf].bufhidden or "",
+          optionset = _G.optionset,
+        }
       ]])
     end
 
-    -- A BufLeave autocmd shows another buffer in the split. `:buffer!` skips the E37 check of a plain swap, and it unloads
-    -- or wipes a changed buffer with these values of 'bufhidden'. A plain swap keeps the text.
-    for _, bufhidden in ipairs({ "unload", "delete", "wipe" }) do
-      it(
-        "keeps the text of a new buffer that an autocmd showed in the split, with 'bufhidden' " .. bufhidden,
-        function()
-          local result = run(string.format(
-            [[
-          local file, terminal, split = ...
-          _G.other = vim.api.nvim_create_buf(true, false)
-          vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
-          vim.bo[_G.other].bufhidden = %q
-          vim.api.nvim_create_autocmd("BufLeave", {
-            buffer = file,
-            once = true,
-            callback = function()
-              vim.api.nvim_win_set_buf(split, _G.other)
-            end,
-          })
-          return {}
-        ]],
-            bufhidden
-          ))
-
-          local other = other_buffer()
-          assert.same({ valid = true, loaded = true, lines = { "unsaved X text" } }, other)
-          assert.is_false(result.placed)
-          assert.equal("other", result.split)
-        end
-      )
-
-      it(
-        "keeps the unsaved text of a file that an autocmd moved into the split, with 'bufhidden' " .. bufhidden,
-        function()
-          -- The file shows in a window W, and the autocmd shows it in the split and closes W.
-          local result = run(string.format(
-            [[
-          local file, terminal, split = ...
-          vim.cmd("belowright split")
-          local window = vim.api.nvim_get_current_win()
-          _G.other = vim.api.nvim_create_buf(true, false)
-          vim.api.nvim_win_set_buf(window, _G.other)
-          vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "user typed this, unsaved" })
-          vim.bo[_G.other].bufhidden = %q
-          vim.api.nvim_set_current_win(split)
-          vim.api.nvim_create_autocmd("BufLeave", {
-            buffer = file,
-            once = true,
-            callback = function()
-              vim.api.nvim_win_set_buf(split, _G.other)
-              vim.api.nvim_win_close(window, true)
-            end,
-          })
-          return {}
-        ]],
-            bufhidden
-          ))
-
-          local other = other_buffer()
-          assert.same({ valid = true, loaded = true, lines = { "user typed this, unsaved" } }, other)
-          assert.is_false(result.placed)
-          assert.equal("other", result.split)
-        end
+    ---An autocmd of BufLeave shows a new, changed buffer in the split. `extra` is more Lua for the arrangement.
+    local function new_buffer_shape(bufhidden, extra)
+      return string.format(
+        [[
+        local file, terminal, split = ...
+        _G.other = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
+        vim.bo[_G.other].bufhidden = %q
+        _G.optionset = 0
+        vim.api.nvim_create_autocmd("OptionSet", {
+          pattern = "bufhidden",
+          callback = function()
+            _G.optionset = _G.optionset + 1
+          end,
+        })
+        %s
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = file,
+          once = true,
+          callback = function()
+            vim.api.nvim_win_set_buf(split, _G.other)
+          end,
+        })
+        return {}
+      ]],
+        bufhidden,
+        extra or ""
       )
     end
 
-    for _, bufhidden in ipairs({ "", "hide" }) do
+    ---An autocmd of BufLeave shows the user's unsaved file in the split, and closes the window W that showed it.
+    local function moved_file_shape(bufhidden)
+      return string.format(
+        [[
+        local file, terminal, split = ...
+        vim.cmd("belowright split")
+        local window = vim.api.nvim_get_current_win()
+        _G.other = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_win_set_buf(window, _G.other)
+        vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "user typed this, unsaved" })
+        vim.bo[_G.other].bufhidden = %q
+        _G.optionset = 0
+        vim.api.nvim_create_autocmd("OptionSet", {
+          pattern = "bufhidden",
+          callback = function()
+            _G.optionset = _G.optionset + 1
+          end,
+        })
+        vim.api.nvim_set_current_win(split)
+        vim.api.nvim_create_autocmd("BufLeave", {
+          buffer = file,
+          once = true,
+          callback = function()
+            vim.api.nvim_win_set_buf(split, _G.other)
+            vim.api.nvim_win_close(window, true)
+          end,
+        })
+        return {}
+      ]],
+        bufhidden
+      )
+    end
+
+    -- A BufLeave autocmd shows another buffer in the split. `:buffer!` skips the E37 check of a plain swap, and it unloads
+    -- or wipes a changed buffer with 'bufhidden' unload, delete or wipe, where a plain swap keeps the text. The helper
+    -- hides that buffer for the swap and gives its 'bufhidden' back, so the terminal shows and the text stays.
+    for _, bufhidden in ipairs({ "", "hide", "unload", "delete", "wipe" }) do
       it(
-        "shows the buffer, and keeps the text of the other buffer, when it can be hidden, with 'bufhidden' '"
+        "shows the buffer and keeps a new buffer that an autocmd showed in the split, 'bufhidden' '" .. bufhidden .. "'",
+        function()
+          local result = run(new_buffer_shape(bufhidden))
+
+          assert.same({
+            valid = true,
+            loaded = true,
+            lines = { "unsaved X text" },
+            windows = 0,
+            bufhidden = bufhidden,
+            optionset = 0,
+          }, other_buffer())
+          assert.is_true(result.placed)
+          assert.equal("terminal", result.split)
+        end
+      )
+
+      it(
+        "shows the buffer and keeps the unsaved file that an autocmd moved into the split, 'bufhidden' '"
           .. bufhidden
           .. "'",
         function()
-          local result = run(string.format(
-            [[
-          local file, terminal, split = ...
-          _G.other = vim.api.nvim_create_buf(true, false)
-          vim.api.nvim_buf_set_lines(_G.other, 0, -1, false, { "unsaved X text" })
-          vim.bo[_G.other].bufhidden = %q
-          vim.api.nvim_create_autocmd("BufLeave", {
-            buffer = file,
-            once = true,
-            callback = function()
-              vim.api.nvim_win_set_buf(split, _G.other)
-            end,
-          })
-          return {}
-        ]],
-            bufhidden
-          ))
+          local result = run(moved_file_shape(bufhidden))
 
-          assert.same({ valid = true, loaded = true, lines = { "unsaved X text" } }, other_buffer())
+          assert.same({
+            valid = true,
+            loaded = true,
+            lines = { "user typed this, unsaved" },
+            windows = 0,
+            bufhidden = bufhidden,
+            optionset = 0,
+          }, other_buffer())
           assert.is_true(result.placed)
           assert.equal("terminal", result.split)
         end
       )
     end
+
+    it("gives the 'bufhidden' back, and raises the error, when an autocmd of the swap raises", function()
+      -- The swap hides the buffer, so its BufHidden autocmd runs inside the swap.
+      local ok = pcall(
+        run,
+        new_buffer_shape(
+          "wipe",
+          [[vim.api.nvim_create_autocmd("BufHidden", { buffer = _G.other, callback = function() error("USER ERROR") end })]]
+        )
+      )
+
+      assert.is_false(ok, "the error of the autocmd must reach the caller")
+      local other = other_buffer()
+      assert.equal("wipe", other.bufhidden, "the 'bufhidden' must be back after the error")
+      assert.same({ "unsaved X text" }, other.lines)
+    end)
 
     it("shows the buffer in the split when an autocmd entered a window that already showed the buffer", function()
       local result = run([[
@@ -1288,7 +1321,7 @@ describe("the terminal's placement in its own split", function()
     end)
 
     ---A BufLeave autocmd of the user's file (once) shows a changed buffer in the split that it runs in, with the given
-    ---'bufhidden'. `buffer!` would unload or wipe that buffer with its text, so the helper leaves it in the split.
+    ---'bufhidden'. `buffer!` would unload or wipe that buffer with its text, so the helper hides it for the swap.
     local function arm_split_shows_other(bufhidden)
       call(
         [[
@@ -1331,12 +1364,13 @@ describe("the terminal's placement in its own split", function()
       ]])
     end
 
-    for _, bufhidden in ipairs({ "unload", "delete", "wipe" }) do
+    for _, bufhidden in ipairs({ "", "unload", "delete", "wipe" }) do
       it(
-        "starts a new terminal that stays hidden, with no error, when the autocmd shows a changed buffer in the split, 'bufhidden' "
-          .. bufhidden,
+        "starts a new terminal in the split, and keeps the changed buffer that the autocmd showed there, 'bufhidden' '"
+          .. bufhidden
+          .. "'",
         function()
-          -- The helper returns false and keeps the buffer. A plain swap to repair the split after termopen would raise E37.
+          -- The helper hides that buffer for the swap, so the split shows the terminal and nothing needs a second swap.
           start_child()
           arm_split_shows_other(bufhidden)
 
@@ -1345,17 +1379,17 @@ describe("the terminal's placement in its own split", function()
           local state = shows_other_state()
           assert.is_true(ok, "the command must not fail: " .. tostring(err))
           assert.same({ "unsaved X text" }, state.other_lines)
-          assert.equal(1, state.other_windows, "the buffer stays in the split")
-          assert.equal(0, state.terminal_windows)
-          assert.is_true(state.job_running, "the terminal must still start")
+          assert.equal(0, state.other_windows, "the buffer is hidden")
+          assert.equal(1, state.terminal_windows)
+          assert.is_true(state.job_running, "the terminal must start")
         end
       )
 
       for _, entry in ipairs({ "ClaudeCodeOpen", "ensure_visible" }) do
         it(
-          "shows a hidden terminal nowhere, with no error and no message, when the autocmd shows a changed buffer in the split, 'bufhidden' "
+          "shows a hidden terminal in the split, with no error and no message, and keeps the changed buffer that the autocmd showed there, 'bufhidden' '"
             .. bufhidden
-            .. ", for "
+            .. "', for "
             .. entry,
           function()
             start_child()
@@ -1369,13 +1403,15 @@ describe("the terminal's placement in its own split", function()
             local state = shows_other_state()
             assert.is_true(ok, "the call must not fail: " .. tostring(err))
             assert.same({ "unsaved X text" }, state.other_lines)
-            assert.equal(1, state.other_windows, "the buffer stays in the split")
-            assert.equal(0, state.terminal_windows)
+            assert.equal(0, state.other_windows, "the buffer is hidden")
+            assert.equal(1, state.terminal_windows)
             assert.is_true(state.job_running, "the terminal must keep running")
             assert.same({}, state.notes)
-            if entry == "ensure_visible" then
-              assert.is_true(state.cursor_original, "a show without focus leaves the cursor where the user was")
-            end
+            assert.equal(
+              entry == "ensure_visible",
+              state.cursor_original,
+              "only a show without focus leaves the cursor where the user was"
+            )
           end
         )
       end
