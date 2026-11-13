@@ -43,6 +43,9 @@ local STUB_TIMEOUT = concat({ "#!/bin/sh" }, SPEC_NAME, {
 })
 local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   'echo "$name" >> "$STUB_DIR/ran"',
+  "for fd in /proc/$$/fd/*; do",
+  '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/$name.holds_status_file" ;; esac',
+  "done",
   'echo "$*" >> "$STUB_DIR/nvim_args"',
   'if [ -f "$STUB_DIR/$name.sleep" ]; then',
   '  if [ -f "$STUB_DIR/$name.deaf_to_term" ]; then trap "" TERM; fi',
@@ -65,6 +68,7 @@ local STUB_NVIM = concat({ "#!/bin/sh" }, SPEC_NAME, {
   '  echo $! > "$STUB_DIR/$name.orphan.pid"',
   "fi",
   'cat "$STUB_DIR/$name.out"',
+  'if [ -f "$STUB_DIR/$name.remove_state" ]; then rm -rf "$XDG_STATE_HOME"; fi',
   'if [ -f "$STUB_DIR/$name.die_by" ]; then kill -"$(cat "$STUB_DIR/$name.die_by")" $$; fi',
   'exit "$(cat "$STUB_DIR/$name.exit")"',
 })
@@ -132,15 +136,51 @@ end
 local tee_pipe = assert(io.popen("command -v tee 2> /dev/null"))
 local real_tee = assert(tee_pipe:read("*l"), "needs tee")
 tee_pipe:close()
--- Copies its input like tee, then exits with the status in $STUB_DIR/tee.exit when that file exists, after a second
--- when $STUB_DIR/tee.delay exists.
+-- Copies its input like tee, then exits with the status in $STUB_DIR/tee.exit when that file exists, after the seconds
+-- in $STUB_DIR/tee.delay when that file exists.
 local STUB_TEE = {
   "#!/bin/sh",
   quote(real_tee) .. ' "$@"',
   "status=$?",
+  -- After the real tee, so that the output file is opened as early as it is for the real tee.
+  "for fd in /proc/$$/fd/*; do",
+  '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/tee.holds_status_file" ;; esac',
+  "done",
   'if [ -f "$STUB_DIR/tee.exit" ]; then status=$(cat "$STUB_DIR/tee.exit"); fi',
-  'if [ -f "$STUB_DIR/tee.delay" ]; then sleep 1; fi',
+  'if [ -f "$STUB_DIR/tee.delay" ]; then sleep "$(cat "$STUB_DIR/tee.delay")"; fi',
   'exit "$status"',
+}
+
+local mktemp_pipe = assert(io.popen("command -v mktemp 2> /dev/null"))
+local real_mktemp = assert(mktemp_pipe:read("*l"), "needs mktemp")
+mktemp_pipe:close()
+-- Runs the real mktemp, except when $STUB_DIR/mktemp.drop_dirs exists: then mktemp -d prints the name of a folder
+-- that it made and removed again, so the folder does not exist.
+local STUB_MKTEMP = {
+  "#!/bin/sh",
+  'if [ ! -f "$STUB_DIR/mktemp.drop_dirs" ]; then exec ' .. quote(real_mktemp) .. ' "$@"; fi',
+  "path=$(" .. quote(real_mktemp) .. ' "$@") || exit $?',
+  'case "$1" in -d) rmdir "$path" ;; esac',
+  'echo "$path"',
+}
+
+local rm_pipe = assert(io.popen("command -v rm 2> /dev/null"))
+local real_rm = assert(rm_pipe:read("*l"), "needs rm")
+rm_pipe:close()
+-- Notes in $STUB_DIR/rm.holds_status_file that it holds the status file open. Runs the real rm, except when
+-- $STUB_DIR/rm.slow exists: then it walks the way rm -rf does, but slowly. It deletes the
+-- files, waits the seconds in that file, and only then removes the folders, so a file that something makes meanwhile in
+-- a folder stops the removal of the folder ("Directory not empty"), as it does for a slow rm -rf under strace.
+local STUB_RM = {
+  "#!/bin/sh",
+  "for fd in /proc/$$/fd/*; do",
+  '  case "$(readlink "$fd" 2> /dev/null)" in */exit_statuses*) : > "$STUB_DIR/rm.holds_status_file" ;; esac',
+  "done",
+  'if [ ! -f "$STUB_DIR/rm.slow" ]; then exec ' .. quote(real_rm) .. ' "$@"; fi',
+  "shift",
+  'for path in "$@"; do find "$path" -type f -delete; done',
+  'sleep "$(cat "$STUB_DIR/rm.slow")"',
+  'for path in "$@"; do find "$path" -depth -type d -exec rmdir {} +; done',
 }
 
 local timeout_pipe = assert(io.popen("command -v timeout 2> /dev/null"))
@@ -197,6 +237,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
     write(dir .. "/bin/nvim", STUB_NVIM, true)
     write(dir .. "/bin/timeout", STUB_TIMEOUT, true)
     write(dir .. "/bin/tee", STUB_TEE, true)
+    write(dir .. "/bin/rm", STUB_RM, true)
+    write(dir .. "/bin/mktemp", STUB_MKTEMP, true)
   end)
 
   after_each(function()
@@ -219,6 +261,7 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field ignore_term boolean|nil
   ---@field outside_term boolean|nil An outside SIGTERM reaches timeout while the stub nvim sleeps, and nvim dies of it
   ---@field die_by string|nil A signal the stub nvim sends itself after its output, as `kill -<die_by>` takes it
+  ---@field remove_state boolean|nil The stub nvim deletes its state folder after its output
 
   ---@param specs ScriptSpec[]
   ---@param locale string|nil The LC_ALL to run the script under
@@ -242,6 +285,9 @@ describe("scripts/run_integration_tests_individually.sh", function()
       end
       if spec.die_by then
         write(dir .. "/" .. spec.name .. ".die_by", { spec.die_by })
+      end
+      if spec.remove_state then
+        write(dir .. "/" .. spec.name .. ".remove_state", {})
       end
     end
     local command = "cd "
@@ -454,7 +500,8 @@ describe("scripts/run_integration_tests_individually.sh", function()
   ---@field window boolean|nil Send the signal when timeout has started but has not made its process group yet
   ---@field deaf_to_term boolean|nil The file's Neovim ignores SIGTERM
   ---@field caller_loop boolean|nil Run the runner twice in a calling shell and send the signal to their process group
-  ---@field late_tee boolean|nil The file's tee ends a second after the signal, long after the runner cleaned up
+  ---@field late_tee number|nil The file's tee ends this many seconds after its input ends
+  ---@field slow_rm number|nil The runner's rm waits this many seconds between deleting files and removing folders
 
   ---@param signal string The signal to send
   ---@param run SignalRun
@@ -473,7 +520,10 @@ describe("scripts/run_integration_tests_individually.sh", function()
       write(dir .. "/slow_spec.lua.deaf_to_term", {})
     end
     if run.late_tee then
-      write(dir .. "/tee.delay", {})
+      write(dir .. "/tee.delay", { tostring(run.late_tee) })
+    end
+    if run.slow_rm then
+      write(dir .. "/rm.slow", { tostring(run.slow_rm) })
     end
     local temp = dir .. "/tmp"
     shell("mkdir -p " .. quote(temp))
@@ -559,11 +609,66 @@ describe("scripts/run_integration_tests_individually.sh", function()
   end)
 
   it("leaves no exit status file when the file's subshell ends after the runner cleaned up", function()
-    local result = signal_runner("TERM", { late_tee = true })
+    local result = signal_runner("TERM", { late_tee = 1 })
 
     assert.are.equal("143", result.status)
     assert.are.equal("", result.left, "the file's subshell wrote its exit statuses after the runner deleted its items")
     assert.is_nil(result.runner_output:find("No such file", 1, true), result.runner_output)
+  end)
+
+  it("opens no file after its cleanup started, even when its rm is slow and its tee ends late", function()
+    -- The file's tee ends half a second after the signal, while the stub rm waits between its files and its folders.
+    local result = signal_runner("TERM", { late_tee = 0.5, slow_rm = 1.5 })
+
+    assert.are.equal("143", result.status)
+    assert.are.equal("", result.left, "something made a file in a folder that the cleanup was removing")
+    assert.is_nil(result.runner_output:find("Directory not empty", 1, true), result.runner_output)
+  end)
+
+  it("closes the status file for nvim and for tee, which only the file's subshell needs", function()
+    local status, output = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are.equal("0", status, output)
+    assert.is_nil(io.open(dir .. "/a_spec.lua.holds_status_file"), "nvim kept the status file open")
+    assert.is_nil(io.open(dir .. "/tee.holds_status_file"), "tee kept the status file open")
+    assert.is_nil(io.open(dir .. "/rm.holds_status_file"), "the runner kept the status file open after it read it")
+  end)
+
+  it("uses no named descriptor redirection, which bash 3.2 does not know", function()
+    local file = assert(io.open(script))
+    local source = file:read("*a")
+    file:close()
+
+    for line in source:gmatch("[^\n]+") do
+      if not line:match("^%s*#") then
+        assert.is_nil(line:find("{[%a_][%w_]*}[<>]"), line)
+      end
+    end
+  end)
+
+  it("stops and does not pass when it cannot open the status file", function()
+    write(dir .. "/mktemp.drop_dirs", {})
+    local status, output, ran = run_script({
+      { name = "a_spec.lua", exit = 0, output = summary(1, 0, 0) },
+    })
+
+    assert.are_not.equal("0", status, output)
+    assert.is_nil(output:find("All integration tests passed", 1, true), output)
+    assert.are.same({}, ran)
+  end)
+
+  it("uses the exit status of the file's subshell when it cannot read the statuses back", function()
+    -- The stub nvim deletes the state folder, where the statuses go, so the runner finds no file to read.
+    write(dir .. "/tee.exit", { "3" })
+    local status, output = run_script({
+      { name = "gone_spec.lua", exit = 0, output = summary(2, 0, 0), remove_state = true },
+    })
+
+    assert.are.equal("1", status, output)
+    assert.is_truthy(output:find("FAILED: gone_spec.lua: nvim exit 3\n", 1, true), output)
+    assert.is_truthy(output:find("Failed test files:\n  - gone_spec.lua", 1, true), output)
   end)
 
   it("stops a file on SIGTERM that arrives after timeout started and before it made its process group", function()
