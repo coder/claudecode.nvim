@@ -121,6 +121,79 @@ describe("the termopen wrapper of the integration suite", function()
     assert.equal(0, sleeps)
   end)
 
+  -- Neovim's own pid as the job's pid: that process keeps Neovim's executable and command line, so a wrapper that
+  -- reads them from /proc waits until the deadline of its clock. The clock is a fake that only `sleep` advances.
+  local function fake_clock()
+    local clock = { now = 0, sleeps = 0, reads = 0 }
+    function clock.hrtime()
+      clock.reads = clock.reads + 1
+      assert(clock.reads < 100000, "the wrapper still reads the clock after 100000 polls")
+      return clock.now
+    end
+    function clock.sleep(ms)
+      assert(clock.sleeps < 20000, "the wrapper still waits after 20 s")
+      clock.sleeps = clock.sleeps + 1
+      clock.now = clock.now + ms * 1e6
+    end
+    return clock
+  end
+
+  local function assert_waits_to_the_deadline(termopen, clock)
+    local ok, err = pcall(termopen, { "sleep", "60" })
+    assert.is_false(ok, "termopen waited for a child that keeps Neovim's executable and command line")
+    assert.is_truthy(tostring(err):find("did not run exec within 10 s", 1, true), tostring(err))
+    assert.is_true(clock.now >= 10e9, "waited the 10 s")
+  end
+
+  it("reads /proc with its defaults", function()
+    local clock = fake_clock()
+    local termopen = wrap(function()
+      return 7
+    end, {
+      jobpid = function()
+        return vim.fn.getpid()
+      end,
+      hrtime = clock.hrtime,
+      sleep = clock.sleep,
+    })
+    assert_waits_to_the_deadline(termopen, clock)
+  end)
+
+  it("binds its defaults to vim's jobpid, hrtime and sleep", function()
+    local clock = fake_clock()
+    local jobpids = 0
+    local replaced = {
+      {
+        vim.fn,
+        "jobpid",
+        function()
+          jobpids = jobpids + 1
+          return vim.fn.getpid()
+        end,
+      },
+      { vim.loop, "hrtime", clock.hrtime },
+      { vim.loop, "sleep", clock.sleep },
+    }
+    local saved = {}
+    for index, item in ipairs(replaced) do
+      saved[index] = item[1][item[2]]
+      item[1][item[2]] = item[3]
+    end
+    local ok, err = pcall(function()
+      assert_waits_to_the_deadline(
+        wrap(function()
+          return 7
+        end),
+        clock
+      )
+    end)
+    for index, item in ipairs(replaced) do
+      item[1][item[2]] = saved[index]
+    end
+    assert(ok, err)
+    assert.equal(1, jobpids)
+  end)
+
   local function start_job(on_exit)
     vim.cmd("enew")
     return vim.fn.termopen({ "sleep", "60" }, on_exit and { on_exit = on_exit } or vim.empty_dict())
