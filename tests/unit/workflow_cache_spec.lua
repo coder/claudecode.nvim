@@ -81,9 +81,11 @@ describe(".github/workflows/test.yml cache settings", function()
 
   ---@param step string[]
   ---@param action string an action name without a version, such as `actions/cache`
-  ---@return boolean uses_it whether the step's `uses:` names the action
+  ---@return boolean uses_it whether the step's `uses:` starts with the name and `@` or `/` follows it
   local function uses_action(step, action)
-    return (field(step, "uses") or ""):find(action, 1, true) == 1
+    local uses = field(step, "uses") or ""
+    local after = uses:sub(#action + 1, #action + 1)
+    return uses:sub(1, #action) == action and (after == "@" or after == "/")
   end
 
   ---@param step string[]
