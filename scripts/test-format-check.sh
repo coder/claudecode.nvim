@@ -8,8 +8,9 @@
 # on the probes must write the formatted text. The check must pass on the formatted probes, and it must fail on a shell
 # probe that shfmt keeps and shellcheck rejects, also when its name starts with a dash. The dash names are there
 # because a tool reads such a name as an option when no `--` comes before the file names: prettier skips the file,
-# stylua reads `-V...` as `--version` and skips every file of its batch, shfmt stops with an error, and shellcheck reads
-# `-P...` as a source path and lints nothing of that name. In a vendored copy of the repo (a folder with no .git inside
+# stylua reads `-V...` as `--version` and skips every file of its batch, shfmt stops with an error when the name is the
+# first of its file list (it takes a dash name that comes after a plain name as a file), and shellcheck reads `-P...` as
+# a source path and lints nothing of that name. In a vendored copy of the repo (a folder with no .git inside
 # another git repository, made in a temporary folder) the check must pass on a formatted probe and fail on an
 # unformatted one, so treefmt must take the vendored folder as its tree root. After a version bump of a formatter,
 # treefmt must format a file again: the test swaps in a second "version" of stylua (the real one with another quote
@@ -52,7 +53,7 @@ for file in "$md" "$lua" "$sh" "$dash" "$dashlua" "$dashsh" "$dashlint" "$bump";
     : >"$file"
   ) 2>/dev/null; then
     echo "test-format-check: $file exists already (another run of this test, or a run that was killed), so the test" \
-      "cannot use it" >&2
+      "cannot use it. Remove the probes of a killed run with: rm -- <name>" >&2
     exit 2
   fi
   made+=("$file")
@@ -145,6 +146,8 @@ run_check
 
 # 4. shfmt keeps this file, and shellcheck fails on it (SC2086): the check fails, and the tree stays. Then the same for
 # a file whose name starts with -P, which shellcheck reads as a source path when no `--` comes before the file names.
+# That second part cannot show a missing `--` for shellcheck by itself: with `-format-check-probe.sh` in the tree, a
+# run without `--` fails every time ("Unknown format ormat-check-probe.sh"), so the test fails earlier, at step 2.
 write_probes "$formatted_md" "$formatted_lua" "$lint_sh"
 run_check
 [ "$status" -ne 0 ] || fail "format-check passed a file that shellcheck fails"
