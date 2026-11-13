@@ -170,6 +170,12 @@ describe(".github/workflows/test.yml cache settings", function()
       assert.are.equal("false", field(step, "cache", "env"))
     end)
 
+    it("ends the with: block at a step-key line with no letter or digit", function()
+      -- An explicit YAML key: `?` and `:` sit alone at the step-key indent, so cache: false is an entry of env:.
+      local step = mise_step("        ?", "          env", "        :", "          cache: false")
+      assert.is_nil(field(step, "cache", "with"))
+    end)
+
     it("keeps the with: block open over a line of spaces", function()
       local step = mise_step("        ", "          cache: false")
       assert.are.equal("false", field(step, "cache", "with"))
