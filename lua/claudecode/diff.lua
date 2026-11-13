@@ -2180,10 +2180,15 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     if active_diffs[tab_name] == existing_diff then
       M._cleanup_diff_state(tab_name, "replaced by new diff")
     end
-    -- While Neovim refuses window changes, the window gate holds the teardown and the entry stays registered. The setup
-    -- below then fails as every setup does in that state, and the held teardown closes this diff once windows can change.
+    -- While Neovim refuses window changes, the window gate holds the teardown and the entry stays registered. A setup
+    -- would fail in that state, and its failure handlers take this entry for the setup's own diff and leave what the
+    -- setup made. So the call fails here, and the held teardown closes this diff once windows can change.
     if active_diffs[tab_name] == existing_diff then
-      break
+      error({
+        code = -32000,
+        message = "Diff setup failed",
+        data = "tab_name " .. tab_name .. " is held until Neovim allows window changes",
+      })
     end
     existing_diff = active_diffs[tab_name]
   end
