@@ -22,6 +22,7 @@ if vim.loop.os_uname().sysname ~= "Linux" or compiler == "" or vim.fn.executable
 end
 
 local root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h:h")
+local ld_preload_path = dofile(root .. "/tests/helpers/ld_preload_path.lua")
 
 describe("closing a Claude terminal right after it started", function()
   local dir
@@ -29,13 +30,12 @@ describe("closing a Claude terminal right after it started", function()
 
   before_each(function()
     dir = vim.fn.tempname()
-    -- LD_PRELOAD splits its value at spaces and colons, so a TMPDIR with either one (CI also runs the suite under
-    -- "odd tmp 50%") cannot hold the shim.
-    if dir:find("[%s:]") then
+    -- A TMPDIR with a space or a colon cannot hold the shim: see tests/helpers/ld_preload_path.lua.
+    if ld_preload_path.can_name_a_shim(dir) then
+      vim.fn.mkdir(dir, "p")
+    else
       dir = vim.trim(vim.fn.system({ "mktemp", "-d", "/tmp/claudecode.XXXXXX" }))
       assert.equal(0, vim.v.shell_error)
-    else
-      vim.fn.mkdir(dir, "p")
     end
     shim = dir .. "/hold_pty_child.so"
     local output =
