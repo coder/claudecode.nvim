@@ -52,12 +52,10 @@ jq -e '(.error.data // "") | contains("diffoff") | not' "$OUT/diff-replace-cmdwi
 "$V" await d1 10 >"$OUT/diff-replace-cmdwin-a-answer.json" || fail "the first call got no answer"
 jq -e '.result.content[0].text == "DIFF_REJECTED"' "$OUT/diff-replace-cmdwin-a-answer.json" >/dev/null ||
   fail "the first call should be answered DIFF_REJECTED: $(cat "$OUT/diff-replace-cmdwin-a-answer.json")"
-# The refused setup logs an ERROR line wider than the screen, so Neovim waits at Press ENTER and RPC stops answering.
-"$V" capture diff-replace-cmdwin-2-error-prompt >/dev/null
-"$V" keys Enter
+# The call fails before any setup and logs nothing, so no Press ENTER prompt appears. Enter would run the command line.
 "$V" until 'getcmdwintype()' ':'
 [[ $(statuses) == 0/1/0 && $(proposals) == 1 ]] || fail "the old diff should wait, rejected, while the window is open: $(snapshot)"
-"$V" capture diff-replace-cmdwin-3-after-replace >/dev/null
+"$V" capture diff-replace-cmdwin-2-after-replace >/dev/null
 echo "ok: first call answered, b got an error, the old diff waits: $(snapshot)"
 
 step "The user leaves the command-line window; the old diff closes"
@@ -66,7 +64,7 @@ step "The user leaves the command-line window; the old diff closes"
 "$V" until "luaeval('vim.tbl_count(require(\"claudecode.diff\")._get_active_diffs())')" 0 5 ||
   fail "the rejected diff kept its registry entry after the window closed: $(snapshot)"
 [[ $(proposals) == 0 ]] || fail "a proposal buffer is left after its diff closed: $(snapshot)"
-"$V" capture diff-replace-cmdwin-4-closed >/dev/null
-"$V" screenshot diff-replace-cmdwin-4-closed >/dev/null
+"$V" capture diff-replace-cmdwin-3-closed >/dev/null
+"$V" screenshot diff-replace-cmdwin-3-closed >/dev/null
 "$V" record diff-replace-cmdwin >/dev/null
 echo "PASS diff-replace-cmdwin; evidence in $OUT"
