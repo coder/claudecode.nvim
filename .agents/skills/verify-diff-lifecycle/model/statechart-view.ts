@@ -48,5 +48,6 @@ const labels: Record<string, string> = {
   DiffCleanupAtExit: "Neovim exits (VimLeavePre)",
   ExitInSetup:
     "Neovim exits inside a ClaudeCodeDiffOpened handler, during setup",
+  DeferredCleanupRuns: "the cleanup that waited for windows to change runs",
 };
 export const step = (action: string) => labels[action] ?? action;

@@ -1495,8 +1495,9 @@ function M._close_proposal_window(diff_data)
 end
 
 ---A diff needs a partner window. A window that is the only one in diff mode in its tab page has nothing to compare, so
----the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. Neovim refuses
----`:diffoff` in some states (E11 in the command-line window), and then the window keeps its diff mode.
+---the diff mode it has is a leftover of a diff that ended. A diff that the user started has a partner. When Neovim
+---refuses `:diffoff`, the window keeps its diff mode. The cleanup does not run in the command-line window or under
+---textlock, where Neovim refuses it (see `M._cleanup_diff_state`).
 ---@param win number
 local function end_diff_mode_if_alone(win)
   if not vim.api.nvim_get_option_value("diff", { win = win }) then
@@ -1647,15 +1648,11 @@ end
 
 M._release_surviving_diff_tab = release_surviving_diff_tab
 
----Clean up diff state and resources
+---Runs only while Neovim allows window changes: `M._cleanup_diff_state` calls it through the window gate.
 ---@param tab_name string The diff identifier
+---@param diff_data table The entry that `active_diffs[tab_name]` holds
 ---@param reason string Reason for cleanup
-function M._cleanup_diff_state(tab_name, reason)
-  local diff_data = active_diffs[tab_name]
-  if not diff_data then
-    return
-  end
-
+local function teardown_diff(tab_name, diff_data, reason)
   -- Dispatch to unified diff handler
   if diff_data.layout == "unified" then
     local inline = require("claudecode.diff_inline")
@@ -1782,6 +1779,23 @@ function M._cleanup_diff_state(tab_name, reason)
   })
 
   logger.debug("diff", "Cleaned up diff for", tab_name)
+end
+
+---Clean up diff state and resources. While Neovim refuses window changes (the command-line window, textlock), the closes
+---fail or raise, and a half-run cleanup drops the entry while its windows stay. A new diff can take the tab name before
+---a held teardown runs.
+---@param tab_name string The diff identifier
+---@param reason string Reason for cleanup
+function M._cleanup_diff_state(tab_name, reason)
+  local diff_data = active_diffs[tab_name]
+  if not diff_data then
+    return
+  end
+  utils.when_windows_allowed(function()
+    if active_diffs[tab_name] == diff_data then
+      teardown_diff(tab_name, diff_data, reason)
+    end
+  end)
 end
 
 ---Clean up all active diffs
@@ -2166,7 +2180,16 @@ function M.open_diff_blocking(old_file_path, new_file_path, new_file_contents, t
     if active_diffs[tab_name] == existing_diff then
       M._cleanup_diff_state(tab_name, "replaced by new diff")
     end
-    assert(active_diffs[tab_name] ~= existing_diff, "the replaced diff is still registered")
+    -- While Neovim refuses window changes, the window gate holds the teardown and the entry stays registered. A setup
+    -- would fail in that state, and its failure handlers take this entry for the setup's own diff and leave what the
+    -- setup made. So the call fails here, and the held teardown closes this diff once windows can change.
+    if active_diffs[tab_name] == existing_diff then
+      error({
+        code = -32000,
+        message = "Diff setup failed",
+        data = "tab_name " .. tab_name .. " is held until Neovim allows window changes",
+      })
+    end
     existing_diff = active_diffs[tab_name]
   end
 
