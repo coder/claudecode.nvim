@@ -2,6 +2,37 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-14
+
+### Added
+
+- Set the `claudecode` filetype on the Claude terminal buffer (native and snacks), so autocmds can target it ([#202](https://github.com/coder/claudecode.nvim/pull/202), @ehaynes99)
+- `<C-z>` in the Claude terminal now suspends Neovim instead of suspending Claude Code, matching Ctrl-Z in any other window ([#448](https://github.com/coder/claudecode.nvim/pull/448))
+
+### Changed
+
+- The `unified` diff layout now officially runs on Neovim 0.8.0 (it only needs `vim.diff`); the "requires Neovim >= 0.9.0" note has been dropped ([#564](https://github.com/coder/claudecode.nvim/pull/564))
+- `@mentions` are now sent as absolute paths, matching the official VS Code extension and resolving correctly when Claude's working directory differs from Neovim's ([#460](https://github.com/coder/claudecode.nvim/pull/460))
+- An invalid `terminal.provider` value now keeps the previously configured provider and the warning names it accurately (`Keeping 'auto'.`) instead of falsely claiming it defaulted to `native` ([#530](https://github.com/coder/claudecode.nvim/pull/530))
+
+### Fixed
+
+- `:ClaudeCodeAdd %` now works for buffers whose path contains spaces ([#304](https://github.com/coder/claudecode.nvim/pull/304), @joshmedeski)
+- Queued `@mentions` are now delivered once, in order, or report an error; a mention queued while Claude is launching is delivered once Claude connects even if startup is slow ([#454](https://github.com/coder/claudecode.nvim/pull/454))
+- A send with `disable_broadcast_debouncing = true` now waits for the connection readiness window instead of reaching Claude mid-startup ([#541](https://github.com/coder/claudecode.nvim/pull/541))
+- Terminal lifecycle hardening: keep a single live Claude, never run a second one, never close the wrong window, and no longer error with `E444` when Claude's window is the only one ([#451](https://github.com/coder/claudecode.nvim/pull/451))
+- Reuse the `:tabnew` window for the unified new-tab diff, removing the stray empty pane and fixing new-tab cleanup ([#303](https://github.com/coder/claudecode.nvim/pull/303), @zakissimo)
+- Diff accept now returns the exact proposed bytes: keep trailing blank lines in a unified diff ([#535](https://github.com/coder/claudecode.nvim/pull/535)), accept proposals without a final line break in the split layouts ([#542](https://github.com/coder/claudecode.nvim/pull/542)), save an emptied buffer as an empty string ([#551](https://github.com/coder/claudecode.nvim/pull/551)), and save CRLF proposals with CRLF line endings ([#577](https://github.com/coder/claudecode.nvim/pull/577))
+- `getCurrentSelection` answers from the live editor when no selection is tracked, and from the previous window when the Claude terminal is current ([#457](https://github.com/coder/claudecode.nvim/pull/457), [#463](https://github.com/coder/claudecode.nvim/pull/463))
+- Held selections end correctly when their text or cursor changes, and are no longer leaked across file changes or the Claude terminal ([#452](https://github.com/coder/claudecode.nvim/pull/452), [#471](https://github.com/coder/claudecode.nvim/pull/471), [#481](https://github.com/coder/claudecode.nvim/pull/481), [#493](https://github.com/coder/claudecode.nvim/pull/493), [#524](https://github.com/coder/claudecode.nvim/pull/524), [#540](https://github.com/coder/claudecode.nvim/pull/540), [#562](https://github.com/coder/claudecode.nvim/pull/562))
+- Malformed `tools/call` and `close_tab` requests now get proper JSON-RPC `-32602` "Invalid params" errors instead of internal error text or leaked file paths ([#497](https://github.com/coder/claudecode.nvim/pull/497), [#500](https://github.com/coder/claudecode.nvim/pull/500))
+- `saveDocument` reports only the Vim error (e.g. `E45: 'readonly' option is set`) instead of a full Lua stack trace with install paths ([#453](https://github.com/coder/claudecode.nvim/pull/453))
+- `openFile` finishes reloading a file even when a user's `BufReadPre`/`FileChangedShell` autocmd errors, so the buffer holds the new content and a later `:w` doesn't silently overwrite Claude's file ([#461](https://github.com/coder/claudecode.nvim/pull/461), [#468](https://github.com/coder/claudecode.nvim/pull/468))
+- WebSocket server reliability: never time out a live Claude, drop dead or silent clients promptly, and hold disconnect cleanup until window changes are allowed ([#455](https://github.com/coder/claudecode.nvim/pull/455), [#467](https://github.com/coder/claudecode.nvim/pull/467), [#479](https://github.com/coder/claudecode.nvim/pull/479), [#488](https://github.com/coder/claudecode.nvim/pull/488), [#499](https://github.com/coder/claudecode.nvim/pull/499))
+- The Claude terminal working directory is found and used correctly for folders whose names contain spaces, commas, `$`, `\`, brackets, or other path characters ([#561](https://github.com/coder/claudecode.nvim/pull/561), [#569](https://github.com/coder/claudecode.nvim/pull/569))
+- Lock file handling reports failed removals and cleans up on token mismatch, so a stale auth token is never silently left on disk ([#459](https://github.com/coder/claudecode.nvim/pull/459), [#557](https://github.com/coder/claudecode.nvim/pull/557))
+- Extensive diff lifecycle hardening: clean teardown after `:wq`, `:q`, `:qa`, `:edit`, and a second `:w`; preserve the sign column and diff mode in windows a closed diff leaves; hide a floating Claude terminal only while a diff is open in its tab; answer every open diff when Neovim exits; and keep Neovim alive when a user handler raises during diff setup ([#469](https://github.com/coder/claudecode.nvim/pull/469), [#473](https://github.com/coder/claudecode.nvim/pull/473), [#478](https://github.com/coder/claudecode.nvim/pull/478), [#483](https://github.com/coder/claudecode.nvim/pull/483), [#491](https://github.com/coder/claudecode.nvim/pull/491), [#494](https://github.com/coder/claudecode.nvim/pull/494), [#504](https://github.com/coder/claudecode.nvim/pull/504), [#511](https://github.com/coder/claudecode.nvim/pull/511), [#516](https://github.com/coder/claudecode.nvim/pull/516), [#538](https://github.com/coder/claudecode.nvim/pull/538), [#558](https://github.com/coder/claudecode.nvim/pull/558), [#574](https://github.com/coder/claudecode.nvim/pull/574))
+
 ## [0.4.0] - 2026-11-09
 
 ### Added
