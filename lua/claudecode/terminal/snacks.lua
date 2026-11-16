@@ -399,6 +399,8 @@ local function cc_show(term, focus, config)
   end
 
   local original_win = vim.api.nvim_get_current_win()
+  -- Read before the split and the swap, whose autocmds can close Claude, and that clears `term.buf`.
+  local term_buf = term.buf
   local horizontal = position == "top" or position == "bottom"
   local lead = (position == "top" or position == "left") and "topleft " or "botright "
   local new_win
@@ -416,10 +418,21 @@ local function cc_show(term, focus, config)
   -- Set term.win before nvim_win_set_buf so Snacks' fixbuf BufWinEnter autocmd
   -- (if still registered) sees a valid window and does not self-delete.
   term.win = new_win
+  local placed
   if focus then
-    vim.api.nvim_win_set_buf(new_win, term.buf)
+    placed = utils.win_set_buf_in_split(new_win, term_buf)
   else
-    utils.win_set_buf_without_bufenter(new_win, term.buf)
+    placed = utils.win_set_buf_in_split(new_win, term_buf, { ignore_bufenter = true })
+  end
+  if not placed then
+    -- A BufLeave autocmd of the user's closed the split, wiped the terminal's buffer or closed Claude, so nothing
+    -- shows. The terminal stays hidden, or is gone when its buffer is gone. Nothing is logged. Without focus, the
+    -- cursor goes back to the window it was in, as after a show, unless that autocmd closed it.
+    term.win = nil
+    if not focus and vim.api.nvim_win_is_valid(original_win) then
+      vim.api.nvim_set_current_win(original_win)
+    end
+    return false
   end
   if not horizontal then
     vim.api.nvim_win_set_height(new_win, vim.o.lines) -- full height for vertical splits, like native
@@ -748,6 +761,7 @@ function M.open(cmd_string, env_table, config, focus)
   if started then
     setup_terminal_events(term_instance, config)
     patch_instance(term_instance, config)
+    term_instance._cc.job_started_at = vim.loop.hrtime()
     vim.b[term_instance.buf][OWNED_MARK] = true
     vim.b[term_instance.buf][AUTO_CLOSE_VAR] = config.auto_close and true or false
     -- The resolved options of the instance (the terminal style, position, size, window options), not the ones passed.
@@ -834,11 +848,10 @@ function M.close()
   -- An exited Claude (auto_close = false) has nothing to wait for.
   if jobid > 0 and vim.fn.jobwait({ jobid }, 0)[1] == -1 then
     closing._cc.closing = true
-    if closing.adopted then
-      -- The TermClose handler belongs to the instance that started this Claude, and it cannot see `closing` on this
-      -- one. Without the mark it does not report the stop as a failure.
-      vim.b[closing_bufnr][OWNED_MARK] = nil
-    end
+    -- The wait for the exec below runs scheduled callbacks while the job still runs, and an open() among them must not
+    -- adopt this terminal by its mark. The TermClose handler of the instance that started this Claude cannot see
+    -- `closing` on an adopted one. Without the mark it does not report the stop as a failure.
+    vim.b[closing_bufnr][OWNED_MARK] = nil
     local exited = false
     vim.api.nvim_create_autocmd("TermClose", {
       buffer = closing_bufnr,
@@ -847,6 +860,10 @@ function M.close()
         exited = true
       end,
     })
+    -- A close of a young job waits for its child to run exec: see owned.wait_for_exec.
+    if owned.is_young(closing._cc.job_started_at) then
+      owned.wait_for_exec(jobid)
+    end
     vim.fn.jobstop(jobid)
     -- The auto_close handler or a user's TermClose autocmd can wipe the buffer first.
     vim.wait(1000, function()

@@ -19,6 +19,50 @@ function M.job_ended(buf)
   return channel ~= 0 and not pcall(vim.fn.jobpid, channel)
 end
 
+-- The name of a process, or nil when it is gone or its name cannot be read. Linux has it in /proc, a read of a few bytes.
+-- Where /proc is missing (macOS, the BSDs), nvim_get_proc asks `ps`, which takes ~100 ms and raises when `ps` is missing.
+local function process_name(pid)
+  local own = io.open("/proc/self/comm", "r")
+  if own then
+    own:close()
+    local file = io.open("/proc/" .. pid .. "/comm", "r")
+    if not file then
+      return nil
+    end
+    local name = file:read("*l")
+    file:close()
+    return name
+  end
+  local ok, info = pcall(vim.api.nvim_get_proc, pid)
+  return ok and info and info.name or nil
+end
+
+-- A stop looks at the child of a job that started less than this long ago (10 s).
+local YOUNG_JOB_NS = 10 * 1e9
+
+---Whether a job that started at `started_at` (`vim.loop.hrtime()`) is young enough that its child may not have run exec.
+---@param started_at number|nil
+---@return boolean
+function M.is_young(started_at)
+  return started_at ~= nil and vim.loop.hrtime() - started_at < YOUNG_JOB_NS
+end
+
+---Waits (up to 1 s) until the child of a pty job has run exec. A job that was just started can still be a fork of
+---Neovim: its child has not run exec yet. A jobstop then ends Neovim (SIGHUP), or the buffer delete after it hangs.
+---After the exec the child has the name of its command. A job that already exited has no pid. When the names cannot
+---be read, this returns at once and the caller goes on to jobstop. The wait runs scheduled callbacks.
+---@param jobid number
+function M.wait_for_exec(jobid)
+  local has_pid, child_pid = pcall(vim.fn.jobpid, jobid)
+  local own_name = has_pid and process_name(vim.fn.getpid())
+  if own_name then
+    vim.wait(1000, function()
+      local child_name = process_name(child_pid)
+      return child_name == nil or child_name ~= own_name
+    end, 5)
+  end
+end
+
 ---Whether the buffer carries the mark and its job has not ended.
 ---@param buf number
 ---@param mark string
@@ -55,7 +99,11 @@ local function stop_buffer(buf, mark)
       exited = true
     end,
   })
-  if vim.fn.jobstop(vim.bo[buf].channel) == 1 then
+  -- The start time of this job is unknown here, so the child may be a fork of Neovim that has not run exec. The wait
+  -- runs scheduled callbacks, and one of them can delete the buffer.
+  local channel = vim.bo[buf].channel
+  M.wait_for_exec(channel)
+  if vim.api.nvim_buf_is_valid(buf) and vim.fn.jobstop(channel) == 1 then
     -- A user's TermClose autocmd can delete the buffer first, and that also removes this buffer-local autocmd.
     vim.wait(1000, function()
       return exited or not vim.api.nvim_buf_is_valid(buf)

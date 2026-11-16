@@ -19,6 +19,7 @@ const claude = (v: any) => {
   const n = running(v).length;
   const count =
     n === 0 ? "no Claude runs" : n === 1 ? "Claude runs" : `${n} Claudes run`;
+  if (v.pc.op === "begin") return `${count}, a start is making its split`;
   if (v.pc.op === "split") return `${count}, a start is setting up a window`;
   if (v.pc.op === "started") return `${count}, a start ran termopen`;
   if (v.pc.op === "waiting")
@@ -91,7 +92,7 @@ const flagged = (from: any, to: any, f: string) =>
 export const step = (action: string, from: any, to: any) => {
   switch (action) {
     case "YouOpen": {
-      if (to.pc.op === "split")
+      if (to.pc.op === "split" || to.pc.op === "begin")
         return "you open or toggle Claude (a start begins)";
       if (flagged(from, to, "hideError"))
         return "you toggle Claude (E444: cannot close last window)";
@@ -105,14 +106,22 @@ export const step = (action: string, from: any, to: any) => {
       return flagged(from, to, "hideError")
         ? "an autocmd calls a toggle during the start (it hides the new window)"
         : "an autocmd calls open or a toggle during the start";
+    case "CloseDuringStart":
+      return "an autocmd calls close during the start (it runs when the start returns)";
+    case "SplitRuns":
+      return "the start makes its split and its buffer";
     case "TermopenRuns":
       return to.pc.op === "started"
         ? "termopen starts Claude"
         : "termopen fails";
     case "StartReturns":
-      return flagged(from, to, "hideError")
-        ? "the start returns and raises Invalid window id (its split is gone)"
-        : "the start returns";
+      if (flagged(from, to, "hideError"))
+        return "the start returns and raises Invalid window id (its split is gone)";
+      if (from.pc.cl)
+        return to.pc.op === "waiting"
+          ? "the start returns and runs the close that an autocmd asked for (it waits)"
+          : "the start returns and runs the close that an autocmd asked for";
+      return "the start returns";
     case "YouClose":
       return to.pc.op === "waiting"
         ? "you run :ClaudeCodeClose (it waits)"

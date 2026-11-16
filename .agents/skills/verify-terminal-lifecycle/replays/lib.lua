@@ -68,6 +68,14 @@ function M.reload(setup)
   return setup()
 end
 
+-- Run `body` once Neovim is in its main loop. Neovim fires no OptionSet while it starts up, and run.sh runs the replay from a
+-- -c command, which counts as startup. A replay that needs OptionSet calls this and ends in lib.finish. run.sh reads the flag
+-- and does not quit when the file returns.
+function M.after_startup(body)
+  vim.g.replay_after_startup = true
+  vim.defer_fn(body, 50)
+end
+
 -- Print the count line, stop every job, and quit.
 function M.finish()
   local bugs = 0

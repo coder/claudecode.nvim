@@ -37,40 +37,42 @@ site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks"
 site lua/claudecode/terminal.lua: local snacks_provider = load_provider("snacks") @ local function get_provider()
 site lua/claudecode/terminal.lua: return get_provider().get_active_bufnr() @ function M.get_active_terminal_bufnr()
 == lua/claudecode/terminal/native.lua
-file lua/claudecode/terminal/native.lua 0e9b890a642c84f7
+file lua/claudecode/terminal/native.lua f7e0fb030c0c487d
 block is_last_window         ca717305ec122468
 block is_valid               d3f215f69bdc28bf
 block forget_exited          2ab5742b54f43e66
 block forget_ended           aec79589d4546ab6
 block adopt                  c89db8a9183c7aff
 block stop_snacks            3b6ad0bb3ca53456
-block open_terminal          5639b634b276997d
-block close_terminal         3670472311f724a7
+block start_terminal         4a5167f7b2733904
+block open_terminal          588edf5c85e83068
+block close_terminal         58ef17ed38295567
 block native_visible         4c17f637808c446a
-block hide_terminal          7bdf4ed80ba5c8fb
-block show_hidden            875f91703794172d
+block hide_terminal          2e97ed454c3e46a0
+block show_hidden            9fbb7027cd800388
 block focus_adopted          579c004bde4a34d3
 block native_open            1cc698999c199996
-block native_simple_toggle   5def423db2692fc0
-block native_focus_toggle    79f16bb8bcf0663b
+block native_simple_toggle   02774804fa59ce33
+block native_focus_toggle    25837c821d84f407
 block native_active          c01277ba06b3891c
 site lua/claudecode/terminal/native.lua: adopt_existing_terminal() @ function M.get_active_bufnr()
 site lua/claudecode/terminal/native.lua: cleanup_state() -- Clear our managed state first @ local function forget_exited_job(job_id, auto_close)
-site lua/claudecode/terminal/native.lua: cleanup_state() @ local function close_terminal()
+site lua/claudecode/terminal/native.lua: cleanup_state() @ function close_terminal()
 site lua/claudecode/terminal/native.lua: cleanup_state() @ local function is_valid()
-site lua/claudecode/terminal/native.lua: cleanup_state() @ local function open_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: cleanup_state() @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: close_terminal() @ function M.close()
-site lua/claudecode/terminal/native.lua: elseif termopen_result <= 0 then @ local function open_terminal(cmd_string, env_table, effective_config, focus)
-site lua/claudecode/terminal/native.lua: failure = " " .. tostring(termopen_result) @ local function open_terminal(cmd_string, env_table, effective_config, focus)
-site lua/claudecode/terminal/native.lua: failure = " Its buffer was deleted after termopen started." @ local function open_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: elseif termopen_result <= 0 then @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: failure = " " .. tostring(termopen_result) @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: failure = " Its buffer was deleted after termopen started." @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: focus_adopted(effective_config, focus) @ function M.open(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: focus_adopted(effective_config, true) @ function M.simple_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: forget_ended_terminal() @ function M.focus_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: forget_ended_terminal() @ function M.open(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: forget_ended_terminal() @ function M.simple_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: forget_exited_job(adopted_jobid, config.auto_close) @ local function adopt_existing_terminal()
-site lua/claudecode/terminal/native.lua: forget_exited_job(job_id, effective_config.auto_close) @ local function open_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: forget_exited_job(job_id, effective_config.auto_close) @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: forget_exited_job(jobid, job_auto_close) @ local function forget_ended_terminal()
+site lua/claudecode/terminal/native.lua: function close_terminal() @ function close_terminal()
 site lua/claudecode/terminal/native.lua: function show_hidden_terminal(effective_config, focus) @ function show_hidden_terminal(effective_config, focus)
 site lua/claudecode/terminal/native.lua: hide_terminal() @ function M.focus_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: hide_terminal() @ function M.focus_toggle(cmd_string, env_table, effective_config)
@@ -78,25 +80,24 @@ site lua/claudecode/terminal/native.lua: hide_terminal() @ function M.simple_tog
 site lua/claudecode/terminal/native.lua: if adopt_existing_terminal() then @ function M.focus_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: if adopt_existing_terminal() then @ function M.open(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: if adopt_existing_terminal() then @ function M.simple_toggle(cmd_string, env_table, effective_config)
-site lua/claudecode/terminal/native.lua: if not is_valid() and not adopt_existing_terminal() then @ local function close_terminal()
+site lua/claudecode/terminal/native.lua: if not is_valid() and not adopt_existing_terminal() then @ function close_terminal()
 site lua/claudecode/terminal/native.lua: if owned.stop_other(owned.SNACKS_MARK, "snacks") then @ local function stop_snacks_terminal()
 site lua/claudecode/terminal/native.lua: if show_hidden_terminal(effective_config, true) then @ function M.focus_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: if show_hidden_terminal(effective_config, true) then @ function M.simple_toggle(cmd_string, env_table, effective_config)
-site lua/claudecode/terminal/native.lua: if vim.fn.jobstop(closing_jobid) == 1 then @ local function close_terminal()
-site lua/claudecode/terminal/native.lua: jobid = termopen_result @ local function open_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: if vim.fn.jobstop(closing_jobid) == 1 then @ function close_terminal()
+site lua/claudecode/terminal/native.lua: jobid = termopen_result @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: local OWNED_MARK = owned.NATIVE_MARK @ local OWNED_MARK = owned.NATIVE_MARK
 site lua/claudecode/terminal/native.lua: local buf = owned.find(OWNED_MARK) @ local function adopt_existing_terminal()
 site lua/claudecode/terminal/native.lua: local function adopt_existing_terminal() @ local function adopt_existing_terminal()
 site lua/claudecode/terminal/native.lua: local function cleanup_state() @ local function cleanup_state()
-site lua/claudecode/terminal/native.lua: local function close_terminal() @ local function close_terminal()
 site lua/claudecode/terminal/native.lua: local function focus_adopted(effective_config, focus) @ local function focus_adopted(effective_config, focus)
 site lua/claudecode/terminal/native.lua: local function forget_ended_terminal() @ local function forget_ended_terminal()
 site lua/claudecode/terminal/native.lua: local function forget_exited_job(job_id, auto_close) @ local function forget_exited_job(job_id, auto_close)
 site lua/claudecode/terminal/native.lua: local function hide_terminal() @ local function hide_terminal()
 site lua/claudecode/terminal/native.lua: local function open_terminal(cmd_string, env_table, effective_config, focus) @ local function open_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: local function stop_snacks_terminal() @ local function stop_snacks_terminal()
-site lua/claudecode/terminal/native.lua: local started, termopen_result = false, "Its buffer was deleted before termopen ran." @ local function open_terminal(cmd_string, env_table, effective_config, focus)
-site lua/claudecode/terminal/native.lua: local termopen_opts = { @ local function open_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: local started, termopen_result = false, "Its buffer was deleted before termopen ran." @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: local termopen_opts = { @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: open_terminal(cmd_string, env_table, effective_config) @ function M.focus_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: open_terminal(cmd_string, env_table, effective_config) @ function M.simple_toggle(cmd_string, env_table, effective_config)
 site lua/claudecode/terminal/native.lua: open_terminal(cmd_string, env_table, effective_config, focus) @ function M.open(cmd_string, env_table, effective_config, focus)
@@ -104,35 +105,36 @@ site lua/claudecode/terminal/native.lua: show_hidden_terminal(effective_config, 
 site lua/claudecode/terminal/native.lua: show_hidden_terminal(effective_config, focus) @ local function focus_adopted(effective_config, focus)
 site lua/claudecode/terminal/native.lua: show_hidden_terminal(effective_config, focus) @ local function open_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: show_hidden_terminal(effective_config, true) @ function M.focus_toggle(cmd_string, env_table, effective_config)
-site lua/claudecode/terminal/native.lua: started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts) @ local function open_terminal(cmd_string, env_table, effective_config, focus)
-site lua/claudecode/terminal/native.lua: stop_snacks_terminal() @ local function close_terminal()
+site lua/claudecode/terminal/native.lua: started, termopen_result = pcall(vim.fn.termopen, term_cmd_arg, termopen_opts) @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: stop_snacks_terminal() @ function close_terminal()
 site lua/claudecode/terminal/native.lua: stop_snacks_terminal() @ local function open_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: vim.api.nvim_win_close(current_winid_for_job, true) @ local function forget_exited_job(job_id, auto_close)
-site lua/claudecode/terminal/native.lua: vim.api.nvim_win_close(new_winid, true) @ local function open_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: vim.api.nvim_win_close(new_winid, true) @ local function start_terminal(cmd_string, env_table, effective_config, focus)
 site lua/claudecode/terminal/native.lua: vim.api.nvim_win_close(winid, false) @ local function hide_terminal()
-site lua/claudecode/terminal/native.lua: vim.b[closing_bufnr][OWNED_MARK] = nil @ local function close_terminal()
-site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = nil @ local function open_terminal(cmd_string, env_table, effective_config, focus)
-site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = true @ local function open_terminal(cmd_string, env_table, effective_config, focus)
-site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ local function close_terminal()
+site lua/claudecode/terminal/native.lua: vim.b[closing_bufnr][OWNED_MARK] = nil @ function close_terminal()
+site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = nil @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: vim.b[new_bufnr][OWNED_MARK] = true @ local function start_terminal(cmd_string, env_table, effective_config, focus)
+site lua/claudecode/terminal/native.lua: vim.wait(1000, function() @ function close_terminal()
 == lua/claudecode/terminal/owned.lua
-file lua/claudecode/terminal/owned.lua f64571d98221176c
+file lua/claudecode/terminal/owned.lua a7a29f9f0cbde8eb
 block owned_job_ended        30418e22d097d6da
 block owned_is_live          23b894bb3039eb49
 block owned_find             040ba4e1a08ede20
-block owned_stop_buffer      ae1288f144f32e2f
+block owned_stop_buffer      25ea1194de3993b5
 block owned_stop_other       3d9b8f033d0ab40c
 site lua/claudecode/terminal/owned.lua: function M.stop_other(mark, provider_name) @ function M.stop_other(mark, provider_name)
 site lua/claudecode/terminal/owned.lua: if not stop_buffer(buf, mark) then @ function M.stop_other(mark, provider_name)
-site lua/claudecode/terminal/owned.lua: if vim.fn.jobstop(vim.bo[buf].channel) == 1 then @ local function stop_buffer(buf, mark)
+site lua/claudecode/terminal/owned.lua: if vim.api.nvim_buf_is_valid(buf) and vim.fn.jobstop(channel) == 1 then @ local function stop_buffer(buf, mark)
 site lua/claudecode/terminal/owned.lua: local function stop_buffer(buf, mark) @ local function stop_buffer(buf, mark)
+site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ function M.wait_for_exec(jobid)
 site lua/claudecode/terminal/owned.lua: vim.wait(1000, function() @ local function stop_buffer(buf, mark)
 == lua/claudecode/terminal/snacks.lua
-file lua/claudecode/terminal/snacks.lua db7debdd7dfe1486
+file lua/claudecode/terminal/snacks.lua 154059961dfa8a1a
 block snacks_available       4023f2a3d4a90e0e
 block snacks_events          6db7bed40172cc23
 block cc_is_visible          8790d471872e649b
 block cc_hide                f180c5a98143f116
-block cc_show                04067f53deba36c3
+block cc_show                97b2f08a6f72c602
 block snacks_forget_ended    c7d2db0114e9d0bf
 block snacks_remember_backdrop 806a2a1326965830
 block snacks_register_events 84f1e908c74c2195
@@ -144,8 +146,8 @@ block snacks_upgrade_wrapper a0f108ee3a1c5ada
 block snacks_adopted_config  34dc397ccedfb0a9
 block snacks_adopt           f1b5635b51fc6ec8
 block snacks_stop_native     4eb23f341fda78b3
-block snacks_open            28bb9590189f4a80
-block snacks_close           0b3e0103c84d8ed4
+block snacks_open            07270833be7691d1
+block snacks_close           aa433d2d616b97da
 block snacks_simple_toggle   01830b5ae73c3329
 block snacks_focus_toggle    00d61258c50dd894
 block snacks_active          7c480f7b7fb7ed7d

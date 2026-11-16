@@ -109,7 +109,7 @@ site lua/claudecode/server/init.lua: main_module.process_mention_queue(true) @ f
 site lua/claudecode/server/init.lua: on_open = function(client) @ function M.start(config, auth_token)
 site lua/claudecode/server/init.lua: return tcp_server.broadcast(M.state.server, json_message, on_written) > 0 @ function M.broadcast(method, params, on_written)
 == lua/claudecode/server/tcp.lua
-file lua/claudecode/server/tcp.lua 8be1dd96671223ea
+file lua/claudecode/server/tcp.lua 610f324845bca7b5
 block new_connection         e1daff4237326df4
 block tcp_broadcast          2b207928d69c9dbd
 block clients_info           b2d757e5dc9d2c2f

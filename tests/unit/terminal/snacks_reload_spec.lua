@@ -120,6 +120,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
     package.loaded["claudecode.terminal.snacks"] = nil
     package.loaded["claudecode.terminal.owned"] = nil
     snacks_provider = require("claudecode.terminal.snacks")
+    require("tests.helpers.plain_placement").install()
   end
 
   before_each(function()
@@ -147,6 +148,11 @@ describe("claudecode.terminal.snacks after a module reload", function()
     }
 
     _G.vim = {
+      loop = {
+        hrtime = function()
+          return 0
+        end,
+      },
       log = { levels = { ERROR = 3, WARN = 2, INFO = 1, DEBUG = 0 } },
       notify = function(message, level)
         table.insert(notices, { message = message, level = level })
@@ -202,6 +208,9 @@ describe("claudecode.terminal.snacks after a module reload", function()
       end,
       keymap = { set = function() end },
       fn = {
+        getpid = function()
+          return 99999999
+        end,
         has = function(feature)
           return feature == "nvim-0.10" and 1 or 0
         end,
@@ -444,6 +453,7 @@ describe("claudecode.terminal.snacks after a module reload", function()
   end)
 
   after_each(function()
+    require("tests.helpers.plain_placement").restore()
     _G.vim = original_vim
     package.loaded["snacks"] = nil
     package.loaded["claudecode.utils"] = nil

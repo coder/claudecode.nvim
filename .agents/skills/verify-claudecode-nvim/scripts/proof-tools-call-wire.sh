@@ -5,7 +5,7 @@
 # Usage: proof-tools-call-wire.sh [tree]     tree: a plugin tree with lua/claudecode (default: this checkout)
 # Prints one `ok:` or `FAIL:` line per case and ends with `COUNT tools-call-wire cases=<n> failed=<n> leaks=<n>`.
 # Exit: 0 every case passed, 1 a case failed or a frame leaked, 2 the probe could not run, or judged fewer cases than
-# its table holds, or the tree, the work folder or the home folder path holds a double quote, a backslash or a control
+# its table holds, or a path that the leak rule looks for holds a double quote, a backslash or a control
 # character (the checker refuses it: the leak rule could not find such a path in a frame. A backslash in the tree path
 # can make nvim fail first: exit 2 too).
 # VCN_NVIM=<path> runs that Neovim (0.8 or newer), as in vcn.sh. It must be the Neovim binary itself or a wrapper that
@@ -45,8 +45,9 @@ if PATH=/usr/bin:/bin command -v claude >/dev/null; then
   die "a claude program is on PATH=/usr/bin:/bin: refusing to start nvim"
 fi
 
-# Both processes are children of this script. The cleanup stops them by PID and removes the temp dir.
+# Both processes are children of this script. The cleanup stops them by PID and removes the two temp dirs.
 RUN=""
+WORK_TMP=""
 NVIM_PID=""
 NODE_PID=""
 # shellcheck disable=SC2329
@@ -62,6 +63,7 @@ cleanup() {
     kill -KILL "$pid" 2>/dev/null || true
   done
   [[ -z $RUN ]] || rm -rf -- "$RUN"
+  [[ -z $WORK_TMP ]] || rm -rf -- "$WORK_TMP"
 }
 trap cleanup EXIT
 # Each handler ignores the three signals before it exits, so a further signal cannot end the cleanup that it starts.
@@ -72,9 +74,19 @@ trap 'trap "" TERM INT HUP; exit 129' HUP
 RUN="$(mktemp -d /tmp/wire-probe.XXXXXX)" || die "cannot make a temp dir under /tmp"
 REAL="$(cd "$RUN" 2>/dev/null && pwd -P)" || die "cannot enter the temp dir $RUN"
 RUN="$REAL"
-mkdir "$RUN/work" "$RUN/tmp" || die "cannot make the dirs in $RUN"
+mkdir "$RUN/tmp" || die "cannot make the dirs in $RUN"
+# nvim runs in a folder of its own temp dir, beside the run dir and not in it, so no path under the run dir starts with
+# the text of the work folder, and the checker can find a run dir path by plain text. The two names differ after
+# `wire-probe` (`.` against `-cwd.`), and mktemp fills XXXXXX with letters and digits, so neither path is a prefix of
+# the other. The check below asserts it. The folder is called work, as getWorkspaceFolders names it in the case table.
+WORK_TMP="$(mktemp -d /tmp/wire-probe-cwd.XXXXXX)" || die "cannot make a temp dir under /tmp"
+REAL="$(cd "$WORK_TMP" 2>/dev/null && pwd -P)" || die "cannot enter the temp dir $WORK_TMP"
+WORK_TMP="$REAL"
+WORK="$WORK_TMP/work"
+mkdir "$WORK" || die "cannot make the dir $WORK"
+[[ $WORK != "$RUN"* && $RUN != "$WORK"* ]] || die "the work folder $WORK and the temp dir $RUN start with each other"
 # What nvim gets, and nothing else. The checker gets nothing.
-NVIM_ENV=(env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" WIRE_TREE="$TREE" WIRE_CWD="$RUN/work" HOME="$RUN/home"
+NVIM_ENV=(env -i PATH=/usr/bin:/bin WIRE_PARENT="$$" WIRE_TREE="$TREE" WIRE_CWD="$WORK" HOME="$RUN/home"
   TMPDIR="$RUN/tmp" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" XDG_STATE_HOME="$RUN/state"
   XDG_CACHE_HOME="$RUN/cache" CLAUDE_CONFIG_DIR="$RUN/claude")
 "${NVIM_ENV[@]}" "$NVIM" --version >/dev/null 2>&1 ||
@@ -104,7 +116,7 @@ for _ in {1..100}; do
   sleep 0.1
 done
 [[ ${#locks[@]} -gt 0 ]] || why "nvim wrote no lock file in 10 s"
-env -i "$NODE" "$SKILL_DIR/scripts/proof-tools-call-wire.mjs" "${locks[0]}" "$TREE" "$RUN/work" &
+env -i "$NODE" "$SKILL_DIR/scripts/proof-tools-call-wire.mjs" "${locks[0]}" "$TREE" "$WORK" "$RUN" &
 NODE_PID=$!
 rc=0
 wait "$NODE_PID" || rc=$?

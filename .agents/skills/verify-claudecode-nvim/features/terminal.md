@@ -49,3 +49,4 @@ Steps:
 - Plain `terminal_cmd = "sh"` cannot test arguments: `sh --model opus` exits at once, and its window closes. Use the `ARGS:` shell.
 - `mode()` prints `n` in terminal-Normal mode too. `mode(1)` prints `nt` there and `n` in a file window.
 - Under `none`, the `:ClaudeCodeSendText` warning is wider than the screen, so Neovim waits at `Press ENTER` and RPC stops answering. Run `$V capture` and then `$V keys Enter`.
+- A terminal job that is stopped right after `termopen` can kill Neovim (`Caught deadly signal 'SIGHUP'`): the forked child still runs Neovim's signal handlers until it runs exec. `:ClaudeCodeClose` of the native terminal waits for the exec of a young job (#544). A direct `jobstop` or `:bwipeout` of the terminal buffer and the Snacks close do not wait, so in a script, wait for the job's output first. `scripts/proof-pty-child-hangup.sh` shows the race.

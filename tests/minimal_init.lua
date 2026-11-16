@@ -8,6 +8,11 @@ if path:sub(1, #stub_dir + 1) ~= stub_dir .. ":" then
   vim.env.PATH = stub_dir .. (path ~= "" and ":" .. path or "")
 end
 
+-- See tests/helpers/termopen_wait.lua for why termopen waits for exec.
+vim.fn.termopen = dofile(
+  vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h") .. "/helpers/termopen_wait.lua"
+)(vim.fn.termopen)
+
 -- Set up package path
 local package_root = vim.fn.stdpath("data") .. "/site/pack/vendor/start/"
 local install_path = package_root .. "plenary.nvim"

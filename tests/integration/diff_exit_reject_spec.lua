@@ -1,7 +1,9 @@
--- Real-Neovim check of the answer that each openDiff call gets in four exits: `:qa!`, SIGTERM, a buffer that deletes
--- itself in its own BufUnload, and `:qa!` inside a `nested = true` ClaudeCodeDiffOpened handler. README.md lists the
--- answers under Global Invariants, in "Exit answers". This spec does not run SIGHUP, SIGKILL, a quit from a
--- non-nested autocmd or :ClaudeCodeStop, and it does not check the close codes or the ClaudeCodeDiffClosed order.
+-- Real-Neovim check of the answer that each openDiff call gets in these exits: `:qa!`, SIGTERM, a buffer that deletes
+-- itself in its own BufUnload, `:qa!` inside a `nested = true` ClaudeCodeDiffOpened handler, and a `:qa!` or SIGTERM
+-- that comes during an autocmd (nested or not). README.md lists the answers under Global Invariants, in "Exit
+-- answers". This spec does not run SIGHUP, SIGKILL or :ClaudeCodeStop, and it does not check the close codes, the lock
+-- file or the ClaudeCodeDiffClosed order. The child has no server, so the cases without VimLeavePre show only that no
+-- call is answered.
 -- Neovim fires BufUnload for each loaded buffer at exit, and the proposal buffers' autocmds reject their diffs. That
 -- loop stops once an autocmd deletes the buffer it fired for: the reject of a new-file diff with the default
 -- `on_new_file_reject = "keep_empty"`, in a tab the diff did not open, deletes its proposal buffer, and another
@@ -63,8 +65,31 @@ describe("openDiff at exit", function()
       end
     end
     vim.defer_fn(function()
-      if vim.env.EXIT_QUIT == "sigterm" then
+      local quit = vim.env.EXIT_QUIT
+      if quit == "sigterm" then
         vim.loop.kill(vim.fn.getpid(), 15)
+        return
+      end
+      if quit == "autocmd" or quit == "nested_autocmd" or quit == "pump" then
+        -- The exit starts inside a User autocmd. `autocmd` and `nested_autocmd` run :qa! in it. `pump` sends SIGTERM and
+        -- waits in vim.wait, which runs the event loop, so Neovim handles the signal while the autocmd still runs.
+        vim.api.nvim_create_autocmd("User", {
+          pattern = "ExitProbe",
+          nested = quit == "nested_autocmd",
+          callback = function()
+            if quit == "pump" then
+              vim.defer_fn(function()
+                vim.loop.kill(vim.fn.getpid(), 15)
+              end, 50)
+              vim.wait(5000, function()
+                return false
+              end, 10)
+            else
+              vim.cmd("qa!")
+            end
+          end,
+        })
+        vim.cmd("doautocmd User ExitProbe")
         return
       end
       vim.cmd("qa!")
@@ -211,22 +236,17 @@ describe("openDiff at exit", function()
   local rejects = { "keep_empty", "close_window" }
 
   for _, layout in ipairs(layouts) do
-    local runs_here = layout ~= "unified" or vim.fn.has("nvim-0.9") == 1
-    local define = runs_here and it or pending
-    define(("answers each pending diff when SIGTERM ends Neovim (%s layout)"):format(layout), function()
+    it(("answers each pending diff when SIGTERM ends Neovim (%s layout)"):format(layout), function()
       local lines = exit_with({ "new1.txt:new", "b.txt:old" }, layout, "keep_empty", false, "sigterm")
       local answers = answers_by_name(lines)
       assert.same({ "DIFF_REJECTED" }, answers["new1.txt"], table.concat(lines, "\n"))
       assert.same({ "DIFF_REJECTED" }, answers["b.txt"], table.concat(lines, "\n"))
     end)
-    define(
-      ("answers one diff that another plugin's buffer kept from its BufUnload (%s layout)"):format(layout),
-      function()
-        local lines, code = exit_with({ "a.txt:old" }, layout, "keep_empty", true)
-        assert.equal(0, code, "the child exited with :qa!\n" .. table.concat(lines, "\n"))
-        assert.same({ "DIFF_REJECTED" }, answers_by_name(lines)["a.txt"], table.concat(lines, "\n"))
-      end
-    )
+    it(("answers one diff that another plugin's buffer kept from its BufUnload (%s layout)"):format(layout), function()
+      local lines, code = exit_with({ "a.txt:old" }, layout, "keep_empty", true)
+      assert.equal(0, code, "the child exited with :qa!\n" .. table.concat(lines, "\n"))
+      assert.same({ "DIFF_REJECTED" }, answers_by_name(lines)["a.txt"], table.concat(lines, "\n"))
+    end)
   end
 
   ---The answers that the server sent, by request id.
@@ -244,23 +264,61 @@ describe("openDiff at exit", function()
   end
 
   for _, layout in ipairs(layouts) do
-    local runs_here = layout ~= "unified" or vim.fn.has("nvim-0.9") == 1
-    local define = runs_here and it or pending
-    define(
-      ("answers the call whose setup was running when a handler quit Neovim (%s layout)"):format(layout),
-      function()
-        local lines = exit_in_opened_handler({ "new1.txt:new", "b.txt:old" }, "b.txt", layout)
+    it(("answers the call whose setup was running when a handler quit Neovim (%s layout)"):format(layout), function()
+      local lines = exit_in_opened_handler({ "new1.txt:new", "b.txt:old" }, "b.txt", layout)
 
-        local responses = responses_by_id(lines)
-        local log = table.concat(lines, "\n")
-        assert.same({ "DIFF_REJECTED" }, responses[1], log)
-        assert.same({ "error -32603" }, responses[2], log)
-      end
-    )
-    define(("answers the only call when a handler quit Neovim during its setup (%s layout)"):format(layout), function()
+      local responses = responses_by_id(lines)
+      local log = table.concat(lines, "\n")
+      assert.same({ "DIFF_REJECTED" }, responses[1], log)
+      assert.same({ "error -32603" }, responses[2], log)
+    end)
+    it(("answers the only call when a handler quit Neovim during its setup (%s layout)"):format(layout), function()
       local lines = exit_in_opened_handler({ "a.txt:old" }, "a.txt", layout)
 
       assert.same({ "error -32603" }, responses_by_id(lines)[1], table.concat(lines, "\n"))
+    end)
+  end
+
+  ---Whether the child's coroutines for `names` all yielded, that is, whether each call was waiting when the exit began.
+  local function assert_waiting(lines, names)
+    local log = table.concat(lines, "\n")
+    for _, name in ipairs(names) do
+      assert.is_truthy(log:find("resume " .. name .. " ok=true status=suspended", 1, true), log)
+    end
+  end
+
+  -- The exit starts inside an autocmd. Whether Neovim runs VimLeavePre depends on the autocmd, and the README says how.
+  for _, layout in ipairs(layouts) do
+    local steps = { "new1.txt:new", "b.txt:old" }
+    it(
+      ("gives no answer when :qa! runs directly in an autocmd that is not nested (%s layout)"):format(layout),
+      function()
+        local lines, code = exit_with(steps, layout, "keep_empty", false, "autocmd")
+
+        assert.is_true(code ~= -1, "the child did not end by itself\n" .. table.concat(lines, "\n"))
+        assert_waiting(lines, { "new1.txt", "b.txt" })
+        assert.same({}, answers_by_name(lines), table.concat(lines, "\n"))
+      end
+    )
+    it(
+      ("gives no answer when SIGTERM comes while an autocmd that is not nested waits in vim.wait (%s layout)"):format(
+        layout
+      ),
+      function()
+        local lines, code = exit_with(steps, layout, "keep_empty", false, "pump")
+
+        assert.is_true(code ~= -1, "the child did not end by itself\n" .. table.concat(lines, "\n"))
+        assert_waiting(lines, { "new1.txt", "b.txt" })
+        assert.same({}, answers_by_name(lines), table.concat(lines, "\n"))
+      end
+    )
+    it(("answers each call when :qa! runs directly in a nested autocmd (%s layout)"):format(layout), function()
+      local lines = exit_with(steps, layout, "keep_empty", false, "nested_autocmd")
+
+      assert_waiting(lines, { "new1.txt", "b.txt" })
+      local answers = answers_by_name(lines)
+      assert.same({ "DIFF_REJECTED" }, answers["new1.txt"], table.concat(lines, "\n"))
+      assert.same({ "DIFF_REJECTED" }, answers["b.txt"], table.concat(lines, "\n"))
     end)
   end
 
@@ -272,10 +330,7 @@ describe("openDiff at exit", function()
           layout,
           reject
         )
-        -- The unified layout needs Neovim 0.9. The split layout bug is the same on 0.8.
-        local runs_here = layout ~= "unified" or vim.fn.has("nvim-0.9") == 1
-        local define = runs_here and it or pending
-        define(title, function()
+        it(title, function()
           local lines, code = exit_with(scenario.steps, layout, reject)
 
           assert.equal(0, code, "the child exited with :qa!\n" .. table.concat(lines, "\n"))

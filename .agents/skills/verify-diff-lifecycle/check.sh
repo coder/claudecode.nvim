@@ -25,6 +25,7 @@ OPEN_DIFF_TOOL=lua/claudecode/tools/open_diff.lua
 CLOSE_TAB_TOOL=lua/claudecode/tools/close_tab.lua
 CLOSE_ALL_TOOL=lua/claudecode/tools/close_all_diff_tabs.lua
 CLIENT=lua/claudecode/server/client.lua
+UTILS=lua/claudecode/utils.lua
 
 covered_block resolve_saved "$DIFF" '^function M\._resolve_diff_as_saved\('
 covered_block resolve_rejected "$DIFF" '^function M\._resolve_diff_as_rejected\('
@@ -59,6 +60,10 @@ covered_block setup_inline "$INLINE" '^function M\.setup_inline_diff\('
 covered_block accept_current "$DIFF" '^function M\.accept_current_diff\('
 covered_block fire_event "$DIFF" '^local function fire_diff_event\('
 covered_block register_state "$DIFF" '^function M\._register_diff_state\('
+covered_block windows_allowed "$UTILS" '^local function windows_allowed\('
+covered_block windows_retry "$UTILS" '^local function retry_held_for_windows\('
+covered_block windows_gate "$UTILS" '^function M\.when_windows_allowed\('
+covered_block teardown_diff "$DIFF" '^local function teardown_diff\('
 covered_block cleanup_state "$DIFF" '^function M\._cleanup_diff_state\('
 covered_block diff_autocmds "$DIFF" '^local function register_diff_autocmds\('
 covered_block write_proposal "$DIFF" '^function M\._write_proposal\('
@@ -75,7 +80,7 @@ fact[GuardRejected]=$(as_bool in_order 'if not diff_data or diff_data\.status ~=
   'diff_data\.status = "rejected"' <<<"$resolve_rejected")
 fact[SenderCleared]=$(as_bool in_order '_G\.claude_deferred_responses\[co_key\]\(' \
   '_G\.claude_deferred_responses\[co_key\] = nil' <<<"$open_blocking")
-fact[ReplaceRejects]=$(as_bool in_order 'if active_diffs\[tab_name\] then' 'existing_diff\.status == "pending"' \
+fact[ReplaceRejects]=$(as_bool in_order 'while existing_diff do' 'existing_diff\.status == "pending"' \
   'M\._resolve_diff_as_rejected\(tab_name\)' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' \
   'coroutine\.running\(\)' <<<"$open_blocking")
 fact[CloseTabRejectsPending]=$(as_bool in_order 'if diff_data\.status == "pending" then' \
@@ -89,7 +94,7 @@ held_for_other_reads_owner() {
 }
 replace_keeps_others_saved() {
   held_for_other_reads_owner &&
-    in_order 'if active_diffs\[tab_name\] then' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
+    in_order 'while existing_diff do' 'if holds_edits_for_other_client\(existing_diff, client_id\) then' \
       '^ *error\(\{$' 'M\._cleanup_diff_state\(tab_name, "replaced by new diff"\)' <<<"$open_blocking"
 }
 fact[ReplaceKeepsOthersSaved]=$(as_bool replace_keeps_others_saved)
@@ -126,6 +131,28 @@ fact[CloseTakesRejected]=$(as_bool in_order '^      listed\[tab_name\] = diff_da
   'for _, tab_name in ipairs\(tab_names\) do' '^    local diff_data = active_diffs\[tab_name\]$' \
   '^    local rejected = diff_data == listed\[tab_name\] and diff_data\.status == "rejected"$' \
   'if \(matches\(diff_data\) or rejected\) and M\.close_diff_by_tab_name\(tab_name[,)]' <<<"$close_active")
+# Neovim refuses window changes in the command-line window (E11) and under textlock (E565). The entry stays registered
+# until the teardown runs, and the teardown runs only while active_diffs still holds that entry.
+FACTS+=(CleanupHoldsWhenLocked CleanupRetries RetryChecksEntry)
+cleanup_holds_when_locked() {
+  grep -qE '^  return pcall\(vim\.api\.nvim_set_current_win, vim\.api\.nvim_get_current_win\(\)\)$' \
+    <<<"$windows_allowed" &&
+    in_order '^  if windows_allowed\(\) then$' '^    fn\(\)$' '^    return$' 'table\.insert\(held_for_windows, fn\)' \
+      <<<"$windows_gate" &&
+    in_order '^  local diff_data = active_diffs\[tab_name\]$' 'utils\.when_windows_allowed\(function\(\)$' \
+      'teardown_diff\(tab_name, diff_data, reason\)$' <<<"$cleanup_state" &&
+    ! grep -q 'active_diffs\[tab_name\] = nil' <<<"$cleanup_state" &&
+    in_order 'diff_data\.layout == "unified"' 'active_diffs\[tab_name\] = nil' <<<"$teardown_diff"
+}
+fact[CleanupHoldsWhenLocked]=$(as_bool cleanup_holds_when_locked)
+cleanup_retries() {
+  in_order 'table\.insert\(held_for_windows, fn\)' 'vim\.defer_fn\(retry_held_for_windows, 50\)' <<<"$windows_gate" &&
+    in_order '^  if not windows_allowed\(\) then$' 'vim\.defer_fn\(retry_held_for_windows, 50\)' \
+      'M\.when_windows_allowed\(fn\)' <<<"$windows_retry"
+}
+fact[CleanupRetries]=$(as_bool cleanup_retries)
+fact[RetryChecksEntry]=$(as_bool in_order 'utils\.when_windows_allowed\(function\(\)$' \
+  '^    if active_diffs\[tab_name\] == diff_data then$' 'teardown_diff\(tab_name, diff_data, reason\)$' <<<"$cleanup_state")
 # A saved diff outlives its client's connection, so a later connection must never get that client's id.
 # The counter is a global so a reload of server/client.lua keeps it, and only create_client may set it.
 FACTS+=(ClientIdsUnique)
@@ -197,7 +224,7 @@ fact[ClientTagged]=$(as_bool client_tagged)
 # the running coroutine, and open_diff_blocking returns that result.
 setup_answer_returned() {
   in_order '^ *local waiting = false$' 'pcall\(M\._setup_blocking_diff' '^ *if not waiting then$' \
-    '^ *setup_result = result$' '^ *return$' 'coroutine\.resume\(co, result\)' '^ *if setup_result then$' \
+    '^ *setup_result = result$' '^ *return$' '^ *local .* = utils\.resume_tool_coroutine\(co, result\)$' '^ *if setup_result then$' \
     '^ *return setup_result$' '^ *waiting = true$' 'coroutine\.yield\(\)' <<<"$open_blocking"
 }
 fact[SetupAnswerReturned]=$(as_bool setup_answer_returned)
@@ -221,7 +248,7 @@ mapfile -t COVERED < <(find lua plugin \( -name '*.lua' -o -name '*.vim' \) | so
 SITE_RE='(_resolve_diff_as_|resolve_inline_as_|_cleanup_diff_state|_cleanup_all_active_diffs|close_[a-z_]*diffs|close_diff_by_tab_name|resolution_callback|claude_deferred_responses|_register_diff_state|active_diffs|_get_active_diffs|\.status *= *[^=])'
 
 RULES=(AtMostOneAnswer AnswerMatchesDiff NoStrandedCall SavedDiffKept NoRejectedLeftover ExitedCallsAnswered)
-LIVE=(DisconnectedCallsAnswered)
+LIVE=(DisconnectedCallsAnswered DeferredCleanupDone)
 CONSTRAINT=AnswerBound
 
 # Expected first-broken rule for each fact when only that guard is removed. A+B removes both guards at once.
@@ -236,6 +263,7 @@ EXPECT=(
   [CloseTakesRejected]=NoRejectedLeftover [UserCloseTakesRejected]=NoRejectedLeftover
   [CloseRechecksFilter]=SavedDiffKept [ReplaceKeepsOthersSaved]=SavedDiffKept [CloseKeepsOthersSaved]=SavedDiffKept
   [ClientIdsUnique]=SavedDiffKept
+  [CleanupHoldsWhenLocked]=NoRejectedLeftover [CleanupRetries]=DeferredCleanupDone [RetryChecksEntry]=NoStrandedCall
   [DisconnectRejects]=DisconnectedCallsAnswered [ClientTagged]=DisconnectedCallsAnswered
   ["SenderCleared+GuardRejected"]=AtMostOneAnswer
   [OpenedEventInSetup]=-

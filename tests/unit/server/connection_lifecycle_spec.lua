@@ -988,9 +988,9 @@ describe("The lifecycle of a WebSocket connection", function()
     end)
   end)
 
-  -- Two rules judge a connected client on each ping tick. The pong rule gives a client without a pong one more tick
-  -- (`pong_overdue`) and then drops it. The stall rule drops a client that answers, whose write queue made no progress at
-  -- two observations in a row. The pong rule runs first, so only a client that answers is judged for a stall.
+  -- Two rules judge a connected client on each ping tick. The keepalive drops a client whose oldest ping went unanswered
+  -- for `interval * 2.5` (`judge_silence`). The stall rule drops a client that answers, whose write queue made no progress
+  -- at two observations in a row (`judge_stall`). Only a client that answers is judged for a stall.
   describe("when a client misses a pong and its write queue stalls", function()
     local reply = string.rep("x", 262144)
 
