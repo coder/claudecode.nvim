@@ -562,9 +562,10 @@ cmd_launch() {
   mapfile -t att_cands <<<"$att_cands"
   VCN_RTP=$(rtp_dirs)
   node_exe=$(bin node)
-  runs_or_die "$node_exe"
+  # A relative path can name a file of the checkout under review: refuse it before anything runs it.
   why=$(bad_node_dir "$(dirname -- "$node_exe")")
   [[ -z $why ]] || die "node is at $node_exe, and its dir is not usable: $why"
+  runs_or_die "$node_exe"
   # Every call runs these paths, not the bare names: another setsid or jq earlier on PATH could differ or fail.
   SETSID_BIN=$(bin setsid)
   runs_or_die "$SETSID_BIN"

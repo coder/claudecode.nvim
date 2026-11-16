@@ -23,7 +23,8 @@
 #                  leads to a safe dir: the resolved path is read with its newline
 #   tmp-load-refused  mktemp answers with a path that is not its own resolved path (a // in it): load refuses the new state dir,
 #                  and launch leaves no state dir and no evidence dir
-#   node-relative  node is found through a relative PATH entry (no mise): its dir would go on PATH in every agent-tty call
+#   node-relative  node is found through a relative PATH entry (no mise): its dir would go on PATH in every agent-tty call,
+#                  and launch must refuse it before it runs it
 #   att-root-nosticky  /tmp/agent-tty is this user's 0700 dir, and /tmp is world-writable without the sticky bit
 #   tmp-root       TMPDIR is /: launch gives mktemp /vcn.XXXXXX, not //vcn.XXXXXX (a mktemp shim stops launch and prints it)
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
@@ -162,9 +163,10 @@ printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-
 chmod +x "$TMP/mktemp-bin/mktemp"
 # launch resolves node itself. Without mise (a shim that fails stands in, whatever /usr/bin holds), `command -v node` prints a
 # relative path for a relative PATH entry, and the dir of that path would go in front of PATH in every agent-tty call. Launch
-# refuses before it makes anything.
+# refuses before it makes anything and before it runs that node: the stand-in leaves a file when it runs, and refused fails
+# on any new file under $TMP.
 mkdir -m 700 "$TMP/relnode" "$TMP/relnode/nb" "$TMP/relnode/t" "$TMP/relnode/nomise"
-printf '#!/bin/sh\nexit 0\n' >"$TMP/relnode/nb/node"
+printf '#!/bin/sh\n: >"%s"\nexit 0\n' "$TMP/relnode/node-ran" >"$TMP/relnode/nb/node"
 printf '#!/bin/sh\nexit 1\n' >"$TMP/relnode/nomise/mise"
 chmod +x "$TMP/relnode/nb/node" "$TMP/relnode/nomise/mise"
 nvim_dir=$(dirname -- "$(mise which nvim 2>/dev/null || command -v nvim)")
