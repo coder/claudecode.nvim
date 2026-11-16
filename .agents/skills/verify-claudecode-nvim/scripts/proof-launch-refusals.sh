@@ -23,7 +23,8 @@
 #                  leads to a safe dir: the resolved path is read with its newline
 #   tmp-load-refused  mktemp answers with a path that is not its own resolved path (a // in it): load refuses the new state dir,
 #                  and launch leaves no state dir and no evidence dir
-#   node-relative  node is found through a relative PATH entry (no mise): its dir would go on PATH in every agent-tty call
+#   node-relative  node is found through a relative PATH entry (no mise): its dir would go on PATH in every agent-tty call,
+#                  and launch must refuse it before it runs it
 #   att-root-nosticky  /tmp/agent-tty is this user's 0700 dir, and /tmp is world-writable without the sticky bit
 #   tmp-root       TMPDIR is /: launch gives mktemp /vcn.XXXXXX, not //vcn.XXXXXX (a mktemp shim stops launch and prints it)
 #   tmp-space      a dir above TMPDIR that others can write has a name that ends in a space
@@ -34,6 +35,21 @@
 #   out-uncreatable  mkdir cannot create VERIFY_OUT
 #   out-file       VERIFY_OUT is a file
 #   parent-uncreatable  mkdir cannot create the default parent dir
+#   tool-nvim      the nvim that launch finds cannot run (a mise shim in a checkout that mise does not trust): launch names it,
+#                  its path and its own error line, and gives no remedy, where it once went on and blamed agent-tty
+#   tool-vcn-nvim  the nvim that VCN_NVIM names cannot run: the same message
+#   tool-stdout-error  the nvim that VCN_NVIM names prints its error line to stdout only: the message shows that line, not
+#                  "it printed no error"
+#   tool-jq        the jq that launch finds cannot run, with VCN_NVIM set: launch names jq
+#   tool-node      the node that launch finds cannot run, with VCN_NVIM set: launch names node
+#   tool-setsid    the setsid that launch finds cannot run, with VCN_NVIM set: launch names setsid
+#   old-run-cleanup  a run that exists, with a run.env that has no JQ_BIN (an older vcn.sh wrote it), and a jq on PATH that
+#                  cannot run: cleanup still exits 0 and leaves no process and no state dir, as on main (only launch checks)
+#   connect-setsid   a run that exists and a setsid on PATH that cannot run: connect still starts a client, because launch
+#                  recorded its setsid in run.env. A run.env without SETSID_BIN (an older vcn.sh wrote it) still connects and
+#                  cleans up, because connect resolves setsid again
+#   old-run-setsid   a run that exists, with a run.env that has no SETSID_BIN: get exits 0 with a setsid that cannot run first
+#                  on PATH, and cleanup exits 0 and leaves nothing on a PATH that has no setsid (only connect needs one)
 #   out-acl-unremovable  VERIFY_OUT has a default ACL that launch cannot remove (setfacl fails)
 #   race           another launch makes the missing dir above VERIFY_OUT first, group-writable: launch uses it,
 #                  refuses it in the check after mkdir, and leaves it in place
@@ -147,9 +163,10 @@ printf '#!/bin/sh\necho "mktemp shim: template=$2" >&2\nexit 1\n' >"$TMP/mktemp-
 chmod +x "$TMP/mktemp-bin/mktemp"
 # launch resolves node itself. Without mise (a shim that fails stands in, whatever /usr/bin holds), `command -v node` prints a
 # relative path for a relative PATH entry, and the dir of that path would go in front of PATH in every agent-tty call. Launch
-# refuses before it makes anything.
+# refuses before it makes anything and before it runs that node: the stand-in leaves a file when it runs, and refused fails
+# on any new file under $TMP.
 mkdir -m 700 "$TMP/relnode" "$TMP/relnode/nb" "$TMP/relnode/t" "$TMP/relnode/nomise"
-printf '#!/bin/sh\nexit 0\n' >"$TMP/relnode/nb/node"
+printf '#!/bin/sh\n: >"%s"\nexit 0\n' "$TMP/relnode/node-ran" >"$TMP/relnode/nb/node"
 printf '#!/bin/sh\nexit 1\n' >"$TMP/relnode/nomise/mise"
 chmod +x "$TMP/relnode/nb/node" "$TMP/relnode/nomise/mise"
 nvim_dir=$(dirname -- "$(mise which nvim 2>/dev/null || command -v nvim)")
@@ -310,6 +327,100 @@ refused out-uncreatable "cannot create /proc/vcn-proof" VERIFY_OUT=/proc/vcn-pro
 : >"$TMP/out-file"
 refused out-file "$TMP/out-file is not a directory" VERIFY_OUT="$TMP/out-file"
 refused parent-uncreatable "cannot create /proc/verify-claudecode-nvim/" XUM_SCRATCH_DIR=/proc
+# A tool that is found but cannot run, as a mise shim cannot in a checkout that mise does not trust, stops launch at once and
+# is named. The stand-in mise names only the real node and agent-tty, so `mise which` fails for the other tools, as it does
+# there, and only the stand-in under test cannot run.
+real_node=$(mise which node 2>/dev/null || command -v node) || fail "tool: no node to use"
+real_att=$(command -v agent-tty || mise which agent-tty) || fail "tool: no agent-tty to use"
+real_nvim=$(mise which nvim 2>/dev/null || command -v nvim) || fail "tool: no nvim to use"
+for dead in nvim jq node setsid; do
+  mkdir "$TMP/dead-$dead"
+  {
+    printf '#!/bin/sh\ncase "$*" in\n'
+    [[ $dead == node ]] || printf '"which node") echo "%s" ;;\n' "$real_node"
+    printf '"which agent-tty") echo "%s" ;;\n*) exit 1 ;;\nesac\n' "$real_att"
+  } >"$TMP/dead-$dead/mise"
+  printf '#!/bin/sh\necho "mise ERROR stand-in %s cannot run" >&2\nexit 1\n' "$dead" >"$TMP/dead-$dead/$dead"
+  chmod +x "$TMP/dead-$dead/mise" "$TMP/dead-$dead/$dead"
+done
+dead_nvim_msg="nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run"$'\n'"If it is a mise shim, mise may not trust this checkout."
+refused tool-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" PATH="$TMP/dead-nvim:$PATH"
+[[ $err == "vcn: $dead_nvim_msg" ]] || fail "tool-nvim: the message is not the tool, its path, its own error line and the possible cause alone (a remedy sentence is not allowed): $err"
+refused tool-vcn-nvim "nvim at $TMP/dead-nvim/nvim does not run: mise ERROR stand-in nvim cannot run" VCN_NVIM="$TMP/dead-nvim/nvim"
+[[ $err == "vcn: $dead_nvim_msg" ]] || fail "tool-vcn-nvim: the message is not the tool, its path, its own error line and the possible cause alone (a remedy sentence is not allowed): $err"
+mkdir "$TMP/stdout-error"
+printf '#!/bin/sh\necho "stand-in nvim prints this error to stdout only"\nexit 1\n' >"$TMP/stdout-error/nvim"
+chmod +x "$TMP/stdout-error/nvim"
+refused tool-stdout-error "nvim at $TMP/stdout-error/nvim does not run: stand-in nvim prints this error to stdout only" VCN_NVIM="$TMP/stdout-error/nvim"
+[[ $err == "vcn: nvim at $TMP/stdout-error/nvim does not run: stand-in nvim prints this error to stdout only"$'\n'"If it is a mise shim, mise may not trust this checkout." ]] ||
+  fail "tool-stdout-error: the message is not the tool, its path, the error line from stdout and the possible cause alone: $err"
+refused tool-jq "jq at $TMP/dead-jq/jq does not run: mise ERROR stand-in jq cannot run" PATH="$TMP/dead-jq:$PATH" VCN_NVIM="$real_nvim"
+refused tool-node "node at $TMP/dead-node/node does not run: mise ERROR stand-in node cannot run" PATH="$TMP/dead-node:$PATH" VCN_NVIM="$real_nvim"
+refused tool-setsid "setsid at $TMP/dead-setsid/setsid does not run: mise ERROR stand-in setsid cannot run" \
+  PATH="$TMP/dead-setsid:$PATH" VCN_NVIM="$real_nvim"
+# Only launch checks a tool, so a run that exists can always be cleaned up. A run.env without JQ_BIN makes cleanup resolve jq
+# again, and here that jq cannot run: cleanup must still exit 0 and leave nothing, as it does on main. A cleanup that refuses
+# leaves its run, so the case stops that run with a working jq before it fails.
+name=old-run-cleanup rc=0
+err=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR VCN_NVIM="$real_nvim" VERIFY_OUT="$TMP/old-run-out" "$V" launch 2>&1) || fail "$name: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+sed -i '/^JQ_BIN=/d' "$state/run.env"
+err=$(env PATH="$TMP/dead-jq:$PATH" VCN_STATE="$state" "$V" cleanup 2>&1) || rc=$?
+pids=$(grep -lzxF "VCN_RUN_TAG=$state" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
+left=0
+[[ ! -e $state ]] || left=1
+((left == 0)) || VCN_STATE=$state "$V" cleanup >/dev/null 2>&1 || true
+((rc == 0)) || fail "$name: cleanup exited $rc, wanted 0: $err"
+[[ -z $pids ]] || fail "$name: processes tagged $state are still alive: $(tr '\n' ' ' <<<"$pids")"
+((left == 0)) || fail "$name: $state is still there"
+echo "PASS $name: cleanup of a run without JQ_BIN, with a jq that cannot run, exited 0 and left no process and no state dir"
+# Launch records its setsid in run.env, and connect uses it: a setsid that cannot run first on PATH does not break the run. The
+# second check drops SETSID_BIN from run.env, as an older vcn.sh wrote it: connect resolves setsid again, and connect and cleanup
+# still work. The case runs cleanup with a working PATH at the end, whatever happened, so that it leaves no run.
+name=connect-setsid why=""
+err=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR VCN_NVIM="$real_nvim" VERIFY_OUT="$TMP/connect-out" "$V" launch 2>&1) || fail "$name: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+rc=0
+err=$(env PATH="$TMP/dead-setsid:$PATH" VCN_STATE="$state" VCN_CLIENT=b "$V" connect 2>&1) || rc=$?
+((rc == 0)) || why="connect with a setsid that cannot run first on PATH exited $rc: $err"
+sed -i '/^SETSID_BIN=/d' "$state/run.env"
+rc=0
+err=$(env VCN_STATE="$state" VCN_CLIENT=c "$V" connect 2>&1) || rc=$?
+((rc == 0)) || why="${why:+$why, }connect on a run.env without SETSID_BIN exited $rc: $err"
+rc=0
+err=$(env VCN_STATE="$state" "$V" cleanup 2>&1) || rc=$?
+pids=$(grep -lzxF "VCN_RUN_TAG=$state" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
+((rc == 0)) || why="${why:+$why, }cleanup of the run exited $rc: $err"
+[[ -z $pids ]] || why="${why:+$why, }processes tagged $state are still alive: $(tr '\n' ' ' <<<"$pids")"
+[[ ! -e $state ]] || why="${why:+$why, }$state is still there"
+[[ -z $why ]] || fail "$name: $why"
+echo "PASS $name: connect started a client with a setsid that cannot run first on PATH, and again on a run.env without SETSID_BIN, and cleanup left nothing"
+# A run.env without SETSID_BIN (an older vcn.sh wrote it) has no setsid to run. Only connect resolves one, so a setsid that
+# cannot run first on PATH, or a PATH with none, must stop neither get nor cleanup. get checks the first, because it leaves
+# the run for the second. The PATH with no setsid holds links to everything in /usr/bin (and /bin, where that is another
+# dir) but setsid. A cleanup that refuses leaves its run, so the case stops that run with a working PATH before it fails.
+name=old-run-setsid why=""
+err=$(env -u VERIFY_OUT -u XUM_SCRATCH_DIR VCN_NVIM="$real_nvim" VERIFY_OUT="$TMP/old-setsid-out" "$V" launch 2>&1) || fail "$name: launch failed: $err"
+state=$(sed -n 's/^VCN_STATE=//p' <<<"$err")
+sed -i '/^SETSID_BIN=/d' "$state/run.env"
+mkdir "$TMP/no-setsid"
+ln -sf -t "$TMP/no-setsid" /usr/bin/*
+[[ -L /bin ]] || ln -sf -t "$TMP/no-setsid" /bin/*
+rm "$TMP/no-setsid/setsid"
+rc=0
+err=$(env PATH="$TMP/dead-setsid:$PATH" VCN_STATE="$state" "$V" get PORT 2>&1) || rc=$?
+((rc == 0)) || why="get with a setsid that cannot run first on PATH exited $rc: $err"
+rc=0
+err=$(env PATH="$TMP/no-setsid" VCN_STATE="$state" "$V" cleanup 2>&1) || rc=$?
+pids=$(grep -lzxF "VCN_RUN_TAG=$state" /proc/[0-9]*/environ 2>/dev/null | cut -d/ -f3 || true)
+left=0
+[[ ! -e $state ]] || left=1
+((left == 0)) || VCN_STATE=$state "$V" cleanup >/dev/null 2>&1 || true
+((rc == 0)) || why="${why:+$why, }cleanup on a PATH with no setsid exited $rc: $err"
+[[ -z $pids ]] || why="${why:+$why, }processes tagged $state are still alive: $(tr '\n' ' ' <<<"$pids")"
+((left == 0)) || why="${why:+$why, }$state is still there"
+[[ -z $why ]] || fail "$name: $why"
+echo "PASS $name: on a run.env without SETSID_BIN, get exited 0 with a setsid that cannot run first on PATH, and cleanup exited 0 and left no process and no state dir on a PATH with no setsid"
 # Two first launches can both find the default parent dir missing. The mkdir shim plays the launch that makes
 # $TMP/race/mid first, and makes it unsafe, so only the check after mkdir can refuse it.
 mkdir "$TMP/race" "$TMP/race-bin"
