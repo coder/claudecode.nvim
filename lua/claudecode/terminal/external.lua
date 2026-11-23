@@ -95,11 +95,33 @@ function M.open(cmd_string, env_table)
     elseif placeholder_count == 1 then
       -- Backward compatible: just the command
       full_command = string.format(external_cmd, cmd_string)
+      cmd_parts = utils.parse_command(full_command)
     elseif placeholder_count == 2 then
-      -- New feature: cwd and command
+      -- The cwd comes from the workspace, so it goes in only after the split: a marker holds its place, and no part
+      -- of a folder name is parsed as arguments.
       local cwd = vim.fn.getcwd()
       cwd_for_jobstart = cwd
-      full_command = string.format(external_cmd, cwd, cmd_string)
+      local marker = "\1cwd\1"
+      cmd_parts = utils.parse_command(string.format(external_cmd, marker, cmd_string))
+      local cwd_args, misplaced = 0, false
+      for i, arg in ipairs(cmd_parts) do
+        if arg:find(marker, 1, true) then
+          -- Anywhere else, such as in a `sh -c` script, the program that gets the argument would parse the folder name.
+          local option = arg == marker and "" or arg:match("^(%-%-?[%w][%w_-]*=)" .. marker .. "$")
+          cwd_args = cwd_args + 1
+          misplaced = misplaced or not option
+          cmd_parts[i] = (option or "") .. cwd
+        end
+      end
+      if misplaced or cwd_args ~= 1 then
+        vim.notify(
+          "external_terminal_cmd: the cwd '%s' must be a whole argument or an --option=%s value. "
+            .. "Use a function for any other form.",
+          vim.log.levels.ERROR
+        )
+        return
+      end
+      full_command = table.concat(cmd_parts, " ")
     else
       vim.notify(
         string.format(
@@ -110,8 +132,6 @@ function M.open(cmd_string, env_table)
       )
       return
     end
-
-    cmd_parts = utils.parse_command(full_command)
   else
     vim.notify("external_terminal_cmd must be a string or function, got: " .. type(external_cmd), vim.log.levels.ERROR)
     return

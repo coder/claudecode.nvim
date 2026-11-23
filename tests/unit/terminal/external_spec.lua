@@ -255,6 +255,38 @@ describe("claudecode.terminal.external", function()
         call_args[1]
       )
     end)
+
+    it("passes a quoted cwd placeholder as one argument", function()
+      mock_vim.fn.getcwd = spy.new(function()
+        return "/home/user/a 'b' c"
+      end)
+      external_provider.setup({ provider_opts = { external_terminal_cmd = "kitty --directory '%s' %s" } })
+
+      external_provider.open("claude", {})
+
+      local call_args = mock_vim.fn.jobstart.calls[1].vals
+      assert.are.same({ "kitty", "--directory", "/home/user/a 'b' c", "claude" }, call_args[1])
+    end)
+
+    it("keeps a quoted command placeholder one argument, as before", function()
+      external_provider.setup({ provider_opts = { external_terminal_cmd = "xterm --working-directory %s -e '%s'" } })
+
+      external_provider.open("claude --resume", {})
+
+      local call_args = mock_vim.fn.jobstart.calls[1].vals
+      assert.are.same({ "xterm", "--working-directory", "/cwd", "-e", "claude --resume" }, call_args[1])
+    end)
+  end)
+
+  describe("open with one placeholder", function()
+    it("keeps a quoted command placeholder one argument, as before", function()
+      external_provider.setup({ provider_opts = { external_terminal_cmd = "gnome-terminal -e '%s'" } })
+
+      external_provider.open("claude --resume", {})
+
+      local call_args = mock_vim.fn.jobstart.calls[1].vals
+      assert.are.same({ "gnome-terminal", "-e", "claude --resume" }, call_args[1])
+    end)
   end)
 
   describe("open with function command", function()

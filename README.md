@@ -378,6 +378,7 @@ For deep technical details, see [ARCHITECTURE.md](./ARCHITECTURE.md).
         -- Command for external terminal provider. Can be:
         -- 1. String with %s placeholder: "alacritty -e %s" (backward compatible)
         -- 2. String with two %s placeholders: "alacritty --working-directory %s -e %s" (cwd, command)
+        --    The cwd %s must be a whole argument or an --option=%s value; other forms need a function
         -- 3. Function returning command: function(cmd, env) return "alacritty -e " .. cmd end
         external_terminal_cmd = nil,
       },
@@ -854,6 +855,8 @@ Run Claude Code in a separate terminal application outside of Neovim:
   },
 }
 ```
+
+With two `%s`, the working directory always stays one argument, whatever its folder name holds. The cwd `%s` must be a whole argument (`--working-directory %s`) or the value of an `--option=%s` argument. A template with the cwd `%s` anywhere else, such as inside `sh -c 'cd %s && ...'`, is refused with an error. Build that command with a function instead.
 
 ### Custom Terminal Providers
 
