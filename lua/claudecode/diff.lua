@@ -710,7 +710,7 @@ local function load_original_buffer(original_win, old_file_path, is_new_file, ex
   end
 
   vim.api.nvim_set_current_win(original_win)
-  vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+  vim.cmd.edit(vim.fn.fnameescape(old_file_path))
   return vim.api.nvim_win_get_buf(original_win)
 end
 
@@ -858,11 +858,11 @@ local function show_native_diff(old_file_path, new_file_path, tmp_file)
     end
   end
 
-  vim.cmd("edit " .. vim.fn.fnameescape(old_file_path))
+  vim.cmd.edit(vim.fn.fnameescape(old_file_path))
   local original_win = vim.api.nvim_get_current_win()
   create_split()
   -- Without a swap file, the rename below cannot meet another Neovim's swap file for "<path> (New)" (E325).
-  vim.cmd("noswapfile edit " .. vim.fn.fnameescape(tmp_file))
+  vim.cmd.edit({ vim.fn.fnameescape(tmp_file), mods = { noswapfile = true } })
   vim.api.nvim_buf_set_name(0, new_file_path .. " (New)")
 
   -- Propagate filetype to the proposed buffer for proper syntax highlighting (#20)

@@ -1,5 +1,6 @@
 -- luacheck: globals expect
 require("tests.busted_setup")
+local ex_command = require("tests.helpers.ex_command")
 
 describe("Diff Buffer Cleanup Edge Cases", function()
   local diff_module
@@ -125,7 +126,7 @@ describe("Diff Buffer Cleanup Edge Cases", function()
     end
 
     -- Mock command execution
-    mock_vim.cmd = function(command) end
+    mock_vim.cmd = ex_command(function(command) end)
 
     _G.vim = mock_vim
   end

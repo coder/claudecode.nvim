@@ -1,8 +1,8 @@
--- Real-Neovim check that openFile and the diff open a file whose name holds a line break as that one file, and run
--- nothing in the name. fnameescape() puts a backslash before a line break but keeps the line break, and vim.cmd() with a
--- string runs each of its lines as an Ex command, so `vim.cmd("edit " .. vim.fn.fnameescape(path))` ran the text after
--- the line break. Busted's mock vim runs no Ex commands, so under busted this is pending;
--- scripts/run_integration_tests_individually.sh runs it in Neovim.
+-- Real-Neovim check that a file name with a line break runs nothing: openFile refuses it, and the diff opens the file
+-- that has the name. fnameescape() puts a backslash before a line break but keeps it, and vim.cmd() with a string runs
+-- each of its lines as an Ex command, so `vim.cmd("edit " .. vim.fn.fnameescape(path))` ran the text after the line
+-- break. The diff specs call the diff module itself, past openDiff's check of the path. Busted's mock vim runs no Ex
+-- commands, so under busted this is pending; scripts/run_integration_tests_individually.sh runs it in Neovim.
 if vim == nil or vim.fn.has("nvim") ~= 1 then
   describe("file names with a line break", function()
     pending("needs a real Neovim")

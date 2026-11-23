@@ -399,7 +399,8 @@ local function open_from(win, file_path, preview, keep_mode)
     else
       show_buffer(buf, win, keep_mode, function()
         vim.api.nvim_win_call(win, function()
-          vim.cmd("edit " .. vim.fn.fnameescape(file_path))
+          -- One command: vim.cmd() with a string would run the text after a line break in the name as another one.
+          vim.cmd.edit(vim.fn.fnameescape(file_path))
         end)
       end)
     end
@@ -505,6 +506,11 @@ end
 local function handler(params)
   if type(params.filePath) ~= "string" then
     error({ code = -32602, message = "Invalid params", data = "Missing filePath parameter" })
+  end
+  -- An Ex command built from a path with a line break would run the text after the break, and Neovim's file functions
+  -- raise on a NUL (E976), so such a path stops here, before any step below reads it.
+  if params.filePath:find("[%z\r\n]") then
+    error({ code = -32602, message = "Invalid params", data = "filePath must not contain a line break or a NUL" })
   end
 
   if vim.fn.getcmdwintype() ~= "" then
