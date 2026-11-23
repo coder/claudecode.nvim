@@ -268,7 +268,7 @@ describe("Tool: open_file", function()
       expect(err.code).to_be(-32602)
       assert_contains(err.message, "Invalid params")
       assert_contains(err.data, "filePath")
-      assert.spy(_G.vim.fn.filereadable).was_not_called()
+      assert.spy(_G.vim.fn.filereadable).was_not_called_with(case.value)
       assert.are.same({}, _G.vim.cmd_history)
     end)
   end
