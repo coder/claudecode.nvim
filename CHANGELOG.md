@@ -2,6 +2,43 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-23
+
+### Added
+
+- Set the `claudecode` filetype on the native and snacks Claude terminal buffers so autocmds and `buflisted = false` rules can target them. On snacks this replaces the `snacks_terminal` filetype; set `terminal.snacks_win_opts = { bo = { filetype = "snacks_terminal" } }` to keep the old one ([#202](https://github.com/coder/claudecode.nvim/pull/202)).
+- Ctrl-Z in the Claude terminal now suspends Neovim instead of being passed to Claude Code, matching every other window. Remap it in a `FileType claudecode` autocmd if you want the old behavior ([#448](https://github.com/coder/claudecode.nvim/pull/448)).
+
+### Fixed
+
+- **Security:** reject file paths containing a line break, carriage return, or NUL in `openFile`/`openDiff`, and open every path as a single literal file, closing a code-execution vector when Claude opened or diffed a maliciously named committed file ([#608](https://github.com/coder/claudecode.nvim/pull/608)).
+- **Security:** pass the working directory to `external_terminal_cmd` as one argument so a crafted folder name can no longer inject shell commands (CWE-88); templates that embed the cwd inside a larger argument are now refused with an error ([#607](https://github.com/coder/claudecode.nvim/pull/607)).
+- `:ClaudeCodeAdd %` now works when the buffer's path contains spaces, and supports escaped spaces ([#304](https://github.com/coder/claudecode.nvim/pull/304)).
+- @mentions are now sent as absolute paths, matching the VS Code extension, so they resolve to the right file when Claude's cwd differs from Neovim's ([#460](https://github.com/coder/claudecode.nvim/pull/460)).
+- The @mention queue now delivers each queued mention once, in order, or reports an error; a mention queued while Claude is launching is delivered on connect rather than silently dropped, and `:ClaudeCodeStop` no longer leaks a pending mention to the next Claude or raises a Lua error. `queue_timeout` no longer expires mentions by age (`connection_timeout` bounds the wait) ([#454](https://github.com/coder/claudecode.nvim/pull/454), [#480](https://github.com/coder/claudecode.nvim/pull/480), [#541](https://github.com/coder/claudecode.nvim/pull/541)).
+- Malformed `tools/call` requests (missing/wrong-typed `name`, non-object `params` or `arguments`, wrong-typed required parameters) now answer with `-32602` "Invalid params" instead of leaking internal Lua errors and file paths, and `close_tab` errors are returned under `error` rather than `result` ([#497](https://github.com/coder/claudecode.nvim/pull/497), [#500](https://github.com/coder/claudecode.nvim/pull/500)).
+- `saveDocument` now reports only the Vim error (e.g. `E45: 'readonly' option is set`) when `:write` fails, instead of a full Lua stack trace with install paths ([#453](https://github.com/coder/claudecode.nvim/pull/453)).
+- `getCurrentSelection` answers the real selection or cursor position when `track_selection = false`, instead of a fixed empty selection at line 0 ([#457](https://github.com/coder/claudecode.nvim/pull/457)).
+- `openFile` now finishes its reload with the whole new file even when a user's `BufReadPre`/`FileChangedShell` autocmd errors, and keeps Neovim's E13 guard so a `BufWriteCmd` autocmd can no longer overwrite Claude's new file with unsaved buffer text ([#461](https://github.com/coder/claudecode.nvim/pull/461), [#468](https://github.com/coder/claudecode.nvim/pull/468)).
+- The unified diff layout now rejects on `:q` (answering `DIFF_REJECTED` immediately instead of timing out) and on switching the proposal window to another buffer, in both split and unified layouts ([#469](https://github.com/coder/claudecode.nvim/pull/469)).
+- New-tab diffs now open the proposal in Normal mode, close without entering their tab, reuse the `:tabnew` window instead of leaving an empty pane, and tear down their terminal `BufEnter` handler on close ([#303](https://github.com/coder/claudecode.nvim/pull/303), [#473](https://github.com/coder/claudecode.nvim/pull/473), [#478](https://github.com/coder/claudecode.nvim/pull/478), [#485](https://github.com/coder/claudecode.nvim/pull/485)).
+- An accepted unified diff now preserves every trailing blank line, and split/horizontal layouts accept a proposal with no final line break correctly, so Claude receives the exact proposed bytes ([#535](https://github.com/coder/claudecode.nvim/pull/535), [#542](https://github.com/coder/claudecode.nvim/pull/542), [#551](https://github.com/coder/claudecode.nvim/pull/551), [#577](https://github.com/coder/claudecode.nvim/pull/577)).
+- Closing a diff no longer overwrites the sign column, diff mode, or other window options the user set in windows the diff leaves behind, and leaves no leftovers after `:wq`, a second `:w`, `:qa`, or `:edit` ([#483](https://github.com/coder/claudecode.nvim/pull/483), [#491](https://github.com/coder/claudecode.nvim/pull/491), [#494](https://github.com/coder/claudecode.nvim/pull/494)).
+- A floating (snacks) Claude terminal is now hidden while a diff is open in its tab so the diff is visible and usable ([#447](https://github.com/coder/claudecode.nvim/pull/447), [#504](https://github.com/coder/claudecode.nvim/pull/504)).
+- Every pending `openDiff` call is answered when Neovim exits, and a handler error during a failed `openDiff` setup no longer crashes Neovim ([#538](https://github.com/coder/claudecode.nvim/pull/538), [#558](https://github.com/coder/claudecode.nvim/pull/558), [#574](https://github.com/coder/claudecode.nvim/pull/574)).
+- The Claude terminal now keeps a single live instance and no longer closes or errors on the wrong window: `:ClaudeCodeOpen` after `:e` in Claude's window works, `:ClaudeCode` no longer raises `E444` when Claude is the only window, and an exited terminal is cleaned up before reopening ([#451](https://github.com/coder/claudecode.nvim/pull/451)).
+- The running Claude is now found and reused after a plugin reload (`:Lazy reload`) across the native and snacks providers, so `:ClaudeCodeClose` and `:ClaudeCodeSendText` work and a second Claude is not started ([#464](https://github.com/coder/claudecode.nvim/pull/464)).
+- The native terminal start survives an autocmd that closes its split, and stays a single start when an autocmd interrupts it ([#527](https://github.com/coder/claudecode.nvim/pull/527), [#544](https://github.com/coder/claudecode.nvim/pull/544)).
+- The WebSocket server now drops dead clients promptly, never times out a Claude that answers pings, no longer drops a live Claude on a late keepalive tick during the handshake, and drops a client that answers pings but never reads ([#455](https://github.com/coder/claudecode.nvim/pull/455), [#467](https://github.com/coder/claudecode.nvim/pull/467), [#479](https://github.com/coder/claudecode.nvim/pull/479), [#488](https://github.com/coder/claudecode.nvim/pull/488)).
+- The lock file (which holds the WebSocket auth token) now reports a failed removal and is cleaned up on a token mismatch instead of being left on disk silently ([#459](https://github.com/coder/claudecode.nvim/pull/459), [#557](https://github.com/coder/claudecode.nvim/pull/557)).
+- Repository lookup (`git_repo_cwd`) now finds a repo whose folder name contains a space, comma, quote, or other path characters even when git cannot run, and the terminal uses a cwd folder with `$` or `\` in its name as written ([#561](https://github.com/coder/claudecode.nvim/pull/561), [#569](https://github.com/coder/claudecode.nvim/pull/569)).
+- Visual-selection tracking is more reliable: a held selection ends when its text, cursor, or file changes, and the Claude terminal becoming current no longer clobbers or mis-reports the selection ([#452](https://github.com/coder/claudecode.nvim/pull/452), [#471](https://github.com/coder/claudecode.nvim/pull/471), [#481](https://github.com/coder/claudecode.nvim/pull/481), [#493](https://github.com/coder/claudecode.nvim/pull/493), [#524](https://github.com/coder/claudecode.nvim/pull/524), [#540](https://github.com/coder/claudecode.nvim/pull/540), [#562](https://github.com/coder/claudecode.nvim/pull/562), [#463](https://github.com/coder/claudecode.nvim/pull/463)).
+- When setup rejects an invalid `terminal.provider`, the warning now names the provider that is actually kept instead of claiming "native" ([#530](https://github.com/coder/claudecode.nvim/pull/530)).
+
+### Changed
+
+- The unified diff layout is documented and tested to run on Neovim 0.8.0 (it only needs `vim.diff`); the `Requires Neovim >= 0.9.0` note has been removed ([#564](https://github.com/coder/claudecode.nvim/pull/564), [#572](https://github.com/coder/claudecode.nvim/pull/572)).
+
 ## [0.4.0] - 2026-11-09
 
 ### Added
