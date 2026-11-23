@@ -138,6 +138,39 @@ describe("openDiff tool MCP compliance", function()
     end
   end)
 
+  -- A line break in a file name ended the Ex command that opened it, so the rest ran as another command. A NUL makes
+  -- Neovim's file functions raise (E976).
+  describe("paths that hold a line break or a NUL", function()
+    for _, param_name in ipairs({ "old_file_path", "new_file_path" }) do
+      for _, case in ipairs({
+        { label = "a line feed", value = "/test/a.txt\nlua vim.g.ran = 1" },
+        { label = "a carriage return", value = "/test/a.txt\rlua vim.g.ran = 1" },
+        { label = "a NUL", value = "/test/a.txt\0b" },
+      }) do
+        it("should refuse " .. param_name .. " with " .. case.label, function()
+          local params = {
+            old_file_path = test_old_file,
+            new_file_path = test_new_file,
+            new_file_contents = test_content_new,
+            tab_name = test_tab_name,
+          }
+          params[param_name] = case.value
+
+          local co = coroutine.create(function()
+            open_diff_tool.handler(params)
+          end)
+
+          local success, err = coroutine.resume(co)
+          assert.is_false(success)
+          assert.is_table(err)
+          assert.equal(-32602, err.code)
+          assert.equal("Invalid params", err.message)
+          assert_contains(err.data, param_name)
+        end)
+      end
+    end
+  end)
+
   describe("coroutine context requirement", function()
     it("should error when not in coroutine context", function()
       local params = {

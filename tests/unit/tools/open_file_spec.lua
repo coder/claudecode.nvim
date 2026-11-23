@@ -254,6 +254,25 @@ describe("Tool: open_file", function()
     end)
   end
 
+  -- A line break in a file name ended the Ex command that opened it, so the rest ran as another command. A NUL makes
+  -- Neovim's file functions raise (E976).
+  for _, case in ipairs({
+    { label = "a line feed", value = "a.txt\nlua vim.g.ran = 1" },
+    { label = "a carriage return", value = "a.txt\rlua vim.g.ran = 1" },
+    { label = "a NUL", value = "a.txt\0b" },
+  }) do
+    it("should refuse a filePath that holds " .. case.label .. " before it touches the path", function()
+      local success, err = pcall(open_file_handler, { filePath = case.value })
+      expect(success).to_be_false()
+      expect(err).to_be_table()
+      expect(err.code).to_be(-32602)
+      assert_contains(err.message, "Invalid params")
+      assert_contains(err.data, "filePath")
+      assert.spy(_G.vim.fn.filereadable).was_not_called()
+      assert.are.same({}, _G.vim.cmd_history)
+    end)
+  end
+
   it("should error if file is not readable", function()
     local params = { filePath = "non_readable_file.txt" }
     local success, err = pcall(open_file_handler, params)
