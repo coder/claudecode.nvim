@@ -770,7 +770,8 @@ local vim = {
     end,
   },
 
-  cmd = function(command)
+  -- Callable with a command string, and indexable by command name (`vim.cmd.edit(path)`), as in Neovim.
+  cmd = require("tests.helpers.ex_command")(function(command)
     -- Store the last command for test assertions.
     vim._last_command = command
     -- Implement minimal behavior for essential commands
@@ -902,7 +903,7 @@ local vim = {
     else
       -- other commands (wincmd etc.) are recorded but not simulated
     end
-  end,
+  end),
 
   json = {
     encode = function(data)

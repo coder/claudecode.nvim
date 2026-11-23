@@ -73,7 +73,7 @@ M.register("openFile", {
   required = { "filePath" }
 }, function(params)
   -- Implementation
-  vim.cmd("edit " .. params.filePath)
+  vim.cmd.edit(vim.fn.fnameescape(params.filePath))
   return { content = {{ type = "text", text = "Opened" }} }
 end)
 

@@ -1,4 +1,5 @@
 require("tests.busted_setup") -- Ensure test helpers are loaded
+local ex_command = require("tests.helpers.ex_command")
 
 describe("Tool: open_file", function()
   local open_file_handler
@@ -50,7 +51,7 @@ describe("Tool: open_file", function()
     call_win = nil
     local kind_of = { v = "v", s = "v", V = "V", S = "V", ["\22"] = "\22", ["\19"] = "\22" }
     local select_of = { v = "s", V = "S", ["\22"] = "\19" }
-    _G.vim.cmd = spy.new(function(command)
+    _G.vim.cmd = ex_command(function(command)
       table.insert(_G.vim.cmd_history, command)
       local keys = command:match("^normal! (.*)")
       local in_visual = kind_of[editor_mode] ~= nil
@@ -251,6 +252,25 @@ describe("Tool: open_file", function()
       expect(err).to_be_table()
       expect(err.code).to_be(-32602)
       assert_contains(err.data, "Missing filePath parameter")
+    end)
+  end
+
+  -- A line break in a file name ended the Ex command that opened it, so the rest ran as another command. A NUL makes
+  -- Neovim's file functions raise (E976).
+  for _, case in ipairs({
+    { label = "a line feed", value = "a.txt\nlua vim.g.ran = 1" },
+    { label = "a carriage return", value = "a.txt\rlua vim.g.ran = 1" },
+    { label = "a NUL", value = "a.txt\0b" },
+  }) do
+    it("should refuse a filePath that holds " .. case.label .. " before it touches the path", function()
+      local success, err = pcall(open_file_handler, { filePath = case.value })
+      expect(success).to_be_false()
+      expect(err).to_be_table()
+      expect(err.code).to_be(-32602)
+      assert_contains(err.message, "Invalid params")
+      assert_contains(err.data, "filePath")
+      assert.spy(_G.vim.fn.filereadable).was_not_called_with(case.value)
+      assert.are.same({}, _G.vim.cmd_history)
     end)
   end
 
@@ -514,7 +534,7 @@ describe("Tool: open_file", function()
 
     before_each(function()
       local run_cmd = _G.vim.cmd
-      _G.vim.cmd = spy.new(function(command)
+      _G.vim.cmd = ex_command(function(command)
         local at
         for i, id in ipairs(order) do
           if id == current then
@@ -891,7 +911,7 @@ describe("Tool: open_file", function()
       end
       local run_cmd = _G.vim.cmd
       silenced = false
-      _G.vim.cmd = spy.new(function(command)
+      _G.vim.cmd = ex_command(function(command)
         local recorded = command
         silenced = command:match("^silent! ") ~= nil
         command = command:gsub("^silent! ", "")
@@ -1310,7 +1330,7 @@ describe("Tool: open_file", function()
       -- Neovim accepts a FileChangedShell autocommand for a buffer that is unloaded, so only a wiped buffer is a case.
       it("shows the file with no FileChangedShell autocommand when an autocommand wipes the buffer", function()
         local run_cmd, create = _G.vim.cmd, _G.vim.api.nvim_create_autocmd
-        _G.vim.cmd = function(command)
+        _G.vim.cmd = ex_command(function(command)
           if command == "edit test.txt" and not buffers[30] then
             buffers[30] = { lines = { "fresh" }, filetype = "lua" } -- :edit makes a new buffer for the file
           end
@@ -1318,7 +1338,7 @@ describe("Tool: open_file", function()
           if command == "checktime 30" then
             buffers[30] = nil -- autocmd FileChangedShellPost test.txt bwipeout
           end
-        end
+        end)
         local created_for_missing = {}
         _G.vim.api.nvim_create_autocmd = function(event, opts)
           if event == "FileChangedShell" and not buffers[opts.buffer] then
@@ -1477,12 +1497,12 @@ describe("Tool: open_file", function()
           buffers[40] = { lines = { "plugin text" }, buftype = "nofile", loaded = true, filetype = "" }
           -- autocmd BufWinEnter test.txt ++nested buffer 40
           local run_cmd, set_buf = _G.vim.cmd, _G.vim.api.nvim_win_set_buf
-          _G.vim.cmd = function(command)
+          _G.vim.cmd = ex_command(function(command)
             run_cmd(command)
             if command == "edit test.txt" then
               win_buf[case.win] = 40
             end
-          end
+          end)
           _G.vim.api.nvim_win_set_buf = function(win, buf)
             set_buf(win, buf)
             win_buf[win] = 40

@@ -3,7 +3,7 @@ file lua/claudecode/config.lua 3afb1bdeff27bfb6
 == lua/claudecode/cwd.lua
 file lua/claudecode/cwd.lua b034e82c76e8dee4
 == lua/claudecode/diff.lua
-file lua/claudecode/diff.lua 44c686c5bff3fc80
+file lua/claudecode/diff.lua 2b7fd97e91645f00
 block resolve_saved          36fd89d5b97f0173
 block resolve_rejected       c7a620816abff9a1
 block open_blocking          f2f5ae6216c0457a
@@ -211,10 +211,10 @@ file lua/claudecode/tools/get_workspace_folders.lua 80f38bdf62e55c3e
 file lua/claudecode/tools/init.lua a8ff3ef7cd3c9df9
 block handle_invoke          5c2422dfe7e2ea93
 == lua/claudecode/tools/open_diff.lua
-file lua/claudecode/tools/open_diff.lua d4050352cb09dfb9
-block open_diff_tool         1a0e157e8e0a9452
+file lua/claudecode/tools/open_diff.lua c2eef8418b600af3
+block open_diff_tool         fa7326d9e69eb708
 == lua/claudecode/tools/open_file.lua
-file lua/claudecode/tools/open_file.lua b277cbe8b86ac7c8
+file lua/claudecode/tools/open_file.lua 8ce0857bca852c81
 == lua/claudecode/tools/save_document.lua
 file lua/claudecode/tools/save_document.lua 584b046bec6cb1f6
 == lua/claudecode/types.lua

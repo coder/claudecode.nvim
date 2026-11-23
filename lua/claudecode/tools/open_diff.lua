@@ -46,6 +46,17 @@ local function handler(params, client)
       })
     end
   end
+  -- An Ex command built from a path with a line break would run the text after the break, and Neovim's file functions
+  -- raise on a NUL (E976), so such a path stops here, before any step below reads it. tab_name is not a path.
+  for _, param_name in ipairs({ "old_file_path", "new_file_path" }) do
+    if params[param_name]:find("[%z\r\n]") then
+      error({
+        code = -32602,
+        message = "Invalid params",
+        data = param_name .. " must not contain a line break or a NUL",
+      })
+    end
+  end
 
   -- Ensure we're running in a coroutine context for blocking operation
   local co, is_main = coroutine.running()

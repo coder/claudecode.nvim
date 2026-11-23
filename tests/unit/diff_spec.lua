@@ -1,5 +1,6 @@
 -- luacheck: globals expect
 require("tests.busted_setup")
+local ex_command = require("tests.helpers.ex_command")
 local temp_dir = require("tests.helpers.temp_dir")
 
 describe("Diff Module", function()
@@ -324,9 +325,9 @@ describe("Diff Module", function()
       if _G.vim and rawget(original_vim_functions, "cmd") == nil then
         original_vim_functions["cmd"] = _G.vim.cmd
       end
-      _G.vim.cmd = function(cmd)
+      _G.vim.cmd = ex_command(function(cmd)
         table.insert(commands, cmd)
-      end
+      end)
 
       local mock_file = {
         write = function() end,
@@ -379,9 +380,9 @@ describe("Diff Module", function()
       if _G.vim and rawget(original_vim_functions, "cmd") == nil then
         original_vim_functions["cmd"] = _G.vim.cmd
       end
-      _G.vim.cmd = function(cmd)
+      _G.vim.cmd = ex_command(function(cmd)
         table.insert(commands, cmd)
-      end
+      end)
 
       local mock_file = {
         write = function() end,
@@ -550,7 +551,7 @@ describe("Diff Module", function()
       _G.vim.api.nvim_buf_set_name = function() end
       _G.vim.api.nvim_buf_set_lines = function() end
       _G.vim.api.nvim_set_option_value = function() end
-      _G.vim.cmd = function() end
+      _G.vim.cmd = ex_command(function() end)
       local old_io_open = io.open
       rawset(io, "open", function()
         return {
@@ -661,7 +662,7 @@ describe("Diff Module", function()
       _G.vim.api.nvim_buf_set_name = function() end
       _G.vim.api.nvim_buf_set_lines = function() end
       _G.vim.api.nvim_set_option_value = function() end
-      _G.vim.cmd = function() end
+      _G.vim.cmd = ex_command(function() end)
       local old_io_open = io.open
       rawset(io, "open", function()
         return {
@@ -714,7 +715,7 @@ describe("Diff Module", function()
       _G.vim.api.nvim_buf_set_name = function() end
       _G.vim.api.nvim_buf_set_lines = function() end
       _G.vim.api.nvim_set_option_value = function() end
-      _G.vim.cmd = function() end
+      _G.vim.cmd = ex_command(function() end)
       local old_io_open = io.open
       rawset(io, "open", function()
         return {
