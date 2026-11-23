@@ -182,6 +182,81 @@ describe("claudecode.terminal.external", function()
     end)
   end)
 
+  describe("open with a cwd placeholder", function()
+    -- Folder names that utils.parse_command or a shell would read as syntax.
+    local folder_names = {
+      "plain",
+      "my project",
+      "demo -e sh -c 'touch PWNED' x",
+      'it\'s "q"',
+      "back\\slash",
+      "x;touch PWNED;:",
+      "$(touch PWNED)",
+      "x;touch${IFS}PWNED;:",
+      "odd %s name",
+    }
+    local templates = {
+      {
+        cmd = "alacritty --working-directory %s -e %s",
+        argv = function(cwd)
+          return { "alacritty", "--working-directory", cwd, "-e", "claude", "--help" }
+        end,
+      },
+      {
+        cmd = "alacritty --working-directory=%s -e %s",
+        argv = function(cwd)
+          return { "alacritty", "--working-directory=" .. cwd, "-e", "claude", "--help" }
+        end,
+      },
+    }
+
+    for _, template in ipairs(templates) do
+      for _, name in ipairs(folder_names) do
+        it(string.format("passes the cwd %q as one argument in %q", name, template.cmd), function()
+          local cwd = "/home/user/" .. name
+          mock_vim.fn.getcwd = spy.new(function()
+            return cwd
+          end)
+          external_provider.setup({ provider_opts = { external_terminal_cmd = template.cmd } })
+
+          external_provider.open("claude --help", {})
+
+          assert.spy(mock_vim.notify).was_not_called()
+          assert.spy(mock_vim.fn.jobstart).was_called(1)
+          local call_args = mock_vim.fn.jobstart.calls[1].vals
+          assert.are.same(template.argv(cwd), call_args[1])
+          assert.are.equal(cwd, call_args[2].cwd)
+        end)
+      end
+    end
+
+    it("refuses a cwd placeholder inside a larger argument", function()
+      external_provider.setup({ provider_opts = { external_terminal_cmd = "sh -c 'cd %s && exec alacritty -e %s'" } })
+
+      external_provider.open("claude", {})
+
+      assert.spy(mock_vim.notify).was_called(1)
+      local message, level = mock_vim.notify.calls[1].vals[1], mock_vim.notify.calls[1].vals[2]
+      assert.are.equal(mock_vim.log.levels.ERROR, level)
+      assert.is_truthy(message:find("--option=%s", 1, true))
+      assert.spy(mock_vim.fn.jobstart).was_not_called()
+    end)
+
+    it("puts the command into a larger argument as text", function()
+      external_provider.setup({
+        provider_opts = { external_terminal_cmd = "alacritty --working-directory=%s -e sh -c 'exec %s'" },
+      })
+
+      external_provider.open("claude --x=100%", {})
+
+      local call_args = mock_vim.fn.jobstart.calls[1].vals
+      assert.are.same(
+        { "alacritty", "--working-directory=/cwd", "-e", "sh", "-c", "exec claude --x=100%" },
+        call_args[1]
+      )
+    end)
+  end)
+
   describe("open with function command", function()
     it("should handle function returning string", function()
       local config = {
